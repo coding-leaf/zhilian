@@ -215,9 +215,86 @@ class StorageConnectionError(StorageError):
         )
 
 
+class OCRError(AppError):
+    """OCR 识别服务基础异常 (错误码 30004, HTTP 502)。
+
+    当 OCR 服务发生通用识别失败、图像解码异常或底层第三方 SDK 故障时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "OCR服务异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30004,
+        status_code: int = 502,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class OCRTimeoutError(OCRError):
+    """OCR 识别服务调用超时异常 (错误码 30005, HTTP 504)。
+
+    当 OCR 服务网络连接超时、等待响应超时（超过预设 timeout 阈值）时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "OCR服务响应超时",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30005,
+            status_code=504,
+            code=code,
+            detail=detail,
+        )
+
+
+class OCRAuthError(OCRError):
+    """OCR 识别服务鉴权或授权失败异常 (错误码 30006, HTTP 502)。
+
+    当腾讯云或第三方 OCR 凭证密钥失效、权限不足或未开通服务时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "OCR服务认证或授权失败",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30006,
+            status_code=502,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
+    "OCRAuthError",
+    "OCRError",
+    "OCRTimeoutError",
     "PermissionDeniedError",
     "StorageConnectionError",
     "StorageError",
