@@ -15,3 +15,4 @@
 | ZL-105 | 实现知识点自引用树模型/切片关联模型/题目主实体(7大题型+HNSW向量查重)/质检记录表/修改痕迹审计日志表，通过双向对称迁移与多租户隔离验证 | Deploy | `working-tree` | 91 tests passed, 99.1% coverage, 0 layer violations | 2026-09-23 |
 | ZL-106 | 实现练习主表/答卷作答表(题目快照解耦)/判题记录表(两阶段状态机)/掌握度表/诊断报告表/错题本表，完成Alembic对称迁移与强幂等约束 | Deploy | `working-tree` | 105 tests passed, 99.35% coverage, 0 layer violations | 2026-09-23 |
 | ZL-108 | 实现 OCR 识别质量门禁纯函数计算核 verify_ocr_quality 与批次仲裁评估 | Deploy | `ZL-108` | pytest tests/unit/core/algorithms/test_ocr_quality.py 26通过 100%覆盖率, ruff/mypy/bandit/check_layers 全绿 | 2026-09-23 |
+| ZL-109 | 实现知识点质检门禁算法 verify_knowledge_points 与四项一票否决决策矩阵 | Deploy | `ZL-109` | pytest 44用例通过，100%分支覆盖率，ruff/mypy/bandit/check_layers 全绿 | 2026-09-23 |
