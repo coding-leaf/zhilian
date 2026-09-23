@@ -6,6 +6,10 @@ from app.core.errors import (
     EmbeddingAuthError,
     EmbeddingError,
     EmbeddingTimeoutError,
+    LLMAuthError,
+    LLMError,
+    LLMResponseFormatError,
+    LLMTimeoutError,
     PermissionDeniedError,
     SearchError,
 )
@@ -101,3 +105,29 @@ class TestAppErrors:
         assert custom_err.error_code == 30010
         assert custom_err.status_code == 400
         assert custom_err.details == {"cause": "bad_syntax"}
+
+    def test_llm_errors(self) -> None:
+        """Verify LLM error hierarchy, error codes, and status codes."""
+        base_err = LLMError()
+        assert base_err.error_code == 30011
+        assert base_err.status_code == 502
+        assert base_err.message == "大模型服务异常"
+        assert isinstance(base_err, AppError)
+
+        timeout_err = LLMTimeoutError(message="Timeout calling LLM")
+        assert timeout_err.error_code == 30012
+        assert timeout_err.status_code == 504
+        assert timeout_err.message == "Timeout calling LLM"
+        assert isinstance(timeout_err, LLMError)
+
+        auth_err = LLMAuthError(message="Invalid API Key")
+        assert auth_err.error_code == 30013
+        assert auth_err.status_code == 502
+        assert auth_err.message == "Invalid API Key"
+        assert isinstance(auth_err, LLMError)
+
+        format_err = LLMResponseFormatError(message="Schema validation failed")
+        assert format_err.error_code == 30014
+        assert format_err.status_code == 502
+        assert format_err.message == "Schema validation failed"
+        assert isinstance(format_err, LLMError)

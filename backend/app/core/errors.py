@@ -389,12 +389,114 @@ class SearchError(AppError):
         )
 
 
+class LLMError(AppError):
+    """大语言模型服务基础异常 (错误码 30011, HTTP 502)。
+
+    当大语言模型适配器发生通用业务异常、服务端错误 (5xx) 且重试耗尽时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "大模型服务异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30011,
+        status_code: int = 502,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class LLMTimeoutError(LLMError):
+    """大语言模型服务调用超时异常 (错误码 30012, HTTP 504)。
+
+    当大语言模型服务网络连接超时或等待响应超时（超过 options.timeout / 预设阈值）时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "大模型服务响应超时",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30012,
+            status_code=504,
+            code=code,
+            detail=detail,
+        )
+
+
+class LLMAuthError(LLMError):
+    """大语言模型服务鉴权或授权失败异常 (错误码 30013, HTTP 502)。
+
+    当 API Key 凭据缺失、无效、未授权或欠费停服 (401/403) 时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "大模型服务认证或授权失败",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30013,
+            status_code=502,
+            code=code,
+            detail=detail,
+        )
+
+
+class LLMResponseFormatError(LLMError):
+    """大语言模型响应格式校验失败异常 (错误码 30014, HTTP 502)。
+
+    当模型输出 JSON 损坏或 Schema 校验失败且单次自愈修复后仍无法通过 Pydantic 校验时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "大模型输出格式校验失败",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30014,
+            status_code=502,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
     "EmbeddingAuthError",
     "EmbeddingError",
     "EmbeddingTimeoutError",
+    "LLMAuthError",
+    "LLMError",
+    "LLMResponseFormatError",
+    "LLMTimeoutError",
     "OCRAuthError",
     "OCRError",
     "OCRTimeoutError",
