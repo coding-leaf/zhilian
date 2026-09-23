@@ -17,3 +17,4 @@
 | ZL-108 | 实现 OCR 识别质量门禁纯函数计算核 verify_ocr_quality 与批次仲裁评估 | Deploy | `ZL-108` | pytest tests/unit/core/algorithms/test_ocr_quality.py 26通过 100%覆盖率, ruff/mypy/bandit/check_layers 全绿 | 2026-09-23 |
 | ZL-109 | 实现知识点质检门禁算法 verify_knowledge_points 与四项一票否决决策矩阵 | Deploy | `ZL-109` | pytest 44用例通过，100%分支覆盖率，ruff/mypy/bandit/check_layers 全绿 | 2026-09-23 |
 | ZL-110 | 实现题目质检与待处理过滤算法 filter_qualified_questions 与四类一票否决流水线 | Deploy | `ZL-110` | pytest 59用例通过，分支覆盖率98.7%，ruff/mypy/bandit/check_layers 全绿 | 2026-09-23 |
+| ZL-111 | 实现纯函数判题阈值与匹配算法 match_and_grade_answer、客观题秒判规则核与主观题双阈值分流及4类转AI仲裁引擎 | Deploy | `ZL-111` | pytest 40用例全绿，行覆盖率100%，分支覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
