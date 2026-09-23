@@ -26,6 +26,25 @@ STAGE_ORDER = {stage: i for i, stage in enumerate(VALID_STAGES)}
 VALID_STATUSES = ["in_progress", "blocked", "ready_for_qa", "ready_for_review"]
 VALID_RISKS = ["Tier 1", "Tier 2", "Tier 3"]
 
+# 各阶段要求就绪的工件集合 (按阶段递增)
+STAGE_DOCS: dict[str, list[str]] = {
+    "Plan": ["intent.md"],
+    "Design": ["intent.md", "spec.md"],
+    "Build": ["intent.md", "spec.md", "plan.md"],
+    "Test": ["intent.md", "spec.md", "plan.md"],
+    "Review": ["intent.md", "spec.md", "plan.md"],
+    "Deploy": ["intent.md", "spec.md", "plan.md"],
+}
+
+ACTIVE_TASKS_HEADER = (
+    "# Active Tasks (当前活跃任务索引)\n\n"
+    "> **定位说明**：  \n"
+    "> 本文件是当前活跃任务的轻量导航索引，**不是任务事实的唯一来源**。  \n"
+    "> 若本索引与底层 `docs/sdlc/<task-id>/` 工件或实际工作区状态冲突，一律以实际客观代码与工件为准，并立即纠偏本索引。  \n"
+    "> 任务完成并通过验收后，从本文件移除并沉淀至 `docs/sdlc/ARCHIVE.md`。\n\n"
+    "---\n"
+)
+
 
 def _extract_field(body: str, name: str, default: str = "") -> str:
     m = re.search(rf"^-\s+{name}:\s*(.*?)$", body, re.MULTILINE)
@@ -79,16 +98,7 @@ class TaskManager:
     def _ensure_active_tasks_file(self) -> None:
         if not self.active_tasks_file.exists():
             self.active_tasks_file.parent.mkdir(parents=True, exist_ok=True)
-            initial_content = (
-                "# Active Tasks (当前活跃任务索引)\n\n"
-                "> **定位说明**：  \n"
-                "> 本文件是当前活跃任务的轻量导航索引，**不是任务事实的唯一来源**。  \n"
-                "> 若本索引与底层 `docs/sdlc/<task-id>/` 工件或实际工作区状态冲突，一律以实际客观代码与工件为准，并立即纠偏本索引。  \n"
-                "> 任务完成并通过验收后，从本文件移除并沉淀至 `docs/sdlc/ARCHIVE.md`。\n\n"
-                "---\n\n"
-                "(暂无活跃任务)\n"
-            )
-            self.active_tasks_file.write_text(initial_content, encoding="utf-8")
+            self.active_tasks_file.write_text(f"{ACTIVE_TASKS_HEADER}\n(暂无活跃任务)\n", encoding="utf-8")
 
     def _ensure_archive_file(self) -> None:
         if not self.archive_file.exists():
@@ -134,17 +144,7 @@ class TaskManager:
 
     def _save_active_tasks(self, tasks: dict[str, TaskCard]) -> None:
         self._ensure_active_tasks_file()
-        lines = [
-            "# Active Tasks (当前活跃任务索引)",
-            "",
-            "> **定位说明**：  ",
-            "> 本文件是当前活跃任务的轻量导航索引，**不是任务事实的唯一来源**。  ",
-            "> 若本索引与底层 `docs/sdlc/<task-id>/` 工件或实际工作区状态冲突，一律以实际客观代码与工件为准，并立即纠偏本索引。  ",
-            "> 任务完成并通过验收后，从本文件移除并沉淀至 `docs/sdlc/ARCHIVE.md`。",
-            "",
-            "---",
-            "",
-        ]
+        lines = [ACTIVE_TASKS_HEADER.strip(), ""]
 
         if not tasks:
             lines.append("(暂无活跃任务)\n")
@@ -190,6 +190,16 @@ class TaskManager:
         )
         target_file.write_text(content, encoding="utf-8")
 
+    def _restore_or_materialize_doc(self, task_id: str, doc_name: str, title: str, card: TaskCard) -> None:
+        artifact_dir = self.sdlc_dir / task_id
+        doc_file = artifact_dir / doc_name
+        doc_bak = artifact_dir / f"{doc_name}.bak"
+        if not doc_file.exists() and doc_bak.exists():
+            doc_bak.rename(doc_file)
+            print(f"♻️ 已从备份恢复工件: {doc_name}.bak -> {doc_name}")
+        else:
+            self._materialize_doc(task_id, doc_name, title, card.owner, card.risk)
+
     def create(
         self,
         task_id: str,
@@ -217,12 +227,11 @@ class TaskManager:
         created_at = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
 
         # Tier 2/3 按阶段物化工件 (默认 Plan 仅初始化 intent.md)
+        created_docs: list[str] = []
         if tier in (2, 3):
-            self._materialize_doc(task_id, "intent.md", title, owner, risk_str, created_at=created_at)
-            if stage in ("Design", "Build", "Test", "Review", "Deploy"):
-                self._materialize_doc(task_id, "spec.md", title, owner, risk_str, created_at=created_at)
-            if stage in ("Build", "Test", "Review", "Deploy"):
-                self._materialize_doc(task_id, "plan.md", title, owner, risk_str, created_at=created_at)
+            created_docs = STAGE_DOCS.get(stage, ["intent.md"])
+            for doc in created_docs:
+                self._materialize_doc(task_id, doc, title, owner, risk_str, created_at=created_at)
 
         card = TaskCard(
             task_id=task_id,
@@ -239,11 +248,6 @@ class TaskManager:
         self._save_active_tasks(tasks)
         print(f"✅ 成功创建任务 [{task_id}] ({risk_str})")
         if tier in (2, 3):
-            created_docs = ["intent.md"]
-            if stage in ("Design", "Build", "Test", "Review", "Deploy"):
-                created_docs.append("spec.md")
-            if stage in ("Build", "Test", "Review", "Deploy"):
-                created_docs.append("plan.md")
             print(f"📁 已初始化工件目录: docs/sdlc/{task_id}/ ({', '.join(created_docs)})")
 
     def update(
@@ -300,23 +304,10 @@ class TaskManager:
                     if "# Intent:" in first_line:
                         title = first_line.replace("# Intent:", "").strip()
 
-                if stage in ("Design", "Build", "Test", "Review", "Deploy"):
-                    spec_file = artifact_dir / "spec.md"
-                    spec_bak = artifact_dir / "spec.md.bak"
-                    if not spec_file.exists() and spec_bak.exists():
-                        spec_bak.rename(spec_file)
-                        print("♻️ 已从备份恢复工件: spec.md.bak -> spec.md")
-                    else:
-                        self._materialize_doc(task_id, "spec.md", title, card.owner, card.risk)
-
-                if stage in ("Build", "Test", "Review", "Deploy"):
-                    plan_file = artifact_dir / "plan.md"
-                    plan_bak = artifact_dir / "plan.md.bak"
-                    if not plan_file.exists() and plan_bak.exists():
-                        plan_bak.rename(plan_file)
-                        print("♻️ 已从备份恢复工件: plan.md.bak -> plan.md")
-                    else:
-                        self._materialize_doc(task_id, "plan.md", title, card.owner, card.risk)
+                target_docs = STAGE_DOCS.get(stage, [])
+                for doc in ("spec.md", "plan.md"):
+                    if doc in target_docs:
+                        self._restore_or_materialize_doc(task_id, doc, title, card)
 
         if status is not None:
             if status not in VALID_STATUSES:
@@ -371,13 +362,11 @@ class TaskManager:
                             issues.append("当前处于 Plan 阶段，严禁提前创建/修改 spec.md (需经用户审批 intent 并推进至 Design)")
                         if (artifact_dir / "plan.md").exists():
                             issues.append("当前处于 Plan 阶段，严禁提前创建/修改 plan.md (需经用户审批并推进至 Build)")
-                        stage_docs = ["intent.md"]
                     elif card.stage == "Design":
                         if (artifact_dir / "plan.md").exists():
                             issues.append("当前处于 Design 阶段，严禁提前创建/修改 plan.md (需经用户审批 spec 并推进至 Build)")
-                        stage_docs = ["intent.md", "spec.md"]
-                    else:
-                        stage_docs = ["intent.md", "spec.md", "plan.md"]
+
+                    stage_docs = STAGE_DOCS.get(card.stage, ["intent.md", "spec.md", "plan.md"])
 
                     for doc_name in stage_docs:
                         doc_file = artifact_dir / doc_name

@@ -12,10 +12,24 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+
+def _extract_tokens(data: Optional[Dict[str, Any]]) -> Tuple[int, int, int, int]:
+    if not data:
+        return 0, 0, 0, 0
+    return (
+        data.get("tokens_input") or 0,
+        data.get("tokens_cache_read") or 0,
+        data.get("tokens_output") or 0,
+        data.get("tokens_reasoning") or 0,
+    )
 
 
 def _default_db_path() -> Path:
@@ -178,14 +192,8 @@ def render_table(
     total_row: Optional[List[str]] = None,
 ) -> str:
     """纯文本 / ANSI 对齐美化表格渲染器。"""
-    col_count = len(headers)
-    
-    # 计算无颜色控制字符时的视觉宽度
-    import re
-    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-
     def visual_len(s: str) -> int:
-        return len(ansi_escape.sub("", s))
+        return len(ANSI_ESCAPE.sub("", s))
 
     col_widths = [visual_len(h) for h in headers]
     for r in rows:
@@ -196,46 +204,33 @@ def render_table(
             col_widths[i] = max(col_widths[i], visual_len(val))
 
     # 边框字符
-    # ┌─┬─┐ │ ├─┼─┤ └─┴─┘
     top_line = "┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
     header_sep = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
     bottom_line = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
 
-    lines = [top_line]
-
-    # Header
-    header_cells = []
-    for i, h in enumerate(headers):
-        w = col_widths[i]
-        pad = w - visual_len(h)
-        header_cells.append(f" {bold(h)}{' ' * pad} ")
-    lines.append("│" + "│".join(header_cells) + "│")
-    lines.append(header_sep)
-
-    # Data Rows
-    for r in rows:
+    def format_row(row_data: List[str], is_header: bool = False) -> str:
         cells = []
-        for i, val in enumerate(r):
+        for i, val in enumerate(row_data):
             w = col_widths[i]
             pad = w - visual_len(val)
-            if alignments[i] == "right":
-                cells.append(f" {' ' * pad}{val} ")
-            else:
-                cells.append(f" {val}{' ' * pad} ")
-        lines.append("│" + "│".join(cells) + "│")
+            content = bold(val) if is_header else val
+            pad_str = " " * pad
+            cell = f" {pad_str}{content} " if alignments[i] == "right" else f" {content}{pad_str} "
+            cells.append(cell)
+        return "│" + "│".join(cells) + "│"
 
-    # Total Row
+    lines = [
+        top_line,
+        format_row(headers, is_header=True),
+        header_sep,
+    ]
+
+    for r in rows:
+        lines.append(format_row(r))
+
     if total_row:
         lines.append(header_sep)
-        cells = []
-        for i, val in enumerate(total_row):
-            w = col_widths[i]
-            pad = w - visual_len(val)
-            if alignments[i] == "right":
-                cells.append(f" {' ' * pad}{val} ")
-            else:
-                cells.append(f" {val}{' ' * pad} ")
-        lines.append("│" + "│".join(cells) + "│")
+        lines.append(format_row(total_row))
 
     lines.append(bottom_line)
     return "\n".join(lines)
@@ -297,10 +292,7 @@ def print_session_report(
 
     if not subagents_only and parent:
         parent_model = format_model_name(parent.get("model"))
-        parent_inp = parent.get("tokens_input") or 0
-        parent_cread = parent.get("tokens_cache_read") or 0
-        parent_outp = parent.get("tokens_output") or 0
-        parent_reasoning = parent.get("tokens_reasoning") or 0
+        parent_inp, parent_cread, parent_outp, parent_reasoning = _extract_tokens(parent)
         parent_duration = format_duration(
             parent.get("time_created"), parent.get("time_updated")
         )
@@ -331,10 +323,7 @@ def print_session_report(
     for s in subs:
         agent_name = s.get("agent") or "subagent"
         model_name = format_model_name(s.get("model"))
-        inp = s.get("tokens_input") or 0
-        cread = s.get("tokens_cache_read") or 0
-        outp = s.get("tokens_output") or 0
-        reasoning = s.get("tokens_reasoning") or 0
+        inp, cread, outp, reasoning = _extract_tokens(s)
         duration = format_duration(s.get("time_created"), s.get("time_updated"))
 
         tot_input += inp
