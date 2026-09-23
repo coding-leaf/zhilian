@@ -20,3 +20,4 @@
 | ZL-111 | 实现纯函数判题阈值与匹配算法 match_and_grade_answer、客观题秒判规则核与主观题双阈值分流及4类转AI仲裁引擎 | Deploy | `ZL-111` | pytest 40用例全绿，行覆盖率100%，分支覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
 | ZL-112 | 实现纯函数掌握度时间衰减与聚合算法 aggregate_mastery_scores、艾宾浩斯30天半衰期模型与四级档次映射 | Deploy | `ZL-112` | pytest 49用例全绿，行覆盖率100%，分支覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
 | ZL-113 | 实现纯函数诊断规则合成算法 synthesize_diagnosis_report、四类成因优先级归因树与退步0.05判定引擎 | Deploy | `ZL-113` | pytest 42用例全绿，行覆盖率100%，分支覆盖率100%，McCabe V(G)<=7，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
+| ZL-114 | 实现 StorageProtocol 抽象、并发安全 MemoryStorageAdapter、S3StorageAdapter 与工厂函数及 30001~30003 存储异常体系 | Deploy | `ZL-114` | pytest 42用例全绿，代码覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |

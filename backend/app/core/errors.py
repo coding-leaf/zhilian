@@ -119,3 +119,107 @@ class PermissionDeniedError(AppError):
             details=details,
             detail=detail,
         )
+
+
+class StorageError(AppError):
+    """对象存储基础业务异常 (错误码 30001, HTTP 500)。
+
+    当对象存储服务发生通用读写失败、配置缺失或底层异常时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "对象存储服务异常"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 30001。
+        status_code: HTTP 状态码，默认 500。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "对象存储服务异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30001,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class StorageNotFoundError(StorageError):
+    """请求的存储对象不存在异常 (错误码 30002, HTTP 404)。
+
+    当请求的存储桶或对象键不存在时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "请求的存储对象不存在"。
+        details: 结构化附加诊断信息。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的存储对象不存在",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30002,
+            status_code=404,
+            code=code,
+            detail=detail,
+        )
+
+
+class StorageConnectionError(StorageError):
+    """对象存储服务连接失败异常 (错误码 30003, HTTP 503)。
+
+    当对象存储服务网络连接超时、Endpoint 无法解析或第三方驱动缺失时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "对象存储服务连接失败"。
+        details: 结构化附加诊断信息。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "对象存储服务连接失败",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30003,
+            status_code=503,
+            code=code,
+            detail=detail,
+        )
+
+
+__all__ = [
+    "AppError",
+    "AuthenticationError",
+    "PermissionDeniedError",
+    "StorageConnectionError",
+    "StorageError",
+    "StorageNotFoundError",
+]
