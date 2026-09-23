@@ -13,6 +13,22 @@ from app.models.material import (
     SourceType,
     get_vector_type,
 )
+from app.models.practice import (
+    AttemptItem,
+    DiagnosisReport,
+    ErrorType,
+    GradingChannel,
+    GradingRecord,
+    GradingStatus,
+    MasteryLevel,
+    MasteryRecord,
+    Practice,
+    PracticeSourceType,
+    PracticeStatus,
+    WrongRecord,
+    validate_practice_transition,
+    validate_question_snapshot,
+)
 from app.models.question import (
     AuditAction,
     QualityCheckType,
@@ -26,10 +42,18 @@ from app.models.question import (
 from app.models.user import User
 
 __all__ = [
+    "AttemptItem",
     "AuditAction",
     "Base",
+    "DiagnosisReport",
+    "ErrorType",
+    "GradingChannel",
+    "GradingRecord",
+    "GradingStatus",
     "KnowledgePoint",
     "KnowledgePointSnippet",
+    "MasteryLevel",
+    "MasteryRecord",
     "Material",
     "MaterialDocType",
     "MaterialOCRPage",
@@ -37,6 +61,9 @@ __all__ = [
     "MaterialStatus",
     "MaterialVersion",
     "ParseStatus",
+    "Practice",
+    "PracticeSourceType",
+    "PracticeStatus",
     "QualityCheckType",
     "Question",
     "QuestionAuditLog",
@@ -47,6 +74,9 @@ __all__ = [
     "TenantModelMixin",
     "TimestampMixin",
     "User",
+    "WrongRecord",
     "get_vector_type",
+    "validate_practice_transition",
     "validate_question_payload",
+    "validate_question_snapshot",
 ]
