@@ -22,3 +22,4 @@
 | ZL-113 | 实现纯函数诊断规则合成算法 synthesize_diagnosis_report、四类成因优先级归因树与退步0.05判定引擎 | Deploy | `ZL-113` | pytest 42用例全绿，行覆盖率100%，分支覆盖率100%，McCabe V(G)<=7，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
 | ZL-114 | 实现 StorageProtocol 抽象、并发安全 MemoryStorageAdapter、S3StorageAdapter 与工厂函数及 30001~30003 存储异常体系 | Deploy | `ZL-114` | pytest 42用例全绿，代码覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
 | ZL-115 | 实现 OCRProtocol 抽象、并发安全 FakeOCRAdapter、TencentOCRAdapter (指数退避重试与凭证脱敏)、工厂函数及 30004~30006 异常体系 | Deploy | `ZL-115` | pytest 23用例全绿，代码覆盖率98%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |
+| ZL-116 | 实现 EmbeddingProtocol 抽象、确定性 FakeEmbeddingAdapter、OpenAICompatible 生产适配器 (指数退避与掩码脱敏)、SearchProtocol 混合检索契约、PgvectorHybridSearchAdapter (租户隔离、Top20余弦粗排、BM25精排、RRF/加权打分与Top4截断) 及 30007~30010 异常体系 | Deploy | `ZL-116` | pytest 487全用例全绿，全局代码覆盖率99.29%，纯算法覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-23 |

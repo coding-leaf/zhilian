@@ -289,13 +289,117 @@ class OCRAuthError(OCRError):
         )
 
 
+class EmbeddingError(AppError):
+    """向量化服务基础异常 (错误码 30007, HTTP 502)。
+
+    当向量化服务发生通用失败、第三方 API 异常响应或数据反序列化错误时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "向量化服务异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30007,
+        status_code: int = 502,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class EmbeddingTimeoutError(EmbeddingError):
+    """向量化服务调用超时异常 (错误码 30008, HTTP 504)。
+
+    当向量化服务网络连接超时或等待响应超时（超过预设 timeout 阈值）时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "向量化服务响应超时",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30008,
+            status_code=504,
+            code=code,
+            detail=detail,
+        )
+
+
+class EmbeddingAuthError(EmbeddingError):
+    """向量化服务鉴权或授权失败异常 (错误码 30009, HTTP 502)。
+
+    当通义千问或 OpenAI 兼容 API 凭据失效、权限不足或配额耗尽时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "向量化服务认证或授权失败",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30009,
+            status_code=502,
+            code=code,
+            detail=detail,
+        )
+
+
+class SearchError(AppError):
+    """检索服务基础业务异常 (错误码 30010, HTTP 500)。
+
+    当混合检索流水线执行出现未预期的数据库异常、维度不匹配或排序融合失败时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "检索服务执行异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30010,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
+    "EmbeddingAuthError",
+    "EmbeddingError",
+    "EmbeddingTimeoutError",
     "OCRAuthError",
     "OCRError",
     "OCRTimeoutError",
     "PermissionDeniedError",
+    "SearchError",
     "StorageConnectionError",
     "StorageError",
     "StorageNotFoundError",

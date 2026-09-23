@@ -1,6 +1,14 @@
 """Unit tests for the unified business exception hierarchy in app/core/errors.py."""
 
-from app.core.errors import AppError, AuthenticationError, PermissionDeniedError
+from app.core.errors import (
+    AppError,
+    AuthenticationError,
+    EmbeddingAuthError,
+    EmbeddingError,
+    EmbeddingTimeoutError,
+    PermissionDeniedError,
+    SearchError,
+)
 
 
 class TestAppErrors:
@@ -59,3 +67,37 @@ class TestAppErrors:
         assert error.message == "Access denied"
         assert error.details == {"resource": "notes"}
         assert error.detail == {"resource": "notes"}
+
+    def test_embedding_errors(self) -> None:
+        """Verify Embedding error hierarchy, error codes, and status codes."""
+        base_err = EmbeddingError()
+        assert base_err.error_code == 30007
+        assert base_err.status_code == 502
+
+        timeout_err = EmbeddingTimeoutError(message="Timeout calling embedding")
+        assert timeout_err.error_code == 30008
+        assert timeout_err.status_code == 504
+        assert timeout_err.message == "Timeout calling embedding"
+        assert isinstance(timeout_err, EmbeddingError)
+
+        auth_err = EmbeddingAuthError(message="Invalid API Key")
+        assert auth_err.error_code == 30009
+        assert auth_err.status_code == 502
+        assert auth_err.message == "Invalid API Key"
+        assert isinstance(auth_err, EmbeddingError)
+
+    def test_search_error(self) -> None:
+        """Verify SearchError default attributes and custom fields."""
+        err = SearchError()
+        assert err.error_code == 30010
+        assert err.status_code == 500
+        assert err.message == "检索服务执行异常"
+
+        custom_err = SearchError(
+            message="Query syntax invalid",
+            details={"cause": "bad_syntax"},
+            status_code=400,
+        )
+        assert custom_err.error_code == 30010
+        assert custom_err.status_code == 400
+        assert custom_err.details == {"cause": "bad_syntax"}

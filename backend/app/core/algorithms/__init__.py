@@ -144,6 +144,13 @@ from app.core.algorithms.question_quality import (
     extract_keywords,
     filter_qualified_questions,
 )
+from app.core.algorithms.search import (
+    compute_bm25_score,
+    cosine_similarity,
+    reciprocal_rank_fusion,
+    tokenize_text,
+    weighted_score_fusion,
+)
 
 __all__ = [
     "AMBIGUOUS_TRIGGER_WORDS",
@@ -250,6 +257,8 @@ __all__ = [
     "check_regression",
     "check_source_grounding",
     "clean_ocr_text",
+    "compute_bm25_score",
+    "cosine_similarity",
     "count_valid_characters",
     "detect_negation_inversion",
     "detect_sentence_negation",
@@ -271,9 +280,12 @@ __all__ = [
     "normalize_fill_blank_text",
     "normalize_objective_token",
     "normalize_timestamp",
+    "reciprocal_rank_fusion",
     "resolve_source_weight",
     "split_material_into_snippets",
     "synthesize_diagnosis_report",
+    "tokenize_text",
     "verify_knowledge_points",
     "verify_ocr_quality",
+    "weighted_score_fusion",
 ]
