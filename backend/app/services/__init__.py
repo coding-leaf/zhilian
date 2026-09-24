@@ -1,5 +1,6 @@
 """Services package exporting domain services."""
 
+from app.services.auth import AuthService
 from app.services.diagnosis import (
     DiagnosisService,
     KnowledgeMasterySummaryDTO,
@@ -27,6 +28,7 @@ from app.services.practice import (
 from app.services.question import QuestionService
 
 __all__ = [
+    "AuthService",
     "CreatePracticeOptions",
     "DiagnosisService",
     "GradingService",

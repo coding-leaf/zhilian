@@ -1,5 +1,11 @@
 """Pydantic 数据传输对象与校验模型统一导出模块。"""
 
+from app.schemas.auth import (
+    RefreshTokenRequest,
+    RevokeTokenResponse,
+    TokenResponse,
+    WechatLoginRequest,
+)
 from app.schemas.diagnosis import (
     ActionableSuggestionItemDTO,
     AnalysisCauseItemDTO,
@@ -90,6 +96,10 @@ from app.schemas.question import (
     QuestionUpdateRequest,
     QuestionUpdateResponse,
 )
+from app.schemas.user import (
+    UserActionResponse,
+    UserProfileResponse,
+)
 
 __all__ = [
     "ActionableSuggestionItemDTO",
@@ -154,10 +164,12 @@ __all__ = [
     "QuestionSnapshotDTO",
     "QuestionUpdateRequest",
     "QuestionUpdateResponse",
+    "RefreshTokenRequest",
     "RegradeAttemptRequest",
     "RegradeRequest",
     "RegradeResponse",
     "RegressedKnowledgeItemDTO",
+    "RevokeTokenResponse",
     "SaveAnswerRequest",
     "SaveAnswerResponse",
     "SelfEvaluateRequest",
@@ -165,8 +177,12 @@ __all__ = [
     "SnippetKnowledgePointsResponse",
     "SnippetSourceResponse",
     "SubmitPracticeResponse",
+    "TokenResponse",
+    "UserActionResponse",
     "UserMasteryOverviewResponse",
+    "UserProfileResponse",
     "WeakKnowledgeItemDTO",
+    "WechatLoginRequest",
     "WrongRecordItemResponse",
     "WrongRecordListResponse",
     "sanitize_material_title",

@@ -16,6 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.core.errors import AuthenticationError
 from app.core.security import decode_token, verify_token_version
 from app.models.user import User
+from app.services.auth import AuthService
 
 # 设置 auto_error=False，以便本模块自主拦截缺失凭证并转化为规范的 AuthenticationError (HTTP 401)
 http_bearer = HTTPBearer(auto_error=False)
@@ -134,3 +135,31 @@ async def get_current_user(
         "用户服务数据加载器尚未装配，"
         "请在测试或路由中使用 dependency_overrides[get_current_user] 注入"
     )
+
+
+def get_auth_service() -> AuthService:
+    """FastAPI 依赖项：获取 AuthService 服务实例。
+
+    在生产环境下由服务装配工厂提供；
+    在单元测试中通过 app.dependency_overrides[get_auth_service] 注入。
+
+    Returns:
+        AuthService: 认证与账号管理业务编排服务。
+
+    Raises:
+        NotImplementedError: 在外部服务层装配前直接调用时提醒依赖注入覆盖。
+    """
+    raise NotImplementedError(
+        "AuthService 生产装配工厂尚未挂载，"
+        "请在测试或路由中使用 dependency_overrides[get_auth_service] 注入"
+    )
+
+
+__all__ = [
+    "get_auth_service",
+    "get_current_token_payload",
+    "get_current_user",
+    "get_current_user_id",
+    "http_bearer",
+    "validate_user_status",
+]

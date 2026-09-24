@@ -6,6 +6,7 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
+from app.repositories.user import UserRepository
 
 __all__ = [
     "DiagnosisRepository",
@@ -14,4 +15,5 @@ __all__ = [
     "MaterialRepository",
     "PracticeRepository",
     "QuestionRepository",
+    "UserRepository",
 ]
