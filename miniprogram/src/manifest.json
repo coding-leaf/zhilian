@@ -1,0 +1,22 @@
+{
+  "name": "智练自主学习平台",
+  "appid": "__UNI__ZHILIAN",
+  "description": "智练自主学习平台小程序客户端",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true
+  },
+  "mp-weixin": {
+    "appid": "wx6c3a2ca90c010005",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": true
+    },
+    "usingComponents": true
+  },
+  "vueVersion": "3"
+}

@@ -22,3 +22,15 @@ coverage.json
 *.swp
 *.swo
 .serena/
+
+# Node & Frontend
+node_modules/
+dist/
+dist-*
+unpackage/
+.eslintcache
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

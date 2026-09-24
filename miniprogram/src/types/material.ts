@@ -1,0 +1,123 @@
+/**
+ * ZhiLian Mini-Program Material Data Contracts
+ * Defines material item metadata, parsing status, and snippet structures.
+ */
+
+export type MaterialStatus =
+  | 'pending'
+  | 'parsing'
+  | 'ready'
+  | 'failed'
+  | 'retake_required'
+  | 'completed'
+  | 'PENDING'
+  | 'PARSING'
+  | 'READY'
+  | 'FAILED'
+  | 'RETAKE_REQUIRED'
+  | 'COMPLETED';
+
+export interface MaterialItem {
+  id: string;
+  title: string;
+  file_format: string;
+  file_size: number;
+  source_type: string;
+  status: MaterialStatus;
+  current_version_id?: string | null;
+  versions_count?: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface SnippetItem {
+  id: string;
+  material_id: string;
+  version_id: string;
+  snippet_index: number;
+  content_preview?: string;
+  char_count?: number;
+  created_at?: string;
+}
+
+export interface MaterialListQueryParams {
+  page?: number;
+  page_size?: number;
+  limit?: number;
+  offset?: number;
+  keyword?: string;
+  status?: string;
+}
+
+export interface KnowledgeTreeNode {
+  id: string;
+  name?: string;
+  title?: string;
+  material_id?: string;
+  version_id?: string;
+  parent_id?: string | null;
+  description?: string;
+  level: number;
+  is_low_confidence?: boolean;
+  confidence_score?: number;
+  batch_id?: string;
+  order_index?: number;
+  children?: KnowledgeTreeNode[];
+}
+
+export type KnowledgeTreeNodeItem = KnowledgeTreeNode;
+
+export interface KnowledgeTreeResponse {
+  material_id: string;
+  version_id: string;
+  nodes: KnowledgeTreeNode[];
+}
+
+/**
+ * 单页 OCR 质检与识别状态
+ */
+export interface PageOCRStatus {
+  page_no: number;
+  is_qualified: boolean;
+  issue_type?: string | null;
+  issue_description?: string | null;
+  retake_count: number;
+  max_retakes: number;
+}
+
+/**
+ * 单页重拍接口响应数据契约
+ */
+export interface RetakePageResponse {
+  material_id: string;
+  page_no: number;
+  status: string;
+  message?: string;
+}
+
+/**
+ * 资料上传响应 DTO
+ */
+export interface MaterialUploadResponse {
+  id: string;
+  version_id: string;
+  title: string;
+  file_format: string;
+  file_size: number;
+  source_type: string;
+  status: MaterialStatus;
+  created_at: string;
+}
+
+/**
+ * 资料单页重拍响应 DTO (与后端对齐)
+ */
+export interface MaterialReshootResponse {
+  material_id: string;
+  version_id?: string;
+  page_index: number;
+  is_qualified: boolean;
+  reshoot_count: number;
+  parse_status: string;
+  unqualified_reason?: string | null;
+}

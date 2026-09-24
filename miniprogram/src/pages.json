@@ -1,0 +1,71 @@
+{
+  "easycom": {
+    "autoscan": true,
+    "custom": {
+      "^wd-(.*)": "wot-design-uni/components/wd-$1/wd-$1.vue"
+    }
+  },
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "智练控制台"
+      }
+    },
+    {
+      "path": "pages/auth/login",
+      "style": {
+        "navigationBarTitleText": "用户登录"
+      }
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "subpackages/material",
+      "pages": [
+        {
+          "path": "pages/list/index",
+          "style": {
+            "navigationBarTitleText": "资料列表",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
+          "path": "pages/detail/index",
+          "style": {
+            "navigationBarTitleText": "资料详情"
+          }
+        },
+        {
+          "path": "pages/knowledge-tree/index",
+          "style": {
+            "navigationBarTitleText": "知识点树与出题配置"
+          }
+        },
+        {
+          "path": "index",
+          "style": {
+            "navigationBarTitleText": "资料管理"
+          }
+        }
+      ]
+    },
+    {
+      "root": "subpackages/report",
+      "pages": [
+        {
+          "path": "index",
+          "style": {
+            "navigationBarTitleText": "学情诊断"
+          }
+        }
+      ]
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "智练",
+    "navigationBarBackgroundColor": "#F8FAFC",
+    "backgroundColor": "#F8FAFC"
+  }
+}

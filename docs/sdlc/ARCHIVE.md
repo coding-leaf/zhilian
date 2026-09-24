@@ -36,3 +36,6 @@
 | ZL-127 | 实现练习组卷、作答保存、强幂等交卷与判题自评/重判 API 路由 | Deploy | `pending-commit` | 916 tests passed, check_layers 0 violations, ruff/mypy/bandit all green, 3-Pass Approved | 2026-09-24 |
 | ZL-128 | 实现诊断报告生成、掌握度总览与错题闭环 API 路由 | Deploy | `pending-commit` | 958 tests passed, 100% router coverage, check_layers 0 violations, ruff/mypy/bandit all green, 3-Pass Approved | 2026-09-24 |
 | ZL-129 | 实现微信换端登录、双令牌签发与刷新、即时版本吊销与用户注销 API 路由 | Deploy | `pending-commit` | 1013 tests passed, check_layers 0 violations, ruff/mypy/bandit all green, 3-Pass Approved | 2026-09-24 |
+| ZL-131 | 实现小程序前端脚手架、Pinia 4-Store、网络拦截双令牌静默刷新与Storage白名单安全防护 | Deploy | `working-tree` | 87 tests passed, 0 eslint errors, 0 type errors, 3-Pass Approved | 2026-09-24 |
+| ZL-132 | 实现资料分包列表、详情、2s智能轮询、单页就地重拍抽屉与3次熔断防护前端组件 | Deploy | `working-tree` | 143 tests passed, 0 eslint errors, 0 type errors, 3-Pass Approved | 2026-09-24 |
+| ZL-133 | Completed | Deploy | `pending-commit` | pnpm run test:unit (194 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-24 |
