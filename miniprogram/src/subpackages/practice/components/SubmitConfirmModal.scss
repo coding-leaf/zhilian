@@ -1,0 +1,194 @@
+/**
+ * SubmitConfirmModal.scss
+ * Styles for practice submission confirmation and unanswered warning dialog.
+ * Adheres to docs/DESIGN.md: Zero-Emoji, Low-saturation palette, WCAG AA/AAA.
+ */
+
+@import '@/uni.scss';
+
+.modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: $spacing-xl;
+  box-sizing: border-box;
+  background-color: rgba(15, 23, 42, 0.45);
+  animation: viewFade 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 640rpx;
+  padding: $spacing-xl;
+  background-color: #ffffff;
+  border-radius: $radius-lg; // 24rpx
+  box-shadow: $shadow-card;
+  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+
+  .modal-header {
+    text-align: center;
+    margin-bottom: $spacing-lg;
+
+    .modal-title {
+      font-size: $font-size-section;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-9;
+    }
+  }
+
+  .stats-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: $spacing-md 0;
+    margin-bottom: $spacing-lg;
+    background-color: $--wot-color-gray-1;
+    border-radius: $radius-md;
+    border: 1px solid $--wot-color-gray-4;
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+
+      .stat-num {
+        font-size: $font-size-section;
+        font-weight: $font-weight-bold;
+        color: $--wot-color-gray-9;
+
+        &.num-warning {
+          color: $--wot-color-warning-text;
+        }
+
+        &.num-success {
+          color: $--wot-color-success-text;
+        }
+      }
+
+      .stat-label {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+        margin-top: 4rpx;
+      }
+    }
+
+    .stat-divider {
+      width: 1px;
+      height: 40rpx;
+      background-color: $--wot-color-gray-4;
+    }
+  }
+
+  .unanswered-alert {
+    padding: $spacing-md $spacing-lg;
+    margin-bottom: $spacing-xl;
+    background-color: $--wot-color-warning-bg;
+    border: 1px solid $--wot-color-warning-border;
+    border-radius: $radius-md;
+
+    .alert-text {
+      font-size: $font-size-body;
+      line-height: $line-height-relaxed;
+      color: $--wot-color-warning-text;
+      font-weight: $font-weight-medium;
+    }
+
+    .unanswered-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: $spacing-xs;
+      margin-top: $spacing-sm;
+
+      .chip-item {
+        padding: 4rpx 14rpx;
+        background-color: #ffffff;
+        border: 1px solid $--wot-color-warning-border;
+        border-radius: $radius-pill;
+        font-size: $font-size-caption;
+        color: $--wot-color-warning-text;
+        transition: transform 0.16s ease;
+
+        &:active {
+          transform: $scale-active;
+        }
+      }
+    }
+  }
+
+  .complete-tip {
+    padding: $spacing-md $spacing-lg;
+    margin-bottom: $spacing-xl;
+    background-color: $--wot-color-success-bg;
+    border: 1px solid $--wot-color-success-border;
+    border-radius: $radius-md;
+    text-align: center;
+
+    .tip-text {
+      font-size: $font-size-body;
+      color: $--wot-color-success-text;
+      font-weight: $font-weight-medium;
+    }
+  }
+
+  .modal-actions {
+    display: flex;
+    align-items: center;
+    gap: $spacing-md;
+
+    .btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 80rpx;
+      border-radius: $radius-pill;
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      box-sizing: border-box;
+      transition: transform 0.16s ease, background-color 0.16s ease;
+
+      &:active:not(.disabled) {
+        transform: scale(0.975);
+      }
+
+      &.btn-secondary {
+        background-color: $--wot-color-gray-2;
+        color: $--wot-color-gray-8;
+        border: 1px solid $--wot-color-gray-4;
+      }
+
+      &.btn-primary {
+        background-color: $--wot-color-theme;
+        color: #ffffff;
+        box-shadow: $shadow-btn-primary;
+
+        &.btn-warning-submit {
+          background-color: $--wot-color-warning;
+        }
+      }
+
+      &.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+    }
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}

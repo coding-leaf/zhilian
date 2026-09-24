@@ -1,0 +1,161 @@
+/**
+ * AnswerSheetDrawer.scss
+ * Styles for answer sheet bottom popup drawer.
+ * Adheres to docs/DESIGN.md: Zero-Emoji, 24rpx top radius, 72rpx cell size, safe area padding.
+ */
+
+@import '@/uni.scss';
+
+.sheet-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  background-color: rgba(15, 23, 42, 0.45);
+  animation: viewFade 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sheet-drawer {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 80vh;
+  padding: $spacing-xl $spacing-xl calc(#{$spacing-xl} + env(safe-area-inset-bottom));
+  background-color: #ffffff;
+  border-top-left-radius: $radius-lg; // 24rpx
+  border-top-right-radius: $radius-lg;
+  box-shadow: $shadow-sheet;
+  animation: slideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+
+  .sheet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: $spacing-lg;
+    border-bottom: 1px solid $--wot-color-gray-4;
+
+    .header-left {
+      display: flex;
+      align-items: baseline;
+
+      .title {
+        font-size: $font-size-section; // 32rpx
+        font-weight: $font-weight-bold;
+        color: $--wot-color-gray-9;
+        margin-right: $spacing-md;
+      }
+
+      .subtitle {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+      }
+    }
+
+    .close-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: $touch-target-min; // 88rpx
+      min-height: $touch-target-min;
+      font-size: $font-size-card;
+      font-weight: $font-weight-medium;
+      color: $--wot-color-gray-7;
+    }
+  }
+
+  .sheet-legend {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: $spacing-md 0;
+    gap: $spacing-xl;
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+
+      .legend-dot {
+        width: 16rpx;
+        height: 16rpx;
+        border-radius: 4rpx;
+        margin-right: $spacing-xs;
+
+        &.legend-current {
+          background-color: $--wot-color-theme;
+        }
+
+        &.legend-answered {
+          background-color: $--wot-color-theme-light;
+          border: 1px solid $--wot-color-theme-border;
+        }
+
+        &.legend-unanswered {
+          background-color: $--wot-color-gray-2;
+          border: 1px solid $--wot-color-gray-4;
+        }
+      }
+
+      .legend-text {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+      }
+    }
+  }
+
+  .sheet-scroll {
+    max-height: 50vh;
+    padding: $spacing-sm 0;
+
+    .sheet-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20rpx;
+
+      .sheet-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 72rpx;
+        height: 72rpx;
+        box-sizing: border-box;
+        border-radius: $radius-sm; // 12rpx
+        font-size: $font-size-card;
+        font-weight: $font-weight-bold;
+        transition: transform 0.16s cubic-bezier(0.4, 0, 0.2, 1);
+
+        &:active {
+          transform: $scale-active;
+        }
+
+        &.cell-current {
+          background-color: $--wot-color-theme;
+          color: #ffffff;
+        }
+
+        &.cell-answered {
+          background-color: $--wot-color-theme-light;
+          border: 1px solid $--wot-color-theme-border;
+          color: $--wot-color-theme;
+        }
+
+        &.cell-unanswered {
+          background-color: $--wot-color-gray-2;
+          border: 1px solid $--wot-color-gray-4;
+          color: $--wot-color-gray-7;
+        }
+      }
+    }
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}

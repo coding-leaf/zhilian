@@ -1,0 +1,126 @@
+/**
+ * QuestionRenderer.scss
+ * Styles for question rendering across 5 question types.
+ * Adheres to docs/DESIGN.md: Zero-Emoji, Low-saturation palette, WCAG contrast.
+ */
+
+@import '@/uni.scss';
+
+.question-renderer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+
+  .question-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: $spacing-md;
+
+    .type-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 6rpx 16rpx;
+      border-radius: $radius-pill;
+      background-color: $--wot-color-theme-light;
+      border: 1px solid $--wot-color-theme-border;
+      font-size: $font-size-caption;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-theme;
+    }
+
+    .order-label {
+      font-size: $font-size-caption;
+      font-weight: $font-weight-medium;
+      color: $--wot-color-gray-6;
+    }
+  }
+
+  .stem-card {
+    box-sizing: border-box;
+    width: 100%;
+    padding: $spacing-xl; // 32rpx
+    margin-bottom: $spacing-xl;
+    background-color: #ffffff;
+    border-radius: $radius-lg; // 24rpx
+    border: 1px solid $--wot-color-gray-4;
+    box-shadow: $shadow-card;
+
+    .stem-text {
+      font-size: $font-size-section; // 32rpx
+      font-weight: $font-weight-bold;
+      line-height: $line-height-normal;
+      color: $--wot-color-gray-9;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+  }
+
+  .options-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .blank-input-wrapper {
+    box-sizing: border-box;
+    width: 100%;
+    padding: $spacing-lg;
+    background-color: #ffffff;
+    border-radius: $radius-md;
+    border: 1.5px solid $--wot-color-gray-4;
+    box-shadow: $shadow-card;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+
+    &:focus-within {
+      border-color: $--wot-color-theme;
+      box-shadow: 0 0 0 1px $--wot-color-theme-border;
+    }
+
+    .blank-input {
+      width: 100%;
+      height: 64rpx;
+      font-size: $font-size-card;
+      color: $--wot-color-gray-9;
+      background-color: transparent;
+    }
+  }
+
+  .short-answer-wrapper {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    padding: $spacing-lg;
+    padding-bottom: 56rpx;
+    background-color: #ffffff;
+    border-radius: $radius-md;
+    border: 1.5px solid $--wot-color-gray-4;
+    box-shadow: $shadow-card;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+
+    &:focus-within {
+      border-color: $--wot-color-theme;
+      box-shadow: 0 0 0 1px $--wot-color-theme-border;
+    }
+
+    .short-answer-textarea {
+      width: 100%;
+      min-height: 240rpx;
+      font-size: $font-size-card;
+      line-height: $line-height-card;
+      color: $--wot-color-gray-9;
+      background-color: transparent;
+      box-sizing: border-box;
+    }
+
+    .word-count {
+      position: absolute;
+      right: $spacing-lg;
+      bottom: $spacing-sm;
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-6;
+    }
+  }
+}

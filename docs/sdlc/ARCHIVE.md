@@ -39,3 +39,4 @@
 | ZL-131 | 实现小程序前端脚手架、Pinia 4-Store、网络拦截双令牌静默刷新与Storage白名单安全防护 | Deploy | `working-tree` | 87 tests passed, 0 eslint errors, 0 type errors, 3-Pass Approved | 2026-09-24 |
 | ZL-132 | 实现资料分包列表、详情、2s智能轮询、单页就地重拍抽屉与3次熔断防护前端组件 | Deploy | `working-tree` | 143 tests passed, 0 eslint errors, 0 type errors, 3-Pass Approved | 2026-09-24 |
 | ZL-133 | Completed | Deploy | `pending-commit` | pnpm run test:unit (194 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-24 |
+| ZL-134 | Completed | Deploy | `pending-commit` | pnpm run test:unit (245 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-24 |

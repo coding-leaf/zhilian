@@ -60,6 +60,17 @@
           }
         }
       ]
+    },
+    {
+      "root": "subpackages/practice",
+      "pages": [
+        {
+          "path": "pages/session/index",
+          "style": {
+            "navigationBarTitleText": "练习作答"
+          }
+        }
+      ]
     }
   ],
   "globalStyle": {

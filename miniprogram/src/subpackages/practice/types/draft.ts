@@ -1,0 +1,45 @@
+/**
+ * ZhiLian Mini-Program Practice Draft Contracts
+ * Reference: docs/sdlc/ZL-134/spec.md
+ * Zero-Emoji Policy enforced.
+ */
+
+export type DraftSyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
+
+/**
+ * 单题作答草稿条目
+ * 严格遵从 Storage 白名单，仅保留核心字段，禁止存入题目全文。
+ */
+export interface PracticeDraftItem {
+  question_id: string;
+  user_answer: string | string[];
+  time_spent_seconds: number;
+  sync_status: DraftSyncStatus;
+  updated_at: number;
+}
+
+/**
+ * 练习会话本地离线草稿包
+ * 对应 Storage 白名单 key: practice_drafts 的单场练习记录
+ */
+export interface PracticeDraftRecord {
+  practice_id: string;
+  items: Record<string, PracticeDraftItem>;
+  answers: Record<string, string | string[]>;
+  updated_at: number;
+}
+
+/**
+ * 本地 Storage practice_drafts 结构
+ */
+export type PracticeDraftStorage = Record<string, PracticeDraftRecord>;
+
+/**
+ * 未答题盘点计算结果
+ */
+export interface UnansweredCheckResult {
+  total: number;
+  answeredCount: number;
+  unansweredCount: number;
+  unansweredIndices: number[]; // 1-based 人类可读题目序号
+}
