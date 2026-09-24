@@ -6,11 +6,15 @@ from app.core.errors import (
     EmbeddingAuthError,
     EmbeddingError,
     EmbeddingTimeoutError,
+    IdempotencyConflictError,
+    IdempotencyKeyInvalidError,
     LLMAuthError,
     LLMError,
     LLMResponseFormatError,
     LLMTimeoutError,
     PermissionDeniedError,
+    QueueError,
+    QueueTimeoutError,
     SearchError,
 )
 
@@ -131,3 +135,56 @@ class TestAppErrors:
         assert format_err.status_code == 502
         assert format_err.message == "Schema validation failed"
         assert isinstance(format_err, LLMError)
+
+    def test_queue_errors(self) -> None:
+        """Verify Queue error hierarchy, error codes, and status codes."""
+        base_err = QueueError()
+        assert base_err.error_code == 30015
+        assert base_err.status_code == 500
+        assert base_err.message == "异步任务队列服务异常"
+        assert isinstance(base_err, AppError)
+
+        custom_err = QueueError(
+            message="Redis connection dropped",
+            details={"broker": "redis"},
+            status_code=503,
+        )
+        assert custom_err.error_code == 30015
+        assert custom_err.status_code == 503
+        assert custom_err.details == {"broker": "redis"}
+
+        timeout_err = QueueTimeoutError(message="Task wait timeout")
+        assert timeout_err.error_code == 30016
+        assert timeout_err.status_code == 504
+        assert timeout_err.message == "Task wait timeout"
+        assert isinstance(timeout_err, QueueError)
+
+    def test_idempotency_errors(self) -> None:
+        """Verify Idempotency error hierarchy, error codes, and status codes."""
+        conflict_err = IdempotencyConflictError()
+        assert conflict_err.error_code == 30017
+        assert conflict_err.status_code == 409
+        assert conflict_err.message == "请求正在并发处理中，请勿重复提交"
+        assert isinstance(conflict_err, AppError)
+
+        custom_conflict = IdempotencyConflictError(
+            message="Duplicate submission in progress",
+            details={"key": "k-123"},
+        )
+        assert custom_conflict.error_code == 30017
+        assert custom_conflict.status_code == 409
+        assert custom_conflict.details == {"key": "k-123"}
+
+        invalid_key_err = IdempotencyKeyInvalidError()
+        assert invalid_key_err.error_code == 30018
+        assert invalid_key_err.status_code == 400
+        assert invalid_key_err.message == "幂等键格式不合法"
+        assert isinstance(invalid_key_err, AppError)
+
+        custom_invalid = IdempotencyKeyInvalidError(
+            message="Idempotency-Key too long",
+            details={"length": 256},
+        )
+        assert custom_invalid.error_code == 30018
+        assert custom_invalid.status_code == 400
+        assert custom_invalid.details == {"length": 256}

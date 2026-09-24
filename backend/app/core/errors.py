@@ -487,12 +487,146 @@ class LLMResponseFormatError(LLMError):
         )
 
 
+class QueueError(AppError):
+    """异步任务队列服务基础异常 (错误码 30015, HTTP 500)。
+
+    当任务队列发生通用操作异常、底层驱动故障或出入队失败时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "异步任务队列服务异常"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 30015。
+        status_code: HTTP 状态码，默认 500。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "异步任务队列服务异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30015,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class QueueTimeoutError(QueueError):
+    """异步任务调度响应超时异常 (错误码 30016, HTTP 504)。
+
+    当任务入队等待连接超时或任务同步执行等待超时时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "异步任务调度响应超时"。
+        details: 结构化附加诊断信息。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "异步任务调度响应超时",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30016,
+            status_code=504,
+            code=code,
+            detail=detail,
+        )
+
+
+class IdempotencyConflictError(AppError):
+    """幂等并发冲突异常 (错误码 30017, HTTP 409)。
+
+    当相同幂等键在当前租户下正在处理中、未生成最终结果时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "请求正在并发处理中，请勿重复提交"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 30017。
+        status_code: HTTP 状态码，默认 409。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求正在并发处理中，请勿重复提交",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30017,
+        status_code: int = 409,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class IdempotencyKeyInvalidError(AppError):
+    """幂等键格式不合法异常 (错误码 30018, HTTP 400)。
+
+    当请求头携带的 Idempotency-Key 为空、超长 (>128 字符) 或含非法字符时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "幂等键格式不合法"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 30018。
+        status_code: HTTP 状态码，默认 400。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "幂等键格式不合法",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 30018,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
     "EmbeddingAuthError",
     "EmbeddingError",
     "EmbeddingTimeoutError",
+    "IdempotencyConflictError",
+    "IdempotencyKeyInvalidError",
     "LLMAuthError",
     "LLMError",
     "LLMResponseFormatError",
@@ -501,6 +635,8 @@ __all__ = [
     "OCRError",
     "OCRTimeoutError",
     "PermissionDeniedError",
+    "QueueError",
+    "QueueTimeoutError",
     "SearchError",
     "StorageConnectionError",
     "StorageError",
