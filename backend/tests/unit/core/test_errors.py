@@ -4,6 +4,7 @@ from app.core.errors import (
     AppError,
     AttemptItemNotFoundError,
     AuthenticationError,
+    DiagnosisReportNotFoundError,
     EmbeddingAuthError,
     EmbeddingError,
     EmbeddingTimeoutError,
@@ -18,6 +19,7 @@ from app.core.errors import (
     LLMError,
     LLMResponseFormatError,
     LLMTimeoutError,
+    MasteryRecordNotFoundError,
     MaterialInvalidError,
     MaterialNotFoundError,
     MaterialParseError,
@@ -26,6 +28,7 @@ from app.core.errors import (
     PermissionDeniedError,
     PracticeEmptyQuestionsError,
     PracticeNotFoundError,
+    PracticeNotGradedError,
     PracticeSessionNotFoundError,
     PracticeSessionStatusError,
     PracticeStatusError,
@@ -404,3 +407,47 @@ class TestAppErrors:
         assert custom_exec.error_code == 40015
         assert custom_exec.status_code == 500
         assert custom_exec.details == {"reason": "database deadlock"}
+
+    def test_diagnosis_and_mastery_errors(self) -> None:
+        """Verify Diagnosis and Mastery domain error codes, messages, and default status."""
+        not_graded_err = PracticeNotGradedError()
+        assert not_graded_err.error_code == 40016
+        assert not_graded_err.status_code == 400
+        assert not_graded_err.message == "练习尚未完成全量判题（存在待重判题目），无法生成诊断报告"
+        assert isinstance(not_graded_err, AppError)
+
+        custom_not_graded = PracticeNotGradedError(
+            message="练习判题中，无法生成报告",
+            details={"practice_id": "p-123", "pending_regrade_count": 2},
+        )
+        assert custom_not_graded.error_code == 40016
+        assert custom_not_graded.status_code == 400
+        assert custom_not_graded.details == {"practice_id": "p-123", "pending_regrade_count": 2}
+
+        report_nf = DiagnosisReportNotFoundError()
+        assert report_nf.error_code == 40017
+        assert report_nf.status_code == 404
+        assert report_nf.message == "诊断报告不存在"
+        assert isinstance(report_nf, AppError)
+
+        custom_report_nf = DiagnosisReportNotFoundError(
+            message="指定报告未找到",
+            details={"report_id": "r-456"},
+        )
+        assert custom_report_nf.error_code == 40017
+        assert custom_report_nf.status_code == 404
+        assert custom_report_nf.details == {"report_id": "r-456"}
+
+        mastery_nf = MasteryRecordNotFoundError()
+        assert mastery_nf.error_code == 40018
+        assert mastery_nf.status_code == 404
+        assert mastery_nf.message == "掌握度记录不存在"
+        assert isinstance(mastery_nf, AppError)
+
+        custom_mastery_nf = MasteryRecordNotFoundError(
+            message="指定掌握度记录未找到",
+            details={"knowledge_point_id": "kp-789"},
+        )
+        assert custom_mastery_nf.error_code == 40018
+        assert custom_mastery_nf.status_code == 404
+        assert custom_mastery_nf.details == {"knowledge_point_id": "kp-789"}

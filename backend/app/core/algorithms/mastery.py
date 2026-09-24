@@ -97,6 +97,10 @@ class AttemptRecord:
     answered_at_timestamp: float
 
 
+MasteryAttemptInput = AttemptRecord
+"""单次作答与判分记录实体别名，对齐契约规范。"""
+
+
 @dataclass(frozen=True)
 class MasteryAlgorithmConfig:
     """掌握度衰减算法配置不可变参数。

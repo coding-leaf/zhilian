@@ -1,5 +1,11 @@
 """Services package exporting domain services."""
 
+from app.services.diagnosis import (
+    DiagnosisService,
+    KnowledgeMasterySummaryDTO,
+    ReportService,
+    UserMasteryOverviewDTO,
+)
 from app.services.grading import (
     GradingService,
     LLMGradingOutput,
@@ -22,7 +28,9 @@ from app.services.question import QuestionService
 
 __all__ = [
     "CreatePracticeOptions",
+    "DiagnosisService",
     "GradingService",
+    "KnowledgeMasterySummaryDTO",
     "KnowledgeService",
     "LLMGradingOutput",
     "LLMGradingRubricEvaluation",
@@ -33,7 +41,9 @@ __all__ = [
     "PracticeSubmissionResult",
     "QuestionService",
     "RegradeAttemptDTO",
+    "ReportService",
     "SaveAnswerDTO",
     "SelfEvaluateDTO",
     "SubmitPracticeDTO",
+    "UserMasteryOverviewDTO",
 ]

@@ -1076,10 +1076,89 @@ class GradingExecutionError(AppError):
         )
 
 
+class PracticeNotGradedError(AppError):
+    """练习未完成全量判题异常 (错误码 40016, HTTP 400)。
+
+    当练习处于 PARTIALLY_GRADED 或存在待重判题目时，阻断诊断报告生成。
+    """
+
+    def __init__(
+        self,
+        message: str = "练习尚未完成全量判题（存在待重判题目），无法生成诊断报告",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40016,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class DiagnosisReportNotFoundError(AppError):
+    """诊断报告不存在异常 (错误码 40017, HTTP 404)。
+
+    当请求的学情诊断报告不存在或无权访问时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "诊断报告不存在",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40017,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class MasteryRecordNotFoundError(AppError):
+    """知识点掌握度记录不存在异常 (错误码 40018, HTTP 404)。
+
+    当请求的知识点掌握度记录不存在或无权访问时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "掌握度记录不存在",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40018,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AttemptItemNotFoundError",
     "AuthenticationError",
+    "DiagnosisReportNotFoundError",
     "EmbeddingAuthError",
     "EmbeddingError",
     "EmbeddingTimeoutError",
@@ -1094,6 +1173,7 @@ __all__ = [
     "LLMError",
     "LLMResponseFormatError",
     "LLMTimeoutError",
+    "MasteryRecordNotFoundError",
     "MaterialInvalidError",
     "MaterialNotFoundError",
     "MaterialParseError",
@@ -1105,6 +1185,7 @@ __all__ = [
     "PermissionDeniedError",
     "PracticeEmptyQuestionsError",
     "PracticeNotFoundError",
+    "PracticeNotGradedError",
     "PracticeSessionNotFoundError",
     "PracticeSessionStatusError",
     "PracticeStatusError",
