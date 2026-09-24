@@ -163,6 +163,11 @@ class Material(Base, TimestampMixin, TenantModelMixin):
         Index("ix_materials_user_status", "user_id", "status"),
     )
 
+    @property
+    def versions_count(self) -> int:
+        """获取关联历史版本总数。"""
+        return len(self.versions) if self.versions else 0
+
     def __repr__(self) -> str:
         """安全脱敏日志展示，严禁泄漏敏感凭证或全文。"""
         return (
@@ -478,6 +483,11 @@ class MaterialOCRPage(Base, TimestampMixin, TenantModelMixin):
         ),
         Index("ix_material_ocr_pages_version_qualified", "version_id", "is_qualified"),
     )
+
+    @property
+    def page_index(self) -> int:
+        """获取兼容别名属性：1-based 页面序号。"""
+        return self.page_number
 
     def __repr__(self) -> str:
         return (

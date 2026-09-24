@@ -31,7 +31,7 @@ from app.integrations.ocr.protocol import OCRResult, OCRTextBlock
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.storage.memory import MemoryStorageAdapter
 from app.models.base import Base
-from app.models.material import MaterialStatus, ParseStatus
+from app.models.material import MaterialOCRPage, MaterialStatus, ParseStatus
 from app.services.material import (
     MaterialService,
     validate_file_magic,
@@ -720,3 +720,167 @@ class TestMaterialCreationAndLifecycle:
         assert ready_ver.parse_status == ParseStatus.READY.value
         mat_refreshed = service.get_material(material_id=mat.id, user_id=user_id)
         assert mat_refreshed.status == MaterialStatus.READY.value
+
+    def test_list_materials_and_versions(self, service: MaterialService) -> None:
+        """Verify list_materials and list_material_versions."""
+        user_id = uuid.uuid4()
+        c1 = b"Sample text content 1"
+        c2 = b"Sample text content 2"
+        mat1, _ = service.create_material(
+            user_id=user_id,
+            title="Math-Analysis.txt",
+            file_format="txt",
+            file_size=len(c1),
+            file_content=c1,
+        )
+        _mat2, _ = service.create_material(
+            user_id=user_id,
+            title="Algebra.txt",
+            file_format="txt",
+            file_size=len(c2),
+            file_content=c2,
+        )
+
+        items, total = service.list_materials(user_id=user_id, keyword="Math")
+        assert total == 1
+        assert items[0].id == mat1.id
+
+        _items_all, total_all = service.list_materials(
+            user_id=user_id, status=MaterialStatus.PENDING.value
+        )
+        assert total_all == 2
+
+        versions = service.list_material_versions(user_id=user_id, material_id=mat1.id)
+        assert len(versions) == 1
+
+        with pytest.raises(MaterialNotFoundError):
+            service.list_material_versions(user_id=user_id, material_id=uuid.uuid4())
+
+    def test_switch_material_version_flow(self, service: MaterialService) -> None:
+        """Verify switch_material_version success and error conditions."""
+        user_id = uuid.uuid4()
+        c = b"Text content for version testing\n\n" * 5
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="SwitchTest.txt",
+            file_format="txt",
+            file_size=len(c),
+            file_content=c,
+        )
+
+        # Target version not ready raises error
+        with pytest.raises(MaterialInvalidError, match="尚未解析完成"):
+            service.switch_material_version(
+                user_id=user_id,
+                material_id=mat.id,
+                version_id=ver.id,
+            )
+
+        # Parse version to READY
+        service.parse_material_pipeline(
+            material_id=mat.id,
+            version_id=ver.id,
+            user_id=user_id,
+        )
+
+        # Switch version successfully
+        updated_mat = service.switch_material_version(
+            user_id=user_id,
+            material_id=mat.id,
+            version_id=ver.id,
+        )
+        assert updated_mat.current_version_id == ver.id
+
+        # Not found errors
+        with pytest.raises(MaterialNotFoundError):
+            service.switch_material_version(
+                user_id=user_id,
+                material_id=uuid.uuid4(),
+                version_id=ver.id,
+            )
+        with pytest.raises(MaterialNotFoundError):
+            service.switch_material_version(
+                user_id=user_id,
+                material_id=mat.id,
+                version_id=uuid.uuid4(),
+            )
+
+    def test_trigger_parse_sync_and_async(self, service: MaterialService) -> None:
+        """Verify trigger_parse both sync and async modes."""
+        user_id = uuid.uuid4()
+        c = b"Sync and async parse triggering test\n\n" * 4
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="TriggerTest.txt",
+            file_format="txt",
+            file_size=len(c),
+            file_content=c,
+        )
+
+        # Async trigger marks queued
+        ver_queued = service.trigger_parse(
+            user_id=user_id,
+            material_id=mat.id,
+            version_id=ver.id,
+            sync=False,
+        )
+        assert ver_queued.parse_status == ParseStatus.QUEUED.value
+
+        # Sync trigger executes pipeline
+        ver_ready = service.trigger_parse(
+            user_id=user_id,
+            material_id=mat.id,
+            version_id=ver.id,
+            sync=True,
+        )
+        assert ver_ready.parse_status == ParseStatus.READY.value
+
+        # Material not found
+        with pytest.raises(MaterialNotFoundError):
+            service.trigger_parse(user_id=user_id, material_id=uuid.uuid4())
+
+    def test_reshoot_material_page_service(self, service: MaterialService) -> None:
+        """Verify reshoot_material_page service logic."""
+        user_id = uuid.uuid4()
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"fake png data for reshoot"
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="ReshootMat.png",
+            file_format="png",
+            file_size=len(png_bytes),
+            file_content=png_bytes,
+        )
+
+        # Create initial OCR page record first
+        ocr_page = MaterialOCRPage(
+            version_id=ver.id,
+            material_id=mat.id,
+            user_id=user_id,
+            page_number=1,
+            image_storage_key="materials/test/page_1.png",
+            raw_text="Initial OCR text",
+            valid_char_count=16,
+            gibberish_ratio=0.0,
+            is_qualified=True,
+        )
+        service.repo.create_ocr_pages([ocr_page])
+
+        # Reshoot page 1
+        page = service.reshoot_material_page(
+            user_id=user_id,
+            material_id=mat.id,
+            page_index=1,
+            file_content=png_bytes,
+            version_id=ver.id,
+        )
+        assert page.page_number == 1
+        assert page.reshoot_count == 1
+
+        # Reshoot errors
+        with pytest.raises(MaterialNotFoundError):
+            service.reshoot_material_page(
+                user_id=user_id,
+                material_id=uuid.uuid4(),
+                page_index=1,
+                file_content=png_bytes,
+            )

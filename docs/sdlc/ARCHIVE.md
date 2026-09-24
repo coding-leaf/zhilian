@@ -31,3 +31,4 @@
 | ZL-122 | Success | Deploy | `pending-commit` | 705 tests passed, 91% service coverage, 100% algorithm/repo coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
 | ZL-123 | Success | Deploy | `pending-commit` | 732 tests passed, 100% repo coverage, 88% service coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
 | ZL-124 | Success | Deploy | `pending-commit` | 771 tests passed, 97% repo coverage, 92% service coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
+| ZL-125 | Success | Deploy | `pending-commit` | 816 tests passed, 96.58% global coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |

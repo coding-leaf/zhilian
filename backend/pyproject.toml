@@ -16,6 +16,7 @@ dependencies = [
     "pgvector>=0.3.0",
     "langgraph>=1.2.12",
     "langchain-core>=1.6.4",
+    "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]

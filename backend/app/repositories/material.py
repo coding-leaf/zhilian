@@ -107,6 +107,8 @@ class MaterialRepository:
         is_deleted: bool = False,
         limit: int = 20,
         offset: int = 0,
+        keyword: str | None = None,
+        status: str | None = None,
     ) -> list[Material]:
         """分页获取用户所属资料列表。
 
@@ -115,20 +117,22 @@ class MaterialRepository:
             is_deleted: 软删除状态过滤，默认 False。
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
+            keyword: 可选标题模糊搜索词。
+            status: 可选资料生命周期状态过滤。
 
         Returns:
             list[Material]: 资料实体列表。
         """
-        stmt = (
-            select(Material)
-            .where(
-                Material.user_id == user_id,
-                Material.is_deleted == is_deleted,
-            )
-            .order_by(Material.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+        stmt = select(Material).where(
+            Material.user_id == user_id,
+            Material.is_deleted == is_deleted,
         )
+        if keyword:
+            stmt = stmt.where(Material.title.ilike(f"%{keyword}%"))
+        if status:
+            stmt = stmt.where(Material.status == status)
+
+        stmt = stmt.order_by(Material.created_at.desc()).limit(limit).offset(offset)
         return list(self.session.execute(stmt).scalars().all())
 
     def list_materials_by_user(
@@ -138,6 +142,8 @@ class MaterialRepository:
         is_deleted: bool = False,
         limit: int = 20,
         offset: int = 0,
+        keyword: str | None = None,
+        status: str | None = None,
     ) -> tuple[list[Material], int]:
         """分页获取用户所属资料列表及符合条件的总记录数。
 
@@ -146,6 +152,8 @@ class MaterialRepository:
             is_deleted: 软删除状态过滤，默认 False。
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
+            keyword: 可选标题模糊搜索词。
+            status: 可选资料生命周期状态过滤。
 
         Returns:
             tuple[list[Material], int]: (资料实体列表, 总记录数)。
@@ -154,6 +162,11 @@ class MaterialRepository:
             Material.user_id == user_id,
             Material.is_deleted == is_deleted,
         )
+        if keyword:
+            count_stmt = count_stmt.where(Material.title.ilike(f"%{keyword}%"))
+        if status:
+            count_stmt = count_stmt.where(Material.status == status)
+
         total = self.session.execute(count_stmt).scalar_one()
 
         items = self.list_materials(
@@ -161,6 +174,8 @@ class MaterialRepository:
             is_deleted=is_deleted,
             limit=limit,
             offset=offset,
+            keyword=keyword,
+            status=status,
         )
         return items, int(total)
 
@@ -298,6 +313,30 @@ class MaterialRepository:
             MaterialVersion.user_id == user_id,
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_versions_by_material(
+        self,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[MaterialVersion]:
+        """查询指定资料所属的所有历史版本列表 (按版本号降序排序)。
+
+        Args:
+            material_id: 资料主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            list[MaterialVersion]: 版本实体列表。
+        """
+        stmt = (
+            select(MaterialVersion)
+            .where(
+                MaterialVersion.material_id == material_id,
+                MaterialVersion.user_id == user_id,
+            )
+            .order_by(MaterialVersion.version_number.desc())
+        )
+        return list(self.session.execute(stmt).scalars().all())
 
     def find_version_by_hash(
         self,

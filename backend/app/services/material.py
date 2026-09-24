@@ -11,6 +11,7 @@
 import hashlib
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -329,6 +330,51 @@ class MaterialService:
             if idempotency_key is not None and self.idempotency is not None:
                 self.idempotency.release_lock(idempotency_key, str(user_id))
             raise
+
+    def import_material_file(
+        self,
+        *,
+        user_id: uuid.UUID,
+        file_content: bytes,
+        filename: str | None = None,
+        title: str | None = None,
+        source_type: str = SourceType.LOCAL.value,
+        idempotency_key: str | None = None,
+    ) -> tuple[Material, MaterialVersion]:
+        """上传导入资料文件高阶入口。
+
+        清洗提取标题并推断文件扩展名，调用 create_material 执行完整魔数校验、查重与持久化。
+
+        Args:
+            user_id: 租户用户主键。
+            file_content: 原始文件二进制内容。
+            filename: 上传的文件名（用于推导扩展名与清洗默认标题）。
+            title: 用户显式传入的自定义标题（可选）。
+            source_type: 导入渠道来源（local/wechat）。
+            idempotency_key: 幂等键（可选）。
+
+        Returns:
+            tuple[Material, MaterialVersion]: 创建（或复用）的资料与版本实体。
+        """
+        file_format = ""
+        if filename and "." in filename:
+            file_format = filename.rsplit(".", 1)[-1].lower()
+
+        resolved_title = title
+        if not resolved_title or not resolved_title.strip():
+            resolved_title = filename.strip() if filename else ""
+            if not resolved_title:
+                resolved_title = "未命名资料"
+
+        return self.create_material(
+            user_id=user_id,
+            title=resolved_title,
+            file_format=file_format,
+            file_size=len(file_content),
+            file_content=file_content,
+            source_type=source_type,
+            idempotency_key=idempotency_key,
+        )
 
     def parse_material_pipeline(
         self,
@@ -659,43 +705,289 @@ class MaterialService:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
         return material
 
-    def list_materials(
+    def get_material_detail(
         self,
         *,
+        material_id: uuid.UUID,
         user_id: uuid.UUID,
+    ) -> Material:
+        """获取资料详情（包含历史版本），阻断跨租户越权。
+
+        Args:
+            material_id: 资料标识。
+            user_id: 租户用户标识。
+
+        Returns:
+            Material: 包含历史版本的资料实体。
+
+        Raises:
+            MaterialNotFoundError: 资料不存在或已软删除。
+        """
+        return self.get_material(material_id=material_id, user_id=user_id)
+
+    def list_materials(
+        self,
+        user_id: uuid.UUID | None = None,
+        *,
+        keyword: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        limit: int | None = None,
+        offset: int | None = None,
         is_deleted: bool = False,
-        limit: int = 20,
-        offset: int = 0,
+        **kwargs: Any,
     ) -> tuple[list[Material], int]:
         """分页获取用户所属资料列表及符合条件总记录数。
 
         Args:
             user_id: 租户用户标识。
+            keyword: 可选标题模糊搜索词。
+            status: 可选资料生命周期状态过滤。
+            page: 当前页码 (从 1 开始)。
+            page_size: 单页容量限制。
+            limit: 可选的单页数量限制（优先于 page_size）。
+            offset: 可选的分页游标偏移量（优先于 page 计算）。
             is_deleted: 软删除状态过滤。
-            limit: 单页记录数限制。
-            offset: 偏移游标。
+            kwargs: 兼容其他调用传参。
 
         Returns:
             tuple[list[Material], int]: (资料实体列表, 总记录数)。
         """
+        resolved_user_id = user_id or kwargs.get("user_id")
+        if resolved_user_id is None:
+            raise ValueError("user_id 必须指定")
+
+        calc_limit = limit if limit is not None else page_size
+        calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
+
         return self.repo.list_materials_by_user(
-            user_id=user_id,
+            user_id=resolved_user_id,
             is_deleted=is_deleted,
-            limit=limit,
-            offset=offset,
+            limit=calc_limit,
+            offset=calc_offset,
+            keyword=keyword,
+            status=status,
         )
+
+    def list_material_versions(
+        self,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+    ) -> list[MaterialVersion]:
+        """查询指定资料所属的所有历史版本列表 (按版本号降序)。
+
+        Args:
+            user_id: 租户用户标识。
+            material_id: 资料主键。
+
+        Returns:
+            list[MaterialVersion]: 历史版本实体列表。
+
+        Raises:
+            MaterialNotFoundError: 资料不存在或已软删除。
+        """
+        material = self.repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在")
+        return self.repo.list_versions_by_material(material_id, user_id)
+
+    def switch_material_version(
+        self,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+    ) -> Material:
+        """切换资料激活版本，必须处于 ready 状态。
+
+        Args:
+            user_id: 租户用户标识。
+            material_id: 资料主键。
+            version_id: 目标版本主键。
+
+        Returns:
+            Material: 切换后的资料实体。
+
+        Raises:
+            MaterialNotFoundError: 资料或版本不存在。
+            MaterialInvalidError: 目标版本未解析完成无法切换。
+        """
+        material = self.repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在")
+
+        version = self.repo.get_version_by_id(version_id, user_id)
+        if version is None or version.material_id != material_id:
+            raise MaterialNotFoundError("请求的资料版本不存在")
+
+        if version.parse_status != ParseStatus.READY.value:
+            raise MaterialInvalidError(
+                "该版本尚未解析完成，无法切换为当前激活版本",
+                details={"version_id": str(version_id), "parse_status": version.parse_status},
+            )
+
+        versions = self.repo.list_versions_by_material(material_id, user_id)
+        for v in versions:
+            v.is_active = v.id == version_id
+
+        self.repo.update_material_status(
+            material_id=material_id,
+            user_id=user_id,
+            status=MaterialStatus.READY.value,
+            current_version_id=version_id,
+        )
+        self.session.commit()
+
+        updated_material = self.repo.get_material_by_id(material_id, user_id)
+        return updated_material if updated_material is not None else material
+
+    def trigger_parse(
+        self,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
+        *,
+        sync: bool = False,
+    ) -> MaterialVersion:
+        """触发或重新调度资料解析流水线。
+
+        Args:
+            user_id: 租户用户标识。
+            material_id: 资料主键。
+            version_id: 可选指定版本标识，默认当前激活版本或最新版本。
+            sync: 是否同步阻塞执行。
+
+        Returns:
+            MaterialVersion: 目标版本实体。
+
+        Raises:
+            MaterialNotFoundError: 资料或指定版本不存在。
+        """
+        material = self.repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在")
+
+        if version_id is not None:
+            target_version = self.repo.get_version_by_id(version_id, user_id)
+            if target_version is None or target_version.material_id != material_id:
+                raise MaterialNotFoundError("请求的资料版本不存在")
+        else:
+            if material.current_version_id is not None:
+                target_version = self.repo.get_version_by_id(material.current_version_id, user_id)
+            else:
+                target_version = None
+
+            if target_version is None:
+                versions = self.repo.list_versions_by_material(material_id, user_id)
+                if not versions:
+                    raise MaterialNotFoundError("该资料未关联有效版本")
+                target_version = versions[0]
+
+        if sync:
+            return self.parse_material_pipeline(
+                material_id=material_id,
+                version_id=target_version.id,
+                user_id=user_id,
+            )
+
+        self.repo.update_version_status(
+            target_version.id,
+            user_id,
+            ParseStatus.QUEUED.value,
+            error_message=None,
+            failed_stage=None,
+        )
+        self.repo.update_material_status(
+            material_id,
+            user_id,
+            MaterialStatus.PARSING.value,
+        )
+        self.session.commit()
+
+        if self.queue is not None:
+            self.queue.enqueue(
+                task_name="parse_material_pipeline",
+                payload={
+                    "material_id": str(material_id),
+                    "version_id": str(target_version.id),
+                    "user_id": str(user_id),
+                },
+                user_id=str(user_id),
+            )
+        return target_version
+
+    def reshoot_material_page(
+        self,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+        page_index: int,
+        file_content: bytes,
+        version_id: uuid.UUID | None = None,
+    ) -> MaterialOCRPage:
+        """单页就地重拍替换：重新识别、更新质量评级与重拍熔断控制。
+
+        Args:
+            user_id: 租户用户标识。
+            material_id: 资料主键。
+            page_index: 目标重拍页码序号 (从 1 开始)。
+            file_content: 新拍摄的图片二进制字节流。
+            version_id: 可选指定版本标识，默认当前激活版本。
+
+        Returns:
+            MaterialOCRPage: 更新后的页级质检记录。
+
+        Raises:
+            MaterialNotFoundError: 资料或对应页面不存在。
+            MaterialInvalidError: 上传图片内容为空。
+            ReshootLimitExceededError: 单页重拍次数达 3 次触发熔断。
+        """
+        if not file_content:
+            raise MaterialInvalidError("重拍上传的图片内容不能为空")
+
+        material = self.repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在")
+
+        if version_id is not None:
+            target_ver_id = version_id
+        else:
+            if material.current_version_id is None:
+                raise MaterialNotFoundError("该资料未关联有效版本")
+            target_ver_id = material.current_version_id
+
+        version = self.repo.get_version_by_id(target_ver_id, user_id)
+        if version is None or version.material_id != material_id:
+            raise MaterialNotFoundError("请求的资料版本不存在")
+
+        self.retry_ocr_pages(
+            material_id=material_id,
+            version_id=target_ver_id,
+            user_id=user_id,
+            page_replaces={page_index: file_content},
+        )
+
+        page = self.repo.get_ocr_page(target_ver_id, page_index, user_id)
+        if page is None:
+            raise MaterialNotFoundError(f"未找到页码为 {page_index} 的 OCR 记录")
+        return page
 
     def soft_delete_material(
         self,
+        user_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
         *,
-        material_id: uuid.UUID,
-        user_id: uuid.UUID,
+        user_id_kw: uuid.UUID | None = None,
+        material_id_kw: uuid.UUID | None = None,
+        **kwargs: Any,
     ) -> bool:
         """软删除资料：标记 is_deleted=True，不破坏历史练习记录。
 
         Args:
-            material_id: 资料标识。
             user_id: 租户用户标识。
+            material_id: 资料标识。
+            user_id_kw: 兼容关键字参数。
+            material_id_kw: 兼容关键字参数。
+            kwargs: 兼容其他调用。
 
         Returns:
             bool: 成功删除返回 True。
@@ -703,7 +995,12 @@ class MaterialService:
         Raises:
             MaterialNotFoundError: 资料不存在或已删除。
         """
-        success = self.repo.soft_delete_material(material_id, user_id)
+        resolved_user_id = user_id or kwargs.get("user_id") or user_id_kw
+        resolved_material_id = material_id or kwargs.get("material_id") or material_id_kw
+        if resolved_user_id is None or resolved_material_id is None:
+            raise ValueError("user_id 与 material_id 均必须指定")
+
+        success = self.repo.soft_delete_material(resolved_material_id, resolved_user_id)
         if not success:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
         self.session.commit()
@@ -711,15 +1008,21 @@ class MaterialService:
 
     def hard_delete_material(
         self,
+        user_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
         *,
-        material_id: uuid.UUID,
-        user_id: uuid.UUID,
+        user_id_kw: uuid.UUID | None = None,
+        material_id_kw: uuid.UUID | None = None,
+        **kwargs: Any,
     ) -> bool:
         """物理级联销毁资料：删除切片、版本、OCR页、资料表记录及 MinIO 对象存储文件。
 
         Args:
-            material_id: 资料标识。
             user_id: 租户用户标识。
+            material_id: 资料标识。
+            user_id_kw: 兼容关键字参数。
+            material_id_kw: 兼容关键字参数。
+            kwargs: 兼容其他调用。
 
         Returns:
             bool: 成功删除返回 True。
@@ -727,7 +1030,14 @@ class MaterialService:
         Raises:
             MaterialNotFoundError: 资料不存在。
         """
-        material = self.repo.get_material_by_id(material_id, user_id, include_deleted=True)
+        resolved_user_id = user_id or kwargs.get("user_id") or user_id_kw
+        resolved_material_id = material_id or kwargs.get("material_id") or material_id_kw
+        if resolved_user_id is None or resolved_material_id is None:
+            raise ValueError("user_id 与 material_id 均必须指定")
+
+        material = self.repo.get_material_by_id(
+            resolved_material_id, resolved_user_id, include_deleted=True
+        )
         if material is None:
             raise MaterialNotFoundError("请求的学习资料不存在")
 
@@ -742,7 +1052,7 @@ class MaterialService:
                 if page.image_storage_key:
                     keys_to_purge.append(page.image_storage_key)
 
-        self.repo.hard_delete_material(material_id, user_id)
+        self.repo.hard_delete_material(resolved_material_id, resolved_user_id)
         self.session.commit()
 
         # 同步清理存储文件
