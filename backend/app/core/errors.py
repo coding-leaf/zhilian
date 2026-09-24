@@ -758,6 +758,84 @@ class MaterialNotFoundError(AppError):
         )
 
 
+class KnowledgePointQualityError(AppError):
+    """知识点质检门禁严重拦截异常 (错误码 40005, HTTP 400)。
+
+    当知识点抽取结果未通过四项门禁质检且无法自愈时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "知识点质检未达到合格门禁标准",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40005,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class KnowledgeExtractionRetryExceededError(AppError):
+    """知识点抽取内部异常耗尽重试 (错误码 40006, HTTP 500)。
+
+    当知识点抽取重试次数耗尽或大模型抽取异常且无法降级恢复时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "知识点抽取重试次数耗尽",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40006,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class KnowledgeNotFoundError(AppError):
+    """请求的知识点不存在或无权访问异常 (错误码 40007, HTTP 404)。
+
+    当查询的知识点不存在或所属租户不匹配时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的知识点不存在或已被删除",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40007,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
@@ -766,6 +844,9 @@ __all__ = [
     "EmbeddingTimeoutError",
     "IdempotencyConflictError",
     "IdempotencyKeyInvalidError",
+    "KnowledgeExtractionRetryExceededError",
+    "KnowledgeNotFoundError",
+    "KnowledgePointQualityError",
     "LLMAuthError",
     "LLMError",
     "LLMResponseFormatError",

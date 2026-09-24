@@ -8,6 +8,9 @@ from app.core.errors import (
     EmbeddingTimeoutError,
     IdempotencyConflictError,
     IdempotencyKeyInvalidError,
+    KnowledgeExtractionRetryExceededError,
+    KnowledgeNotFoundError,
+    KnowledgePointQualityError,
     LLMAuthError,
     LLMError,
     LLMResponseFormatError,
@@ -227,4 +230,32 @@ class TestAppErrors:
         assert not_found_err.error_code == 40004
         assert not_found_err.status_code == 404
         assert not_found_err.message == "请求的学习资料不存在或已被删除"
+        assert isinstance(not_found_err, AppError)
+
+    def test_knowledge_errors(self) -> None:
+        """Verify Knowledge error hierarchy, error codes, and status codes."""
+        quality_err = KnowledgePointQualityError()
+        assert quality_err.error_code == 40005
+        assert quality_err.status_code == 400
+        assert quality_err.message == "知识点质检未达到合格门禁标准"
+        assert isinstance(quality_err, AppError)
+
+        custom_quality_err = KnowledgePointQualityError(
+            message="知识点过度拆分",
+            details={"density": 100},
+        )
+        assert custom_quality_err.error_code == 40005
+        assert custom_quality_err.status_code == 400
+        assert custom_quality_err.details == {"density": 100}
+
+        retry_err = KnowledgeExtractionRetryExceededError()
+        assert retry_err.error_code == 40006
+        assert retry_err.status_code == 500
+        assert retry_err.message == "知识点抽取重试次数耗尽"
+        assert isinstance(retry_err, AppError)
+
+        not_found_err = KnowledgeNotFoundError()
+        assert not_found_err.error_code == 40007
+        assert not_found_err.status_code == 404
+        assert not_found_err.message == "请求的知识点不存在或已被删除"
         assert isinstance(not_found_err, AppError)
