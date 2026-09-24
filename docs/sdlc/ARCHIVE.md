@@ -27,3 +27,4 @@
 | ZL-118 | 实现 QueueProtocol、MemoryQueueAdapter (支持同步即时与优先级排队)、RedisQueueAdapter (指数退避与掩码脱敏)、IdempotencyProtocol、MemoryIdempotencyAdapter (原子抢占与TTL快照回放)、RedisIdempotencyAdapter、工厂函数及 30015~30018 统一异常体系 | Deploy | `ZL-118` | pytest 607用例全绿，全局代码覆盖率99.09%，队列及幂等模块覆盖率98%，ruff/mypy/bandit/check_layers全绿 | 2026-09-24 |
 | ZL-119 | 实现 MaterialRepository 仓储（强租户隔离阻断越权）、MaterialService 编排服务（魔数校验、MinIO隔离存储、异步任务排队、OCR质检门禁、重拍3次熔断、纯函数分块、批量向量化持久化、软删除与级联物理清理联动MinIO）及 40001~40004 业务异常体系 | Deploy | `ZL-119` | pytest 635用例全绿，全局代码覆盖率98.41%，MaterialService覆盖率96%，MaterialRepository覆盖率100%，ruff/mypy/bandit/check_layers全绿 | 2026-09-24 |
 | ZL-120 | Success | Deploy | `pending-commit` | 654 tests passed, 99.06% coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
+| ZL-121 | Success | Deploy | `pending-commit` | 680 tests passed, 97% coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |

@@ -18,8 +18,11 @@ from app.core.errors import (
     MaterialInvalidError,
     MaterialNotFoundError,
     MaterialParseError,
+    MissingSourceSnippetError,
     OCRReshootExceededError,
     PermissionDeniedError,
+    QuestionNotFoundError,
+    QuestionQualityCheckError,
     QueueError,
     QueueTimeoutError,
     ReshootLimitExceededError,
@@ -259,3 +262,47 @@ class TestAppErrors:
         assert not_found_err.status_code == 404
         assert not_found_err.message == "请求的知识点不存在或已被删除"
         assert isinstance(not_found_err, AppError)
+
+    def test_question_errors(self) -> None:
+        """Verify Question error hierarchy, error codes, and status codes."""
+        missing_snippet_err = MissingSourceSnippetError()
+        assert missing_snippet_err.error_code == 40003
+        assert missing_snippet_err.status_code == 400
+        assert missing_snippet_err.message == "检索不到与知识点匹配的有效资料片段，拒绝出题"
+        assert isinstance(missing_snippet_err, AppError)
+
+        custom_missing = MissingSourceSnippetError(
+            message="自定义检索不到片段",
+            details={"similarity": 0.2},
+        )
+        assert custom_missing.error_code == 40003
+        assert custom_missing.status_code == 400
+        assert custom_missing.details == {"similarity": 0.2}
+
+        qc_err = QuestionQualityCheckError()
+        assert qc_err.error_code == 40008
+        assert qc_err.status_code == 400
+        assert qc_err.message == "题目质检未达到合格门禁标准"
+        assert isinstance(qc_err, AppError)
+
+        custom_qc = QuestionQualityCheckError(
+            message="重复题目超限",
+            details={"check_type": "DUPLICATE"},
+        )
+        assert custom_qc.error_code == 40008
+        assert custom_qc.status_code == 400
+        assert custom_qc.details == {"check_type": "DUPLICATE"}
+
+        not_found_err = QuestionNotFoundError()
+        assert not_found_err.error_code == 40009
+        assert not_found_err.status_code == 404
+        assert not_found_err.message == "请求的题目不存在或无权访问"
+        assert isinstance(not_found_err, AppError)
+
+        custom_not_found = QuestionNotFoundError(
+            message="题目不存在",
+            details={"question_id": "123"},
+        )
+        assert custom_not_found.error_code == 40009
+        assert custom_not_found.status_code == 404
+        assert custom_not_found.details == {"question_id": "123"}

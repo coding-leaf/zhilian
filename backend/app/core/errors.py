@@ -836,6 +836,84 @@ class KnowledgeNotFoundError(AppError):
         )
 
 
+class MissingSourceSnippetError(AppError):
+    """检索不到与知识点匹配的有效资料片段异常 (错误码 40003, HTTP 400)。
+
+    当知识点绑定的切片为空或与考点检索相似度未达到门禁阈值时抛出，阻断题目生成。
+    """
+
+    def __init__(
+        self,
+        message: str = "检索不到与知识点匹配的有效资料片段，拒绝出题",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40003,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class QuestionQualityCheckError(AppError):
+    """题目质检未通过门禁异常 (错误码 40008, HTTP 400)。
+
+    当题目质检四项一票否决门禁未通过且重试耗尽时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "题目质检未达到合格门禁标准",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40008,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class QuestionNotFoundError(AppError):
+    """请求的题目不存在或无权访问异常 (错误码 40009, HTTP 404)。
+
+    当查询的题目不存在或所属租户不匹配时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的题目不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40009,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
@@ -854,11 +932,14 @@ __all__ = [
     "MaterialInvalidError",
     "MaterialNotFoundError",
     "MaterialParseError",
+    "MissingSourceSnippetError",
     "OCRAuthError",
     "OCRError",
     "OCRReshootExceededError",
     "OCRTimeoutError",
     "PermissionDeniedError",
+    "QuestionNotFoundError",
+    "QuestionQualityCheckError",
     "QueueError",
     "QueueTimeoutError",
     "ReshootLimitExceededError",
