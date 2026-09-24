@@ -21,6 +21,11 @@ from app.core.errors import (
     MissingSourceSnippetError,
     OCRReshootExceededError,
     PermissionDeniedError,
+    PracticeEmptyQuestionsError,
+    PracticeNotFoundError,
+    PracticeSessionNotFoundError,
+    PracticeSessionStatusError,
+    PracticeStatusError,
     QuestionNotFoundError,
     QuestionQualityCheckError,
     QueueError,
@@ -306,3 +311,49 @@ class TestAppErrors:
         assert custom_not_found.error_code == 40009
         assert custom_not_found.status_code == 404
         assert custom_not_found.details == {"question_id": "123"}
+
+    def test_practice_errors(self) -> None:
+        """Verify Practice domain errors codes, messages, and aliases."""
+        not_found = PracticeNotFoundError()
+        assert not_found.error_code == 40010
+        assert not_found.status_code == 404
+        assert not_found.message == "请求的练习不存在或无权访问"
+        assert isinstance(not_found, AppError)
+        assert PracticeSessionNotFoundError is PracticeNotFoundError
+
+        custom_nf = PracticeNotFoundError(
+            message="练习会话不存在",
+            details={"practice_id": "p1"},
+        )
+        assert custom_nf.error_code == 40010
+        assert custom_nf.status_code == 404
+        assert custom_nf.details == {"practice_id": "p1"}
+
+        status_err = PracticeStatusError()
+        assert status_err.error_code == 40011
+        assert status_err.status_code == 400
+        assert status_err.message == "练习状态流转不合法，当前状态禁止该操作"
+        assert isinstance(status_err, AppError)
+        assert PracticeSessionStatusError is PracticeStatusError
+
+        custom_status = PracticeStatusError(
+            message="状态非法",
+            details={"current_status": "completed"},
+        )
+        assert custom_status.error_code == 40011
+        assert custom_status.status_code == 400
+        assert custom_status.details == {"current_status": "completed"}
+
+        empty_q_err = PracticeEmptyQuestionsError()
+        assert empty_q_err.error_code == 40012
+        assert empty_q_err.status_code == 400
+        assert empty_q_err.message == "题库可用题目不足，无法满足当前出题配置要求"
+        assert isinstance(empty_q_err, AppError)
+
+        custom_empty = PracticeEmptyQuestionsError(
+            message="题目不足",
+            details={"required": 10, "available": 3},
+        )
+        assert custom_empty.error_code == 40012
+        assert custom_empty.status_code == 400
+        assert custom_empty.details == {"required": 10, "available": 3}

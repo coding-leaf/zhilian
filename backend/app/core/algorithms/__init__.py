@@ -115,6 +115,9 @@ from app.core.algorithms.ocr_quality import (
     evaluate_page_quality,
     verify_ocr_quality,
 )
+from app.core.algorithms.practice import (
+    scatter_adjacent_knowledge_questions,
+)
 from app.core.algorithms.question_quality import (
     AMBIGUOUS_TRIGGER_WORDS,
     CONTENT_WORD_PATTERN,
@@ -282,6 +285,7 @@ __all__ = [
     "normalize_timestamp",
     "reciprocal_rank_fusion",
     "resolve_source_weight",
+    "scatter_adjacent_knowledge_questions",
     "split_material_into_snippets",
     "synthesize_diagnosis_report",
     "tokenize_text",

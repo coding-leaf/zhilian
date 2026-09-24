@@ -914,6 +914,90 @@ class QuestionNotFoundError(AppError):
         )
 
 
+class PracticeNotFoundError(AppError):
+    """请求的练习不存在或无权访问异常 (错误码 40010, HTTP 404)。
+
+    当查询的练习不存在或所属租户不匹配时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的练习不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40010,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+PracticeSessionNotFoundError = PracticeNotFoundError
+
+
+class PracticeStatusError(AppError):
+    """练习状态流转不合法异常 (错误码 40011, HTTP 400)。
+
+    当练习当前状态不允许所请求的操作或跃迁时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "练习状态流转不合法，当前状态禁止该操作",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40011,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+PracticeSessionStatusError = PracticeStatusError
+
+
+class PracticeEmptyQuestionsError(AppError):
+    """题库可用题目不足异常 (错误码 40012, HTTP 400)。
+
+    当可用题目数量不足以满足组卷出题配置要求时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "题库可用题目不足，无法满足当前出题配置要求",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40012,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
@@ -938,6 +1022,11 @@ __all__ = [
     "OCRReshootExceededError",
     "OCRTimeoutError",
     "PermissionDeniedError",
+    "PracticeEmptyQuestionsError",
+    "PracticeNotFoundError",
+    "PracticeSessionNotFoundError",
+    "PracticeSessionStatusError",
+    "PracticeStatusError",
     "QuestionNotFoundError",
     "QuestionQualityCheckError",
     "QueueError",
