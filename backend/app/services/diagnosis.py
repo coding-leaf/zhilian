@@ -33,8 +33,10 @@ from app.core.algorithms.mastery import (
 )
 from app.core.errors import (
     DiagnosisReportNotFoundError,
+    MasteryRecordNotFoundError,
     PracticeNotFoundError,
     PracticeNotGradedError,
+    WrongRecordNotFoundError,
 )
 from app.core.security import generate_user_ref
 from app.models.practice import (
@@ -266,7 +268,7 @@ class DiagnosisService:
             list[MasteryRecord]: 持久化更新后的掌握度记录列表（支持双模索引）。
         """
         start_time = time.perf_counter()
-        req_id = request_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
         evaluation_time = current_time if current_time is not None else datetime.now(UTC)
         evaluation_timestamp = evaluation_time.timestamp()
 
@@ -367,7 +369,7 @@ class DiagnosisService:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         self._log_metric(
             action="CALCULATE_MASTERY",
-            request_id=req_id,
+            request_id=request_id,
             user_id=user_id,
             target_id=str(knowledge_point_ids[0]) if knowledge_point_ids else "empty",
             duration_ms=duration_ms,
@@ -415,7 +417,7 @@ class DiagnosisService:
             PracticeNotGradedError: 练习尚未全量判题终态。
         """
         start_time = time.perf_counter()
-        req_id = request_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
         evaluation_time = current_time if current_time is not None else datetime.now(UTC)
 
         # 1. 检索 Practice 并校验归属
@@ -427,7 +429,7 @@ class DiagnosisService:
         if practice is None:
             self._log_metric(
                 action="GENERATE_DIAGNOSIS_REPORT",
-                request_id=req_id,
+                request_id=request_id,
                 user_id=user_id,
                 target_id=practice_id,
                 duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -445,7 +447,7 @@ class DiagnosisService:
         ):
             self._log_metric(
                 action="GENERATE_DIAGNOSIS_REPORT",
-                request_id=req_id,
+                request_id=request_id,
                 user_id=user_id,
                 target_id=practice_id,
                 duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -467,7 +469,7 @@ class DiagnosisService:
         if existing_report is not None:
             self._log_metric(
                 action="GENERATE_DIAGNOSIS_REPORT_IDEMPOTENT",
-                request_id=req_id,
+                request_id=request_id,
                 user_id=user_id,
                 target_id=practice_id,
                 duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -559,7 +561,7 @@ class DiagnosisService:
             user_id=user_id,
             knowledge_point_ids=sorted_point_ids,
             current_time=evaluation_time,
-            request_id=req_id,
+            request_id=request_id,
         )
         current_record_map = {record.knowledge_point_id: record for record in updated_mastery_list}
 
@@ -571,8 +573,8 @@ class DiagnosisService:
         fallback_point_id = sorted_point_ids[0] if sorted_point_ids else None
 
         for point_id in sorted_point_ids:
-            kp_entity = self.knowledge_repo.get_by_id(point_id, user_id)
-            if kp_entity and getattr(kp_entity, "is_low_confidence", False):
+            knowledge_point = self.knowledge_repo.get_by_id(point_id, user_id)
+            if knowledge_point and getattr(knowledge_point, "is_low_confidence", False):
                 is_structure_degraded = True
 
             prev_record = previous_record_map.get(point_id)
@@ -609,7 +611,9 @@ class DiagnosisService:
             evaluation_inputs.append(
                 KnowledgeEvaluationInput(
                     knowledge_id=str(point_id),
-                    knowledge_title=kp_entity.name if kp_entity else f"知识点-{str(point_id)[:8]}",
+                    knowledge_title=knowledge_point.name
+                    if knowledge_point
+                    else f"知识点-{str(point_id)[:8]}",
                     current_score=curr_score,
                     previous_score=prev_score,
                     days_since_last_practice=days_since,
@@ -749,7 +753,7 @@ class DiagnosisService:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         self._log_metric(
             action="GENERATE_DIAGNOSIS_REPORT",
-            request_id=req_id,
+            request_id=request_id,
             user_id=user_id,
             target_id=practice_id,
             duration_ms=duration_ms,
@@ -784,7 +788,7 @@ class DiagnosisService:
             DiagnosisReportNotFoundError: 报告不存在或无权访问。
         """
         start_time = time.perf_counter()
-        req_id = request_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
 
         report = self.diagnosis_repo.get_diagnosis_report_by_id(
             report_id=report_id,
@@ -793,7 +797,7 @@ class DiagnosisService:
         if report is None:
             self._log_metric(
                 action="GET_DIAGNOSIS_REPORT",
-                request_id=req_id,
+                request_id=request_id,
                 user_id=user_id,
                 target_id=report_id,
                 duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -806,7 +810,7 @@ class DiagnosisService:
 
         self._log_metric(
             action="GET_DIAGNOSIS_REPORT",
-            request_id=req_id,
+            request_id=request_id,
             user_id=user_id,
             target_id=report_id,
             duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -834,7 +838,7 @@ class DiagnosisService:
             DiagnosisReportNotFoundError: 报告不存在或无权访问。
         """
         start_time = time.perf_counter()
-        req_id = request_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
 
         report = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
             practice_id=practice_id,
@@ -843,7 +847,7 @@ class DiagnosisService:
         if report is None:
             self._log_metric(
                 action="GET_DIAGNOSIS_REPORT_BY_PRACTICE",
-                request_id=req_id,
+                request_id=request_id,
                 user_id=user_id,
                 target_id=practice_id,
                 duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -856,7 +860,7 @@ class DiagnosisService:
 
         self._log_metric(
             action="GET_DIAGNOSIS_REPORT_BY_PRACTICE",
-            request_id=req_id,
+            request_id=request_id,
             user_id=user_id,
             target_id=practice_id,
             duration_ms=(time.perf_counter() - start_time) * 1000.0,
@@ -913,7 +917,7 @@ class DiagnosisService:
             UserMasteryOverviewDTO: 包含薄弱点清单与四档统计的总览实体。
         """
         start_time = time.perf_counter()
-        req_id = request_id or str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
 
         knowledge_points = self.knowledge_repo.list_by_material_id(
             material_id=material_id,
@@ -995,7 +999,7 @@ class DiagnosisService:
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         self._log_metric(
             action="GET_MASTERY_OVERVIEW",
-            request_id=req_id,
+            request_id=request_id,
             user_id=user_id,
             target_id=material_id,
             duration_ms=duration_ms,
@@ -1007,6 +1011,78 @@ class DiagnosisService:
             },
         )
         return overview_dto
+
+    def get_knowledge_mastery(
+        self,
+        user_id: uuid.UUID,
+        knowledge_point_id: uuid.UUID,
+        request_id: str | None = None,
+    ) -> KnowledgeMasterySummaryDTO:
+        """获取单个知识点的当前掌握度衰减聚合数据。
+
+        Args:
+            user_id: 租户用户主键。
+            knowledge_point_id: 知识点主键。
+            request_id: 请求追踪标识。
+
+        Returns:
+            KnowledgeMasterySummaryDTO: 单知识点掌握度汇总数据传输实体。
+
+        Raises:
+            MasteryRecordNotFoundError: 知识点掌握度记录不存在或无权访问。
+        """
+        start_time = time.perf_counter()
+        request_id = request_id or str(uuid.uuid4())
+
+        record = self.diagnosis_repo.get_mastery_record(
+            knowledge_point_id=knowledge_point_id,
+            user_id=user_id,
+        )
+        if record is None:
+            self._log_metric(
+                action="GET_KNOWLEDGE_MASTERY",
+                request_id=request_id,
+                user_id=user_id,
+                target_id=knowledge_point_id,
+                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                error_code=40018,
+            )
+            raise MasteryRecordNotFoundError(
+                message="该知识点尚未产生掌握度评估记录",
+                details={"knowledge_point_id": str(knowledge_point_id)},
+                knowledge_point_id=knowledge_point_id,
+            )
+
+        knowledge_name = getattr(record, "knowledge_name", None)
+        if not knowledge_name:
+            knowledge_point = self.knowledge_repo.get_by_id(knowledge_point_id, user_id=user_id)
+            knowledge_name = (
+                knowledge_point.name if knowledge_point else f"知识点-{str(knowledge_point_id)[:8]}"
+            )
+
+        summary_dto = KnowledgeMasterySummaryDTO(
+            knowledge_point_id=record.knowledge_point_id,
+            knowledge_name=knowledge_name,
+            mastery_score=record.mastery_score,
+            level=record.level,
+            practice_count=record.practice_count,
+            correct_count=record.correct_count,
+            last_practiced_at=record.last_practiced_at,
+        )
+
+        self._log_metric(
+            action="GET_KNOWLEDGE_MASTERY",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=knowledge_point_id,
+            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+            error_code=0,
+            extra={
+                "mastery_score": record.mastery_score,
+                "level": record.level,
+            },
+        )
+        return summary_dto
 
     def list_wrong_records(
         self,
@@ -1072,11 +1148,68 @@ class DiagnosisService:
             offset=effective_offset,
         )
 
+    def mark_wrong_record_mastered(
+        self,
+        user_id: uuid.UUID,
+        record_id: uuid.UUID,
+        request_id: str | None = None,
+    ) -> WrongRecord:
+        """标记指定错题记录已攻克掌握。
+
+        Args:
+            user_id: 租户用户主键。
+            record_id: 错题记录主键。
+            request_id: 请求追踪标识。
+
+        Returns:
+            WrongRecord: 更新后的错题实体。
+
+        Raises:
+            WrongRecordNotFoundError: 错题记录不存在或无权访问。
+        """
+        start_time = time.perf_counter()
+        request_id = request_id or str(uuid.uuid4())
+
+        record = self.diagnosis_repo.mark_wrong_record_mastered(
+            wrong_record_id=record_id,
+            user_id=user_id,
+        )
+        if record is None:
+            self._log_metric(
+                action="MARK_WRONG_RECORD_MASTERED",
+                request_id=request_id,
+                user_id=user_id,
+                target_id=record_id,
+                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                error_code=40019,
+            )
+            raise WrongRecordNotFoundError(
+                message="错题记录不存在或无权访问",
+                details={"record_id": str(record_id)},
+                record_id=record_id,
+            )
+
+        self.session.commit()
+        self._log_metric(
+            action="MARK_WRONG_RECORD_MASTERED",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=record_id,
+            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+            error_code=0,
+            extra={
+                "is_mastered": record.is_mastered,
+                "mastered_at": record.mastered_at.isoformat() if record.mastered_at else None,
+            },
+        )
+        return record
+
     def remove_wrong_record(
         self,
         user_id: uuid.UUID,
         wrong_record_id: uuid.UUID | None = None,
         record_id: uuid.UUID | None = None,
+        request_id: str | None = None,
     ) -> bool:
         """删除指定错题记录。
 
@@ -1084,20 +1217,50 @@ class DiagnosisService:
             user_id: 租户用户主键。
             wrong_record_id: 错题记录主键。
             record_id: 错题记录主键别名。
+            request_id: 请求追踪标识。
 
         Returns:
-            bool: 成功删除返回 True，未命中或越权返回 False。
+            bool: 成功删除返回 True。
+
+        Raises:
+            WrongRecordNotFoundError: 错题记录不存在或无权访问。
         """
-        target_id = wrong_record_id if wrong_record_id is not None else record_id
+        target_id = record_id if record_id is not None else wrong_record_id
         if target_id is None:
             return False
+
+        start_time = time.perf_counter()
+        request_id = request_id or str(uuid.uuid4())
 
         deleted = self.diagnosis_repo.delete_wrong_record(
             record_id=target_id,
             user_id=user_id,
         )
+        if not deleted:
+            self._log_metric(
+                action="REMOVE_WRONG_RECORD",
+                request_id=request_id,
+                user_id=user_id,
+                target_id=target_id,
+                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                error_code=40019,
+            )
+            raise WrongRecordNotFoundError(
+                message="错题记录不存在或无权访问",
+                details={"record_id": str(target_id)},
+                record_id=target_id,
+            )
+
         self.session.commit()
-        return deleted
+        self._log_metric(
+            action="REMOVE_WRONG_RECORD",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=target_id,
+            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+            error_code=0,
+        )
+        return True
 
 
 ReportService = DiagnosisService

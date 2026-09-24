@@ -431,19 +431,33 @@ class DiagnosisRepository:
 
     def mark_wrong_record_mastered(
         self,
-        question_id: uuid.UUID,
-        user_id: uuid.UUID,
+        question_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+        *,
+        wrong_record_id: uuid.UUID | None = None,
+        record_id: uuid.UUID | None = None,
     ) -> WrongRecord | None:
         """标记指定错题记录已攻克掌握。
 
         Args:
             question_id: 题目标识。
             user_id: 租户用户标识。
+            wrong_record_id: 错题记录主键 (可选)。
+            record_id: 错题记录主键别名 (可选)。
 
         Returns:
             WrongRecord | None: 更新后的错题实体，未命中返回 None。
         """
-        record = self.get_wrong_record(question_id, user_id)
+        if user_id is None:
+            return None
+        target_record_id = wrong_record_id or record_id
+        if target_record_id is not None:
+            record = self.get_wrong_record_by_id(target_record_id, user_id)
+        elif question_id is not None:
+            record = self.get_wrong_record(question_id, user_id)
+        else:
+            return None
+
         if record is None:
             return None
         record.is_mastered = True

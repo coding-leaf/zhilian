@@ -34,3 +34,4 @@
 | ZL-125 | Success | Deploy | `pending-commit` | 816 tests passed, 96.58% global coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
 | ZL-126 | Success | Deploy | `pending-commit` | 847 tests passed, 96.19% global coverage, check_layers 0 violations, 3-Pass Approved | 2026-09-24 |
 | ZL-127 | 实现练习组卷、作答保存、强幂等交卷与判题自评/重判 API 路由 | Deploy | `pending-commit` | 916 tests passed, check_layers 0 violations, ruff/mypy/bandit all green, 3-Pass Approved | 2026-09-24 |
+| ZL-128 | 实现诊断报告生成、掌握度总览与错题闭环 API 路由 | Deploy | `pending-commit` | 958 tests passed, 100% router coverage, check_layers 0 violations, ruff/mypy/bandit all green, 3-Pass Approved | 2026-09-24 |

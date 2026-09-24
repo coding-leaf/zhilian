@@ -1147,12 +1147,43 @@ class MasteryRecordNotFoundError(AppError):
         status_code: int = 404,
         code: int | None = None,
         detail: dict[str, Any] | None = None,
+        knowledge_point_id: Any = None,
     ) -> None:
+        merged_details = dict(detail or details or {})
+        if knowledge_point_id is not None:
+            merged_details["knowledge_point_id"] = str(knowledge_point_id)
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
-            details=details,
+            details=merged_details,
+            code=code,
+            detail=detail,
+        )
+
+
+class WrongRecordNotFoundError(AppError):
+    """错题记录不存在或无权访问异常 (HTTP 404 / 40019)。"""
+
+    def __init__(
+        self,
+        message: str = "错题记录不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40019,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+        record_id: Any = None,
+    ) -> None:
+        merged_details = dict(detail or details or {})
+        if record_id is not None:
+            merged_details["record_id"] = str(record_id)
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            details=merged_details,
             code=code,
             detail=detail,
         )
@@ -1202,4 +1233,5 @@ __all__ = [
     "StorageConnectionError",
     "StorageError",
     "StorageNotFoundError",
+    "WrongRecordNotFoundError",
 ]

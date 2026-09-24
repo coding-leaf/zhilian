@@ -7,6 +7,7 @@ from app.api.deps.auth import (
     http_bearer,
     validate_user_status,
 )
+from app.api.deps.diagnosis import get_diagnosis_service
 from app.api.deps.grading import get_grading_service
 from app.api.deps.knowledge import get_db_session, get_knowledge_service
 from app.api.deps.material import get_material_service
@@ -18,6 +19,7 @@ __all__ = [
     "get_current_user",
     "get_current_user_id",
     "get_db_session",
+    "get_diagnosis_service",
     "get_grading_service",
     "get_knowledge_service",
     "get_material_service",
