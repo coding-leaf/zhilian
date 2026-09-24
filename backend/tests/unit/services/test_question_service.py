@@ -57,6 +57,7 @@ from app.models.material import Material, MaterialSnippet, MaterialVersion
 from app.models.question import (
     AuditAction,
     Question,
+    QuestionQualityCheck,
     QuestionStatus,
     QuestionType,
 )
@@ -1079,3 +1080,69 @@ class TestQuestionServiceCRUDAndAudit:
                 user_id=user_id,
                 question_id=saved_q.id,
             )
+
+    def test_service_helper_methods(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify get_question_detail, list_questions, list_edit_logs, list_quality_checks."""
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        version_id = helper_setup["version_id"]
+        point_id = helper_setup["point_id"]
+
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+
+        q = Question(
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=point_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="题目服务辅助方法测试。",
+            answer="B",
+            difficulty=2,
+        )
+        saved = service.question_repo.create_question(q, user_id)
+
+        # 1. get_question_detail
+        fetched = service.get_question_detail(saved.id, user_id)
+        assert fetched.id == saved.id
+
+        # 2. list_questions with pagination
+        items, total = service.list_questions(
+            user_id=user_id,
+            material_id=material_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            difficulty=2,
+            page=1,
+            page_size=10,
+        )
+        assert total >= 1
+        assert any(item.id == saved.id for item in items)
+
+        # 3. update_question and list_edit_logs
+        service.update_question(
+            saved.id,
+            user_id,
+            {"difficulty": 4},
+            "测试调整难度",
+        )
+        logs = service.list_edit_logs(saved.id, user_id)
+        assert len(logs) == 1
+        assert logs[0].reason == "测试调整难度"
+
+        # 4. list_quality_checks
+        check = QuestionQualityCheck(
+            user_id=user_id,
+            question_id=saved.id,
+            batch_id="batch_helper",
+            check_type="AMBIGUITY",
+            is_passed=True,
+        )
+        service.question_repo.batch_create_quality_checks([check], user_id)
+        checks = service.list_quality_checks(material_id, user_id)
+        assert len(checks) >= 1
+        assert any(c.batch_id == "batch_helper" for c in checks)

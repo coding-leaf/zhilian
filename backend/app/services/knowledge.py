@@ -26,6 +26,7 @@ from app.core.algorithms.knowledge_quality import (
 from app.core.algorithms.search import cosine_similarity
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
+    KnowledgeNotFoundError,
     MaterialInvalidError,
     MaterialNotFoundError,
 )
@@ -553,18 +554,49 @@ class KnowledgeService:
 
         return saved_points
 
+    def get_latest_version_id(
+        self,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> uuid.UUID:
+        """获取资料的最新版本主键标识。
+
+        Args:
+            material_id: 资料主键。
+            user_id: 租户用户主键。
+
+        Returns:
+            uuid.UUID: 最新版本主键。
+
+        Raises:
+            MaterialNotFoundError: 资料不存在或版本为空。
+        """
+        material = self.material_repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError(
+                "请求的学习资料不存在或已被删除",
+                details={"material_id": str(material_id)},
+            )
+        versions = self.material_repo.list_versions_by_material(material_id, user_id)
+        if not versions:
+            raise MaterialNotFoundError(
+                "请求的资料不存在可用版本",
+                details={"material_id": str(material_id)},
+            )
+        return versions[0].id
+
     def get_knowledge_tree(
         self,
         *,
         material_id: uuid.UUID,
-        version_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
         user_id: uuid.UUID,
     ) -> list[dict[str, Any]]:
         """获取结构化嵌套的树形拓扑结构。
 
         Args:
             material_id: 资料主键。
-            version_id: 版本主键。
+            version_id: 版本主键 (可选，缺省时自动选用最新版本)。
             user_id: 租户用户主键。
 
         Returns:
@@ -580,8 +612,19 @@ class KnowledgeService:
                 details={"material_id": str(material_id)},
             )
 
+        if version_id is None:
+            versions = self.material_repo.list_versions_by_material(material_id, user_id)
+            if not versions:
+                raise MaterialNotFoundError(
+                    "请求的资料不存在可用版本",
+                    details={"material_id": str(material_id)},
+                )
+            target_version_id = versions[0].id
+        else:
+            target_version_id = version_id
+
         points = self.knowledge_repo.get_knowledge_points_by_version(
-            material_id, version_id, user_id
+            material_id, target_version_id, user_id
         )
 
         node_map: dict[uuid.UUID, dict[str, Any]] = {}
@@ -607,6 +650,127 @@ class KnowledgeService:
                 roots.append(node)
 
         return roots
+
+    def get_knowledge_point_detail(
+        self,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> KnowledgePoint:
+        """获取单个知识点详情实体。
+
+        Args:
+            knowledge_point_id: 知识点主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            KnowledgePoint: 知识点实体。
+
+        Raises:
+            KnowledgeNotFoundError: 知识点不存在或所属租户不匹配。
+        """
+        point = self.knowledge_repo.get_by_id(knowledge_point_id, user_id)
+        if point is None:
+            raise KnowledgeNotFoundError(
+                "请求的知识点不存在或已被删除",
+                details={"knowledge_point_id": str(knowledge_point_id)},
+            )
+        return point
+
+    def get_knowledge_point(
+        self,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> KnowledgePoint:
+        """get_knowledge_point_detail 别名方法。"""
+        return self.get_knowledge_point_detail(knowledge_point_id, user_id)
+
+    def get_snippets_for_point(
+        self,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[MaterialSnippet]:
+        """反向溯源：通过知识点获取关联的所有来源切片列表。
+
+        Args:
+            knowledge_point_id: 知识点主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            list[MaterialSnippet]: 关联来源切片列表。
+
+        Raises:
+            KnowledgeNotFoundError: 知识点不存在或所属租户不匹配。
+        """
+        self.get_knowledge_point_detail(knowledge_point_id, user_id)
+        return self.knowledge_repo.get_snippets_for_point(knowledge_point_id, user_id)
+
+    def get_snippets_by_point(
+        self,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[MaterialSnippet]:
+        """get_snippets_for_point 别名方法。"""
+        return self.get_snippets_for_point(knowledge_point_id, user_id)
+
+    def get_points_for_snippet(
+        self,
+        snippet_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """正向溯源：通过切片获取关联的所有知识点列表。
+
+        Args:
+            snippet_id: 切片主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            list[KnowledgePoint]: 关联的知识点列表。
+        """
+        return self.knowledge_repo.get_points_for_snippet(snippet_id, user_id)
+
+    def get_points_by_snippet(
+        self,
+        snippet_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """get_points_for_snippet 别名方法。"""
+        return self.get_points_for_snippet(snippet_id, user_id)
+
+    def trigger_extraction(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
+        user_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """触发知识点抽取并返回抽取概要字典。
+
+        Args:
+            material_id: 资料主键。
+            version_id: 版本主键 (可选，缺省取最新版本)。
+            user_id: 租户用户主键。
+
+        Returns:
+            dict[str, Any]: 包含抽取结果统计的字典。
+        """
+        if version_id is None:
+            resolved_version_id = self.get_latest_version_id(material_id, user_id)
+        else:
+            resolved_version_id = version_id
+
+        saved_points = self.extract_and_build_knowledge_tree(
+            material_id=material_id,
+            version_id=resolved_version_id,
+            user_id=user_id,
+        )
+        has_low_confidence = any(p.is_low_confidence for p in saved_points)
+        return {
+            "material_id": material_id,
+            "version_id": resolved_version_id,
+            "extracted_count": len(saved_points),
+            "has_low_confidence": has_low_confidence,
+            "status": "ready",
+        }
 
 
 __all__ = [

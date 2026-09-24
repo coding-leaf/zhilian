@@ -785,15 +785,16 @@ class QuestionService:
 
     def get_question(
         self,
-        *,
-        user_id: uuid.UUID,
-        question_id: uuid.UUID,
+        question_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+        **kwargs: Any,
     ) -> Question:
         """获取单个题目详情，严格租户隔离。
 
         Args:
-            user_id: 租户用户主键。
             question_id: 题目主键。
+            user_id: 租户用户主键。
+            kwargs: 兼容命名参数传递。
 
         Returns:
             Question: 题目实体。
@@ -801,26 +802,99 @@ class QuestionService:
         Raises:
             QuestionNotFoundError: 题目不存在或越权访问。
         """
-        question = self.question_repo.get_question_by_id(question_id, user_id)
+        resolved_question_id = question_id or kwargs.get("question_id")
+        resolved_user_id = user_id or kwargs.get("user_id")
+        if resolved_question_id is None or resolved_user_id is None:
+            raise ValueError("question_id 与 user_id 必须指定")
+
+        question = self.question_repo.get_question_by_id(resolved_question_id, resolved_user_id)
         if question is None:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
         return question
 
+    get_question_detail = get_question
+
+    def list_questions(
+        self,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID | None = None,
+        knowledge_point_id: uuid.UUID | None = None,
+        question_type: str | None = None,
+        difficulty: int | None = None,
+        review_status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        include_deleted: bool = False,
+        **kwargs: Any,
+    ) -> tuple[list[Question], int]:
+        """多条件筛选分页查询题目列表及匹配总数。
+
+        Args:
+            user_id: 租户用户主键。
+            material_id: 可选的学习资料标识过滤。
+            knowledge_point_id: 可选的知识点标识过滤。
+            question_type: 可选的题型过滤。
+            difficulty: 可选的难度过滤。
+            review_status: 可选的审核状态过滤 (review_status 优先于 status)。
+            page: 当前页码，默认 1。
+            page_size: 单页容量限制，默认 20。
+            status: 兼容的状态过滤入参。
+            limit: 可选的单页数量限制（优先于 page_size）。
+            offset: 可选的分页游标偏移量（优先于 page 计算）。
+            include_deleted: 是否包含软删除记录，默认 False。
+            kwargs: 兼容其他调用传参。
+
+        Returns:
+            tuple[list[Question], int]: (题目列表, 总条数)。
+        """
+        resolved_user_id = user_id or kwargs.get("user_id")
+        if resolved_user_id is None:
+            raise ValueError("user_id 必须指定")
+
+        effective_status = (
+            review_status if review_status is not None else (status or kwargs.get("status"))
+        )
+        calc_limit = limit if limit is not None else page_size
+        calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
+
+        return self.question_repo.list_questions(
+            user_id=resolved_user_id,
+            material_id=material_id or kwargs.get("material_id"),
+            version_id=kwargs.get("version_id"),
+            knowledge_point_id=knowledge_point_id or kwargs.get("knowledge_point_id"),
+            question_type=question_type or kwargs.get("question_type"),
+            difficulty=difficulty or kwargs.get("difficulty"),
+            status=effective_status,
+            include_deleted=include_deleted or bool(kwargs.get("include_deleted", False)),
+            limit=calc_limit,
+            offset=calc_offset,
+        )
+
     def update_question(
         self,
+        question_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+        update_data: dict[str, Any] | None = None,
+        edit_reason: str | None = None,
         *,
-        user_id: uuid.UUID,
-        question_id: uuid.UUID,
-        updates: dict[str, Any],
+        updates: dict[str, Any] | None = None,
         reason: str | None = None,
+        **kwargs: Any,
     ) -> Question:
         """修改题目并持久化不可变修改痕迹审计日志。
 
         Args:
-            user_id: 租户用户主键。
             question_id: 题目主键。
-            updates: 变更字段映射字典。
-            reason: 用户编辑说明备注。
+            user_id: 租户用户主键。
+            update_data: 变更字段映射字典。
+            edit_reason: 用户编辑说明备注。
+            updates: 变更字段字典 (兼容关键字参数)。
+            reason: 编辑说明备注 (兼容关键字参数)。
+            kwargs: 兼容其他参数。
 
         Returns:
             Question: 更新后的题目实体。
@@ -828,29 +902,51 @@ class QuestionService:
         Raises:
             QuestionNotFoundError: 题目不存在或越权。
         """
-        existing = self.question_repo.get_question_by_id(question_id, user_id)
+        resolved_question_id = question_id or kwargs.get("question_id")
+        resolved_user_id = user_id or kwargs.get("user_id")
+        resolved_updates = (
+            update_data
+            if update_data is not None
+            else (updates if updates is not None else kwargs.get("updates"))
+        )
+        resolved_reason = (
+            edit_reason
+            if edit_reason is not None
+            else (reason if reason is not None else kwargs.get("reason"))
+        )
+
+        if resolved_question_id is None or resolved_user_id is None:
+            raise ValueError("question_id 与 user_id 必须指定")
+        if resolved_updates is None:
+            resolved_updates = {}
+
+        existing = self.question_repo.get_question_by_id(resolved_question_id, resolved_user_id)
         if existing is None:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
-        before_payload = {k: getattr(existing, k) for k in updates if hasattr(existing, k)}
+        before_payload = {k: getattr(existing, k) for k in resolved_updates if hasattr(existing, k)}
 
         try:
             with self.session.begin_nested():
-                updated = self.question_repo.update_question(question_id, user_id, updates)
+                updated = self.question_repo.update_question(
+                    resolved_question_id, resolved_user_id, resolved_updates
+                )
                 if updated is None:
                     raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
-                after_payload = {k: getattr(updated, k) for k in updates if hasattr(updated, k)}
+                after_payload = {
+                    k: getattr(updated, k) for k in resolved_updates if hasattr(updated, k)
+                }
                 audit_log = QuestionAuditLog(
-                    user_id=user_id,
-                    question_id=question_id,
+                    user_id=resolved_user_id,
+                    question_id=resolved_question_id,
                     action=AuditAction.EDIT.value,
-                    changed_fields=list(updates.keys()),
+                    changed_fields=list(resolved_updates.keys()),
                     before_payload=before_payload,
                     after_payload=after_payload,
-                    reason=reason,
+                    reason=resolved_reason,
                 )
-                self.question_repo.create_audit_log(audit_log, user_id)
+                self.question_repo.create_audit_log(audit_log, resolved_user_id)
             self.session.commit()
         except Exception:
             self.session.rollback()
@@ -860,17 +956,18 @@ class QuestionService:
 
     def delete_question(
         self,
-        *,
-        user_id: uuid.UUID,
-        question_id: uuid.UUID,
+        question_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
         reason: str | None = None,
+        **kwargs: Any,
     ) -> bool:
         """软删除单个题目并记录审计日志。
 
         Args:
-            user_id: 租户用户主键。
             question_id: 题目主键。
+            user_id: 租户用户主键。
             reason: 删除原因备注。
+            kwargs: 兼容命名参数传递。
 
         Returns:
             bool: 软删除是否成功。
@@ -878,29 +975,86 @@ class QuestionService:
         Raises:
             QuestionNotFoundError: 题目不存在或越权。
         """
-        existing = self.question_repo.get_question_by_id(question_id, user_id)
+        resolved_question_id = question_id or kwargs.get("question_id")
+        resolved_user_id = user_id or kwargs.get("user_id")
+        resolved_reason = reason if reason is not None else kwargs.get("reason")
+
+        if resolved_question_id is None or resolved_user_id is None:
+            raise ValueError("question_id 与 user_id 必须指定")
+
+        existing = self.question_repo.get_question_by_id(resolved_question_id, resolved_user_id)
         if existing is None:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
         try:
             with self.session.begin_nested():
-                deleted = self.question_repo.soft_delete_question(question_id, user_id)
+                deleted = self.question_repo.soft_delete_question(
+                    resolved_question_id, resolved_user_id
+                )
                 if not deleted:
                     raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
                 audit_log = QuestionAuditLog(
-                    user_id=user_id,
-                    question_id=question_id,
+                    user_id=resolved_user_id,
+                    question_id=resolved_question_id,
                     action=AuditAction.DELETE.value,
                     changed_fields=["is_deleted"],
                     before_payload={"is_deleted": False},
                     after_payload={"is_deleted": True},
-                    reason=reason,
+                    reason=resolved_reason,
                 )
-                self.question_repo.create_audit_log(audit_log, user_id)
+                self.question_repo.create_audit_log(audit_log, resolved_user_id)
             self.session.commit()
         except Exception:
             self.session.rollback()
             raise
 
         return True
+
+    def list_edit_logs(
+        self,
+        question_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[QuestionAuditLog]:
+        """获取题目的修改痕迹审计日志列表，严格多租户校验。
+
+        Args:
+            question_id: 题目主键。
+            user_id: 租户用户主键。
+
+        Returns:
+            list[QuestionAuditLog]: 审计日志列表。
+
+        Raises:
+            QuestionNotFoundError: 题目不存在或越权。
+        """
+        existing = self.question_repo.get_question_by_id(question_id, user_id)
+        if existing is None:
+            raise QuestionNotFoundError("请求的题目不存在或无权访问")
+        return self.question_repo.list_audit_logs_by_question(question_id, user_id)
+
+    list_audit_logs = list_edit_logs
+
+    def list_quality_checks(
+        self,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[QuestionQualityCheck]:
+        """按资料获取所有题目的质检明细记录，严格多租户校验。
+
+        Args:
+            material_id: 学习资料主键。
+            user_id: 租户用户主键。
+
+        Returns:
+            list[QuestionQualityCheck]: 质检明细记录列表。
+
+        Raises:
+            MaterialNotFoundError: 资料不存在或越权。
+        """
+        material = self.material_repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
+        return self.question_repo.list_quality_checks_by_material(material_id, user_id)
+
+    list_quality_checks_by_material = list_quality_checks

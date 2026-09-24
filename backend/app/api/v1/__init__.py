@@ -2,9 +2,13 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.knowledge import router as knowledge_router
 from app.api.v1.materials import router as materials_router
+from app.api.v1.questions import router as questions_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(materials_router)
+api_v1_router.include_router(knowledge_router)
+api_v1_router.include_router(questions_router)
 
-__all__ = ["api_v1_router", "materials_router"]
+__all__ = ["api_v1_router", "knowledge_router", "materials_router", "questions_router"]

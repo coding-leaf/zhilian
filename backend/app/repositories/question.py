@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.question import (
@@ -175,6 +175,79 @@ class QuestionRepository:
         return list(self.session.execute(stmt).scalars().all())
 
     list_by_material = list_questions_by_material
+
+    def list_questions(
+        self,
+        user_id: uuid.UUID,
+        *,
+        material_id: uuid.UUID | None = None,
+        version_id: uuid.UUID | None = None,
+        knowledge_point_id: uuid.UUID | None = None,
+        question_type: str | None = None,
+        difficulty: int | None = None,
+        status: str | None = None,
+        include_deleted: bool = False,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[Question], int]:
+        """多条件筛选分页查询题目列表及匹配总数。
+
+        Args:
+            user_id: 租户用户标识。
+            material_id: 可选的资料标识过滤。
+            version_id: 可选的版本标识过滤。
+            knowledge_point_id: 可选的知识点标识过滤。
+            question_type: 可选的题型过滤。
+            difficulty: 可选的难度过滤。
+            status: 可选的状态过滤。
+            include_deleted: 是否包含已软删除题目，默认 False。
+            limit: 单页记录数限制，默认 20。
+            offset: 偏移游标，默认 0。
+
+        Returns:
+            tuple[list[Question], int]: (题目实体列表, 总匹配数)。
+        """
+        count_stmt = select(func.count(Question.id)).where(
+            Question.user_id == user_id,
+        )
+        if not include_deleted:
+            count_stmt = count_stmt.where(Question.is_deleted.is_(False))
+        if material_id is not None:
+            count_stmt = count_stmt.where(Question.material_id == material_id)
+        if version_id is not None:
+            count_stmt = count_stmt.where(Question.version_id == version_id)
+        if knowledge_point_id is not None:
+            count_stmt = count_stmt.where(Question.knowledge_point_id == knowledge_point_id)
+        if question_type is not None:
+            count_stmt = count_stmt.where(Question.question_type == question_type)
+        if difficulty is not None:
+            count_stmt = count_stmt.where(Question.difficulty == difficulty)
+        if status is not None:
+            count_stmt = count_stmt.where(Question.status == status)
+
+        total = self.session.execute(count_stmt).scalar_one()
+
+        stmt = select(Question).where(
+            Question.user_id == user_id,
+        )
+        if not include_deleted:
+            stmt = stmt.where(Question.is_deleted.is_(False))
+        if material_id is not None:
+            stmt = stmt.where(Question.material_id == material_id)
+        if version_id is not None:
+            stmt = stmt.where(Question.version_id == version_id)
+        if knowledge_point_id is not None:
+            stmt = stmt.where(Question.knowledge_point_id == knowledge_point_id)
+        if question_type is not None:
+            stmt = stmt.where(Question.question_type == question_type)
+        if difficulty is not None:
+            stmt = stmt.where(Question.difficulty == difficulty)
+        if status is not None:
+            stmt = stmt.where(Question.status == status)
+
+        stmt = stmt.order_by(Question.created_at.desc()).offset(offset).limit(limit)
+        items = list(self.session.execute(stmt).scalars().all())
+        return items, int(total)
 
     def list_recent_for_deduplication(
         self,

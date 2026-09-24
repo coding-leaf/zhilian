@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
+    KnowledgeNotFoundError,
     MaterialInvalidError,
     MaterialNotFoundError,
 )
@@ -707,3 +708,63 @@ class TestKnowledgeServiceWorkflow:
         ver = mat_repo.get_version_by_id(version_id, user_id)
         assert ver is not None
         assert ver.parse_status == ParseStatus.FAILED.value
+
+    def test_delegate_methods_and_sourcing(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """测试新增代理方法：详情查询、双向溯源、版本解析及触发抽取。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        canned = self._make_qualified_output()
+        fake_llm = StubLLM([canned])
+        fake_embed = StubEmbedding()
+        service = KnowledgeService(session, fake_llm, fake_embed)
+
+        # 1. 触发抽取 trigger_extraction
+        result = service.trigger_extraction(
+            material_id=material_id,
+            version_id=None,  # 测试缺省版本自动推导
+            user_id=user_id,
+        )
+        assert result["material_id"] == material_id
+        assert result["version_id"] == version_id
+        assert result["extracted_count"] == 3
+        assert result["status"] == "ready"
+
+        # 2. 获取树 (缺省版本)
+        tree = service.get_knowledge_tree(
+            material_id=material_id,
+            version_id=None,
+            user_id=user_id,
+        )
+        assert len(tree) == 1
+        root_node = tree[0]
+        kp_id = uuid.UUID(root_node["id"])
+
+        # 3. 获取详情
+        point = service.get_knowledge_point_detail(kp_id, user_id)
+        assert point.name == root_node["name"]
+        assert point.id == kp_id
+
+        # 4. 反向溯源 (知识点查切片)
+        snippets = service.get_snippets_for_point(kp_id, user_id)
+        assert len(snippets) > 0
+        first_snippet_id = snippets[0].id
+
+        # 5. 正向溯源 (切片查知识点)
+        points_for_snippet = service.get_points_for_snippet(first_snippet_id, user_id)
+        assert len(points_for_snippet) > 0
+        assert any(p.id == kp_id for p in points_for_snippet)
+
+        # 6. 异常场景：查询不存在或越权知识点
+        with pytest.raises(KnowledgeNotFoundError):
+            service.get_knowledge_point_detail(uuid.uuid4(), user_id)
+
+        other_user_id = uuid.uuid4()
+        with pytest.raises(KnowledgeNotFoundError):
+            service.get_knowledge_point_detail(kp_id, other_user_id)
+
+        with pytest.raises(KnowledgeNotFoundError):
+            service.get_snippets_for_point(kp_id, other_user_id)
