@@ -71,6 +71,20 @@ class RegradeAttemptDTO:
     """单题重新判题请求对象。"""
 
     attempt_item_id: uuid.UUID
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AttemptGradingDetailDTO:
+    """作答题目判题明细与历史传输对象。"""
+
+    attempt_item_id: uuid.UUID
+    latest_grading: GradingRecord | None
+    records: list[GradingRecord]
+    practice_id: uuid.UUID | None = None
+    question_id: uuid.UUID | None = None
+    current_record: GradingRecord | None = None
+    history: list[GradingRecord] | None = None
 
 
 @dataclass(frozen=True)
@@ -869,8 +883,97 @@ class GradingService:
 
         return record
 
+    # --------------------------------------------------------------------------
+    # 4. 作答判题记录与历史明细只读查询 (get_attempt_grading_detail)
+    # --------------------------------------------------------------------------
+
+    def get_attempt_grading_detail(
+        self,
+        user_id: uuid.UUID,
+        attempt_item_id: uuid.UUID,
+        request_id: str = "",
+    ) -> AttemptGradingDetailDTO:
+        """获取指定作答项的最新生效判题记录与全部历史记录。
+
+        为只读查询方法，严格遵循租户隔离与单向分层。
+
+        Args:
+            user_id: 租户用户标识。
+            attempt_item_id: 作答项主键标识。
+            request_id: 请求跟踪标识。
+
+        Returns:
+            AttemptGradingDetailDTO: 包含最新生效记录与历史记录明细的传输对象。
+
+        Raises:
+            AttemptItemNotFoundError: 作答项不存在或跨租户越权访问 (40013)。
+        """
+        start_time = time.perf_counter()
+
+        # 1. 验证作答项是否存在且属于该 user_id
+        if hasattr(self.practice_repo, "get_attempt_item_by_id"):
+            item = self.practice_repo.get_attempt_item_by_id(attempt_item_id, user_id=user_id)
+        else:
+            stmt = select(AttemptItem).where(
+                AttemptItem.id == attempt_item_id,
+                AttemptItem.user_id == user_id,
+            )
+            item = self.session.execute(stmt).scalars().first()
+
+        if item is None:
+            raise AttemptItemNotFoundError(attempt_item_id=attempt_item_id)
+
+        # 2. 查询最新生效记录与全部历史判题记录
+        if hasattr(self.grading_repo, "get_latest_record_by_attempt_id"):
+            latest_grading = self.grading_repo.get_latest_record_by_attempt_id(
+                attempt_item_id,
+                user_id=user_id,
+            )
+        else:
+            latest_grading = self.grading_repo.get_final_record_for_attempt(
+                attempt_item_id,
+                user_id=user_id,
+            )
+
+        if hasattr(self.grading_repo, "list_records_by_attempt_id"):
+            records = self.grading_repo.list_records_by_attempt_id(
+                attempt_item_id,
+                user_id=user_id,
+            )
+        else:
+            records = self.grading_repo.list_records_by_attempt_item(
+                attempt_item_id,
+                user_id=user_id,
+            )
+
+        # 3. 输出结构化脱敏日志 8 要素 (严禁记录题干、标准答案与考生作答)
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        self._log_metric(
+            action="get_attempt_grading_detail",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=attempt_item_id,
+            duration_ms=duration_ms,
+            error_code=0,
+            extra={
+                "records_count": len(records),
+                "has_latest": latest_grading is not None,
+            },
+        )
+
+        return AttemptGradingDetailDTO(
+            attempt_item_id=attempt_item_id,
+            practice_id=item.practice_id,
+            question_id=item.question_id,
+            latest_grading=latest_grading,
+            current_record=latest_grading,
+            records=records,
+            history=records,
+        )
+
 
 __all__ = [
+    "AttemptGradingDetailDTO",
     "GradingService",
     "LLMGradingOutput",
     "LLMGradingRubricEvaluation",

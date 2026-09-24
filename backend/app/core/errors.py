@@ -1013,12 +1013,16 @@ class AttemptItemNotFoundError(AppError):
         status_code: int = 404,
         code: int | None = None,
         detail: dict[str, Any] | None = None,
+        attempt_item_id: Any = None,
     ) -> None:
+        merged_details = dict(detail or details or {})
+        if attempt_item_id is not None:
+            merged_details["attempt_item_id"] = str(attempt_item_id)
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
-            details=details,
+            details=merged_details,
             code=code,
             detail=detail,
         )

@@ -637,3 +637,36 @@ class TestGradingService:
         service = GradingService(session=session)
         with pytest.raises(GradingNotAllowedError):
             service.regrade_attempt(item_sub.id, 12345)  # type: ignore[arg-type]
+
+    def test_get_attempt_grading_detail_success_and_tenant_isolation(
+        self, session: Session, setup_practice_env: dict[str, Any]
+    ) -> None:
+        """Verify get_attempt_grading_detail queries records and enforces tenant isolation."""
+        user_id = setup_practice_env["user_id"]
+        practice = setup_practice_env["practice"]
+        item_sub = setup_practice_env["item_sub"]
+        service = GradingService(session=session)
+
+        # 1. Non-existent attempt item
+        with pytest.raises(AttemptItemNotFoundError):
+            service.get_attempt_grading_detail(user_id=user_id, attempt_item_id=uuid.uuid4())
+
+        # 2. Cross-tenant isolation
+        user_b = uuid.uuid4()
+        with pytest.raises(AttemptItemNotFoundError):
+            service.get_attempt_grading_detail(user_id=user_b, attempt_item_id=item_sub.id)
+
+        # 3. Successful query with self-evaluation record
+        service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=4.0, feedback="Nice answer"),
+        )
+        detail = service.get_attempt_grading_detail(
+            user_id=user_id,
+            attempt_item_id=item_sub.id,
+        )
+        assert detail.attempt_item_id == item_sub.id
+        assert detail.practice_id == practice.id
+        assert detail.latest_grading is not None
+        assert detail.latest_grading.score == 4.0
+        assert len(detail.records) >= 1

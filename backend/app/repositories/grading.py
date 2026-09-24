@@ -147,6 +147,7 @@ class GradingRepository:
         return self.session.execute(stmt).scalars().first()
 
     get_final_record_by_attempt_id = get_final_record_for_attempt
+    get_latest_record_by_attempt_id = get_final_record_for_attempt
 
     def list_final_records_by_practice(
         self,

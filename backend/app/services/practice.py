@@ -411,8 +411,14 @@ class PracticeService:
     def save_answer(
         self,
         user_id: uuid.UUID,
-        dto: SaveAnswerDTO,
+        dto: SaveAnswerDTO | None = None,
         request_id: str = "",
+        *,
+        practice_id: uuid.UUID | None = None,
+        question_id: uuid.UUID | None = None,
+        user_answer: Any = None,
+        time_spent_seconds: int = 0,
+        duration_seconds: int = 0,
     ) -> AttemptItem:
         """逐题保存用户作答并累加耗时。
 
@@ -420,6 +426,11 @@ class PracticeService:
             user_id: 租户用户标识。
             dto: 作答传输对象。
             request_id: 请求跟踪标识。
+            practice_id: 练习主键标识。
+            question_id: 题目主键标识。
+            user_answer: 用户作答文本或选项标识。
+            time_spent_seconds: 本次作答耗时（秒）。
+            duration_seconds: 作答耗时别名（秒）。
 
         Returns:
             AttemptItem: 更新后的作答项。
@@ -428,6 +439,22 @@ class PracticeService:
             PracticeNotFoundError: 练习或题目作答项不存在。
             PracticeStatusError: 练习状态不允许修改作答。
         """
+        if dto is None:
+            if practice_id is None or question_id is None:
+                raise ValueError("practice_id 与 question_id 在未提供 dto 时必须传入")
+            effective_duration = duration_seconds if duration_seconds > 0 else time_spent_seconds
+            formatted_answer = (
+                str(user_answer)
+                if user_answer is not None and not isinstance(user_answer, str)
+                else user_answer
+            )
+            dto = SaveAnswerDTO(
+                practice_id=practice_id,
+                question_id=question_id,
+                user_answer=formatted_answer,
+                duration_seconds=effective_duration,
+            )
+
         start_time = time.perf_counter()
 
         practice = self.practice_repo.get_practice_by_id(
@@ -582,8 +609,12 @@ class PracticeService:
     def submit_practice(
         self,
         user_id: uuid.UUID,
-        dto: SubmitPracticeDTO,
+        dto: SubmitPracticeDTO | None = None,
         request_id: str = "",
+        *,
+        practice_id: uuid.UUID | None = None,
+        idempotency_key: str | None = None,
+        confirm_unanswered: bool = False,
     ) -> PracticeSubmissionResult:
         """交卷强幂等调度与判题任务派发。
 
@@ -591,6 +622,9 @@ class PracticeService:
             user_id: 租户用户标识。
             dto: 交卷传输对象。
             request_id: 请求跟踪标识。
+            practice_id: 练习主键标识。
+            idempotency_key: 客户端强幂等键。
+            confirm_unanswered: 是否确认提交未作答题目。
 
         Returns:
             PracticeSubmissionResult: 交卷执行结果。
@@ -600,6 +634,15 @@ class PracticeService:
             PracticeStatusError: 状态非法或未确认未作答题目。
             IdempotencyConflictError: 幂等并发锁抢占失败。
         """
+        if dto is None:
+            if practice_id is None or idempotency_key is None:
+                raise ValueError("practice_id 与 idempotency_key 在未提供 dto 时必须传入")
+            dto = SubmitPracticeDTO(
+                practice_id=practice_id,
+                idempotency_key=idempotency_key,
+                confirm_unanswered=confirm_unanswered,
+            )
+
         start_time = time.perf_counter()
         clean_key = validate_idempotency_key(dto.idempotency_key)
 

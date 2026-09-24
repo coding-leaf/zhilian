@@ -241,6 +241,26 @@ class PracticeRepository:
         )
         return self.session.execute(stmt).scalars().first()
 
+    def get_attempt_item_by_id(
+        self,
+        attempt_item_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> AttemptItem | None:
+        """根据作答项主键及租户标识检索单个作答项。
+
+        Args:
+            attempt_item_id: 作答项主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            AttemptItem | None: 作答项实体，不存在或越权返回 None。
+        """
+        stmt = select(AttemptItem).where(
+            AttemptItem.id == attempt_item_id,
+            AttemptItem.user_id == user_id,
+        )
+        return self.session.execute(stmt).scalars().first()
+
     def save_answer(
         self,
         practice_id: uuid.UUID,
