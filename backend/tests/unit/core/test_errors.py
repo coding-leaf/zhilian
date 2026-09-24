@@ -12,9 +12,14 @@ from app.core.errors import (
     LLMError,
     LLMResponseFormatError,
     LLMTimeoutError,
+    MaterialInvalidError,
+    MaterialNotFoundError,
+    MaterialParseError,
+    OCRReshootExceededError,
     PermissionDeniedError,
     QueueError,
     QueueTimeoutError,
+    ReshootLimitExceededError,
     SearchError,
 )
 
@@ -188,3 +193,38 @@ class TestAppErrors:
         assert custom_invalid.error_code == 30018
         assert custom_invalid.status_code == 400
         assert custom_invalid.details == {"length": 256}
+
+    def test_material_errors(self) -> None:
+        """Verify Material error hierarchy, error codes, and status codes."""
+        invalid_err = MaterialInvalidError()
+        assert invalid_err.error_code == 40001
+        assert invalid_err.status_code == 400
+        assert invalid_err.message == "学习资料格式不合法或内容不达标"
+        assert isinstance(invalid_err, AppError)
+
+        custom_invalid = MaterialInvalidError(
+            message="文件大小超出 20MB 上限",
+            details={"file_size": 25000000},
+        )
+        assert custom_invalid.error_code == 40001
+        assert custom_invalid.status_code == 400
+        assert custom_invalid.details == {"file_size": 25000000}
+
+        reshoot_err = ReshootLimitExceededError()
+        assert reshoot_err.error_code == 40002
+        assert reshoot_err.status_code == 400
+        assert reshoot_err.message == "页面重拍次数已达上限熔断，请重新上传清晰文件"
+        assert isinstance(reshoot_err, AppError)
+        assert OCRReshootExceededError is ReshootLimitExceededError
+
+        parse_err = MaterialParseError()
+        assert parse_err.error_code == 40003
+        assert parse_err.status_code == 500
+        assert parse_err.message == "学习资料解析处理失败"
+        assert isinstance(parse_err, AppError)
+
+        not_found_err = MaterialNotFoundError()
+        assert not_found_err.error_code == 40004
+        assert not_found_err.status_code == 404
+        assert not_found_err.message == "请求的学习资料不存在或已被删除"
+        assert isinstance(not_found_err, AppError)

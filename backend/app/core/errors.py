@@ -619,6 +619,145 @@ class IdempotencyKeyInvalidError(AppError):
         )
 
 
+class MaterialInvalidError(AppError):
+    """学习资料无效或不合规异常 (错误码 40001, HTTP 400)。
+
+    当文件大小超限、格式不支持、魔数不匹配或内容为空时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "学习资料格式不合法或内容不达标"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 40001。
+        status_code: HTTP 状态码，默认 400。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "学习资料格式不合法或内容不达标",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40001,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class ReshootLimitExceededError(AppError):
+    """页面重拍次数超限熔断异常 (错误码 40002, HTTP 400)。
+
+    当单页重拍次数超过 3 次仍未达到质检合格标准时触发熔断。
+
+    Args:
+        message: 异常描述文案，默认 "页面重拍次数已达上限熔断，请重新上传清晰文件"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 40002。
+        status_code: HTTP 状态码，默认 400。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "页面重拍次数已达上限熔断，请重新上传清晰文件",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40002,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+OCRReshootExceededError = ReshootLimitExceededError
+
+
+class MaterialParseError(AppError):
+    """学习资料解析处理失败异常 (错误码 40003, HTTP 500)。
+
+    当文本提取、OCR 门禁未通过或切分/向量化失败时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "学习资料解析处理失败"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 40003。
+        status_code: HTTP 状态码，默认 500。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "学习资料解析处理失败",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40003,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class MaterialNotFoundError(AppError):
+    """学习资料或版本不存在异常 (错误码 40004, HTTP 404)。
+
+    当查询的学习资料或版本不存在或已被软删除时抛出。
+
+    Args:
+        message: 异常描述文案，默认 "请求的学习资料不存在或已被删除"。
+        details: 结构化附加诊断信息。
+        error_code: 错误码，默认 40004。
+        status_code: HTTP 状态码，默认 404。
+        code: 错误码别名参数。
+        detail: 附加信息别名参数。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的学习资料不存在或已被删除",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40004,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AuthenticationError",
@@ -631,12 +770,17 @@ __all__ = [
     "LLMError",
     "LLMResponseFormatError",
     "LLMTimeoutError",
+    "MaterialInvalidError",
+    "MaterialNotFoundError",
+    "MaterialParseError",
     "OCRAuthError",
     "OCRError",
+    "OCRReshootExceededError",
     "OCRTimeoutError",
     "PermissionDeniedError",
     "QueueError",
     "QueueTimeoutError",
+    "ReshootLimitExceededError",
     "SearchError",
     "StorageConnectionError",
     "StorageError",
