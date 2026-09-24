@@ -2,10 +2,13 @@
 
 from app.core.errors import (
     AppError,
+    AttemptItemNotFoundError,
     AuthenticationError,
     EmbeddingAuthError,
     EmbeddingError,
     EmbeddingTimeoutError,
+    GradingExecutionError,
+    GradingNotAllowedError,
     IdempotencyConflictError,
     IdempotencyKeyInvalidError,
     KnowledgeExtractionRetryExceededError,
@@ -357,3 +360,47 @@ class TestAppErrors:
         assert custom_empty.error_code == 40012
         assert custom_empty.status_code == 400
         assert custom_empty.details == {"required": 10, "available": 3}
+
+    def test_grading_errors(self) -> None:
+        """Verify Grading domain errors codes, messages, and default status."""
+        item_nf = AttemptItemNotFoundError()
+        assert item_nf.error_code == 40013
+        assert item_nf.status_code == 404
+        assert item_nf.message == "请求的作答题目明细不存在或无权访问"
+        assert isinstance(item_nf, AppError)
+
+        custom_item_nf = AttemptItemNotFoundError(
+            message="明细不存在",
+            details={"attempt_item_id": "item-1"},
+        )
+        assert custom_item_nf.error_code == 40013
+        assert custom_item_nf.status_code == 404
+        assert custom_item_nf.details == {"attempt_item_id": "item-1"}
+
+        not_allowed = GradingNotAllowedError()
+        assert not_allowed.error_code == 40014
+        assert not_allowed.status_code == 400
+        assert not_allowed.message == "判题或自评操作不合法"
+        assert isinstance(not_allowed, AppError)
+
+        custom_not_allowed = GradingNotAllowedError(
+            message="客观题不支持自评",
+            details={"question_type": "single_choice"},
+        )
+        assert custom_not_allowed.error_code == 40014
+        assert custom_not_allowed.status_code == 400
+        assert custom_not_allowed.details == {"question_type": "single_choice"}
+
+        exec_err = GradingExecutionError()
+        assert exec_err.error_code == 40015
+        assert exec_err.status_code == 500
+        assert exec_err.message == "判题流水线执行严重异常"
+        assert isinstance(exec_err, AppError)
+
+        custom_exec = GradingExecutionError(
+            message="流水线内部故障",
+            details={"reason": "database deadlock"},
+        )
+        assert custom_exec.error_code == 40015
+        assert custom_exec.status_code == 500
+        assert custom_exec.details == {"reason": "database deadlock"}

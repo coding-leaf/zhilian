@@ -998,12 +998,93 @@ class PracticeEmptyQuestionsError(AppError):
         )
 
 
+class AttemptItemNotFoundError(AppError):
+    """作答题目明细不存在异常 (错误码 40013, HTTP 404)。
+
+    当请求的作答题目明细不存在或无权访问时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的作答题目明细不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40013,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class GradingNotAllowedError(AppError):
+    """判题或自评不合法异常 (错误码 40014, HTTP 400)。
+
+    当客观题尝试自评、打分超出分值上限或练习状态不允许判题时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "判题或自评操作不合法",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40014,
+        status_code: int = 400,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class GradingExecutionError(AppError):
+    """判题流水线执行严重异常 (错误码 40015, HTTP 500)。
+
+    当判题流水线在编排或执行中发生不可恢复的系统级故障时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "判题流水线执行严重异常",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40015,
+        status_code: int = 500,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
+    "AttemptItemNotFoundError",
     "AuthenticationError",
     "EmbeddingAuthError",
     "EmbeddingError",
     "EmbeddingTimeoutError",
+    "GradingExecutionError",
+    "GradingNotAllowedError",
     "IdempotencyConflictError",
     "IdempotencyKeyInvalidError",
     "KnowledgeExtractionRetryExceededError",
