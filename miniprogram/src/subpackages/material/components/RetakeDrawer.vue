@@ -55,7 +55,7 @@ import { ref, computed } from 'vue';
 import type { PageOCRStatus } from '@/types/material';
 import { retakeMaterialPage } from '@/api/material';
 import { formatOcrIssue } from '@/utils/copywriting';
-import { generateIdempotencyKey } from '../utils/file';
+import { generateIdempotencyKey } from '@/utils/file';
 
 interface Props {
   visible?: boolean;

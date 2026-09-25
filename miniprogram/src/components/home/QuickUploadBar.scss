@@ -1,0 +1,111 @@
+/**
+ * QuickUploadBar.scss
+ * Styles for Quick Upload Action Banner Component.
+ * Complies with docs/DESIGN.md.
+ * Zero-Emoji Policy: No emoji allowed in styles or UI.
+ */
+
+.quick-upload-bar {
+  background-color: $--wot-color-theme-light;
+  border: 1px solid $--wot-color-theme-border;
+  border-radius: $radius-lg;
+  padding: $spacing-md $spacing-lg;
+  min-height: $touch-target-min;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  box-shadow: $shadow-card;
+  transition: $transition-bounce;
+  position: relative;
+  overflow: hidden;
+
+  &:active:not(.is-disabled) {
+    transform: $scale-active;
+  }
+
+  &.is-disabled {
+    opacity: 0.55;
+    pointer-events: none;
+  }
+
+  .upload-content-wrapper {
+    display: flex;
+    align-items: center;
+    gap: $spacing-md;
+    flex: 1;
+    min-width: 0;
+
+    .upload-icon-box {
+      width: 64rpx;
+      height: 64rpx;
+      border-radius: $radius-md;
+      background-color: $--wot-color-theme;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+
+      .upload-icon-arrow {
+        width: 0;
+        height: 0;
+        border-left: 12rpx solid transparent;
+        border-right: 12rpx solid transparent;
+        border-bottom: 16rpx solid #ffffff;
+        position: relative;
+        top: -4rpx;
+
+        &::after {
+          content: '';
+          position: absolute;
+          top: 14rpx;
+          left: -4rpx;
+          width: 8rpx;
+          height: 10rpx;
+          background-color: #ffffff;
+        }
+      }
+    }
+
+    .upload-text-box {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+
+      .upload-title {
+        font-size: $font-size-card;
+        font-weight: $font-weight-bold;
+        color: $--wot-color-theme;
+        line-height: $line-height-normal;
+      }
+
+      .upload-subtitle {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+        margin-top: 4rpx;
+        line-height: $line-height-snug;
+      }
+    }
+  }
+
+  .upload-action-pill {
+    padding: 8rpx 20rpx;
+    background-color: $--wot-color-theme;
+    color: #ffffff;
+    border-radius: $radius-pill;
+    font-size: 24rpx;
+    font-weight: $font-weight-bold;
+    flex-shrink: 0;
+    margin-left: $spacing-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    .pill-text {
+      color: #ffffff;
+      font-size: 24rpx;
+      font-weight: $font-weight-bold;
+    }
+  }
+}

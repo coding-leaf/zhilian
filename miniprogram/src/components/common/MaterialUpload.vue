@@ -53,7 +53,7 @@
 </template>
 
 <script lang="ts">
-export { generateIdempotencyKey, validateMaterialFile, type SelectedFileInfo } from '../utils/file';
+export { generateIdempotencyKey, validateMaterialFile, type SelectedFileInfo } from '@/utils/file';
 </script>
 
 <script setup lang="ts">
@@ -61,7 +61,7 @@ import { ref, computed } from 'vue';
 import { uploadMaterialFile } from '@/api/material';
 import { useMaterialStore } from '@/stores/materialStore';
 import type { MaterialItem, MaterialUploadResponse } from '@/types/material';
-import { generateIdempotencyKey, validateMaterialFile, type SelectedFileInfo } from '../utils/file';
+import { generateIdempotencyKey, validateMaterialFile, type SelectedFileInfo } from '@/utils/file';
 
 interface Props {
   visible?: boolean;

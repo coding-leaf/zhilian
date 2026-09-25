@@ -4,7 +4,7 @@ import { setActivePinia, createPinia } from 'pinia';
 import MaterialUpload, {
   generateIdempotencyKey,
   validateMaterialFile,
-} from '@/subpackages/material/components/MaterialUpload.vue';
+} from '@/components/common/MaterialUpload.vue';
 import { useMaterialStore } from '@/stores/materialStore';
 import * as materialApi from '@/api/material';
 

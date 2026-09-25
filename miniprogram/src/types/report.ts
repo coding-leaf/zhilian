@@ -117,7 +117,8 @@ export interface UserMasteryOverview {
   proficient_count: number;
   weak_count: number;
   unlearned_count: number;
-  weak_points: WeakPoint[];
+  overall_score?: number;
+  weak_points?: WeakPoint[];
 }
 
 export interface KnowledgeMasterySummary {

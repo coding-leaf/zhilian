@@ -1,0 +1,100 @@
+/**
+ * index.scss
+ * Styles for Dashboard Home Container Page.
+ * Complies with docs/DESIGN.md.
+ * Zero-Emoji Policy: No emoji allowed in styles or UI.
+ */
+
+.dashboard-page {
+  min-height: 100vh;
+  background-color: $--wot-color-gray-1;
+  padding: $spacing-lg $spacing-xl calc(env(safe-area-inset-bottom) + #{$spacing-xl});
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-xs 0;
+
+  .greeting-col {
+    display: flex;
+    flex-direction: column;
+
+    .brand-title {
+      font-size: $font-size-section;
+      font-weight: $font-weight-heavy;
+      color: $--wot-color-gray-9;
+      line-height: $line-height-tight;
+    }
+
+    .user-greeting {
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-7;
+      margin-top: 6rpx;
+      line-height: $line-height-snug;
+    }
+  }
+
+  .auth-action-col {
+    display: flex;
+    align-items: center;
+
+    .btn-login {
+      min-height: 56rpx;
+      padding: 0 24rpx;
+      font-size: $font-size-caption;
+      font-weight: $font-weight-bold;
+      border-radius: $radius-pill;
+      background-color: $--wot-color-theme;
+      color: #ffffff;
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: $transition-bounce;
+
+      &:active {
+        transform: $scale-active;
+        background-color: $--wot-color-theme-hover;
+      }
+    }
+
+    .btn-logout {
+      min-height: 56rpx;
+      padding: 0 20rpx;
+      font-size: $font-size-caption;
+      font-weight: $font-weight-medium;
+      border-radius: $radius-pill;
+      background-color: $--wot-color-gray-2;
+      color: $--wot-color-gray-7;
+      border: 1px solid $--wot-color-gray-4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: $transition-bounce;
+
+      &:active {
+        transform: $scale-active;
+      }
+    }
+  }
+}
+
+.dashboard-skeleton {
+  background-color: #ffffff;
+  border-radius: $radius-lg;
+  border: 1px solid $--wot-color-gray-4;
+  padding: $spacing-lg;
+  box-shadow: $shadow-card;
+}
+
+.dashboard-content {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}

@@ -50,7 +50,7 @@ import { onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
 import { fetchMaterialList, deleteMaterial } from '@/api/material';
 import MaterialCard from '../../components/MaterialCard.vue';
-import MaterialUpload from '../../components/MaterialUpload.vue';
+import MaterialUpload from '@/components/common/MaterialUpload.vue';
 import type { MaterialItem } from '@/types/material';
 
 interface TabItem {

@@ -1,56 +1,77 @@
 <template>
   <view class="dashboard-page">
+    <!-- 顶部沉浸式问候栏 -->
     <view class="dashboard-header">
-      <view class="brand-title">智练工作台</view>
-      <view class="user-status-bar">
-        <text class="status-label">当前状态：</text>
-        <text class="status-value">{{ userDisplayName }}</text>
-        <button v-if="!userStore.isAuthenticated" class="auth-btn" @tap="handleNavigateLogin">
-          登录账号
+      <view class="greeting-col">
+        <text class="brand-title">智练工作台</text>
+        <text class="user-greeting">{{ greetingText }}</text>
+      </view>
+      <view class="auth-action-col">
+        <button v-if="!userStore.isAuthenticated" class="btn-login" @tap="handleNavigateLogin">
+          登录
         </button>
-        <button v-else class="auth-btn logout-btn" @tap="handleLogout">退出登录</button>
+        <button v-else class="btn-logout" @tap="handleLogout">退出</button>
       </view>
     </view>
 
-    <view class="metrics-grid">
-      <view class="metric-card" @tap="handleNavigateMaterial">
-        <view class="card-meta">资料总数</view>
-        <view class="card-number">{{ materialCount }}</view>
-        <view class="card-action">资料管理</view>
-      </view>
+    <!-- 骨架屏加载态 -->
+    <view v-if="loading && !hasLoadedOnce" class="dashboard-skeleton">
+      <wd-skeleton theme="paragraph" />
+    </view>
 
-      <view class="metric-card" @tap="handleNavigatePractice">
-        <view class="card-meta">练习进度</view>
-        <view class="card-number">{{ practiceProgressText }}</view>
-        <view class="card-action">进入练习</view>
-      </view>
+    <!-- 核心工作台内容区 -->
+    <view v-else class="dashboard-content">
+      <!-- 掌握度全景状态栏 -->
+      <MasteryDashboardBar
+        :overview="reportStore.masteryOverview"
+        :loading="loading"
+        @tap-detail="handleNavigateReport"
+      />
 
-      <view class="metric-card" @tap="handleNavigateReport">
-        <view class="card-meta">学情诊断</view>
-        <view class="card-number">{{ masteryScoreText }}</view>
-        <view class="card-action">诊断报告</view>
-      </view>
+      <!-- 快捷上传横幅 -->
+      <QuickUploadBar ref="quickUploadRef" @upload-success="handleUploadSuccess" />
 
-      <view class="metric-card" @tap="handleNavigateMistakes">
-        <view class="card-meta">待巩固错题</view>
-        <view class="card-number">{{ mistakeCountText }}</view>
-        <view class="card-action">错题复习</view>
-      </view>
+      <!-- 智能双轨：新手引导卡 或 最近学习流 -->
+      <NewbieGuideCard v-if="isNewbie" @start-first="handleStartFirst" />
+      <RecentLearningSection
+        v-else
+        :active-practice="activePractice"
+        :recent-materials="recentMaterials"
+        :loading="loading"
+        @continue-practice="handleContinuePractice"
+        @quick-quiz="handleQuickQuiz"
+        @view-material="handleViewMaterial"
+        @view-all-materials="handleViewAllMaterials"
+      />
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, onMounted } from 'vue';
+import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { useUserStore } from '@/stores/userStore';
 import { useMaterialStore } from '@/stores/materialStore';
 import { usePracticeStore } from '@/stores/practiceStore';
 import { useReportStore } from '@/stores/reportStore';
+import { fetchMasteryOverview } from '@/api/diagnosis';
+import { fetchMaterialList } from '@/api/material';
+import type { MaterialItem } from '@/types/material';
+import MasteryDashboardBar from '@/components/home/MasteryDashboardBar.vue';
+import QuickUploadBar from '@/components/home/QuickUploadBar.vue';
+import RecentLearningSection, {
+  extractLatestDraftPractice,
+} from '@/components/home/RecentLearningSection.vue';
+import NewbieGuideCard from '@/components/home/NewbieGuideCard.vue';
 
 const userStore = useUserStore();
 const materialStore = useMaterialStore();
 const practiceStore = usePracticeStore();
 const reportStore = useReportStore();
+
+const loading = ref(false);
+const hasLoadedOnce = ref(false);
+const quickUploadRef = ref<InstanceType<typeof QuickUploadBar> | null>(null);
 
 const userDisplayName = computed(() => {
   if (!userStore.isAuthenticated) {
@@ -59,31 +80,46 @@ const userDisplayName = computed(() => {
   return userStore.profile?.nickname || '认证学员';
 });
 
-const materialCount = computed(() => {
-  return materialStore.materialsList.length;
+const greetingText = computed(() => {
+  if (!userStore.isAuthenticated) {
+    return '登录同步学习进度与定制复习方案';
+  }
+  return `你好，${userDisplayName.value}，今日保持高效专注`;
 });
 
-const practiceProgressText = computed(() => {
-  const total = practiceStore.questions.length;
-  if (total === 0) {
-    return '暂无练习';
-  }
-  return `${practiceStore.currentIndex + 1}/${total}`;
+const recentMaterials = computed(() => materialStore.materialsList);
+
+const activePractice = computed(() => {
+  return extractLatestDraftPractice(practiceStore.drafts, materialStore.materialsList);
 });
 
-const masteryScoreText = computed(() => {
-  if (!reportStore.currentReport) {
-    return '未诊断';
-  }
-  return `${Math.round(reportStore.overallMasteryRate)}分`;
+const isNewbie = computed(() => {
+  return materialStore.materialsList.length === 0 && !activePractice.value;
 });
 
-const mistakeCountText = computed(() => {
-  if (!reportStore.currentReport) {
-    return '0道';
+async function loadDashboardData(showSkeleton = true): Promise<void> {
+  if (showSkeleton) {
+    loading.value = true;
   }
-  return `${reportStore.weakPointCount}道`;
-});
+
+  practiceStore.loadDraftFromStorage();
+
+  const [masteryRes, materialsRes] = await Promise.allSettled([
+    fetchMasteryOverview(),
+    fetchMaterialList({ page: 1, page_size: 5 }),
+  ]);
+
+  if (masteryRes.status === 'fulfilled' && masteryRes.value?.data) {
+    reportStore.setMasteryOverview(masteryRes.value.data);
+  }
+
+  if (materialsRes.status === 'fulfilled' && materialsRes.value?.data?.items) {
+    materialStore.setMaterialsList(materialsRes.value.data.items);
+  }
+
+  loading.value = false;
+  hasLoadedOnce.value = true;
+}
 
 function handleNavigateLogin(): void {
   uni.navigateTo({
@@ -95,116 +131,72 @@ function handleLogout(): void {
   userStore.logout();
 }
 
-function handleNavigateMaterial(): void {
-  uni.navigateTo({
-    url: '/subpackages/material/index',
-  });
-}
-
-function handleNavigatePractice(): void {
-  uni.navigateTo({
-    url: '/subpackages/material/index',
-  });
-}
-
 function handleNavigateReport(): void {
   uni.navigateTo({
-    url: '/subpackages/report/index',
+    url: '/subpackages/report/pages/detail/index',
   });
 }
 
-function handleNavigateMistakes(): void {
-  uni.navigateTo({
-    url: '/subpackages/report/index',
-  });
-}
-</script>
-
-<style lang="scss" scoped>
-.dashboard-page {
-  min-height: 100vh;
-  background-color: #f8fafc;
-  padding: 32rpx;
-  box-sizing: border-box;
+async function handleUploadSuccess(): Promise<void> {
+  await loadDashboardData(false);
 }
 
-.dashboard-header {
-  margin-bottom: 32rpx;
-}
-
-.brand-title {
-  font-size: 36rpx;
-  font-weight: 700;
-  color: #0f172a;
-  margin-bottom: 16rpx;
-}
-
-.user-status-bar {
-  display: flex;
-  align-items: center;
-  font-size: 26rpx;
-}
-
-.status-label {
-  color: #64748b;
-}
-
-.status-value {
-  color: #0f172a;
-  font-weight: 600;
-  margin-right: 24rpx;
-}
-
-.auth-btn {
-  font-size: 22rpx;
-  padding: 6rpx 20rpx;
-  border-radius: 9999rpx;
-  background-color: #2563eb;
-  color: #ffffff;
-  border: none;
-  line-height: 1.5;
-  margin: 0;
-
-  &.logout-btn {
-    background-color: #f1f5f9;
-    color: #64748b;
+function handleStartFirst(): void {
+  if (quickUploadRef.value) {
+    quickUploadRef.value.open();
   }
 }
 
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 24rpx;
+function handleContinuePractice(practiceId: string): void {
+  uni.navigateTo({
+    url: `/subpackages/practice/pages/session/index?id=${practiceId}`,
+  });
 }
 
-.metric-card {
-  background-color: #ffffff;
-  border-radius: 24rpx;
-  padding: 28rpx;
-  border: 1px solid #e2e8f0;
-  box-shadow:
-    0 8rpx 24rpx -4rpx rgba(15, 23, 42, 0.05),
-    0 2rpx 6rpx -1rpx rgba(15, 23, 42, 0.02);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  min-height: 180rpx;
+function handleQuickQuiz(mat: MaterialItem): void {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/knowledge-tree/index?id=${mat.id}`,
+  });
 }
 
-.card-meta {
-  font-size: 24rpx;
-  color: #64748b;
+function handleViewMaterial(materialId: string): void {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/detail/index?id=${materialId}`,
+  });
 }
 
-.card-number {
-  font-size: 36rpx;
-  font-weight: 700;
-  color: #2563eb;
-  margin: 12rpx 0;
+function handleViewAllMaterials(): void {
+  uni.navigateTo({
+    url: '/subpackages/material/pages/list/index',
+  });
 }
 
-.card-action {
-  font-size: 22rpx;
-  color: #64748b;
-}
+onMounted(() => {
+  loadDashboardData(true);
+});
+
+onShow(() => {
+  practiceStore.loadDraftFromStorage();
+});
+
+onPullDownRefresh(async () => {
+  try {
+    await loadDashboardData(false);
+  } finally {
+    uni.stopPullDownRefresh();
+  }
+});
+
+defineExpose({
+  loadDashboardData,
+  loading,
+  hasLoadedOnce,
+  isNewbie,
+  activePractice,
+  recentMaterials,
+});
+</script>
+
+<style lang="scss" scoped>
+@import './index.scss';
 </style>

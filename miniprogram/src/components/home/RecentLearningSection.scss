@@ -1,0 +1,283 @@
+/**
+ * RecentLearningSection.scss
+ * Styles for Recent Learning Section (Smart Dual-Track Flow).
+ * Complies with docs/DESIGN.md.
+ * Zero-Emoji Policy: No emoji allowed in styles or UI.
+ */
+
+.recent-learning-section {
+  margin-top: $spacing-lg;
+  box-sizing: border-box;
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $spacing-md;
+
+    .section-title {
+      font-size: $font-size-section;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-9;
+      line-height: $line-height-normal;
+    }
+  }
+
+  .empty-placeholder {
+    background-color: #ffffff;
+    border-radius: $radius-lg;
+    border: 1px dashed $--wot-color-gray-4;
+    padding: $spacing-xl;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: $touch-target-min;
+
+    .empty-text {
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-6;
+    }
+  }
+
+  /* 智能第一轨：进行中练习置顶卡片 */
+  .active-practice-card {
+    background-color: #ffffff;
+    border-radius: $radius-lg;
+    border: 1px solid $--wot-color-gray-4;
+    box-shadow: $shadow-card;
+    padding: $spacing-lg;
+    margin-bottom: $spacing-md;
+    box-sizing: border-box;
+    transition: $transition-bounce;
+
+    &:active {
+      transform: $scale-active;
+    }
+
+    .practice-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: $spacing-sm;
+
+      .practice-left-header {
+        display: flex;
+        align-items: center;
+        gap: $spacing-xs;
+        flex: 1;
+        min-width: 0;
+
+        .practice-badge {
+          font-size: 20rpx;
+          font-weight: $font-weight-bold;
+          padding: 4rpx 12rpx;
+          border-radius: $radius-pill;
+          background-color: $--wot-color-theme-light;
+          color: $--wot-color-theme;
+          border: 1px solid $--wot-color-theme-border;
+          flex-shrink: 0;
+        }
+
+        .practice-title {
+          font-size: $font-size-card;
+          font-weight: $font-weight-bold;
+          color: $--wot-color-gray-9;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .practice-time {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+        flex-shrink: 0;
+        margin-left: $spacing-sm;
+      }
+    }
+
+    .practice-progress-box {
+      margin-bottom: $spacing-md;
+
+      .progress-track {
+        height: 12rpx;
+        border-radius: 6rpx;
+        background-color: $--wot-color-gray-2;
+        overflow: hidden;
+        margin-bottom: 8rpx;
+
+        .progress-fill {
+          height: 100%;
+          background-color: $--wot-color-theme;
+          border-radius: 6rpx;
+          transition: width 0.3s ease;
+        }
+      }
+
+      .progress-meta-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+
+        .progress-text {
+          font-size: 22rpx;
+          color: $--wot-color-gray-7;
+        }
+
+        .progress-pct {
+          font-size: 22rpx;
+          color: $--wot-color-theme;
+          font-weight: $font-weight-bold;
+        }
+      }
+    }
+
+    .practice-action-row {
+      display: flex;
+      justify-content: flex-end;
+
+      .btn-continue {
+        background-color: $--wot-color-theme;
+        color: #ffffff;
+        font-size: 24rpx;
+        font-weight: $font-weight-bold;
+        padding: 8rpx 28rpx;
+        border-radius: $radius-pill;
+        min-height: 56rpx;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    }
+  }
+
+  /* 智能第二轨：最近资料列表 */
+  .materials-list {
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-sm;
+
+    .material-item-card {
+      background-color: #ffffff;
+      border-radius: $radius-lg;
+      border: 1px solid $--wot-color-gray-4;
+      box-shadow: $shadow-card;
+      padding: $spacing-md $spacing-lg;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: $touch-target-min;
+      box-sizing: border-box;
+      transition: $transition-bounce;
+
+      &:active {
+        transform: $scale-active;
+      }
+
+      .material-info-col {
+        flex: 1;
+        min-width: 0;
+        margin-right: $spacing-md;
+
+        .material-title-row {
+          display: flex;
+          align-items: center;
+          gap: $spacing-xs;
+          margin-bottom: 6rpx;
+
+          .format-tag {
+            font-size: 20rpx;
+            font-weight: $font-weight-bold;
+            padding: 2rpx 10rpx;
+            border-radius: $radius-sm;
+            background-color: $--wot-color-gray-2;
+            color: $--wot-color-gray-8;
+            flex-shrink: 0;
+          }
+
+          .material-title {
+            font-size: $font-size-card;
+            font-weight: $font-weight-bold;
+            color: $--wot-color-gray-9;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+          }
+
+          .status-tag {
+            font-size: 20rpx;
+            font-weight: $font-weight-bold;
+            padding: 2rpx 12rpx;
+            border-radius: $radius-pill;
+            flex-shrink: 0;
+
+            &.status--primary { background-color: $--wot-color-theme-light; color: $--wot-color-theme; border: 1px solid $--wot-color-theme-border; }
+            &.status--success { background-color: $--wot-color-success-bg; color: $--wot-color-success-text; border: 1px solid $--wot-color-success-border; }
+            &.status--warning { background-color: $--wot-color-warning-bg; color: $--wot-color-warning-text; border: 1px solid $--wot-color-warning-border; }
+            &.status--danger { background-color: $--wot-color-danger-bg; color: $--wot-color-danger-text; border: 1px solid $--wot-color-danger-border; }
+            &.status--info { background-color: $--wot-color-gray-2; color: $--wot-color-gray-7; border: 1px solid $--wot-color-gray-4; }
+          }
+        }
+
+        .material-meta-row {
+          display: flex;
+          align-items: center;
+          gap: $spacing-xs;
+          font-size: 22rpx;
+          color: $--wot-color-gray-7;
+
+          .meta-dot {
+            color: $--wot-color-gray-5;
+          }
+        }
+      }
+
+      .material-action-col {
+        flex-shrink: 0;
+
+        .btn-quick-quiz {
+          font-size: 24rpx;
+          font-weight: $font-weight-bold;
+          padding: 8rpx 24rpx;
+          border-radius: $radius-pill;
+          background-color: $--wot-color-theme-light;
+          color: $--wot-color-theme;
+          border: 1px solid $--wot-color-theme-border;
+          min-height: 56rpx;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background-color 0.16s ease;
+
+          &:active {
+            background-color: $--wot-color-theme-border;
+          }
+        }
+      }
+    }
+  }
+
+  /* 底部查看全部资料跳转链接 */
+  .section-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-md 0;
+    min-height: $touch-target-min;
+    box-sizing: border-box;
+
+    .footer-link {
+      font-size: 24rpx;
+      color: $--wot-color-gray-7;
+      font-weight: $font-weight-medium;
+    }
+
+    .arrow-char {
+      font-size: 24rpx;
+      color: $--wot-color-gray-5;
+      margin-left: 6rpx;
+      font-weight: $font-weight-bold;
+    }
+  }
+}
