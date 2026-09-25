@@ -6,6 +6,7 @@
  */
 
 import { request } from '../utils/request';
+import { uploadFile } from '../utils/upload';
 import type { ApiResponse, PageResult } from '../types/common';
 import type {
   MaterialItem,
@@ -101,14 +102,36 @@ export function fetchKnowledgeTree(
  * @param idempotencyKey 防重放幂等键（可选）。
  * @returns 统一响应包，包含上传后的资料信息。
  */
+function isRealMiniProgramUpload(): boolean {
+  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test') {
+    return false;
+  }
+  return typeof uni !== 'undefined' && typeof uni.uploadFile === 'function';
+}
+
 export function uploadMaterial(
   file: File | Blob | string,
   title?: string,
   idempotencyKey?: string,
+  sourceType: 'local' | 'wechat' = 'local',
+  onProgressUpdate?: (progress: number) => void,
 ): Promise<ApiResponse<MaterialUploadResponse>> {
   const headers: Record<string, string> = {};
   if (idempotencyKey) {
     headers['Idempotency-Key'] = idempotencyKey;
+  }
+  if (isRealMiniProgramUpload() && typeof file === 'string') {
+    return uploadFile<MaterialUploadResponse>({
+      url: '/api/v1/materials/upload',
+      filePath: file,
+      name: 'file',
+      formData: {
+        title: title || '',
+        source_type: sourceType,
+      },
+      headers,
+      onProgressUpdate,
+    });
   }
   return request<MaterialUploadResponse>({
     url: '/api/v1/materials/upload',
@@ -158,7 +181,13 @@ export function uploadMaterialFile(params: {
   idempotencyKey?: string;
   onProgressUpdate?: (progress: number) => void;
 }): Promise<ApiResponse<MaterialUploadResponse>> {
-  return uploadMaterial(params.filePath, params.title, params.idempotencyKey);
+  return uploadMaterial(
+    params.filePath,
+    params.title,
+    params.idempotencyKey,
+    params.sourceType || 'local',
+    params.onProgressUpdate,
+  );
 }
 
 /**
@@ -177,6 +206,21 @@ export function reshootMaterialPage(params: {
   const headers: Record<string, string> = {};
   if (params.idempotencyKey) {
     headers['Idempotency-Key'] = params.idempotencyKey;
+  }
+  if (isRealMiniProgramUpload() && typeof params.filePath === 'string') {
+    const formData: Record<string, string | number> = {
+      page_index: params.pageIndex,
+    };
+    if (params.versionId) {
+      formData.version_id = params.versionId;
+    }
+    return uploadFile<MaterialReshootResponse>({
+      url: `/api/v1/materials/${params.materialId}/reshoot`,
+      filePath: params.filePath,
+      name: 'file',
+      formData,
+      headers,
+    });
   }
   return request<MaterialReshootResponse>({
     url: `/api/v1/materials/${params.materialId}/reshoot`,

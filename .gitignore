@@ -15,6 +15,8 @@ ENV/
 htmlcov/
 coverage.xml
 coverage.json
+*.db
+*.sqlite3
 
 # Tooling & IDE
 .vscode/

@@ -7,6 +7,7 @@
 
 import { AppError } from './error';
 import { storage } from './storage';
+import { resolveUrl } from '../config/env';
 import type { ApiResponse, RequestOptions } from '../types/common';
 import type { TokenPairResponse } from '../types/auth';
 
@@ -102,7 +103,7 @@ function callUniRequest(
  */
 async function executeRefreshToken(refreshToken: string): Promise<TokenPairResponse> {
   const response = await callUniRequest({
-    url: '/api/v1/auth/refresh',
+    url: resolveUrl('/api/v1/auth/refresh'),
     method: 'POST',
     data: { refresh_token: refreshToken },
     header: { 'Content-Type': 'application/json' },
@@ -225,7 +226,7 @@ export async function request<T = unknown>(options: RequestOptions): Promise<Api
   let response: UniApp.RequestSuccessCallbackResult;
   try {
     response = await callUniRequest({
-      url: options.url,
+      url: resolveUrl(options.url),
       method: options.method || 'GET',
       data: options.data as string | AnyObject | ArrayBuffer | undefined,
       header: headers,

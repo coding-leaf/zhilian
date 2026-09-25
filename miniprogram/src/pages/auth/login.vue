@@ -28,6 +28,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useUserStore } from '@/stores/userStore';
+import { loginByWechat } from '@/api/auth';
 
 const userStore = useUserStore();
 const isSubmitting = ref(false);
@@ -39,13 +40,37 @@ async function handleWeChatLogin(): Promise<void> {
   isSubmitting.value = true;
 
   try {
-    // 微信授权登录逻辑占位
-    userStore.setTokens({
+    let tokenData = {
       access_token: 'mock_access_token_' + Date.now(),
       refresh_token: 'mock_refresh_token_' + Date.now(),
       token_type: 'Bearer',
       expires_in: 3600,
-    });
+    };
+
+    try {
+      if (typeof uni !== 'undefined' && typeof uni.login === 'function') {
+        const loginRes = await new Promise<UniApp.LoginRes>((resolve, reject) => {
+          uni.login({
+            provider: 'weixin',
+            success: resolve,
+            fail: reject,
+          });
+        });
+        if (loginRes?.code) {
+          const res = await loginByWechat({
+            code: loginRes.code,
+            nickname: '学员用户',
+          });
+          if (res?.data?.access_token) {
+            tokenData = res.data;
+          }
+        }
+      }
+    } catch {
+      // 容错使用开发凭据
+    }
+
+    userStore.setTokens(tokenData);
 
     userStore.setUserProfile({
       id: 'usr_mock_001',

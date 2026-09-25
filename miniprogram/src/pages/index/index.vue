@@ -59,10 +59,9 @@ import { fetchMaterialList } from '@/api/material';
 import type { MaterialItem } from '@/types/material';
 import MasteryDashboardBar from '@/components/home/MasteryDashboardBar.vue';
 import QuickUploadBar from '@/components/home/QuickUploadBar.vue';
-import RecentLearningSection, {
-  extractLatestDraftPractice,
-} from '@/components/home/RecentLearningSection.vue';
+import RecentLearningSection from '@/components/home/RecentLearningSection.vue';
 import NewbieGuideCard from '@/components/home/NewbieGuideCard.vue';
+import { extractLatestDraftPractice } from '@/utils/recentLearning';
 
 const userStore = useUserStore();
 const materialStore = useMaterialStore();

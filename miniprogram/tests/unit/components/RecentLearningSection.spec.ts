@@ -1,10 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
-import RecentLearningSection, {
+import RecentLearningSection from '@/components/home/RecentLearningSection.vue';
+import {
   formatRelativeTime,
   extractLatestDraftPractice,
   type ActivePracticeInfo,
-} from '@/components/home/RecentLearningSection.vue';
+} from '@/utils/recentLearning';
 import type { MaterialItem } from '@/types/material';
 import type { AnswerDraft } from '@/types/practice';
 

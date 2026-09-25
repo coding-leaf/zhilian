@@ -1,0 +1,2029 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智练自主学习平台 - 前端交互原型 (现代亲和质感风)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ========================================================
+       智练现代亲和质感风 (Modern Humanist Minimal)
+       规范：温润大圆角、通透呼吸留白、高质感点睛色、零表情包
+       ======================================================== */
+    :root {
+      /* 核心品牌色：充满活力的现代电光蓝 */
+      --wot-color-theme: #2563EB;
+      --wot-color-theme-hover: #1D4ED8;
+      --wot-color-theme-light: #EFF6FF;
+      --wot-color-theme-border: #BFDBFE;
+
+      /* 语义状态点睛色 */
+      --wot-color-success: #10B981;
+      --wot-color-success-bg: #ECFDF5;
+      --wot-color-success-border: #A7F3D0;
+      --wot-color-success-text: #065F46;
+
+      --wot-color-warning: #F59E0B;
+      --wot-color-warning-bg: #FFFBEB;
+      --wot-color-warning-border: #FDE68A;
+      --wot-color-warning-text: #92400E;
+
+      --wot-color-danger: #EF4444;
+      --wot-color-danger-bg: #FEF2F2;
+      --wot-color-danger-border: #FECACA;
+      --wot-color-danger-text: #991B1B;
+
+      --wot-color-info: #3B82F6;
+      --wot-color-info-bg: #EFF6FF;
+
+      /* 掌握度四级状态 */
+      --mastery-mastered-text: #7C3AED;
+      --mastery-mastered-bg: #F5F3FF;
+      --mastery-mastered-fill: #8B5CF6;
+
+      --mastery-proficient-text: #059669;
+      --mastery-proficient-bg: #ECFDF5;
+      --mastery-proficient-fill: #10B981;
+
+      --mastery-weak-text: #B45309;
+      --mastery-weak-bg: #FFFBEB;
+      --mastery-weak-fill: #F59E0B;
+
+      --mastery-unlearned-text: #64748B;
+      --mastery-unlearned-bg: #F1F5F9;
+      --mastery-unlearned-fill: #94A3B8;
+
+      /* 页面基底与表面阶梯 */
+      --color-bg-page: #F8FAFC;
+      --color-surface: #FFFFFF;
+      --color-surface-subtle: #F1F5F9;
+      --color-border-subtle: #E2E8F0;
+      --color-border-strong: #CBD5E1;
+
+      --color-text-primary: #0F172A;
+      --color-text-regular: #334155;
+      --color-text-secondary: #64748B;
+      --color-text-disabled: #94A3B8;
+
+      /* 现代温润大圆角规范 (Squircle) */
+      --radius-sm: 8px;
+      --radius-md: 16px;
+      --radius-lg: 22px;
+      --radius-pill: 9999px;
+
+      /* 浅透弥散自然光影 */
+      --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
+      --shadow-card: 0 8px 24px -4px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+      --shadow-float: 0 16px 36px -6px rgba(37, 99, 235, 0.25);
+      --shadow-sheet: 0 -12px 32px rgba(15, 23, 42, 0.08);
+
+      --font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      font-family: var(--font-family);
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 10%, #1E293B 0%, #0F172A 100%);
+      color: var(--color-text-primary);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    /* 顶部控制器栏 */
+    .prototype-header {
+      width: 100%;
+      max-width: 920px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      color: #E2E8F0;
+    }
+
+    .prototype-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 12px;
+    }
+
+    .prototype-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #F8FAFC;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .spec-badge {
+      background: rgba(37, 99, 235, 0.25);
+      color: #93C5FD;
+      border: 1px solid rgba(147, 197, 253, 0.3);
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: var(--radius-pill);
+      font-weight: 600;
+    }
+
+    .prototype-desc {
+      font-size: 13px;
+      color: #94A3B8;
+      line-height: 1.5;
+    }
+
+    .view-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.85);
+      backdrop-filter: blur(12px);
+      padding: 6px;
+      border-radius: var(--radius-pill);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .view-btn {
+      background: transparent;
+      border: none;
+      color: #94A3B8;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: var(--radius-pill);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .view-btn:hover {
+      color: #F8FAFC;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .view-btn.active {
+      background: var(--wot-color-theme);
+      color: #FFFFFF;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+    }
+
+    /* 小程序手机外壳 */
+    .viewport-device {
+      width: 100%;
+      max-width: 396px;
+      height: 820px;
+      background-color: var(--color-bg-page);
+      border-radius: 46px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 0 10px #1E293B, 0 0 0 12px #334155;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    /* 顶部原生导航栏 */
+    .miniapp-navbar {
+      height: 80px;
+      background: var(--color-surface);
+      border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+      padding: 38px 20px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .miniapp-nav-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
+
+    .miniapp-capsule {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: rgba(15, 23, 42, 0.03);
+      border: 1px solid rgba(203, 213, 225, 0.7);
+      border-radius: var(--radius-pill);
+      padding: 5px 11px;
+    }
+
+    .capsule-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: #475569;
+    }
+
+    .capsule-split {
+      width: 1px;
+      height: 10px;
+      background: #CBD5E1;
+    }
+
+    .capsule-ring {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      border: 1.5px solid #475569;
+    }
+
+    /* 主滚动视口 */
+    .miniapp-scrollview {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scrollbar-width: none;
+    }
+    .miniapp-scrollview::-webkit-scrollbar {
+      display: none;
+    }
+
+    .view-container {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+      animation: modernFade 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .view-container.active {
+      display: flex;
+    }
+
+    @keyframes modernFade {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ========================================================
+       现代温润卡片与基础组件
+       ======================================================== */
+    /* 现代卡片容器 (Squircle + 微阴影) */
+    .modern-card {
+      background: var(--color-surface);
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: var(--shadow-card);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: all 0.2s ease;
+    }
+
+    .modern-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modern-card-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
+
+    .modern-card-meta {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      font-weight: 500;
+    }
+
+    /* 现代药丸徽章 */
+    .modern-tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
+      border-radius: var(--radius-pill);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .modern-tag-primary { background: var(--wot-color-theme-light); color: var(--wot-color-theme); }
+    .modern-tag-success { background: var(--wot-color-success-bg); color: var(--wot-color-success-text); }
+    .modern-tag-warning { background: var(--wot-color-warning-bg); color: var(--wot-color-warning-text); }
+    .modern-tag-danger { background: var(--wot-color-danger-bg); color: var(--wot-color-danger-text); }
+    .modern-tag-neutral { background: #F1F5F9; color: #475569; }
+
+    /* 掌握度徽章 */
+    .tag-mastered { background: var(--mastery-mastered-bg); color: var(--mastery-mastered-text); font-weight: 700; }
+    .tag-proficient { background: var(--mastery-proficient-bg); color: var(--mastery-proficient-text); font-weight: 700; }
+    .tag-weak { background: var(--mastery-weak-bg); color: var(--mastery-weak-text); font-weight: 700; }
+    .tag-unlearned { background: var(--mastery-unlearned-bg); color: var(--mastery-unlearned-text); font-weight: 600; }
+
+    /* 现代有弹性的触控按钮 */
+    .modern-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 20px;
+      border-radius: var(--radius-pill);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      border: none;
+      transition: all 0.16s cubic-bezier(0.4, 0, 0.2, 1);
+      user-select: none;
+    }
+    .modern-button:active {
+      transform: scale(0.975);
+    }
+    .modern-button-primary {
+      background: var(--wot-color-theme);
+      color: #FFFFFF;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+    }
+    .modern-button-primary:hover {
+      background: var(--wot-color-theme-hover);
+    }
+    .modern-button-secondary {
+      background: #FFFFFF;
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-text-regular);
+    }
+    .modern-button-secondary:hover {
+      background: #F8FAFC;
+    }
+    .modern-button-block {
+      width: 100%;
+    }
+
+    /* 大圆角触控选项卡片 (Tactile Option Card) */
+    .option-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .modern-option-card {
+      background: var(--color-surface);
+      border: 1.5px solid rgba(226, 232, 240, 0.9);
+      border-radius: var(--radius-md);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+      user-select: none;
+    }
+    .modern-option-card:hover {
+      border-color: #CBD5E1;
+      background: #FAFAFA;
+    }
+    .modern-option-card:active {
+      transform: scale(0.985);
+    }
+
+    .modern-option-card.active {
+      background: var(--wot-color-theme-light);
+      border-color: var(--wot-color-theme);
+      box-shadow: 0 0 0 1px var(--wot-color-theme);
+    }
+    .modern-option-card.active .option-badge {
+      background: var(--wot-color-theme);
+      color: #FFFFFF;
+    }
+    .modern-option-card.active .option-text {
+      color: #1E3A8A;
+      font-weight: 600;
+    }
+
+    .modern-option-card.correct {
+      background: var(--wot-color-success-bg) !important;
+      border-color: var(--wot-color-success) !important;
+      box-shadow: 0 0 0 1px var(--wot-color-success) !important;
+    }
+    .modern-option-card.correct .option-badge {
+      background: var(--wot-color-success) !important;
+      color: #FFFFFF !important;
+    }
+
+    .modern-option-card.wrong {
+      background: var(--wot-color-danger-bg) !important;
+      border-color: var(--wot-color-danger) !important;
+      box-shadow: 0 0 0 1px var(--wot-color-danger) !important;
+    }
+    .modern-option-card.wrong .option-badge {
+      background: var(--wot-color-danger) !important;
+      color: #FFFFFF !important;
+    }
+
+    .option-inner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+    }
+
+    .option-badge {
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: var(--color-surface-subtle);
+      color: var(--color-text-regular);
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.16s ease;
+    }
+
+    .option-text {
+      font-size: 14px;
+      color: var(--color-text-regular);
+      line-height: 1.45;
+      font-weight: 500;
+    }
+
+    .option-indicator {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1.5px solid var(--color-border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.16s ease;
+    }
+    .modern-option-card.active .option-indicator {
+      border-color: var(--wot-color-theme);
+      background: var(--wot-color-theme);
+    }
+    .indicator-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: transparent;
+    }
+    .modern-option-card.active .indicator-dot {
+      background: #FFFFFF;
+    }
+
+    /* 进度微条 */
+    .modern-progress-track {
+      height: 8px;
+      background: #F1F5F9;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .modern-progress-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* 沉浸式做题顶栏 */
+    .quiz-status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--color-surface);
+      padding: 12px 16px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--color-border-subtle);
+      box-shadow: var(--shadow-sm);
+    }
+    .quiz-timer-pill {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--wot-color-theme);
+      background: var(--wot-color-theme-light);
+      padding: 3px 10px;
+      border-radius: var(--radius-pill);
+    }
+    .quiz-step {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
+    .quiz-step span {
+      color: var(--color-text-secondary);
+      font-weight: 500;
+    }
+    .quiz-step-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.04);
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.16s ease;
+    }
+    .quiz-step-btn:hover {
+      background: rgba(37, 99, 235, 0.08);
+    }
+    .quiz-step-btn:active {
+      transform: scale(0.96);
+    }
+    .sheet-icon-tag {
+      background: var(--wot-color-theme);
+      color: #FFFFFF;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: var(--radius-pill);
+      letter-spacing: 0.2px;
+    }
+
+    /* 出题配置扩展控件 (Chips / Stepper / Switch) */
+    .chip-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chip-item {
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--color-surface-subtle);
+      color: var(--color-text-regular);
+      border: 1.5px solid transparent;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.16s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .chip-item:hover {
+      background: #E2E8F0;
+    }
+    .chip-item.active {
+      background: var(--wot-color-theme-light);
+      color: var(--wot-color-theme);
+      border-color: var(--wot-color-theme);
+      font-weight: 700;
+    }
+
+    .stepper-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .stepper-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--color-border-strong);
+      background: #FFFFFF;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.14s ease;
+    }
+    .stepper-btn:active {
+      transform: scale(0.92);
+      background: #F1F5F9;
+    }
+    .stepper-value {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--wot-color-theme);
+      min-width: 44px;
+      text-align: center;
+    }
+
+    .modern-switch-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-top: 1px solid #F1F5F9;
+    }
+    .modern-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: #CBD5E1;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+      flex-shrink: 0;
+    }
+    .modern-switch.active {
+      background: var(--wot-color-theme);
+    }
+    .switch-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: #FFFFFF;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .modern-switch.active .switch-thumb {
+      transform: translateX(20px);
+    }
+
+    .scope-item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .scope-item-row:hover {
+      background: #F8FAFC;
+    }
+    .scope-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--color-text-regular);
+      font-weight: 500;
+    }
+
+    /* 多选方框指示器 */
+    .checkbox-indicator {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      border: 1.5px solid var(--color-border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.16s ease;
+      background: transparent;
+    }
+    .modern-option-card.active .checkbox-indicator {
+      border-color: var(--wot-color-theme);
+      background: var(--wot-color-theme);
+    }
+    .checkbox-indicator svg {
+      display: none;
+      width: 12px;
+      height: 12px;
+      stroke: #FFFFFF;
+      stroke-width: 2.5;
+      fill: none;
+    }
+    .modern-option-card.active .checkbox-indicator svg {
+      display: block;
+    }
+
+    /* 主观简答题录入框 */
+    .subjective-box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .subjective-textarea {
+      width: 100%;
+      height: 120px;
+      border: 1.5px solid var(--color-border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--color-text-primary);
+      line-height: 1.5;
+      resize: none;
+      outline: none;
+      transition: border-color 0.18s ease;
+      background: var(--color-surface);
+    }
+    .subjective-textarea:focus {
+      border-color: var(--wot-color-theme);
+      box-shadow: 0 0 0 1px var(--wot-color-theme);
+    }
+    .subjective-counter {
+      align-self: flex-end;
+      font-size: 11px;
+      color: var(--color-text-secondary);
+      font-weight: 600;
+    }
+
+    /* AI判题动画遮罩 */
+    .ai-eval-loader {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      background: var(--wot-color-theme-light);
+      border: 1.5px dashed var(--wot-color-theme-border);
+      border-radius: var(--radius-md);
+      animation: pulseBreath 1.5s infinite ease-in-out;
+    }
+    @keyframes pulseBreath {
+      0%, 100% { opacity: 0.9; }
+      50% { opacity: 0.6; }
+    }
+    .ai-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid rgba(37, 99, 235, 0.2);
+      border-top-color: var(--wot-color-theme);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* 答题卡抽屉 (wd-popup 风格) */
+    .popup-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      backdrop-filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 40;
+    }
+    .popup-backdrop.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .popup-sheet {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--color-surface);
+      border-top-left-radius: 24px;
+      border-top-right-radius: 24px;
+      box-shadow: var(--shadow-sheet);
+      padding: 20px 20px calc(20px + env(safe-area-inset-bottom, 14px));
+      transform: translateY(100%);
+      transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .popup-sheet.show {
+      transform: translateY(0);
+    }
+    .sheet-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--color-border-subtle);
+      padding-bottom: 12px;
+    }
+    .sheet-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
+    .sheet-legend {
+      display: flex;
+      gap: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .legend-dot.answered { background: var(--wot-color-theme); }
+    .legend-dot.current { background: #38BDF8; }
+    .legend-dot.unanswered { background: #CBD5E1; }
+
+    .sheet-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      max-height: 270px;
+      overflow-y: auto;
+      padding: 4px 2px;
+    }
+    .sheet-cell {
+      height: 42px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.16s ease;
+      user-select: none;
+    }
+    .sheet-cell:active {
+      transform: scale(0.92);
+    }
+    .sheet-cell.answered {
+      background: var(--wot-color-theme-light);
+      color: var(--wot-color-theme);
+      border: 1.5px solid var(--wot-color-theme-border);
+    }
+    .sheet-cell.current {
+      background: var(--wot-color-theme);
+      color: #FFFFFF;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+    }
+    .sheet-cell.unanswered {
+      background: var(--color-surface-subtle);
+      color: var(--color-text-secondary);
+      border: 1px solid var(--color-border-subtle);
+    }
+
+    /* 现代轻量 Toast */
+    .miniapp-toast {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(12px);
+      color: #FFFFFF;
+      padding: 10px 20px;
+      border-radius: var(--radius-pill);
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+    .miniapp-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* 判题反馈卡 */
+    .feedback-box {
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: var(--shadow-card);
+    }
+    .feedback-box-correct {
+      background: var(--wot-color-success-bg);
+      border: 1.5px solid var(--wot-color-success-border);
+    }
+    .feedback-box-wrong {
+      background: var(--wot-color-danger-bg);
+      border: 1.5px solid var(--wot-color-danger-border);
+    }
+    .feedback-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .feedback-box-correct .feedback-title { color: var(--wot-color-success-text); }
+    .feedback-box-wrong .feedback-title { color: var(--wot-color-danger-text); }
+
+    .feedback-text {
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--color-text-regular);
+    }
+
+    /* 学情诊断 Hero 渐变大卡片 */
+    .score-banner-card {
+      background: linear-gradient(135deg, #1E40AF 0%, #2563EB 60%, #3B82F6 100%);
+      color: #FFFFFF;
+      border-radius: var(--radius-lg);
+      padding: 22px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 10px 24px -4px rgba(37, 99, 235, 0.35);
+    }
+    .score-banner-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      opacity: 0.9;
+      font-weight: 600;
+    }
+    .score-banner-score {
+      font-size: 42px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .score-banner-score span {
+      font-size: 18px;
+      font-weight: 500;
+      opacity: 0.85;
+    }
+    .score-banner-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.18);
+      text-align: center;
+    }
+    .score-sub-label { font-size: 11px; opacity: 0.8; margin-bottom: 2px; }
+    .score-sub-val { font-size: 15px; font-weight: 700; }
+
+    /* 树形知识点条目 */
+    .tree-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #F1F5F9;
+    }
+    .tree-row:last-child { border-bottom: none; }
+    .tree-title {
+      font-size: 13px;
+      color: var(--color-text-regular);
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* 资料条目 */
+    .doc-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 0;
+      border-bottom: 1px solid #F1F5F9;
+    }
+    .doc-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .doc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .doc-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+    }
+    .doc-meta {
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      display: flex;
+      gap: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 原型顶部视图切换控制器 -->
+  <div class="prototype-header">
+    <div class="prototype-title-row">
+      <div class="prototype-title">
+        <span>智练自主学习平台 - 原型预览</span>
+        <span class="spec-badge">现代亲和质感风 (Modern Humanist)</span>
+      </div>
+      <span style="font-size: 12px; color: #94A3B8;">温润大圆角 · 呼吸留白 · 零表情包</span>
+    </div>
+    <div class="prototype-desc">
+      融合温润触控大卡片与高质感语义点睛色，点击标签体验 5 大业务视图：
+    </div>
+    <div class="view-switcher">
+      <button class="view-btn active" onclick="switchView('view-material', this)">1. 资料与大纲</button>
+      <button class="view-btn" onclick="switchView('view-config', this)">2. 出题配置</button>
+      <button class="view-btn" onclick="switchView('view-practice', this)">3. 沉浸答题</button>
+      <button class="view-btn" onclick="switchView('view-review', this)">4. 判题与溯源</button>
+      <button class="view-btn" onclick="switchView('view-diagnosis', this)">5. 学情分析与错题</button>
+    </div>
+  </div>
+
+  <!-- 小程序真机视口模拟器 -->
+  <div class="viewport-device">
+    
+    <!-- 顶部原生导航栏 -->
+    <header class="miniapp-navbar">
+      <div class="miniapp-nav-left" id="navTitle">
+        <span>我的学习资料</span>
+      </div>
+      <div class="miniapp-capsule">
+        <div class="capsule-dot"></div>
+        <div class="capsule-split"></div>
+        <div class="capsule-ring"></div>
+      </div>
+    </header>
+
+    <!-- 主滚动视图 -->
+    <main class="miniapp-scrollview">
+
+      <!-- ================= 视图 1：资料与知识点 ================= -->
+      <section class="view-container active" id="view-material">
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">导入学习资料</span>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="modern-button modern-button-secondary modern-button-block">从聊天记录选择</button>
+            <button class="modern-button modern-button-secondary modern-button-block">选择本地文件</button>
+          </div>
+          <div style="font-size: 12px; color: var(--color-text-secondary); line-height: 1.45;">
+            支持 PDF, DOCX, TXT, Markdown 文档及拍摄照片。
+          </div>
+        </div>
+
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">已上传资料</span>
+            <span class="modern-card-meta">共 2 份</span>
+          </div>
+
+          <div class="doc-row">
+            <div class="doc-header">
+              <span class="doc-name">操作系统核心概念_第3章.pdf</span>
+              <span class="modern-tag modern-tag-success">已就绪</span>
+            </div>
+            <div class="doc-meta">
+              <span>24 页</span>
+              <span>12 个核心考点</span>
+            </div>
+          </div>
+
+          <div class="doc-row">
+            <div class="doc-header">
+              <span class="doc-name">离散数学_集合论笔记_照片卷.zip</span>
+              <span class="modern-tag modern-tag-warning">需重拍</span>
+            </div>
+            <div class="doc-meta">
+              <span>第 4 页文字模糊</span>
+            </div>
+            <button class="modern-button modern-button-secondary" style="padding: 6px 14px; font-size: 12px; align-self: flex-start; margin-top: 4px;">
+              重新拍摄第 4 页
+            </button>
+          </div>
+        </div>
+
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">知识大纲结构</span>
+            <span class="modern-card-meta">12 个考点</span>
+          </div>
+
+          <div class="tree-row">
+            <div class="tree-title" style="font-weight: 700; color: var(--color-text-primary);">
+              <span>第 3 章：进程管理与并发控制</span>
+            </div>
+            <span class="modern-tag modern-tag-neutral">章</span>
+          </div>
+
+          <div class="tree-row" style="padding-left: 16px;">
+            <div class="tree-title">
+              <span>3.1 临界区互斥算法</span>
+            </div>
+            <span class="modern-tag modern-tag-primary">8 题可选</span>
+          </div>
+
+          <div class="tree-row" style="padding-left: 32px;">
+            <div class="tree-title">
+              <span>3.1.2 信号量 PV 机制</span>
+            </div>
+            <span class="modern-tag modern-tag-primary">12 题可选</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 2：出题配置 ================= -->
+      <section class="view-container" id="view-config">
+        <!-- 资料与考点范围 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">1. 资料与考点范围</span>
+            <span class="modern-card-meta">已关联 1 份资料</span>
+          </div>
+
+          <div style="background: var(--color-surface-subtle); padding: 10px 12px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: space-between;">
+            <div style="font-size: 13px; font-weight: 700; color: var(--color-text-primary);">
+              操作系统核心概念_第3章.pdf
+            </div>
+            <span class="modern-tag modern-tag-success">共 12 考点</span>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--color-text-secondary);">勾选出题考点</span>
+            <div style="display: flex; gap: 8px;">
+              <span style="font-size: 11px; color: var(--wot-color-theme); font-weight: 700; cursor: pointer;" onclick="toggleAllScopes(true)">全选</span>
+              <span style="font-size: 11px; color: var(--color-text-secondary); cursor: pointer;" onclick="toggleAllScopes(false)">重置</span>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <div class="scope-item-row" onclick="toggleScopeItem(this)">
+              <div class="scope-left">
+                <div class="checkbox-indicator active">
+                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </div>
+                <span>3.1 临界区互斥算法</span>
+              </div>
+              <span class="modern-tag modern-tag-primary">8 题可选</span>
+            </div>
+
+            <div class="scope-item-row" onclick="toggleScopeItem(this)">
+              <div class="scope-left">
+                <div class="checkbox-indicator active">
+                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </div>
+                <span>3.1.2 信号量 PV 机制</span>
+              </div>
+              <span class="modern-tag modern-tag-warning">薄弱 · 12题</span>
+            </div>
+
+            <div class="scope-item-row" onclick="toggleScopeItem(this)">
+              <div class="scope-left">
+                <div class="checkbox-indicator active">
+                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </div>
+                <span>3.2 死锁的四大必要条件</span>
+              </div>
+              <span class="modern-tag modern-tag-primary">6 题可选</span>
+            </div>
+
+            <div class="scope-item-row" onclick="toggleScopeItem(this)">
+              <div class="scope-left">
+                <div class="checkbox-indicator">
+                  <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </div>
+                <span>3.3 管程机制与条件变量</span>
+              </div>
+              <span class="modern-tag modern-tag-neutral">未学 · 4题</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 题型组合筛选 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">2. 题型组合筛选</span>
+            <span class="modern-card-meta">支持混合出题</span>
+          </div>
+          <div class="chip-group" id="typeChipGroup">
+            <div class="chip-item active" onclick="toggleTypeChip(this)">单选题 (秒判)</div>
+            <div class="chip-item active" onclick="toggleTypeChip(this)">多选题</div>
+            <div class="chip-item active" onclick="toggleTypeChip(this)">简答题 (AI判题)</div>
+            <div class="chip-item" onclick="toggleTypeChip(this)">判断题</div>
+          </div>
+        </div>
+
+        <!-- 难度阶梯与练习题量 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">3. 难度与练习题量</span>
+          </div>
+
+          <div style="font-size: 12px; font-weight: 700; color: var(--color-text-secondary); margin-bottom: 2px;">难度梯度</div>
+          <div class="chip-group">
+            <div class="chip-item active" onclick="selectDifficulty(this)">全部难度</div>
+            <div class="chip-item" onclick="selectDifficulty(this)">基础夯实</div>
+            <div class="chip-item" onclick="selectDifficulty(this)">综合进阶</div>
+            <div class="chip-item" onclick="selectDifficulty(this)">深度拔高</div>
+          </div>
+
+          <div style="font-size: 12px; font-weight: 700; color: var(--color-text-secondary); margin-top: 10px; margin-bottom: 4px;">题数配置 (FR-27: 1~50题)</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 6px;">
+              <button class="chip-item" style="padding: 5px 11px;" onclick="setQuizCount(5, this)">5 题</button>
+              <button class="chip-item" style="padding: 5px 11px;" onclick="setQuizCount(10, this)">10 题</button>
+              <button class="chip-item active" style="padding: 5px 11px;" onclick="setQuizCount(15, this)">15 题</button>
+              <button class="chip-item" style="padding: 5px 11px;" onclick="setQuizCount(20, this)">20 题</button>
+            </div>
+            <div class="stepper-container">
+              <div class="stepper-btn" onclick="stepQuizCount(-1)">-</div>
+              <div class="stepper-value" id="quizCountVal">15</div>
+              <div class="stepper-btn" onclick="stepQuizCount(1)">+</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 策略与模式 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">4. 抽题策略与做题节奏</span>
+          </div>
+
+          <div class="option-group">
+            <div class="modern-option-card active" onclick="selectStrategyCard(this)">
+              <div class="option-inner">
+                <div class="option-text">
+                  <div style="font-weight: 700;">优先强化薄弱点 (推荐)</div>
+                  <div style="font-size: 11px; color: var(--color-text-secondary); margin-top: 2px;">优先抽取低于 0.40 掌握度的核心考点题目</div>
+                </div>
+              </div>
+              <div class="option-indicator"><div class="indicator-dot"></div></div>
+            </div>
+
+            <div class="modern-option-card" onclick="selectStrategyCard(this)">
+              <div class="option-inner">
+                <div class="option-text">
+                  <div style="font-weight: 700;">全范围均衡练习</div>
+                  <div style="font-size: 11px; color: var(--color-text-secondary); margin-top: 2px;">章节考点均匀抽题，覆盖广度</div>
+                </div>
+              </div>
+              <div class="option-indicator"><div class="indicator-dot"></div></div>
+            </div>
+          </div>
+
+          <!-- 乱序抽题开关 (FR-31) -->
+          <div class="modern-switch-row">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; color: var(--color-text-primary);">乱序抽题 (同考点不相邻)</div>
+              <div style="font-size: 11px; color: var(--color-text-secondary);">打破顺序作答惯性，提升真实掌握度</div>
+            </div>
+            <div class="modern-switch active" id="shuffleSwitch" onclick="toggleSwitch(this)">
+              <div class="switch-thumb"></div>
+            </div>
+          </div>
+
+          <!-- 做题节奏 (刷题即判 vs 模考交卷) -->
+          <div class="modern-switch-row">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; color: var(--color-text-primary);">做题即判 (即时出解析)</div>
+              <div style="font-size: 11px; color: var(--color-text-secondary);">每答完一题即显示对错与教材考点透析</div>
+            </div>
+            <div class="modern-switch active" id="instantGradeSwitch" onclick="toggleSwitch(this)">
+              <div class="switch-thumb"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 启动练习行动栏 -->
+        <div class="modern-card" style="border-color: var(--wot-color-theme-border); background: var(--wot-color-theme-light);">
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--wot-color-theme); font-weight: 700;">
+            <span>智能组卷已就绪</span>
+            <span id="summaryMetaText">预计 15 分钟 · 3 考点</span>
+          </div>
+          <button class="modern-button modern-button-primary modern-button-block" onclick="startPracticeSession()">
+            开始智能练习 (共 <span id="btnStartCount">15</span> 题)
+          </button>
+        </div>
+      </section>
+
+      <!-- ================= 视图 3：沉浸答题 (真实顺序/乱序答题流) ================= -->
+      <section class="view-container" id="view-practice">
+        <!-- 沉浸式做题顶栏 (可点击呼出答题卡) -->
+        <div class="quiz-status-bar">
+          <div class="quiz-timer-pill" id="practiceTimer">14:15</div>
+          <div class="quiz-step-btn" onclick="toggleAnswerSheet(true)" title="点击展开答题卡">
+            <span id="currentStepText">第 01 题</span>
+            <span style="color: var(--color-text-secondary); font-weight: 500;" id="totalStepText">/ 15</span>
+            <span class="sheet-icon-tag">答题卡</span>
+          </div>
+          <span class="modern-tag modern-tag-neutral" id="practiceTypeTag">单选题</span>
+        </div>
+
+        <!-- 动态题目渲染挂载区 (根据题目固有类型自动展示对应组件) -->
+        <div id="practiceQuestionContainer" style="display: flex; flex-direction: column; gap: 16px;">
+          <!-- 动态注入当前题目的题干、考点、选项/输入框 -->
+        </div>
+
+        <!-- 底部切题与交卷操作栏 (吸底样式) -->
+        <div style="display: flex; gap: 10px; margin-top: 6px;">
+          <button class="modern-button modern-button-secondary" id="btnPrevQuestion" style="flex: 1;" onclick="prevQuestion()">上一题</button>
+          <button class="modern-button modern-button-secondary" id="btnGradeCurrent" style="flex: 1.2; display: none;" onclick="gradeCurrentQuestion()">本题判分</button>
+          <button class="modern-button modern-button-primary" id="btnNextQuestion" style="flex: 1.3;" onclick="nextQuestion()">下一题</button>
+        </div>
+      </section>
+
+      <!-- ================= 视图 4：判题与溯源 ================= -->
+      <section class="view-container" id="view-review">
+        <!-- 判题结果快速预览切换 -->
+        <div style="display: flex; gap: 6px; background: #F1F5F9; padding: 4px; border-radius: var(--radius-pill);">
+          <button class="mode-tab-btn active" id="btnReviewCorrect" onclick="setReviewCard('correct')">判对状态</button>
+          <button class="mode-tab-btn" id="btnReviewWrong" onclick="setReviewCard('wrong')">判错状态</button>
+          <button class="mode-tab-btn" id="btnReviewAI" onclick="setReviewCard('ai')">AI主观题分析</button>
+        </div>
+
+        <div class="feedback-box feedback-box-correct" id="reviewBanner">
+          <div class="feedback-title" id="reviewStatus">回答正确</div>
+          <div class="feedback-text" id="reviewExplanation">
+            <strong>答案透析：</strong>若先执行 P(mutex) 获得互斥锁，而此时缓冲区已满执行 P(empty) 陷入阻塞，消费者无法进入临界区执行 V 操作释放空间，导致死锁。
+          </div>
+        </div>
+
+        <!-- AI 简答题核心采分点卡片 (按需展示) -->
+        <div class="modern-card" id="aiPointsCard" style="display: none;">
+          <div class="modern-card-header">
+            <span class="modern-card-title">AI 采分点深度诊断</span>
+            <span class="modern-tag modern-tag-success">得分 10/10</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12px; background: #ECFDF5; padding: 8px 12px; border-radius: 8px; color: #065F46;">
+              <span>考点一：空闲让进原则说明准确完整</span>
+              <strong>覆盖率 100%</strong>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12px; background: #ECFDF5; padding: 8px 12px; border-radius: 8px; color: #065F46;">
+              <span>考点二：有限等待与防饥饿机制阐述清晰</span>
+              <strong>覆盖率 100%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">资料原文出处</span>
+            <span class="modern-tag modern-tag-primary">第 14 页</span>
+          </div>
+          <div style="font-size: 11px; color: var(--color-text-secondary); font-weight: 500;">
+            出处: 《操作系统核心概念_第3章.pdf》
+          </div>
+          <div style="font-size: 13px; line-height: 1.55; color: var(--color-text-regular); background: var(--color-surface-subtle); padding: 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--wot-color-theme);">
+            “...必须注意，各个进程中信号量的 P 操作顺序至关重要。应先对资源信号量进行 P 操作，再对互斥信号量进行 P 操作。若顺序倒置，极易引起死锁...”
+          </div>
+        </div>
+
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">作答反馈</span>
+          </div>
+          <div style="font-size: 13px; color: var(--color-text-secondary); line-height: 1.5;">
+            如对本次判题结果有疑问，可申请人工复核或发起自评。
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 4px;">
+            <button class="modern-button modern-button-secondary" style="flex: 1; font-size: 13px;" onclick="showToast('已提交人工复核申请')">申请自评修正</button>
+            <button class="modern-button modern-button-primary" style="flex: 1; font-size: 13px;" onclick="switchView('view-diagnosis')">查看本场分析</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 5：学情诊断与错题 ================= -->
+      <section class="view-container" id="view-diagnosis">
+        <!-- 分数 Hero 卡片 -->
+        <div class="score-banner-card">
+          <div class="score-banner-top">
+            <span>综合测评分析</span>
+            <span class="modern-tag" style="background: rgba(255,255,255,0.22); color: #FFFFFF; font-weight: 600;">已生成</span>
+          </div>
+          <div class="score-banner-score">
+            86.7 <span>分</span>
+          </div>
+          <div class="score-banner-grid">
+            <div>
+              <div class="score-sub-label">练习题数</div>
+              <div class="score-sub-val">15 题</div>
+            </div>
+            <div>
+              <div class="score-sub-label">正确率</div>
+              <div class="score-sub-val" style="color: #6EE7B7;">86.7%</div>
+            </div>
+            <div>
+              <div class="score-sub-label">作答用时</div>
+              <div class="score-sub-val">11分20秒</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 掌握度阶梯看板 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">知识掌握度看板</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px;">
+                <span style="font-weight: 600;">进程管理与并发控制</span>
+                <span class="modern-tag tag-mastered">精通</span>
+              </div>
+              <div class="modern-progress-track">
+                <div class="modern-progress-bar" style="width: 91%; background: var(--mastery-mastered-fill);"></div>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px;">
+                <span style="font-weight: 600;">临界区互斥算法</span>
+                <span class="modern-tag tag-proficient">良好</span>
+              </div>
+              <div class="modern-progress-track">
+                <div class="modern-progress-bar" style="width: 65%; background: var(--mastery-proficient-fill);"></div>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px;">
+                <span style="font-weight: 600;">信号量 PV 机制</span>
+                <span class="modern-tag tag-weak">需巩固</span>
+              </div>
+              <div class="modern-progress-track">
+                <div class="modern-progress-bar" style="width: 32%; background: var(--mastery-weak-fill);"></div>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px;">
+                <span style="font-weight: 600;">管程机制与条件变量</span>
+                <span class="modern-tag tag-unlearned">未学</span>
+              </div>
+              <div class="modern-progress-track">
+                <div class="modern-progress-bar" style="width: 4%; background: var(--mastery-unlearned-fill);"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 错题本闭环 -->
+        <div class="modern-card">
+          <div class="modern-card-header">
+            <span class="modern-card-title">待消灭错题</span>
+            <span class="modern-tag modern-tag-danger">1 题待复练</span>
+          </div>
+          <div style="font-size: 13px; color: var(--color-text-regular); line-height: 1.5;">
+            题目：互斥信号量与资源信号量 P 操作次序颠倒引起的异常判断。<br>
+            <span style="font-size: 12px; color: var(--wot-color-danger-text); font-weight: 600;">你的作答: A | 正确答案: B</span>
+          </div>
+          <button class="modern-button modern-button-primary modern-button-block" style="margin-top: 6px;" onclick="showToast('已加入错题专项复练队列 (共1题)')">
+            消灭错题
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- 答题卡抽屉遮罩 (Popup Backdrop) -->
+    <div class="popup-backdrop" id="sheetBackdrop" onclick="toggleAnswerSheet(false)"></div>
+
+    <!-- 答题卡抽屉内容 (Popup Bottom Sheet) -->
+    <div class="popup-sheet" id="answerSheet">
+      <div class="sheet-header">
+        <div class="sheet-title">
+          <span>答题卡</span>
+          <span style="font-size: 12px; color: var(--color-text-secondary); font-weight: 500;">(已完成 3 / 15)</span>
+        </div>
+        <div class="sheet-legend">
+          <div class="legend-item"><span class="legend-dot answered"></span><span>已答</span></div>
+          <div class="legend-item"><span class="legend-dot current"></span><span>当前</span></div>
+          <div class="legend-item"><span class="legend-dot unanswered"></span><span>未答</span></div>
+        </div>
+      </div>
+
+      <div class="sheet-grid" id="sheetGrid">
+        <!-- 题号矩阵由 JS 自动渲染 -->
+      </div>
+
+      <div style="display: flex; gap: 10px; margin-top: 6px;">
+        <button class="modern-button modern-button-secondary" style="flex: 1;" onclick="toggleAnswerSheet(false)">继续答题</button>
+        <button class="modern-button modern-button-primary" style="flex: 1;" onclick="submitFromSheet()">提前交卷</button>
+      </div>
+    </div>
+
+    <!-- 现代轻量 Toast -->
+    <div class="miniapp-toast" id="miniToast"></div>
+
+  </div>
+
+  <script>
+    const navTitles = {
+      'view-material': '我的学习资料',
+      'view-config': '定制练习题',
+      'view-practice': '单题沉浸练习',
+      'view-review': '判题与溯源',
+      'view-diagnosis': '学情分析与错题'
+    };
+
+    // 视图切换控制
+    function switchView(viewId, btnEl) {
+      document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
+      const target = document.getElementById(viewId);
+      if (target) target.classList.add('active');
+
+      document.querySelectorAll('.view-btn').forEach(b => {
+        b.classList.remove('active');
+        if (btnEl && b === btnEl) {
+          b.classList.add('active');
+        } else if (!btnEl && b.getAttribute('onclick')?.includes(viewId)) {
+          b.classList.add('active');
+        }
+      });
+
+      document.getElementById('navTitle').innerText = navTitles[viewId] || '智练学习平台';
+    }
+
+    // 轻量原生感 Toast
+    let toastTimer = null;
+    function showToast(message) {
+      const toast = document.getElementById('miniToast');
+      toast.innerText = message;
+      toast.classList.add('show');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('show');
+      }, 1800);
+    }
+
+    // ========================================================
+    // 1. 出题配置器管理 (Config State & Handlers)
+    // ========================================================
+    let configState = {
+      scopeCount: 3,
+      count: 15,
+      difficulty: '全部难度',
+      strategy: 'weak',
+      isShuffle: true,
+      isInstantGrade: true
+    };
+
+    function toggleScopeItem(rowEl) {
+      const checkbox = rowEl.querySelector('.checkbox-indicator');
+      checkbox.classList.toggle('active');
+      updateScopeSummary();
+    }
+
+    function toggleAllScopes(selectAll) {
+      document.querySelectorAll('.scope-item-row .checkbox-indicator').forEach(cb => {
+        if (selectAll) cb.classList.add('active');
+        else cb.classList.remove('active');
+      });
+      updateScopeSummary();
+      showToast(selectAll ? '已全选全部考点' : '已重置考点选择');
+    }
+
+    function updateScopeSummary() {
+      const activeCount = document.querySelectorAll('.scope-item-row .checkbox-indicator.active').length;
+      configState.scopeCount = activeCount;
+      const meta = document.getElementById('summaryMetaText');
+      if (meta) meta.innerText = `预计 ${configState.count} 分钟 · ${activeCount} 考点`;
+    }
+
+    function toggleTypeChip(chipEl) {
+      chipEl.classList.toggle('active');
+      const activeTypes = document.querySelectorAll('#typeChipGroup .chip-item.active');
+      if (activeTypes.length === 0) {
+        chipEl.classList.add('active');
+        showToast('至少保留一种题型');
+      }
+    }
+
+    function selectDifficulty(chipEl) {
+      chipEl.parentElement.querySelectorAll('.chip-item').forEach(c => c.classList.remove('active'));
+      chipEl.classList.add('active');
+      configState.difficulty = chipEl.innerText;
+    }
+
+    function setQuizCount(count, btnEl) {
+      configState.count = count;
+      document.getElementById('quizCountVal').innerText = count;
+      document.getElementById('btnStartCount').innerText = count;
+      if (btnEl) {
+        btnEl.parentElement.querySelectorAll('.chip-item').forEach(b => b.classList.remove('active'));
+        btnEl.classList.add('active');
+      }
+      updateScopeSummary();
+    }
+
+    function stepQuizCount(delta) {
+      let next = configState.count + delta;
+      if (next < 1) next = 1;
+      if (next > 50) next = 50; // FR-27
+      configState.count = next;
+      document.getElementById('quizCountVal').innerText = next;
+      document.getElementById('btnStartCount').innerText = next;
+      updateScopeSummary();
+    }
+
+    function selectStrategyCard(cardEl) {
+      cardEl.parentElement.querySelectorAll('.modern-option-card').forEach(c => c.classList.remove('active'));
+      cardEl.classList.add('active');
+      configState.strategy = cardEl.innerText.includes('薄弱点') ? 'weak' : 'balanced';
+    }
+
+    function toggleSwitch(switchEl) {
+      switchEl.classList.toggle('active');
+      if (switchEl.id === 'shuffleSwitch') {
+        configState.isShuffle = switchEl.classList.contains('active');
+        showToast(configState.isShuffle ? '已开启乱序抽题 (同考点不相邻)' : '已恢复顺序出题');
+      } else if (switchEl.id === 'instantGradeSwitch') {
+        configState.isInstantGrade = switchEl.classList.contains('active');
+        showToast(configState.isInstantGrade ? '已开启做题即判 (即时解析)' : '已开启模考模式 (整卷交卷)');
+      }
+    }
+
+    function startPracticeSession() {
+      if (configState.scopeCount === 0) {
+        showToast('请至少勾选一个出题考点');
+        return;
+      }
+      totalQuestionCount = configState.count;
+      document.getElementById('totalStepText').innerText = `/ ${totalQuestionCount}`;
+      currentQuestionIndex = 1;
+      userDrafts = {};
+      answeredQuestions.clear();
+
+      renderPracticeQuestion(1);
+      switchView('view-practice');
+      showToast(`已生成 ${totalQuestionCount} 道智能练习题，开始作答！`);
+    }
+
+    // ========================================================
+    // 2. 真实题库序列数据 (Sequential Question Bank)
+    // ========================================================
+    const fullQuestionBank = [
+      {
+        id: 1,
+        type: 'single',
+        typeName: '单选题',
+        point: '3.1.2 信号量 PV 机制',
+        difficulty: '中等',
+        title: '在利用信号量机制解决生产者-消费者问题时，若互斥信号量 mutex 与资源信号量 empty/full 的 P 操作次序颠倒，可能导致的最直接系统异常是什么？',
+        options: [
+          { key: 'A', text: '缓冲区数据发生覆盖损坏' },
+          { key: 'B', text: '引发进程死锁 (Deadlock)' },
+          { key: 'C', text: '生产者进程单方面饥饿退出' },
+          { key: 'D', text: '产生 CPU 调度器优先级反转' }
+        ],
+        correctAnswer: 'B',
+        explanation: '若先执行 P(mutex) 获得互斥锁，而此时缓冲区已满执行 P(empty) 陷入阻塞，消费者无法进入临界区执行 V 操作释放空间，导致死锁。'
+      },
+      {
+        id: 2,
+        type: 'multi',
+        typeName: '多选题',
+        point: '3.2 死锁的四大必要条件',
+        difficulty: '较难',
+        title: '关于现代操作系统中引发死锁 (Deadlock) 的四大必要条件，以下哪些选项是必须同时满足的？(多选)',
+        options: [
+          { key: 'A', text: '互斥使用条件 (Mutual Exclusion)' },
+          { key: 'B', text: '请求与保持条件 (Hold and Wait)' },
+          { key: 'C', text: '不可剥夺条件 (No Preemption)' },
+          { key: 'D', text: '循环等待条件 (Circular Wait)' }
+        ],
+        correctAnswer: ['A', 'B', 'C', 'D'],
+        explanation: '死锁四大必要条件为：互斥使用、不可剥夺、请求与保持、循环等待。打破其中任一条件即可预防死锁。'
+      },
+      {
+        id: 3,
+        type: 'subjective',
+        typeName: '简答题 (AI判题)',
+        point: '3.1 临界区管理准则',
+        difficulty: '核心',
+        title: '请简述临界区互斥管理准则中“空闲让进”与“有限等待”的核心含义及防止的系统隐患。',
+        placeholder: '请输入你的回答要点（支持多段论述）...',
+        defaultText: '空闲让进：当临界区无进程时，应允许请求进程立即进入，避免资源闲置。有限等待：必须保证请求进程在有限时间内能够进入临界区，防止进程发生饥饿死锁。',
+        correctAnswer: '空闲让进防止资源闲置；有限等待防止进程无限期等待引发饥饿。',
+        explanation: '标准考点：1. 空闲让进原则（临界区空闲应立即让进）；2. 有限等待原则（等待进入时间有限，防止饥饿死锁）。'
+      },
+      {
+        id: 4,
+        type: 'single',
+        typeName: '单选题',
+        point: '3.1.1 临界区访问机制',
+        difficulty: '基础',
+        title: '进程在进入临界区执行访问共享资源的代码之前，必须先在什么区域进行资源请求与标志检查？',
+        options: [
+          { key: 'A', text: '退出区 (Exit Section)' },
+          { key: 'B', text: '进入区 (Entry Section)' },
+          { key: 'C', text: '剩余区 (Remainder Section)' },
+          { key: 'D', text: '阻塞挂起区 (Blocked Section)' }
+        ],
+        correctAnswer: 'B',
+        explanation: '进程访问临界资源分为四部分：进入区（检查并设标志）、临界区（访问共享资源）、退出区（清除标志释放资源）、剩余区。'
+      },
+      {
+        id: 5,
+        type: 'multi',
+        typeName: '多选题',
+        point: '3.1.2 信号量原子特性',
+        difficulty: '中等',
+        title: '关于 Dijkstra 提出的信号量 P (Wait) 与 V (Signal) 操作，下列叙述中正确的有哪些？(多选)',
+        options: [
+          { key: 'A', text: 'P 操作与 V 操作均为原语，执行过程不可中断' },
+          { key: 'B', text: '执行 P 操作使信号量 S 减 1，若 S < 0 则进程阻塞' },
+          { key: 'C', text: '执行 V 操作使信号量 S 加 1，若 S <= 0 则唤醒等待队列中的进程' },
+          { key: 'D', text: '信号量初值只能为 1，不可定义为大于 1 的整数' }
+        ],
+        correctAnswer: ['A', 'B', 'C'],
+        explanation: 'A、B、C 均为信号量基本原子特性。D 错误：资源信号量初值可大于 1，表示多份可用资源。'
+      }
+    ];
+
+    // ========================================================
+    // 3. 连续顺序答题状态引擎 (Sequential Practice Engine)
+    // ========================================================
+    let totalQuestionCount = 15;
+    let currentQuestionIndex = 1;
+    let userDrafts = {
+      1: 'B',
+      2: ['A', 'B', 'C', 'D'],
+      3: '空闲让进：当临界区无进程时，应允许请求进程立即进入，避免资源闲置。有限等待：必须保证请求进程在有限时间内能够进入临界区，防止进程发生饥饿死锁。'
+    };
+    const answeredQuestions = new Set([1, 2, 3]);
+
+    function getQuestionData(idx) {
+      if (idx <= fullQuestionBank.length) {
+        return fullQuestionBank[idx - 1];
+      }
+      // 循环复用生成更多模拟题
+      const template = fullQuestionBank[(idx - 1) % fullQuestionBank.length];
+      return {
+        ...template,
+        id: idx,
+        title: `(题号 ${idx}) ` + template.title
+      };
+    }
+
+    function renderPracticeQuestion(idx) {
+      currentQuestionIndex = idx;
+      const q = getQuestionData(idx);
+
+      // 更新顶栏
+      document.getElementById('currentStepText').innerText = `第 ${(idx < 10 ? '0' : '') + idx} 题`;
+      document.getElementById('practiceTypeTag').innerText = q.typeName;
+
+      const container = document.getElementById('practiceQuestionContainer');
+      container.innerHTML = '';
+
+      // 题干与考点卡片
+      const headerCard = document.createElement('div');
+      headerCard.className = 'modern-card';
+      headerCard.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: var(--color-text-secondary); font-weight: 600;">考点: ${q.point}</span>
+          <span class="modern-tag modern-tag-neutral">${q.difficulty || '综合'}</span>
+        </div>
+        <div style="font-size: 15px; font-weight: 700; line-height: 1.6; color: var(--color-text-primary);">
+          ${q.title}
+        </div>
+      `;
+      container.appendChild(headerCard);
+
+      // 根据题型挂载不同的作答交互组件
+      if (q.type === 'single') {
+        const optionGroup = document.createElement('div');
+        optionGroup.className = 'option-group';
+        const currentAns = userDrafts[idx];
+
+        q.options.forEach(opt => {
+          const card = document.createElement('div');
+          card.className = 'modern-option-card' + (currentAns === opt.key ? ' active' : '');
+          card.onclick = () => selectSingleChoice(idx, opt.key);
+          card.innerHTML = `
+            <div class="option-inner">
+              <div class="option-badge">${opt.key}</div>
+              <div class="option-text">${opt.text}</div>
+            </div>
+            <div class="option-indicator"><div class="indicator-dot"></div></div>
+          `;
+          optionGroup.appendChild(card);
+        });
+        container.appendChild(optionGroup);
+
+      } else if (q.type === 'multi') {
+        const optionGroup = document.createElement('div');
+        optionGroup.className = 'option-group';
+        const currentAns = userDrafts[idx] || [];
+
+        q.options.forEach(opt => {
+          const isSelected = Array.isArray(currentAns) && currentAns.includes(opt.key);
+          const card = document.createElement('div');
+          card.className = 'modern-option-card' + (isSelected ? ' active' : '');
+          card.onclick = () => toggleMultiChoice(idx, opt.key);
+          card.innerHTML = `
+            <div class="option-inner">
+              <div class="option-badge">${opt.key}</div>
+              <div class="option-text">${opt.text}</div>
+            </div>
+            <div class="checkbox-indicator">
+              <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+          `;
+          optionGroup.appendChild(card);
+        });
+        container.appendChild(optionGroup);
+
+      } else if (q.type === 'subjective') {
+        const subjBox = document.createElement('div');
+        subjBox.className = 'subjective-box';
+        const currentText = userDrafts[idx] || q.defaultText || '';
+        subjBox.innerHTML = `
+          <textarea class="subjective-textarea" id="subjectiveTextarea" placeholder="${q.placeholder || '请输入论述...'}" oninput="handleSubjectiveInput(${idx}, this)">${currentText}</textarea>
+          <div class="subjective-counter" id="subjWordCount">${currentText.length} / 500 字</div>
+        `;
+        container.appendChild(subjBox);
+      }
+
+      // 更新底部按钮文案与状态
+      const btnPrev = document.getElementById('btnPrevQuestion');
+      const btnNext = document.getElementById('btnNextQuestion');
+      const btnGrade = document.getElementById('btnGradeCurrent');
+
+      btnPrev.disabled = (idx === 1);
+      btnPrev.style.opacity = (idx === 1) ? '0.45' : '1';
+
+      if (idx === totalQuestionCount) {
+        btnNext.innerText = '完成交卷';
+      } else {
+        btnNext.innerText = '下一题';
+      }
+
+      // 刷题模式下提供即时判分入口
+      if (configState.isInstantGrade) {
+        btnGrade.style.display = 'block';
+      } else {
+        btnGrade.style.display = 'none';
+      }
+    }
+
+    // 单选点击
+    function selectSingleChoice(qIdx, key) {
+      userDrafts[qIdx] = key;
+      answeredQuestions.add(qIdx);
+      renderPracticeQuestion(qIdx);
+    }
+
+    // 多选点击
+    function toggleMultiChoice(qIdx, key) {
+      if (!Array.isArray(userDrafts[qIdx])) {
+        userDrafts[qIdx] = [];
+      }
+      const arr = userDrafts[qIdx];
+      const pos = arr.indexOf(key);
+      if (pos >= 0) arr.splice(pos, 1);
+      else arr.push(key);
+
+      if (arr.length > 0) answeredQuestions.add(qIdx);
+      else answeredQuestions.delete(qIdx);
+
+      renderPracticeQuestion(qIdx);
+    }
+
+    // 简答输入
+    function handleSubjectiveInput(qIdx, textarea) {
+      userDrafts[qIdx] = textarea.value;
+      if (textarea.value.trim().length > 0) answeredQuestions.add(qIdx);
+      else answeredQuestions.delete(qIdx);
+      document.getElementById('subjWordCount').innerText = `${textarea.value.length} / 500 字`;
+    }
+
+    // 切题操作
+    function prevQuestion() {
+      if (currentQuestionIndex > 1) {
+        renderPracticeQuestion(currentQuestionIndex - 1);
+      }
+    }
+
+    function nextQuestion() {
+      if (currentQuestionIndex < totalQuestionCount) {
+        renderPracticeQuestion(currentQuestionIndex + 1);
+      } else {
+        // 最后一题点击完成交卷
+        submitQuizSession();
+      }
+    }
+
+    // 即时单题判分
+    function gradeCurrentQuestion() {
+      const q = getQuestionData(currentQuestionIndex);
+      const userAns = userDrafts[currentQuestionIndex];
+      if (!userAns || (Array.isArray(userAns) && userAns.length === 0)) {
+        showToast('请先作答本题再查看解析');
+        return;
+      }
+
+      if (q.type === 'single') {
+        const isRight = (userAns === q.correctAnswer);
+        setReviewCard(isRight ? 'correct' : 'wrong');
+      } else if (q.type === 'multi') {
+        const isRight = (Array.isArray(userAns) && userAns.length === q.correctAnswer.length);
+        setReviewCard(isRight ? 'correct' : 'wrong');
+      } else {
+        setReviewCard('ai');
+      }
+      switchView('view-review');
+    }
+
+    function submitQuizSession() {
+      switchView('view-diagnosis');
+      showToast('交卷成功！综合学情诊断报告已生成');
+    }
+
+    // ========================================================
+    // 4. 答题卡抽屉与无缝跳转 (Answer Sheet Drawer)
+    // ========================================================
+    function renderAnswerSheetGrid() {
+      const grid = document.getElementById('sheetGrid');
+      grid.innerHTML = '';
+      for (let i = 1; i <= totalQuestionCount; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'sheet-cell';
+        if (i === currentQuestionIndex) {
+          cell.classList.add('current');
+        } else if (answeredQuestions.has(i)) {
+          cell.classList.add('answered');
+        } else {
+          cell.classList.add('unanswered');
+        }
+        cell.innerText = (i < 10 ? '0' : '') + i;
+        cell.onclick = () => selectQuestionFromSheet(i);
+        grid.appendChild(cell);
+      }
+    }
+
+    function toggleAnswerSheet(show) {
+      const backdrop = document.getElementById('sheetBackdrop');
+      const sheet = document.getElementById('answerSheet');
+      if (show) {
+        renderAnswerSheetGrid();
+        backdrop.classList.add('show');
+        sheet.classList.add('show');
+      } else {
+        backdrop.classList.remove('show');
+        sheet.classList.remove('show');
+      }
+    }
+
+    function selectQuestionFromSheet(qNum) {
+      toggleAnswerSheet(false);
+      renderPracticeQuestion(qNum);
+      showToast(`已切换至第 ${qNum} 题`);
+    }
+
+    function submitFromSheet() {
+      toggleAnswerSheet(false);
+      submitQuizSession();
+    }
+
+    // ========================================================
+    // 5. 判题与溯源卡片状态快速切换
+    // ========================================================
+    function setReviewCard(state) {
+      const banner = document.getElementById('reviewBanner');
+      const status = document.getElementById('reviewStatus');
+      const exp = document.getElementById('reviewExplanation');
+      const aiCard = document.getElementById('aiPointsCard');
+
+      const bCorrect = document.getElementById('btnReviewCorrect');
+      const bWrong = document.getElementById('btnReviewWrong');
+      const bAI = document.getElementById('btnReviewAI');
+      if (bCorrect && bWrong && bAI) {
+        [bCorrect, bWrong, bAI].forEach(b => b.classList.remove('active'));
+      }
+
+      if (state === 'correct') {
+        if (bCorrect) bCorrect.classList.add('active');
+        banner.className = 'feedback-box feedback-box-correct';
+        status.innerText = '回答正确';
+        exp.innerHTML = '<strong>答案透析：</strong>若先执行 P(mutex) 获得互斥锁，而此时缓冲区已满执行 P(empty) 陷入阻塞，消费者无法进入临界区执行 V 操作释放空间，导致死锁。';
+        aiCard.style.display = 'none';
+      } else if (state === 'wrong') {
+        if (bWrong) bWrong.classList.add('active');
+        banner.className = 'feedback-box feedback-box-wrong';
+        status.innerText = '回答错误，已收录错题本';
+        exp.innerHTML = '<strong>错误透析：</strong>互斥信号量次序颠倒将引发死锁风险，当前选择 A 选项错误，正确应为 B。已自动纳入针对性错题集。';
+        aiCard.style.display = 'none';
+      } else if (state === 'ai') {
+        if (bAI) bAI.classList.add('active');
+        banner.className = 'feedback-box feedback-box-correct';
+        status.innerText = 'AI 综合评分：优秀 (10/10)';
+        exp.innerHTML = '<strong>语义评价：</strong>逻辑严密，准确阐述了“空闲让进”对资源充分利用的意义，以及“有限等待”防止饥饿的防线设计，关键术语匹配完备。';
+        aiCard.style.display = 'flex';
+      }
+    }
+
+    // 页面初始化时挂载首道题目
+    window.addEventListener('DOMContentLoaded', () => {
+      renderPracticeQuestion(1);
+    });
+    // 确保立即执行一次以防事件已触发
+    renderPracticeQuestion(1);
+  </script>
+</body>
+</html>
