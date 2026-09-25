@@ -24,6 +24,8 @@ coverage.json
 *.swp
 *.swo
 .serena/
+*.docx
+*.doc
 
 # Node & Frontend
 node_modules/
