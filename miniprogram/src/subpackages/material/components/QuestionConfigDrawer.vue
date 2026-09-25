@@ -246,8 +246,10 @@ async function handleSubmit(): Promise<void> {
     emit('generate-success', questions);
     uni.showToast({ title: '出题成功', icon: 'success' });
     handleClose();
-  } catch {
-    uni.showToast({ title: '生成题目失败，请稍后重试', icon: 'none' });
+  } catch (err: unknown) {
+    const errorPayload = err as { message?: string; errMsg?: string };
+    const errorMsg = errorPayload?.message || errorPayload?.errMsg || '生成题目失败，请稍后重试';
+    uni.showToast({ title: errorMsg, icon: 'none' });
   } finally {
     submitting.value = false;
   }

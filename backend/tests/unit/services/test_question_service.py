@@ -352,6 +352,154 @@ class TestQuestionHelpers:
         assert candidates[0].embedding is not None
         assert len(candidates[0].embedding) == 1024
 
+    def test_llm_generated_question_item_tolerant_normalization(self) -> None:
+        """Verify tolerant normalization of answer types and grading_rubric."""
+        # 1. answer as list for multiple choice
+        item_mc = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "multiple_choice",
+                "stem": "以下属于软件工程原则的有？",
+                "options": [{"key": "A", "content": "模块化"}, {"key": "B", "content": "低耦合"}],
+                "answer": ["A", "B", "C"],
+            }
+        )
+        assert item_mc.answer == "A,B,C"
+
+        # 2. answer as list for fill_in_blank
+        item_fill = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "fill_in_blank",
+                "stem": "测试题干内容描述至少六字符",
+                "answer": ["填空1", "填空2"],
+            }
+        )
+        assert item_fill.answer == "填空1; 填空2"
+
+        # 3. answer as bool
+        item_tf_true = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "true_false",
+                "stem": "这是一个正确命题判断六字符",
+                "answer": True,
+            }
+        )
+        assert item_tf_true.answer == "正确"
+
+        item_tf_false = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "true_false",
+                "stem": "这是一个错误命题判断六字符",
+                "answer": False,
+            }
+        )
+        assert item_tf_false.answer == "错误"
+
+        # 4. answer as int
+        item_int = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "fill_in_blank",
+                "stem": "计算结果等于几的题干六字符",
+                "answer": 42,
+            }
+        )
+        assert item_int.answer == "42"
+
+        # 5. grading_rubric as empty string / none / invalid cleaned to None
+        item_empty_rubric = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "single_choice",
+                "stem": "单选题目题干内容描述测试",
+                "answer": "A",
+                "grading_rubric": "",
+            }
+        )
+        assert item_empty_rubric.grading_rubric is None
+
+        # 6. grading_rubric as list of points
+        item_list_rubric = LLMGeneratedQuestionItem.model_validate(
+            {
+                "question_type": "short_answer",
+                "stem": "请简述软件工程核心概念",
+                "answer": "软件工程是...",
+                "grading_rubric": [
+                    {"point": "定义阐述完整", "score": 3},
+                    {"point": "举例说明恰当", "score": 2},
+                ],
+            }
+        )
+        assert item_list_rubric.grading_rubric is not None
+        assert item_list_rubric.grading_rubric.total_score == 5
+        assert len(item_list_rubric.grading_rubric.points) == 2
+
+    def test_llm_grading_rubric_tolerant_normalization(self) -> None:
+        """Verify LLMGradingRubric and LLMGradingPointItem tolerant parsing."""
+        # 1. list input
+        rubric_from_list = LLMGradingRubric.model_validate(
+            [{"point": "要点A", "score": 3}, {"point": "要点B", "score": 2}]
+        )
+        assert rubric_from_list.total_score == 5
+        assert len(rubric_from_list.points) == 2
+
+        # 2. dict missing total_score
+        rubric_no_total = LLMGradingRubric.model_validate(
+            {"points": [{"point": "要点A", "score": 4}]}
+        )
+        assert rubric_no_total.total_score == 4
+
+        # 3. dict with alternative keys 'items' or 'criteria'
+        rubric_alt_keys = LLMGradingRubric.model_validate(
+            {"items": [{"description": "说明清晰", "score": "5"}]}
+        )
+        assert rubric_alt_keys.total_score == 5
+        assert rubric_alt_keys.points[0].point == "说明清晰"
+        assert rubric_alt_keys.points[0].score == 5
+
+    def test_llm_question_batch_output_with_various_question_types(self) -> None:
+        """Verify batch output parsing when LLM outputs list answers and rubric lists."""
+        raw_batch_data = {
+            "questions": [
+                {
+                    "question_type": "single_choice",
+                    "stem": "单选题题干描述内容测试1",
+                    "options": [{"key": "A", "content": "选项1"}, {"key": "B", "content": "选项2"}],
+                    "answer": "A",
+                },
+                {
+                    "question_type": "multiple_choice",
+                    "stem": "多选题题干描述内容测试2",
+                    "options": [
+                        {"key": "A", "content": "选1"},
+                        {"key": "B", "content": "选2"},
+                        {"key": "C", "content": "选3"},
+                    ],
+                    "answer": ["A", "B", "C"],
+                },
+                {
+                    "question_type": "true_false",
+                    "stem": "判断题题干描述内容测试3",
+                    "answer": True,
+                },
+                {
+                    "question_type": "fill_in_blank",
+                    "stem": "填空题题干描述内容测试4",
+                    "answer": ["答案一", "答案二"],
+                },
+                {
+                    "question_type": "short_answer",
+                    "stem": "简答题题干描述内容测试5",
+                    "answer": "标准主观答案",
+                    "grading_rubric": [{"point": "得分点一", "score": 3}],
+                },
+            ]
+        }
+        batch = LLMQuestionBatchOutput.model_validate(raw_batch_data)
+        assert len(batch.questions) == 5
+        assert batch.questions[1].answer == "A,B,C"
+        assert batch.questions[2].answer == "正确"
+        assert batch.questions[3].answer == "答案一; 答案二"
+        assert batch.questions[4].grading_rubric is not None
+        assert batch.questions[4].grading_rubric.total_score == 3
+
 
 # ==============================================================================
 # QuestionService 端到端流程测试

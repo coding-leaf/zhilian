@@ -199,6 +199,28 @@ describe('QuestionConfigDrawer.vue', () => {
 
     await wrapper.vm.$nextTick();
     expect(toastSpy).toHaveBeenCalledWith({
+      title: 'Network error',
+      icon: 'none',
+    });
+  });
+
+  it('handles generate questions failure with default message when error is empty', async () => {
+    vi.spyOn(questionApi, 'generateQuestions').mockRejectedValue({});
+    const toastSpy = vi.spyOn(uni, 'showToast');
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    const submitBtn = wrapper.find('.submit-btn');
+    await submitBtn.trigger('tap');
+
+    await wrapper.vm.$nextTick();
+    expect(toastSpy).toHaveBeenCalledWith({
       title: '生成题目失败，请稍后重试',
       icon: 'none',
     });

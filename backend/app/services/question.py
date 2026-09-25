@@ -127,6 +127,34 @@ class LLMGradingPointItem(BaseModel):
     point: str = Field(description="采分要点阐述")
     score: int = Field(ge=1, description="本要点分值")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_point(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"point": data.strip() or "采分要点", "score": 1}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "point" not in d or not d["point"]:
+                d["point"] = (
+                    d.get("content")
+                    or d.get("text")
+                    or d.get("description")
+                    or d.get("criterion")
+                    or d.get("name")
+                    or "采分要点"
+                )
+            raw_score = d.get("score")
+            if raw_score is None:
+                d["score"] = 1
+            else:
+                try:
+                    score_val = int(float(raw_score))
+                    d["score"] = max(1, score_val)
+                except (ValueError, TypeError):
+                    d["score"] = 1
+            return d
+        return data
+
 
 class LLMGradingRubric(BaseModel):
     """主观题评分细则。"""
@@ -136,6 +164,72 @@ class LLMGradingRubric(BaseModel):
         default_factory=list,
         description="采分要点列表",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_rubric(cls, data: Any) -> Any:
+        if isinstance(data, list):
+            points = data
+            total = 0
+            for p in points:
+                if isinstance(p, dict):
+                    try:
+                        total += max(1, int(float(p.get("score", 1))))
+                    except (ValueError, TypeError):
+                        total += 1
+                elif isinstance(p, LLMGradingPointItem):
+                    total += p.score
+                elif isinstance(p, str):
+                    total += 1
+            return {
+                "total_score": max(1, total),
+                "points": points,
+            }
+        if isinstance(data, str):
+            s = data.strip()
+            if not s or s.lower() in ("none", "null", "无", "{}"):
+                return {"total_score": 5, "points": []}
+            return {
+                "total_score": 5,
+                "points": [{"point": s, "score": 5}],
+            }
+        if isinstance(data, dict):
+            d = dict(data)
+            if "points" not in d:
+                for alt_key in ("rubric", "items", "criteria", "points_list"):
+                    if alt_key in d and isinstance(d[alt_key], list):
+                        d["points"] = d[alt_key]
+                        break
+            points = d.get("points") or []
+            if not isinstance(points, list):
+                points = [points] if points else []
+                d["points"] = points
+
+            raw_total = d.get("total_score")
+            total_score_val = 0
+            if raw_total is not None:
+                try:
+                    total_score_val = int(float(raw_total))
+                except (ValueError, TypeError):
+                    total_score_val = 0
+
+            if total_score_val < 1:
+                computed = 0
+                for p in points:
+                    if isinstance(p, dict):
+                        try:
+                            computed += max(1, int(float(p.get("score", 1))))
+                        except (ValueError, TypeError):
+                            computed += 1
+                    elif isinstance(p, LLMGradingPointItem):
+                        computed += p.score
+                    elif isinstance(p, str):
+                        computed += 1
+                total_score_val = max(1, computed) if computed > 0 else 5
+
+            d["total_score"] = total_score_val
+            return d
+        return data
 
 
 class LLMGeneratedQuestionItem(BaseModel):
@@ -200,14 +294,54 @@ class LLMGeneratedQuestionItem(BaseModel):
             elif "difficulty_level" in d:
                 d["difficulty"] = d["difficulty_level"]
 
-        # 兼容 answer 缺失
-        if "answer" not in d or d["answer"] is None:
-            if "correct_answer" in d:
-                d["answer"] = str(d["correct_answer"])
-            elif "standard_answer" in d:
-                d["answer"] = str(d["standard_answer"])
+        # 兼容与规范化 answer（list/tuple 转字符串、bool 转正确/错误、数值转 str）
+        raw_answer = d.get("answer")
+        if raw_answer is None:
+            raw_answer = (
+                d.get("correct_answer") if "correct_answer" in d else d.get("standard_answer")
+            )
+
+        if raw_answer is None:
+            d["answer"] = "A"
+        elif isinstance(raw_answer, bool):
+            d["answer"] = "正确" if raw_answer else "错误"
+        elif isinstance(raw_answer, (list, tuple)):
+            items = [str(x).strip() for x in raw_answer if x is not None and str(x).strip()]
+            if all(len(x) == 1 and x.isalpha() for x in items):
+                d["answer"] = ",".join(x.upper() for x in items)
             else:
-                d["answer"] = "A"
+                d["answer"] = "; ".join(items) if len(items) > 1 else (items[0] if items else "")
+        elif isinstance(raw_answer, (int, float)):
+            d["answer"] = str(raw_answer)
+        elif isinstance(raw_answer, str):
+            d["answer"] = raw_answer.strip()
+        else:
+            d["answer"] = str(raw_answer).strip()
+
+        # 兼容与清洗 grading_rubric（空/无效清洗为 None）
+        raw_rubric = d.get("grading_rubric")
+        if raw_rubric is not None:
+            if isinstance(raw_rubric, str):
+                cleaned_rubric_str = raw_rubric.strip()
+                if not cleaned_rubric_str or cleaned_rubric_str.lower() in (
+                    "none",
+                    "null",
+                    "无",
+                    "{}",
+                ):
+                    d["grading_rubric"] = None
+                else:
+                    d["grading_rubric"] = cleaned_rubric_str
+            elif isinstance(raw_rubric, (list, tuple)):
+                if not raw_rubric:
+                    d["grading_rubric"] = None
+                else:
+                    d["grading_rubric"] = list(raw_rubric)
+            elif isinstance(raw_rubric, dict):
+                if not raw_rubric:
+                    d["grading_rubric"] = None
+                else:
+                    d["grading_rubric"] = raw_rubric
 
         return d
 
@@ -313,13 +447,18 @@ def build_generation_prompt(
         "【硬性命题铁律】:\n"
         "1. 事实完全忠于资料：题目的题干、选项与参考答案必须源自资料切片，绝不可编造概念；\n"
         "2. 题干长度：题干去空白字符数必须不少于 6 字符，表述必须清晰严谨，无任何歧义；\n"
-        "3. 客观选择题规范：单选必须且仅有 1 个正确答案；多选必须 >=3 个选项且正确答案数 >=2；\n"
-        "4. 判断题规范：答案必须明确标注为'正确'或'错误'；\n"
-        "5. 主观题评分细则：主观题必须提供 grading_rubric，要点分值总和严格等于 total_score；\n"
-        "6. 来源切片标注：每道题目必须标注 source_snippet_index (0~3)，指明主要依据的切片序号；\n"
-        "7. 输出格式规范：必须输出包含 questions 列表的纯 JSON 对象，"
+        "3. 客观选择题规范：单选必须且仅有 1 个正确答案（如 'A'）；"
+        "多选必须 >=3 个选项且正确答案数 >=2，"
+        "多选答案必须为逗号分隔的纯字符串（如 'A,B,C' 或 'ABC'，严禁返回 JSON 数组）；\n"
+        "4. 判断题规范：答案必须明确标注为字符串'正确'或'错误'（严禁返回布尔值）；\n"
+        "5. 填空题规范：答案必须为纯字符串（若多空以分号分隔，如 '答案1; 答案2'，严禁返回数组）；\n"
+        "6. 主观题评分细则：主观题必须提供 grading_rubric 对象"
+        "（格式如 {'total_score': 5, 'points': [{'point': '...', 'score': 2}]}），"
+        "要点分值总和严格等于 total_score；非主观题 grading_rubric 置为 null；\n"
+        "7. 来源切片标注：每道题目必须标注 source_snippet_index (0~3)，指明主要依据的切片序号；\n"
+        "8. 输出格式规范：必须输出包含 questions 列表的纯 JSON 对象，"
         '每题必须包含 question_type, stem, options([{"key": "A", "content": "..."}]), '
-        "answer, analysis, difficulty, source_snippet_index。"
+        "answer(纯字符串), analysis, difficulty, grading_rubric, source_snippet_index。"
     )
 
     user_parts = [
