@@ -64,6 +64,62 @@ export function fetchWrongBook(
 }
 
 /**
+ * 标记或切换错题攻克状态。
+ *
+ * @param id 错题记录主键 UUID。
+ * @returns 统一响应包，包含更新后的攻克状态与时间戳。
+ */
+export function markWrongRecordMastered(
+  id: string,
+): Promise<
+  ApiResponse<{ id: string; is_mastered: boolean; mastered_at: string | null; message: string }>
+> {
+  return request<{ id: string; is_mastered: boolean; mastered_at: string | null; message: string }>(
+    {
+      url: `/api/v1/wrong-records/${id}/master`,
+      method: 'POST',
+    },
+  );
+}
+
+/**
+ * 切换错题攻克状态（支持显式指定目标状态或缺省取反）。
+ *
+ * @param id 错题记录主键 UUID。
+ * @param isMastered 可选的目标攻克状态。
+ * @returns 统一响应包，包含更新后的攻克状态与时间戳。
+ */
+export function toggleWrongRecordResolved(
+  id: string,
+  isMastered?: boolean,
+): Promise<
+  ApiResponse<{ id: string; is_mastered: boolean; mastered_at: string | null; message: string }>
+> {
+  return request<{ id: string; is_mastered: boolean; mastered_at: string | null; message: string }>(
+    {
+      url: `/api/v1/wrong-records/${id}/master`,
+      method: 'POST',
+      data: isMastered !== undefined ? { is_mastered: isMastered } : undefined,
+    },
+  );
+}
+
+/**
+ * 安全删除错题记录。
+ *
+ * @param id 错题记录主键 UUID。
+ * @returns 统一响应包，包含删除确认结果。
+ */
+export function deleteWrongRecord(
+  id: string,
+): Promise<ApiResponse<{ id: string; removed: boolean; message: string }>> {
+  return request<{ id: string; removed: boolean; message: string }>({
+    url: `/api/v1/wrong-records/${id}`,
+    method: 'DELETE',
+  });
+}
+
+/**
  * 主观题用户自主评分提交。
  *
  * @param payload 包含作答项 ID、自评分数及评价反馈。
@@ -104,17 +160,23 @@ export function requestRegrade(
 export function continuePractice(
   payload: ContinuePracticePayload,
 ): Promise<ApiResponse<PracticeSession>> {
+  const headers: Record<string, string> = {};
+  if (payload.idempotency_key) {
+    headers['X-Idempotency-Key'] = payload.idempotency_key;
+  }
   return request<PracticeSession>({
     url: '/api/v1/practices',
     method: 'POST',
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     data: {
       title: payload.title || '薄弱点强化练习',
       material_id: payload.material_id,
       knowledge_point_ids: payload.knowledge_point_ids,
       source_report_id: payload.source_report_id,
-      source_type: 'weakness',
-      mode: 'weak_points',
+      source_type: payload.source_type ?? 'weakness',
+      mode: payload.mode ?? 'weak_points',
       question_count: payload.question_count ?? 10,
+      ...(payload.idempotency_key ? { idempotency_key: payload.idempotency_key } : {}),
     },
   });
 }

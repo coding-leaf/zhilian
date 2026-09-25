@@ -4,6 +4,9 @@ import {
   fetchDiagnosisReport,
   fetchMasteryOverview,
   fetchWrongBook,
+  markWrongRecordMastered,
+  toggleWrongRecordResolved,
+  deleteWrongRecord,
   selfGradeQuestion,
   requestRegrade,
   continuePractice,
@@ -89,6 +92,75 @@ describe('Diagnosis API Module', () => {
     expect(res).toEqual(mockResponse);
   });
 
+  it('should call markWrongRecordMastered with POST /api/v1/wrong-records/:id/master', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'wr_001',
+        is_mastered: true,
+        mastered_at: '2026-09-25T12:00:00Z',
+        message: '已标记攻克',
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await markWrongRecordMastered('wr_001');
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/wrong-records/wr_001/master',
+      method: 'POST',
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should call toggleWrongRecordResolved with optional isMastered status', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'wr_002',
+        is_mastered: false,
+        mastered_at: null,
+        message: '已移出攻克',
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await toggleWrongRecordResolved('wr_002', false);
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/wrong-records/wr_002/master',
+      method: 'POST',
+      data: { is_mastered: false },
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should call deleteWrongRecord with DELETE /api/v1/wrong-records/:id', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'wr_003',
+        removed: true,
+        message: '错题已移除',
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await deleteWrongRecord('wr_003');
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/wrong-records/wr_003',
+      method: 'DELETE',
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
   it('should call selfGradeQuestion with POST /api/v1/grading/self-evaluate and payload', async () => {
     const mockResponse = {
       code: 0,
@@ -163,6 +235,52 @@ describe('Diagnosis API Module', () => {
         source_type: 'weakness',
         mode: 'weak_points',
         question_count: 8,
+      },
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should call continuePractice with idempotency_key in headers and custom mode', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'prac_wr_002',
+        title: '错题巩固练习',
+        material_id: 'mat_002',
+        status: 'in_progress',
+        questions: [],
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const payload = {
+      material_id: 'mat_002',
+      knowledge_point_ids: ['kp_003'],
+      source_type: 'wrong_record' as const,
+      mode: 'random' as const,
+      title: '错题巩固练习',
+      idempotency_key: 'idem-key-1234',
+      question_count: 5,
+    };
+    const res = await continuePractice(payload);
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/practices',
+      method: 'POST',
+      headers: {
+        'X-Idempotency-Key': 'idem-key-1234',
+      },
+      data: {
+        title: '错题巩固练习',
+        material_id: 'mat_002',
+        knowledge_point_ids: ['kp_003'],
+        source_report_id: undefined,
+        source_type: 'wrong_record',
+        mode: 'random',
+        question_count: 5,
+        idempotency_key: 'idem-key-1234',
       },
     });
     expect(res).toEqual(mockResponse);

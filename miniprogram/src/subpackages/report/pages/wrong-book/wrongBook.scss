@@ -1,0 +1,226 @@
+/**
+ * wrongBook.scss
+ * Styles for Wrong Book Page (subpackages/report/pages/wrong-book).
+ * Complies with docs/DESIGN.md & spec ZL-136.
+ * Zero-Emoji Policy enforced.
+ */
+
+.wrong-book-page {
+  min-height: 100vh;
+  background-color: $--wot-color-gray-1;
+  padding: $spacing-md $spacing-xl;
+  padding-bottom: calc(148rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+
+  .batch-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: $spacing-sm $spacing-md;
+    background: #ffffff;
+    border-radius: $radius-md;
+    border: 1px solid $--wot-color-gray-4;
+    margin-bottom: $spacing-md;
+
+    .batch-left {
+      display: flex;
+      align-items: center;
+      gap: $spacing-sm;
+      min-height: $touch-target-min;
+
+      .batch-select-btn {
+        display: flex;
+        align-items: center;
+        gap: $spacing-xs;
+        font-size: $font-size-card;
+        color: $--wot-color-gray-8;
+
+        .select-box {
+          width: 36rpx;
+          height: 36rpx;
+          border-radius: $radius-pill;
+          border: 2rpx solid $--wot-color-gray-5;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #ffffff;
+          box-sizing: border-box;
+
+          &.checked {
+            border-color: $--wot-color-theme;
+            background: $--wot-color-theme;
+
+            .check-dot {
+              width: 16rpx;
+              height: 16rpx;
+              border-radius: $radius-pill;
+              background: #ffffff;
+            }
+          }
+        }
+      }
+
+      .selected-count-tip {
+        font-size: $font-size-body;
+        color: $--wot-color-gray-6;
+
+        .num {
+          color: $--wot-color-theme;
+          font-weight: $font-weight-bold;
+          padding: 0 4rpx;
+        }
+      }
+    }
+
+    .batch-right {
+      .clear-btn {
+        min-height: $touch-target-min;
+        display: flex;
+        align-items: center;
+        font-size: $font-size-body;
+        color: $--wot-color-gray-6;
+        padding: 0 $spacing-sm;
+
+        &:active {
+          color: $--wot-color-theme;
+        }
+      }
+    }
+  }
+
+  .skeleton-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-lg;
+    padding: $spacing-md 0;
+
+    .skeleton-card {
+      background: #ffffff;
+      border-radius: $radius-lg;
+      padding: $spacing-xl;
+      border: 1px solid $--wot-color-gray-4;
+      display: flex;
+      flex-direction: column;
+      gap: $spacing-md;
+
+      .skeleton-line {
+        height: 32rpx;
+        background: $--wot-color-gray-2;
+        border-radius: $radius-sm;
+
+        &.short {
+          width: 35%;
+        }
+
+        &.medium {
+          width: 65%;
+        }
+
+        &.tall {
+          height: 80rpx;
+          width: 50%;
+          align-self: center;
+        }
+      }
+    }
+  }
+
+  .error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-xxl $spacing-xl;
+    text-align: center;
+
+    .error-text {
+      font-size: $font-size-card;
+      color: $--wot-color-gray-7;
+      margin-bottom: $spacing-lg;
+    }
+
+    .retry-btn {
+      min-width: 240rpx;
+      min-height: $touch-target-min;
+      border-radius: $radius-pill;
+      background: $--wot-color-theme;
+      color: #ffffff;
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: $shadow-btn-primary;
+
+      &:active {
+        transform: $scale-active;
+        transition: $transition-bounce;
+      }
+    }
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-xxl $spacing-xl;
+    background: #ffffff;
+    border-radius: $radius-lg;
+    border: 1px solid $--wot-color-gray-4;
+    margin-top: $spacing-md;
+
+    .empty-title {
+      font-size: $font-size-section;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-8;
+      margin-bottom: $spacing-sm;
+    }
+
+    .empty-subtitle {
+      font-size: $font-size-body;
+      color: $--wot-color-gray-6;
+      margin-bottom: $spacing-lg;
+      text-align: center;
+    }
+
+    .reset-filter-btn {
+      min-width: 220rpx;
+      min-height: $touch-target-min;
+      border-radius: $radius-pill;
+      background: $--wot-color-theme-light;
+      color: $--wot-color-theme;
+      border: 1px solid $--wot-color-theme-border;
+      font-size: $font-size-card;
+      font-weight: $font-weight-medium;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      &:active {
+        transform: $scale-active;
+        transition: $transition-bounce;
+      }
+    }
+  }
+
+  .records-list {
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-md;
+    margin-top: $spacing-md;
+  }
+
+  .list-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-lg 0;
+
+    .loading-more-text,
+    .no-more-text {
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-6;
+    }
+  }
+}

@@ -128,26 +128,66 @@ export interface KnowledgeMasterySummary {
   last_practiced_at?: string;
 }
 
+export type WrongErrorType = 'conceptual' | 'incomplete' | 'deviation' | 'unanswered';
+export type ErrorType = WrongErrorType;
+
+export interface ErrorTypeInfo {
+  type: WrongErrorType;
+  label: string;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+}
+
+export interface ResolvedStatusInfo {
+  label: string;
+  color: string;
+  bgColor: string;
+  isMastered: boolean;
+}
+
+export interface ToggleMasteryPayload {
+  id: string;
+  is_mastered?: boolean;
+}
+
 export interface WrongRecordItem {
   id: string;
   practice_id: string;
   question_id: string;
   knowledge_point_id: string;
-  question_stem: string;
+  material_id?: string;
+  question_stem?: string;
   question_type: string;
   options?: Array<{ key: string; text: string }>;
   user_answer?: string | string[];
   correct_answer?: string;
   analysis?: string;
-  error_type?: string;
+  error_type?: WrongErrorType | string;
+  error_count?: number;
+  wrong_count?: number;
+  first_wrong_at?: string;
   is_mastered: boolean;
   mastered_at?: string | null;
   created_at: string;
+  question_snapshot?: {
+    id?: string;
+    stem: string;
+    question_type: string;
+    options?: Array<{ key: string; text: string }>;
+    answer?: string;
+    analysis?: string;
+    knowledge_point_id?: string;
+    knowledge_name?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
 export interface WrongRecordQueryParams {
   material_id?: string;
   knowledge_point_id?: string;
+  question_type?: string;
   error_type?: string;
   is_mastered?: boolean;
   status?: string;
@@ -169,9 +209,12 @@ export interface RegradePayload {
 }
 
 export interface ContinuePracticePayload {
-  material_id: string;
+  material_id?: string;
   knowledge_point_ids: string[];
   source_report_id?: string;
+  source_type?: 'weakness' | 'wrong_record';
+  mode?: 'weak_points' | 'random';
   title?: string;
   question_count?: number;
+  idempotency_key?: string;
 }

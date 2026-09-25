@@ -61,6 +61,13 @@
           }
         },
         {
+          "path": "pages/wrong-book/index",
+          "style": {
+            "navigationBarTitleText": "错题本",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
           "path": "index",
           "style": {
             "navigationBarTitleText": "学情诊断"

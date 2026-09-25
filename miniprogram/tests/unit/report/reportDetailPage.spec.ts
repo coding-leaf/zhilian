@@ -317,12 +317,14 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     await continueBtn.trigger('tap');
 
     expect(continueSpy).toHaveBeenCalledTimes(1);
-    expect(continueSpy).toHaveBeenCalledWith({
-      material_id: 'mat_001',
-      knowledge_point_ids: ['kp_1'],
-      source_report_id: 'rep_1001',
-      title: '薄弱点强化练习',
-    });
+    expect(continueSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        material_id: 'mat_001',
+        knowledge_point_ids: ['kp_1'],
+        source_report_id: 'rep_1001',
+        title: '薄弱点强化练习',
+      }),
+    );
 
     expect(navigateSpy).toHaveBeenCalledWith({
       url: '/subpackages/practice/pages/session/index?id=prac_new_2002',

@@ -42,11 +42,14 @@
     </view>
 
     <!-- 吸底一键继续练习操作栏 -->
-    <view v-if="!loading && currentReport" class="bottom-action-bar">
-      <view class="continue-btn" @tap="handleContinuePractice">
-        <text>一键强化薄弱点练习</text>
-      </view>
-    </view>
+    <ContinuePracticeBar
+      v-if="!loading && currentReport"
+      :material-id="materialId"
+      :knowledge-point-ids="currentWeakPointIds"
+      :source-report-id="currentReport.id"
+      :title="'薄弱点强化练习'"
+      :button-text="'一键强化薄弱点练习'"
+    />
 
     <!-- 原文切片溯源抽屉 -->
     <OriginalSnippetDrawer
@@ -98,7 +101,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { useReportStore } from '@/stores/reportStore';
-import { fetchDiagnosisReport, continuePractice } from '@/api/diagnosis';
+import { fetchDiagnosisReport } from '@/api/diagnosis';
 import { fetchPracticeSession } from '@/api/practice';
 import type { AttemptGradingItem, OriginalSnippet } from '@/types/report';
 
@@ -108,6 +111,7 @@ import GradingResultList from '../../components/GradingResultList.vue';
 import OriginalSnippetDrawer from '../../components/OriginalSnippetDrawer.vue';
 import SelfGradeModal from '../../components/SelfGradeModal.vue';
 import RegradeModal from '../../components/RegradeModal.vue';
+import ContinuePracticeBar from '../../components/ContinuePracticeBar.vue';
 
 interface Props {
   practiceId?: string;
@@ -139,6 +143,9 @@ const regradeVisible = ref(false);
 const activeRegradeItem = ref<AttemptGradingItem | null>(null);
 
 const currentReport = computed(() => reportStore.currentReport);
+const currentWeakPointIds = computed(() => {
+  return currentReport.value?.weak_points?.map((p) => p.knowledge_point_id) || [];
+});
 
 function formatUserAnswer(ans?: unknown): string {
   if (ans === null || ans === undefined || ans === '') return '';
@@ -246,30 +253,6 @@ function onRegradeSuccess(payload: { attempt_item_id: string }): void {
         }
       })
       .catch(() => {});
-  }
-}
-
-async function handleContinuePractice(): Promise<void> {
-  const rep = reportStore.currentReport;
-  if (!rep) return;
-  const weakIds = rep.weak_points?.map((p) => p.knowledge_point_id) || [];
-  try {
-    const res = await continuePractice({
-      material_id: materialId.value,
-      knowledge_point_ids: weakIds,
-      source_report_id: rep.id,
-      title: '薄弱点强化练习',
-    });
-    if (res.data?.id) {
-      uni.navigateTo({
-        url: `/subpackages/practice/pages/session/index?id=${res.data.id}`,
-      });
-    } else {
-      uni.showToast({ title: '无法创建强化练习', icon: 'none' });
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : '创建强化练习异常';
-    uni.showToast({ title: msg, icon: 'none' });
   }
 }
 
