@@ -43,3 +43,4 @@
 | ZL-135 | Completed | Deploy | `pending-commit` | pnpm run test:unit (296 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-25 |
 | ZL-136 | Completed | Deploy | `pending-commit` | pnpm run test:unit (358 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-25 |
 | ZL-138 | Completed | Deploy | `pending-commit` | pnpm run test:unit (405 tests pass) && pnpm run type-check && pnpm run lint | 2026-09-25 |
+| ZL-137 | 完成 P0 端到端全链路闭环集成测试与 16 维越权阻断矩阵，通过全系统前后端与 SDLC 门禁基线审计 | Deploy | `ZL-137` | pytest 1016 passed (cov 95.39%), miniprogram 405 passed, check_layers 0 violations, check_sdlc_integrity ok | 2026-09-25 |

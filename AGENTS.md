@@ -32,6 +32,10 @@
   pnpm run type-check && \
   pnpm run test:unit
   ```
+  - `pnpm run lint`：执行 ESLint + Prettier 静态扫描（强制行宽 100、单引号、尾随逗号、严禁隐式 `any`，**严格拦截单组件文件超过 300 行**）；
+  - `pnpm run type-check`：执行 `vue-tsc --noEmit` 深度静态类型与模板属性检查。**AI 排错核心事实源**：AI Agent 在修改或新增前端代码后**必须**在终端执行该命令，直接根据输出的 `文件路径:行号:列号 - error TSxxxx: 错误信息` 精确定位并就地修复类型、未定义属性与契约不匹配，严禁带着类型报错流转工件；
+  - `pnpm run test:unit`：执行 Vitest 脱机单元测试（验证拦截器、4-Store 状态流转与白名单隔离，毫秒级通过）；
+  - `pnpm run build:mp-weixin`：小程序全量生产编译打包（验证构建产物完整、无缺少模块与语法破坏）。
 - **本地提交前前置检查**（pre-commit）：
   ```bash
   pip install pre-commit && pre-commit install --install-hooks && pre-commit run --all-files
@@ -168,6 +172,7 @@
 - **巨石任务**：面对复杂诉求试图立项“大爆炸重构”，必须主动提醒人类按领域拆解为原子任务。
 - **幻觉签批**：误以为自己可代替人类在工件中勾选签批；Sign-off 必须由人类专属签批。
 - **单会话直通懒惰**：自恃掌握工具而违规跳过子代理；凡 Tier 2 / Tier 3 任务必须严格委派 planner、builder 和 reviewer 分阶段执行。
+- **前端盲目猜错与跳步**：修改前端代码后未在终端运行 `pnpm run type-check` 和 `pnpm run lint`，脱离终端真实编译报错凭空猜错或掩盖类型隐患；必须以 `vue-tsc` 与 ESLint 输出的具体行号及错误描述为唯一事实源就地修复。
 
 ---
 

@@ -64,6 +64,7 @@
   - **纯函数核隔离**：`app/core/algorithms` 严禁导入框架 (`fastapi`)、ORM/数据库 (`sqlalchemy`)、网络库 (`httpx`)、缓存 (`redis`) 或对象存储 (`boto3`)，亦严禁依赖 `services` 与 `repositories`；
   - **绕过依赖禁令**：严禁使用函数内延迟导入或 `getattr` 动态取模块等手段绕过依赖检查，一经发现直接判定为阻断级问题。
 - **前端架构与体积约束 (Miniprogram Rules)**：
+  - **门禁验证铁律 (0 Errors Gate)**：前端改动必须在终端完整通过 `pnpm run lint` 与 `pnpm run type-check`（`vue-tsc`），存在任何未解决的类型报错、模板属性缺失或 ESLint 违规，一律按阻断级 (Blocker) 拦截；
   - **单组件体积约束**：单个组件 Vue 文件代码量 $\le 300$ 行，超标必须在同一次改动中拆分下沉为子组件；
   - **Store 网络调用禁令**：Pinia Store 内严禁直接调用 API 发起网络请求，所有网络请求必须在 `src/api` 模块统一定义与封装，Store 仅负责状态维护与调用引用；
   - **本地 Storage 白名单约束**：本地持久化仅允许保存白名单内数据：① 登录态凭据 (Token)；② 未提交作答草稿；③ 用户偏好设置。资料全文与题目严禁写入本地 Storage。
