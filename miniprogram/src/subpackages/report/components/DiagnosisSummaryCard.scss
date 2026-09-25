@@ -1,0 +1,122 @@
+/**
+ * DiagnosisSummaryCard.scss
+ * Styles for Diagnostic Summary Card Component.
+ * Complies with docs/DESIGN.md.
+ */
+
+.diagnosis-summary-card {
+  background: #ffffff;
+  border-radius: $radius-lg;
+  padding: $spacing-xl;
+  border: 1px solid $--wot-color-gray-4;
+  box-shadow: $shadow-card;
+  margin-bottom: $spacing-lg;
+  box-sizing: border-box;
+
+  .card-top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: $spacing-lg;
+
+    .header-title {
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-9;
+    }
+
+    .badges-wrapper {
+      display: flex;
+      align-items: center;
+      gap: $spacing-xs;
+
+      .degraded-tag {
+        font-size: $font-size-caption;
+        padding: 4rpx 16rpx;
+        border-radius: $radius-pill;
+        background: $--wot-color-warning-bg;
+        color: $--wot-color-warning-text;
+        border: 1px solid $--wot-color-warning-border;
+        font-weight: $font-weight-medium;
+      }
+
+      .tier-badge {
+        font-size: $font-size-caption;
+        font-weight: $font-weight-bold;
+        padding: 6rpx 20rpx;
+        border-radius: $radius-pill;
+      }
+    }
+  }
+
+  .score-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-md 0;
+    margin-bottom: $spacing-lg;
+
+    .score-value {
+      font-size: 72rpx;
+      font-weight: $font-weight-heavy;
+      color: $--wot-color-theme;
+      line-height: $line-height-tight;
+    }
+
+    .score-label {
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-7;
+      margin-top: $spacing-xs;
+    }
+  }
+
+  .metrics-grid {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: $spacing-md 0;
+    background: $--wot-color-gray-1;
+    border-radius: $radius-md;
+    margin-bottom: $spacing-md;
+
+    .metric-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+
+      .metric-value {
+        font-size: $font-size-section;
+        font-weight: $font-weight-bold;
+        color: $--wot-color-gray-9;
+      }
+
+      .metric-label {
+        font-size: $font-size-caption;
+        color: $--wot-color-gray-7;
+        margin-top: 4rpx;
+      }
+
+      &:not(:last-child) {
+        border-right: 1px solid $--wot-color-gray-4;
+      }
+    }
+  }
+
+  .pending-regrade-banner {
+    display: flex;
+    align-items: center;
+    background: $--wot-color-warning-bg;
+    border: 1px solid $--wot-color-warning-border;
+    border-radius: $radius-md;
+    padding: $spacing-sm $spacing-md;
+    margin-top: $spacing-sm;
+
+    .banner-text {
+      font-size: $font-size-caption;
+      color: $--wot-color-warning-text;
+      line-height: $line-height-normal;
+    }
+  }
+}

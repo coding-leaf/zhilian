@@ -54,6 +54,13 @@
       "root": "subpackages/report",
       "pages": [
         {
+          "path": "pages/detail/index",
+          "style": {
+            "navigationBarTitleText": "学情诊断报告",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
           "path": "index",
           "style": {
             "navigationBarTitleText": "学情诊断"

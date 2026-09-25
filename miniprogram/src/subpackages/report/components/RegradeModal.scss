@@ -1,0 +1,190 @@
+/**
+ * RegradeModal.scss
+ * Styles for Question Regrade Request Modal.
+ * Complies with docs/DESIGN.md.
+ * Zero-Emoji Policy enforced.
+ */
+
+.regrade-modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: $spacing-xl;
+  box-sizing: border-box;
+
+  .modal-card {
+    width: 100%;
+    max-height: 80vh;
+    background: #ffffff;
+    border-radius: $radius-lg;
+    display: flex;
+    flex-direction: column;
+    box-shadow: $shadow-sheet;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: $spacing-lg $spacing-xl;
+    border-bottom: 1px solid $--wot-color-gray-4;
+
+    .modal-title {
+      font-size: $font-size-section;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-9;
+    }
+
+    .close-btn {
+      min-width: 88rpx;
+      min-height: 88rpx;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      font-size: $font-size-card;
+      color: $--wot-color-gray-6;
+    }
+  }
+
+  .modal-scroll-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: $spacing-xl;
+    box-sizing: border-box;
+  }
+
+  .instruction-box {
+    background: $--wot-color-warning-bg;
+    border: 1px solid $--wot-color-warning-border;
+    border-radius: $radius-md;
+    padding: $spacing-md;
+    margin-bottom: $spacing-lg;
+
+    .instruction-text {
+      font-size: $font-size-caption;
+      color: $--wot-color-warning-text;
+      line-height: $line-height-normal;
+    }
+  }
+
+  .stem-preview {
+    margin-bottom: $spacing-lg;
+
+    .preview-label {
+      font-size: $font-size-caption;
+      font-weight: $font-weight-bold;
+      color: $--wot-color-gray-7;
+      margin-bottom: $spacing-xs;
+      display: block;
+    }
+
+    .stem-text {
+      font-size: $font-size-body;
+      color: $--wot-color-gray-8;
+      line-height: $line-height-normal;
+    }
+  }
+
+  .reason-section {
+    margin-bottom: $spacing-md;
+
+    .reason-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: $spacing-xs;
+
+      .reason-label {
+        font-size: $font-size-caption;
+        font-weight: $font-weight-bold;
+        color: $--wot-color-gray-7;
+      }
+
+      .required-mark {
+        font-size: $font-size-caption;
+        color: $--wot-color-danger;
+      }
+    }
+
+    .reason-textarea {
+      width: 100%;
+      height: 200rpx;
+      background: $--wot-color-gray-1;
+      border: 1px solid $--wot-color-gray-4;
+      border-radius: $radius-md;
+      padding: $spacing-md;
+      font-size: $font-size-body;
+      color: $--wot-color-gray-8;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: $--wot-color-theme;
+      }
+    }
+
+    .char-count {
+      text-align: right;
+      font-size: $font-size-caption;
+      color: $--wot-color-gray-6;
+      margin-top: 4rpx;
+
+      &.invalid {
+        color: $--wot-color-danger;
+      }
+    }
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: $spacing-md;
+    padding: $spacing-lg $spacing-xl;
+    border-top: 1px solid $--wot-color-gray-4;
+    background: #ffffff;
+
+    .action-btn {
+      flex: 1;
+      min-height: 88rpx;
+      border-radius: $radius-pill;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      box-sizing: border-box;
+
+      &.btn-secondary {
+        background: $--wot-color-gray-2;
+        color: $--wot-color-gray-8;
+
+        &:active {
+          background: $--wot-color-gray-4;
+        }
+      }
+
+      &.btn-primary {
+        background: $--wot-color-theme;
+        color: #ffffff;
+        box-shadow: $shadow-btn-primary;
+
+        &:active {
+          background: $--wot-color-theme-hover;
+        }
+
+        &.disabled {
+          background: $--wot-color-gray-5;
+          box-shadow: none;
+          pointer-events: none;
+        }
+      }
+    }
+  }
+}
