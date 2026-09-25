@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.question_quality import (
@@ -159,11 +159,72 @@ class LLMGeneratedQuestionItem(BaseModel):
         description="主要依据的切片序号 (0~3)",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_item(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        # 兼容 question / title 映射至 stem
+        if ("stem" not in d or not d["stem"]) and ("question" in d or "title" in d):
+            d["stem"] = d.get("question") or d.get("title")
+
+        # 兼容 options 为字符串列表 ["...", "..."] 或字典不规范形式
+        raw_options = d.get("options")
+        if isinstance(raw_options, list):
+            normalized_opts: list[dict[str, Any]] = []
+            for idx, opt in enumerate(raw_options):
+                if isinstance(opt, str):
+                    key = chr(ord("A") + idx)
+                    if len(opt) > 2 and opt[0].isalpha() and opt[1] in (".", "、", ":", " "):
+                        key = opt[0].upper()
+                        opt_content = opt[2:].strip()
+                    else:
+                        opt_content = opt
+                    normalized_opts.append({"key": key, "content": opt_content})
+                elif isinstance(opt, dict):
+                    opt_dict = dict(opt)
+                    if "content" not in opt_dict and "text" in opt_dict:
+                        opt_dict["content"] = opt_dict["text"]
+                    if "key" not in opt_dict:
+                        opt_dict["key"] = chr(ord("A") + idx)
+                    normalized_opts.append(opt_dict)
+                else:
+                    normalized_opts.append(opt)
+            d["options"] = normalized_opts
+
+        # 兼容 difficulty_level / target_difficulty
+        if "difficulty" not in d:
+            if "target_difficulty" in d:
+                d["difficulty"] = d["target_difficulty"]
+            elif "difficulty_level" in d:
+                d["difficulty"] = d["difficulty_level"]
+
+        # 兼容 answer 缺失
+        if "answer" not in d or d["answer"] is None:
+            if "correct_answer" in d:
+                d["answer"] = str(d["correct_answer"])
+            elif "standard_answer" in d:
+                d["answer"] = str(d["standard_answer"])
+            else:
+                d["answer"] = "A"
+
+        return d
+
 
 class LLMQuestionBatchOutput(BaseModel):
     """大模型批次出题输出容器 DTO。"""
 
     questions: list[LLMGeneratedQuestionItem] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_batch(cls, data: Any) -> Any:
+        if isinstance(data, list):
+            return {"questions": data}
+        if isinstance(data, dict) and "questions" not in data and "items" in data:
+            data["questions"] = data["items"]
+        return data
 
 
 # ==============================================================================
@@ -255,7 +316,10 @@ def build_generation_prompt(
         "3. 客观选择题规范：单选必须且仅有 1 个正确答案；多选必须 >=3 个选项且正确答案数 >=2；\n"
         "4. 判断题规范：答案必须明确标注为'正确'或'错误'；\n"
         "5. 主观题评分细则：主观题必须提供 grading_rubric，要点分值总和严格等于 total_score；\n"
-        "6. 来源切片标注：每道题目必须标注 source_snippet_index (0~3)，指明主要依据的切片序号。"
+        "6. 来源切片标注：每道题目必须标注 source_snippet_index (0~3)，指明主要依据的切片序号；\n"
+        "7. 输出格式规范：必须输出包含 questions 列表的纯 JSON 对象，"
+        '每题必须包含 question_type, stem, options([{"key": "A", "content": "..."}]), '
+        "answer, analysis, difficulty, source_snippet_index。"
     )
 
     user_parts = [
@@ -488,7 +552,7 @@ class QuestionService:
         *,
         user_id: uuid.UUID,
         material_id: uuid.UUID,
-        version_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
         knowledge_point_id: uuid.UUID,
         options: GenerateQuestionsOptions | None = None,
     ) -> QuestionGenerationResult:
@@ -497,7 +561,7 @@ class QuestionService:
         Args:
             user_id: 租户用户主键。
             material_id: 学习资料主键。
-            version_id: 资料版本主键。
+            version_id: 可选的资料版本主键（若为空或不符将智能对齐）。
             knowledge_point_id: 知识点主键。
             options: 可选的生成控制选项。
 
@@ -520,14 +584,29 @@ class QuestionService:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
 
         kp = self.knowledge_repo.get_by_id(knowledge_point_id, user_id)
-        if kp is None or kp.material_id != material_id or kp.version_id != version_id:
+        if kp is None or kp.material_id != material_id:
             raise KnowledgeNotFoundError("请求的知识点不存在或无权访问")
+
+        # 智能版本回退与容错：
+        # 如果客户端传入的 version_id 为空，或者客户端误传了 version_id == material_id，
+        # 或者传入的 version_id 与知识点所属的 kp.version_id 不符但知识点确实属于该 material_id，
+        # 自动将 effective_version_id 对齐为 kp.version_id（或 material.current_version_id）
+        effective_version_id = version_id
+        if (
+            effective_version_id is None
+            or effective_version_id == material_id
+            or effective_version_id != kp.version_id
+        ):
+            fallback_version_id = kp.version_id or getattr(material, "current_version_id", None)
+            if fallback_version_id is None:
+                raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+            effective_version_id = fallback_version_id
 
         # 2. 检索前置门禁校验
         snippets = self._retrieve_and_gate_snippets(
             user_id=user_id,
             material_id=material_id,
-            version_id=version_id,
+            version_id=effective_version_id,
             knowledge_point_id=knowledge_point_id,
             kp_name=kp.name,
             kp_description=kp.description,
@@ -684,7 +763,7 @@ class QuestionService:
                 id=uuid.UUID(cand.question_id),
                 user_id=user_id,
                 material_id=material_id,
-                version_id=version_id,
+                version_id=effective_version_id,
                 knowledge_point_id=knowledge_point_id,
                 source_snippet_id=source_snip_id,
                 question_type=cand.question_type,
@@ -718,7 +797,7 @@ class QuestionService:
                 id=uuid.UUID(cand.question_id),
                 user_id=user_id,
                 material_id=material_id,
-                version_id=version_id,
+                version_id=effective_version_id,
                 knowledge_point_id=knowledge_point_id,
                 source_snippet_id=source_snip_id,
                 question_type=cand.question_type,
@@ -774,7 +853,7 @@ class QuestionService:
         return QuestionGenerationResult(
             batch_id=batch_id,
             material_id=material_id,
-            version_id=version_id,
+            version_id=effective_version_id,
             knowledge_point_id=knowledge_point_id,
             total_generated=len(saved_questions),
             qualified_questions=qualified_questions,

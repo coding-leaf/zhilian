@@ -135,7 +135,7 @@ describe('Unified Network Request Client', () => {
     });
 
     await expect(request({ url: '/api/v1/user/profile' })).rejects.toThrow(AppError);
-    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/login/index' });
+    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/auth/login' });
     expect(storage.getItem('auth_tokens')).toBeNull();
   });
 
@@ -280,6 +280,6 @@ describe('Unified Network Request Client', () => {
     await expect(p2).rejects.toThrow(AppError);
 
     expect(storage.getItem('auth_tokens')).toBeNull();
-    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/login/index' });
+    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/auth/login' });
   });
 });

@@ -12,7 +12,10 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
 
+from app.api.deps.db import get_db_session
+from app.container import AppContainer
 from app.core.errors import AuthenticationError
 from app.core.security import decode_token, verify_token_version
 from app.models.user import User
@@ -20,6 +23,7 @@ from app.services.auth import AuthService
 
 # 设置 auto_error=False，以便本模块自主拦截缺失凭证并转化为规范的 AuthenticationError (HTTP 401)
 http_bearer = HTTPBearer(auto_error=False)
+_DEFAULT_REQUEST: Any = None
 
 
 async def get_current_token_payload(
@@ -114,34 +118,18 @@ def validate_user_status(user: User | None, payload_token_version: int) -> User:
     return user
 
 
-async def get_current_user(
-    payload: Annotated[dict[str, Any], Depends(get_current_token_payload)],
-) -> User:
-    """FastAPI 依赖项：获取当前已认证且处于活跃状态的用户实体。
-
-    遵循架构单向分层，路由和依赖严禁直接导入 app.repositories。
-    具体应用中通过注入服务层加载，测试或尚未集成数据库时通过 dependency_overrides 覆盖。
-
-    Args:
-        payload: 已经过校验的令牌载荷。
-
-    Returns:
-        User: 经校验合法的活跃用户实体。
-
-    Raises:
-        NotImplementedError: 在外部服务层装配前直接调用时提醒依赖注入覆盖。
-    """
-    raise NotImplementedError(
-        "用户服务数据加载器尚未装配，"
-        "请在测试或路由中使用 dependency_overrides[get_current_user] 注入"
-    )
-
-
-def get_auth_service() -> AuthService:
+def get_auth_service(
+    request: Request = _DEFAULT_REQUEST,
+    session: Annotated[Session | None, Depends(get_db_session)] = None,
+) -> AuthService:
     """FastAPI 依赖项：获取 AuthService 服务实例。
 
-    在生产环境下由服务装配工厂提供；
+    优先从请求生命周期的 AppContainer 中以单请求独立 Session 装配服务实例；
     在单元测试中通过 app.dependency_overrides[get_auth_service] 注入。
+
+    Args:
+        request: FastAPI 请求上下文对象。
+        session: 单请求生命周期的数据库会话（由 get_db_session 供给）。
 
     Returns:
         AuthService: 认证与账号管理业务编排服务。
@@ -149,9 +137,67 @@ def get_auth_service() -> AuthService:
     Raises:
         NotImplementedError: 在外部服务层装配前直接调用时提醒依赖注入覆盖。
     """
+    if request is not None and getattr(request, "app", None) is not None:
+        container: AppContainer | None = getattr(request.app.state, "container", None)
+        if container is not None:
+            actual_session = (
+                session if isinstance(session, Session) else container.session_factory()
+            )
+            return container.create_auth_service(session=actual_session)
+
     raise NotImplementedError(
         "AuthService 生产装配工厂尚未挂载，"
         "请在测试或路由中使用 dependency_overrides[get_auth_service] 注入"
+    )
+
+
+async def get_current_user(
+    payload: Annotated[dict[str, Any], Depends(get_current_token_payload)],
+    request: Request = _DEFAULT_REQUEST,
+    auth_service: Annotated[AuthService | None, Depends(get_auth_service)] = None,
+) -> User:
+    """FastAPI 依赖项：获取当前已认证且处于活跃状态的用户实体。
+
+    遵循架构单向分层，路由和依赖严禁直接导入 app.repositories。
+    优先通过 AuthService 依赖项检索用户实体并校验状态；
+    测试中通过 app.dependency_overrides[get_current_user] 注入。
+
+    Args:
+        payload: 已经过校验的令牌载荷。
+        request: FastAPI 请求上下文对象。
+        auth_service: 注入的 AuthService 实例。
+
+    Returns:
+        User: 经校验合法的活跃用户实体。
+
+    Raises:
+        AuthenticationError: 令牌解析失败、用户不存在或用户状态异常。
+        NotImplementedError: 容器未初始化且未通过 dependency_overrides 覆盖。
+    """
+    raw_sub = payload.get("sub")
+    if not raw_sub:
+        raise AuthenticationError("令牌载荷缺少用户标识 (sub)")
+    try:
+        user_uuid = uuid.UUID(str(raw_sub))
+    except (ValueError, TypeError) as exc:
+        raise AuthenticationError("用户标识格式无效") from exc
+
+    if isinstance(auth_service, AuthService):
+        user = auth_service.get_user_by_id(user_uuid)
+        token_version = payload.get("token_version", 1)
+        return validate_user_status(user, token_version)
+
+    if request is not None and getattr(request, "app", None) is not None:
+        container: AppContainer | None = getattr(request.app.state, "container", None)
+        if container is not None:
+            active_auth_svc = container.create_auth_service(session=container.session_factory())
+            user = active_auth_svc.get_user_by_id(user_uuid)
+            token_version = payload.get("token_version", 1)
+            return validate_user_status(user, token_version)
+
+    raise NotImplementedError(
+        "用户服务数据加载器尚未装配，"
+        "请在测试或路由中使用 dependency_overrides[get_current_user] 注入"
     )
 
 

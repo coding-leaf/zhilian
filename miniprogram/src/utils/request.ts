@@ -48,7 +48,7 @@ export function _isRefreshing(): boolean {
 function redirectToLogin(): void {
   try {
     if (typeof uni !== 'undefined' && typeof uni.reLaunch === 'function') {
-      uni.reLaunch({ url: '/pages/login/index' });
+      uni.reLaunch({ url: '/pages/auth/login' });
     }
   } catch {
     // Suppress navigation errors during tests

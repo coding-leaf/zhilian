@@ -994,3 +994,87 @@ def test_unimplemented_service_dependency() -> None:
     with pytest.raises(NotImplementedError) as exc_info:
         get_material_service()
     assert "MaterialService 生产装配工厂尚未挂载" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_upload_material_triggers_background_tasks(
+    mock_user: User,
+    mock_material_service: MagicMock,
+) -> None:
+    """验证 POST /api/v1/materials/upload 注册 BackgroundTasks 且后台任务通过独立 Session 调度。"""
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock, patch
+
+    from app.api.v1.materials import run_material_pipeline_background
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    material_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    fake_material = Material(
+        id=material_id,
+        user_id=mock_user.id,
+        title="测试讲义.pdf",
+        file_format="pdf",
+        file_size=1024,
+        source_type=SourceType.LOCAL.value,
+        status=MaterialStatus.PENDING.value,
+    )
+    fake_material.created_at = datetime.now(UTC)
+    fake_version = MaterialVersion(
+        id=version_id,
+        material_id=material_id,
+        user_id=mock_user.id,
+        version_number=1,
+        storage_key="users/.../v1.pdf",
+        content_hash="mockhash",
+        parse_status=ParseStatus.QUEUED.value,
+    )
+    mock_material_service.import_material_file.return_value = (fake_material, fake_version)
+
+    mock_container = MagicMock()
+    app.state.container = mock_container
+
+    # 1. 验证 POST /upload 触发了后台任务调度
+    with patch("app.api.v1.materials.run_material_pipeline_background") as mock_bg_runner:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            file_bytes = b"%PDF-1.4 test document content"
+            files = {"file": ("测试讲义.pdf", io.BytesIO(file_bytes), "application/pdf")}
+            response = await client.post("/api/v1/materials/upload", files=files)
+
+        assert response.status_code == 201
+        mock_bg_runner.assert_called_once_with(
+            mock_container,
+            material_id,
+            version_id,
+            mock_user.id,
+        )
+
+    # 2. 验证 run_material_pipeline_background 独立 Session 执行体
+    isolated_session = MagicMock()
+
+    @contextmanager
+    def fake_get_session():
+        yield isolated_session
+
+    mock_bg_container = MagicMock()
+    mock_bg_container.get_session.side_effect = fake_get_session
+    mock_bg_mat_service = MagicMock()
+    mock_bg_container.create_material_service.return_value = mock_bg_mat_service
+
+    run_material_pipeline_background(
+        container=mock_bg_container,
+        material_id=material_id,
+        version_id=version_id,
+        user_id=mock_user.id,
+    )
+
+    mock_bg_container.get_session.assert_called_once()
+    mock_bg_container.create_material_service.assert_called_once_with(session=isolated_session)
+    mock_bg_mat_service.parse_material_pipeline.assert_called_once_with(
+        material_id=material_id,
+        version_id=version_id,
+        user_id=mock_user.id,
+    )

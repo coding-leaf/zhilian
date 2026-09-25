@@ -10,15 +10,25 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class QuestionGenerateRequest(BaseModel):
     """触发出题生成请求入参模型。"""
 
     material_id: uuid.UUID = Field(..., description="归属学习资料主键 UUIDv4")
-    version_id: uuid.UUID = Field(..., description="归属资料版本主键 UUIDv4")
+    version_id: uuid.UUID | None = Field(
+        default=None, description="归属资料版本主键 UUIDv4，若缺省或不匹配将智能对齐"
+    )
     knowledge_point_id: uuid.UUID = Field(..., description="出题目标知识点主键 UUIDv4")
+
+    @field_validator("version_id", mode="before")
+    @classmethod
+    def _coerce_empty_version_id(cls, v: Any) -> Any:
+        if v == "" or v is None:
+            return None
+        return v
+
     count: int = Field(default=5, ge=1, le=20, description="出题目标数量，1~20，默认 5")
     difficulty: int = Field(default=3, ge=1, le=5, description="题目难度系数，1~5，默认 3")
     question_types: list[str] = Field(

@@ -228,6 +228,71 @@ async def test_generate_questions_success(
 
 
 @pytest.mark.asyncio
+async def test_generate_questions_with_optional_version_id(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Tests generating questions when version_id is omitted, empty, or equals material_id."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    mat_id = uuid.uuid4()
+    ver_id = uuid.uuid4()
+    kp_id = uuid.uuid4()
+    fake_q = make_fake_question(
+        user_id=mock_user.id,
+        material_id=mat_id,
+        version_id=ver_id,
+        knowledge_point_id=kp_id,
+    )
+
+    mock_question_service.generate_questions.return_value = QuestionGenerationResult(
+        batch_id="batch_fallback_1",
+        material_id=mat_id,
+        version_id=ver_id,
+        knowledge_point_id=kp_id,
+        total_generated=1,
+        qualified_questions=[fake_q],
+        pending_questions=[],
+        quality_checks=[],
+        retry_count=0,
+    )
+
+    # 1. version_id omitted or null
+    payload_null = {
+        "material_id": str(mat_id),
+        "version_id": None,
+        "knowledge_point_id": str(kp_id),
+        "count": 3,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp1 = await client.post("/api/v1/questions/generate", json=payload_null)
+    assert resp1.status_code == 200
+
+    # 2. version_id is empty string
+    payload_empty = {
+        "material_id": str(mat_id),
+        "version_id": "",
+        "knowledge_point_id": str(kp_id),
+        "count": 3,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp2 = await client.post("/api/v1/questions/generate", json=payload_empty)
+    assert resp2.status_code == 200
+
+    # 3. version_id == material_id
+    payload_mat = {
+        "material_id": str(mat_id),
+        "version_id": str(mat_id),
+        "knowledge_point_id": str(kp_id),
+        "count": 3,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp3 = await client.post("/api/v1/questions/generate", json=payload_mat)
+    assert resp3.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_generate_questions_missing_source_snippet_40003(
     mock_user: User, mock_question_service: MagicMock
 ) -> None:

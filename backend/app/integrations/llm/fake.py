@@ -130,7 +130,7 @@ class FakeLLMAdapter(LLMProtocol):
         """
         self._check_latency_and_faults("generate", messages)
 
-        model_name = options.model if options else "qwen-max"
+        model_name = options.model if options and options.model is not None else "qwen-max"
 
         with self._lock:
             canned = dict(self._canned_responses)
@@ -186,7 +186,7 @@ class FakeLLMAdapter(LLMProtocol):
         """
         self._check_latency_and_faults("generate_structured", messages)
 
-        model_name = options.model if options else "qwen-max"
+        model_name = options.model if options and options.model is not None else "qwen-max"
 
         with self._lock:
             if response_model in self._canned_structured:

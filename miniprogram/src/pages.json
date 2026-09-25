@@ -17,6 +17,12 @@
       "style": {
         "navigationBarTitleText": "用户登录"
       }
+    },
+    {
+      "path": "pages/login/index",
+      "style": {
+        "navigationBarTitleText": "用户登录"
+      }
     }
   ],
   "subPackages": [

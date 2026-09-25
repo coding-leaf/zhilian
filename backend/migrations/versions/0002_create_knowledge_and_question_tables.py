@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0002_create_knowledge_and_question_tables"
-down_revision: str | None = "0001_create_material_tables_and_vector"
+revision: str = "0002_knowledge_question"
+down_revision: str | None = "0001_material_vector"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

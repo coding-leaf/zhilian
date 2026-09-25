@@ -102,6 +102,20 @@ export const useMaterialStore = defineStore('material', () => {
     }
   }
 
+  function toggleKnowledgeSubtree(ids: string[], select: boolean): void {
+    const currentSet = new Set(selectedKnowledgeIds.value);
+    if (select) {
+      for (const id of ids) {
+        currentSet.add(id);
+      }
+    } else {
+      for (const id of ids) {
+        currentSet.delete(id);
+      }
+    }
+    selectedKnowledgeIds.value = Array.from(currentSet);
+  }
+
   function selectAllKnowledge(allIds: string[]): void {
     selectedKnowledgeIds.value = [...allIds];
   }
@@ -155,6 +169,7 @@ export const useMaterialStore = defineStore('material', () => {
     setKnowledgeTree,
     clearKnowledgeTree,
     toggleKnowledgeSelection,
+    toggleKnowledgeSubtree,
     selectAllKnowledge,
     clearKnowledgeSelection,
     toggleNodeCollapse,

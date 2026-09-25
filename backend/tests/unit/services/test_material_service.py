@@ -884,3 +884,114 @@ class TestMaterialCreationAndLifecycle:
                 page_index=1,
                 file_content=png_bytes,
             )
+
+
+def test_extract_text_pdf_success_and_gate() -> None:
+    """验证 extract_text_from_raw_content 支持 pypdf 原生提取与门禁过滤。"""
+    from app.services.material import extract_text_from_raw_content
+
+    # 包含 "Hello ZhiLian Learning Platform" 的极简真实 PDF
+    valid_pdf_bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]\n"
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n"
+        b"4 0 obj\n<< /Length 44 >>\nstream\n"
+        b"BT\n/F1 12 Tf\n100 700 Td\n(Hello ZhiLian Learning Platform) Tj\nET\n"
+        b"endstream\nendobj\n"
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+        b"xref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n"
+        b"0000000060 00000 n \n0000000117 00000 n \n"
+        b"0000000226 00000 n \n0000000320 00000 n \n"
+        b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n393\n%%EOF\n"
+    )
+
+    paragraphs = extract_text_from_raw_content(valid_pdf_bytes, "pdf")
+    assert len(paragraphs) >= 1
+    assert "Hello ZhiLian Learning Platform" in paragraphs[0]
+
+    # 空白/扫描件 PDF (有效字符不足 10) 抛出 MaterialInvalidError
+    empty_pdf_bytes = (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]\n"
+        b"/Contents 4 0 R >>\nendobj\n"
+        b"4 0 obj\n<< /Length 0 >>\nstream\nendstream\nendobj\n"
+        b"xref\n0 5\n0000000000 65535 f \n0000000010 00000 n \n"
+        b"0000000060 00000 n \n0000000117 00000 n \n0000000199 00000 n \n"
+        b"trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n249\n%%EOF\n"
+    )
+    with pytest.raises(MaterialInvalidError) as exc_info:
+        extract_text_from_raw_content(empty_pdf_bytes, "pdf")
+    assert "PDF文件无有效文字内容，扫描件请直接上传图片" in str(exc_info.value)
+
+
+def test_parse_pipeline_knowledge_chaining(
+    service: MaterialService,
+    session: Session,
+) -> None:
+    """验证 parse_material_pipeline 自动串联知识树抽取及异常状态回滚联动。"""
+    from unittest.mock import MagicMock
+
+    from app.models.material import MaterialStatus, ParseStatus
+
+    user_id = uuid.uuid4()
+    content = "第一章 极限与连续\n\n函数的极限是高等数学的核心基础概念之一。".encode()
+    mat, ver = service.create_material(
+        user_id=user_id,
+        title="高等数学讲义.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+
+    mock_knowledge_service = MagicMock()
+    service.knowledge_service = mock_knowledge_service
+
+    # 1. 成功流水线执行验证
+    res_version = service.parse_material_pipeline(
+        material_id=mat.id,
+        version_id=ver.id,
+        user_id=user_id,
+    )
+
+    mock_knowledge_service.extract_and_build_knowledge_tree.assert_called_once_with(
+        material_id=mat.id,
+        version_id=ver.id,
+        user_id=user_id,
+    )
+    assert res_version.parse_status == ParseStatus.READY.value
+    updated_mat = service.repo.get_material_by_id(mat.id, user_id)
+    assert updated_mat is not None
+    assert updated_mat.status == MaterialStatus.READY.value
+
+    # 2. 异常场景回滚与状态标记验证
+    mat2, ver2 = service.create_material(
+        user_id=user_id,
+        title="线性代数讲义.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    mock_knowledge_service.extract_and_build_knowledge_tree.side_effect = RuntimeError(
+        "LLM抽取网络异常"
+    )
+
+    with pytest.raises(RuntimeError):
+        service.parse_material_pipeline(
+            material_id=mat2.id,
+            version_id=ver2.id,
+            user_id=user_id,
+        )
+
+    failed_ver = service.repo.get_version_by_id(ver2.id, user_id)
+    assert failed_ver is not None
+    assert failed_ver.parse_status == ParseStatus.FAILED.value
+    assert failed_ver.failed_stage == "knowledge_extraction"
+    assert "LLM抽取网络异常" in (failed_ver.error_message or "")
+
+    failed_mat = service.repo.get_material_by_id(mat2.id, user_id)
+    assert failed_mat is not None
+    assert failed_mat.status == MaterialStatus.FAILED.value

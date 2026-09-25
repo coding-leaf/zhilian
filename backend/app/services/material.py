@@ -9,11 +9,16 @@
 """
 
 import hashlib
+import io
 import logging
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import pypdf
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.services.knowledge import KnowledgeService
 
 from app.core.algorithms.material_chunking import split_material_into_snippets
 from app.core.algorithms.ocr_quality import (
@@ -106,6 +111,46 @@ def validate_file_magic(content: bytes, declared_format: str) -> bool:
     return False
 
 
+def _extract_text_from_pdf(content: bytes) -> str:
+    """使用 pypdf 从 PDF 二进制中抽取正文纯文本。
+
+    纯函数计算，执行页文本抽取与有效字符门禁。
+
+    Args:
+        content: PDF 原生二进制字节流。
+
+    Returns:
+        str: 规整后的全部页面文本。
+
+    Raises:
+        MaterialInvalidError: PDF 损坏或无有效文本内容。
+    """
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(content))
+        extracted_pages: list[str] = []
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                extracted_pages.append(page_text)
+        full_text = "\n\n".join(extracted_pages).strip()
+    except Exception as exc:
+        if isinstance(exc, MaterialInvalidError):
+            raise
+        raise MaterialInvalidError(
+            f"PDF 文件解析失败: {exc}",
+            details={"error": str(exc)},
+        ) from exc
+
+    valid_chars = [c for c in full_text if not c.isspace()]
+    if len(valid_chars) < 10:
+        raise MaterialInvalidError(
+            "PDF文件无有效文字内容，扫描件请直接上传图片",
+            details={"valid_char_count": len(valid_chars)},
+        )
+
+    return full_text
+
+
 def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]:
     """从原始文件二进制中提取段落文本序列。
 
@@ -119,7 +164,9 @@ def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]
     normalized_format = file_format.lower().lstrip(".")
     if normalized_format in ("txt", "md"):
         text = content.decode("utf-8", errors="replace")
-    elif normalized_format in ("pdf", "docx", "pptx"):
+    elif normalized_format == "pdf":
+        text = _extract_text_from_pdf(content)
+    elif normalized_format in ("docx", "pptx"):
         text = content.decode("utf-8", errors="ignore")
     else:
         text = ""
@@ -169,6 +216,7 @@ class MaterialService:
         queue_adapter: QueueProtocol,
         idempotency_adapter: IdempotencyProtocol | None = None,
         material_repo: MaterialRepository | None = None,
+        knowledge_service: "KnowledgeService | None" = None,
         bucket: str = DEFAULT_MATERIAL_BUCKET,
     ) -> None:
         self.session = session
@@ -178,6 +226,7 @@ class MaterialService:
         self.queue = queue_adapter
         self.idempotency = idempotency_adapter
         self.repo = material_repo or MaterialRepository(session)
+        self.knowledge_service = knowledge_service
         self.bucket = bucket
 
     def create_material(
@@ -406,6 +455,9 @@ class MaterialService:
         self.repo.update_material_status(material_id, user_id, MaterialStatus.PARSING.value)
         file_bytes = self.storage.get_object(self.bucket, version.storage_key)
         clean_format = material.file_format.lower().lstrip(".")
+        current_stage = (
+            "ocr_processing" if clean_format in ("png", "jpg", "jpeg", "image") else "parsing_doc"
+        )
 
         try:
             # 阶段 A: 提取文本与 OCR 质量门禁
@@ -448,12 +500,13 @@ class MaterialService:
                 self.repo.create_ocr_pages([ocr_page])
 
                 if not report.is_all_qualified:
+                    current_stage = "ocr_quality_gate"
                     self.repo.update_version_status(
                         version_id,
                         user_id,
                         ParseStatus.FAILED.value,
                         error_message=page_report.unqualified_reason,
-                        failed_stage="ocr_quality_gate",
+                        failed_stage=current_stage,
                     )
                     self.repo.update_material_status(
                         material_id, user_id, MaterialStatus.FAILED.value
@@ -477,24 +530,17 @@ class MaterialService:
             )
 
             # 阶段 B: 纯函数知识切分
+            current_stage = "chunking"
             self.repo.update_version_status(
                 version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
             )
             chunk_result = split_material_into_snippets(paragraphs)
 
             if not chunk_result.snippets:
-                self.repo.update_version_status(
-                    version_id,
-                    user_id,
-                    ParseStatus.FAILED.value,
-                    failed_stage="chunking",
-                    error_message="未切分出有效知识切片",
-                )
-                self.repo.update_material_status(material_id, user_id, MaterialStatus.FAILED.value)
-                self.session.commit()
                 raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
 
             # 阶段 C: 批量向量化与切片持久化
+            current_stage = "embedding_generation"
             self.repo.update_version_status(
                 version_id, user_id, ParseStatus.EMBEDDING_GENERATION.value
             )
@@ -522,7 +568,20 @@ class MaterialService:
 
             self.repo.create_snippets(snippets_to_save)
 
-            # 阶段 D: 激活并准出
+            # 阶段 D: 自动串联知识树抽取与落库 (若注入了 KnowledgeService)
+            if self.knowledge_service is not None:
+                current_stage = "knowledge_extraction"
+                self.repo.update_version_status(
+                    version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
+                )
+                self.knowledge_service.extract_and_build_knowledge_tree(
+                    material_id=material_id,
+                    version_id=version_id,
+                    user_id=user_id,
+                )
+
+            # 阶段 E: 激活并准出
+            current_stage = "ready"
             self.repo.update_version_status(
                 version_id,
                 user_id,
@@ -548,8 +607,25 @@ class MaterialService:
             )
             return version
 
-        except Exception:
+        except Exception as exc:
             self.session.rollback()
+            try:
+                error_msg = getattr(exc, "message", str(exc))
+                self.repo.update_version_status(
+                    version_id=version_id,
+                    user_id=user_id,
+                    status=ParseStatus.FAILED.value,
+                    failed_stage=current_stage,
+                    error_message=str(error_msg)[:500],
+                )
+                self.repo.update_material_status(
+                    material_id=material_id,
+                    user_id=user_id,
+                    status=MaterialStatus.FAILED.value,
+                )
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
             raise
 
     def retry_ocr_pages(

@@ -193,7 +193,7 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
         """
         start_time = time.perf_counter()
         effective_timeout = options.timeout if options else self.timeout
-        model_name = options.model if options else self.model
+        model_name = options.model if options and options.model is not None else self.model
 
         payload: dict[str, Any] = {
             "model": model_name,

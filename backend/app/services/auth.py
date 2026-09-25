@@ -262,6 +262,17 @@ class AuthService:
         """
         return self.revoke_tokens(user_id)
 
+    def get_user_by_id(self, user_id: uuid.UUID) -> User | None:
+        """根据用户唯一标识获取用户实体。
+
+        Args:
+            user_id: 归属用户唯一标识 UUID。
+
+        Returns:
+            User | None: 用户实体，不存在则返回 None。
+        """
+        return self.user_repo.get_user_by_id(user_id)
+
     def get_user_profile(self, user_id: uuid.UUID) -> UserProfileResponse:
         """获取指定用户的个人画像资料详情。
 

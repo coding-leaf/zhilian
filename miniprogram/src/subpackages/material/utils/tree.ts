@@ -32,6 +32,29 @@ export function flattenKnowledgeTree(nodes: KnowledgeTreeNode[]): KnowledgeTreeN
 }
 
 /**
+ * 递归收集指定节点及其所有子孙节点的 ID 列表。
+ *
+ * @param node 目标知识点节点。
+ * @returns 包含当前节点及其所有子孙节点 ID 的数组。
+ */
+export function collectNodeAndDescendantIds(node: KnowledgeTreeNode): string[] {
+  const ids: string[] = [];
+
+  function traverse(n: KnowledgeTreeNode): void {
+    if (!n || !n.id) return;
+    ids.push(n.id);
+    if (Array.isArray(n.children) && n.children.length > 0) {
+      for (const child of n.children) {
+        traverse(child);
+      }
+    }
+  }
+
+  traverse(node);
+  return ids;
+}
+
+/**
  * 根据知识点主键列表筛选匹配的节点。
  *
  * @param nodes 知识点树或平铺节点列表。

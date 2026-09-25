@@ -234,7 +234,7 @@ async function handleSubmit(): Promise<void> {
   try {
     const res = await generateQuestions({
       material_id: props.materialId,
-      version_id: props.versionId || props.materialId,
+      version_id: props.versionId || undefined,
       knowledge_point_id: targetKpId,
       count: questionCount.value,
       difficulty: selectedDifficulty.value,

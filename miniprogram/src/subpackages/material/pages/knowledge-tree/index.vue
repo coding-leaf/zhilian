@@ -120,6 +120,7 @@
     <QuestionConfigDrawer
       :visible="isConfigDrawerOpen"
       :material-id="targetMaterialId"
+      :version-id="currentVersionId"
       :selected-knowledge-ids="materialStore.selectedKnowledgeIds"
       @success="handleGenerateSuccess"
       @close="isConfigDrawerOpen = false"
@@ -159,6 +160,7 @@ interface Props {
 const props = defineProps<Props>();
 const materialStore = useMaterialStore();
 const targetMaterialId = ref<string>('');
+const currentVersionId = ref<string>('');
 const materialTitle = ref<string>('学习资料考点大纲');
 const loading = ref<boolean>(false);
 const currentTab = ref<'tree' | 'questions'>('tree');
@@ -186,6 +188,9 @@ async function loadKnowledgeTree(id: string): Promise<void> {
   loading.value = true;
   try {
     const res = await fetchKnowledgeTree(id);
+    if (res.data?.version_id) {
+      currentVersionId.value = res.data.version_id;
+    }
     if (res.data?.nodes) materialStore.setKnowledgeTree(res.data.nodes);
   } catch {
     uni.showToast({ title: '加载知识点树失败', icon: 'none' });
@@ -208,7 +213,9 @@ async function loadMaterialInfo(id: string): Promise<void> {
   }
 }
 
-const handleToggleSelect = (id: string): void => materialStore.toggleKnowledgeSelection(id);
+const handleToggleSelect = (): void => {
+  // 级联勾选状态由 KnowledgeTreeNode 内置的 toggleKnowledgeSubtree 管理
+};
 const handleToggleCollapse = (id: string): void => materialStore.toggleNodeCollapse(id);
 const handleSelectAll = (): void => {
   materialStore.selectAllKnowledge(allFlatNodes.value.map((n) => n.id));

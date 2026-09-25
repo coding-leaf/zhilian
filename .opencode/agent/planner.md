@@ -1,5 +1,5 @@
 ---
-description: 深度分析任务、7维风险扫描并生成技术契约(spec)与实施计划(plan)（只读探索，支持起草工件）
+description: 深度分析任务、7维风险扫描并生成技术契约(spec)与实施计划(plan)（支持起草工件与代码调研）
 mode: subagent
 ---
 

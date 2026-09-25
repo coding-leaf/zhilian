@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0001_create_material_tables_and_vector"
+revision: str = "0001_material_vector"
 down_revision: str | None = None
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
@@ -24,7 +24,26 @@ def upgrade() -> None:
     if conn.dialect.name == "postgresql":
         op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-    # 2. 创建 materials 主表
+    # 2. 创建 users 用户基础表 (供 materials 及后续业务外键引用)
+    op.create_table(
+        "users",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("openid", sa.String(64), nullable=False, unique=True, index=True),
+        sa.Column("unionid", sa.String(64), nullable=True, index=True),
+        sa.Column("nickname", sa.String(64), nullable=False, server_default=""),
+        sa.Column("avatar_url", sa.String(512), nullable=False, server_default=""),
+        sa.Column("token_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+    )
+
+    # 3. 创建 materials 主表
     op.create_table(
         "materials",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -247,3 +266,6 @@ def downgrade() -> None:
 
     # 5. 删除 materials
     op.drop_table("materials")
+
+    # 6. 删除 users
+    op.drop_table("users")

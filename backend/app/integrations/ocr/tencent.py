@@ -94,7 +94,9 @@ class TencentOCRAdapter(OCRProtocol):
 
         cred = credential.Credential(self.secret_id, self.secret_key)
         http_profile = HttpProfile()
-        http_profile.endpoint = self.endpoint
+        http_profile.endpoint = (
+            self.endpoint.replace("https://", "").replace("http://", "").rstrip("/")
+        )
         http_profile.reqTimeout = int(self.timeout)
         client_profile = ClientProfile()
         client_profile.httpProfile = http_profile

@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Sequence
 
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.models.practice import GradingRecord, GradingStatus
@@ -202,7 +203,8 @@ class GradingRepository:
         )
         result = self.session.execute(stmt)
         self.session.flush()
-        return int(result.rowcount or 0)
+        count = result.rowcount if isinstance(result, CursorResult) else 0
+        return int(count)
 
     def set_records_non_final_by_attempt_id(
         self,

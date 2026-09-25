@@ -35,7 +35,7 @@ class LLMMessage:
 class LLMOptions:
     """大模型调用控制选项。"""
 
-    model: str = "qwen-max"
+    model: str | None = None
     temperature: float = 0.7
     max_tokens: int | None = None
     timeout: float = 30.0

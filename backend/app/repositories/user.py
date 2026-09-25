@@ -10,6 +10,7 @@
 import uuid
 
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -142,7 +143,8 @@ class UserRepository:
         stmt = update(User).where(User.id == user_id).values(is_deleted=True, is_active=False)
         result = self.session.execute(stmt)
         self.session.flush()
-        return bool(result.rowcount and result.rowcount > 0)
+        count = result.rowcount if isinstance(result, CursorResult) else 0
+        return bool(count > 0)
 
 
 __all__ = ["UserRepository"]

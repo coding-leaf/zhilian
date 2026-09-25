@@ -8,11 +8,13 @@
 - 缩写白名单仅限 api, id, url, ocr, llm, db, config, env。
 """
 
+import logging
 import uuid
 from typing import Annotated
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Depends,
     File,
@@ -24,7 +26,10 @@ from fastapi import (
 )
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.container import get_container
 from app.api.deps.material import get_material_service
+from app.container import AppContainer
+from app.core.security import generate_user_ref
 from app.models.user import User
 from app.schemas.material import (
     MaterialDeleteResponse,
@@ -40,7 +45,58 @@ from app.schemas.material import (
 )
 from app.services.material import MaterialService
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/materials", tags=["materials"])
+
+
+def run_material_pipeline_background(
+    container: AppContainer,
+    material_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """后台异步任务：以独立数据库 Session 生命周期执行资料解析与知识树抽取闭环。
+
+    严格遵循 Session 隔离铁律：
+    严禁复用请求级 Session；显式使用 container.get_session() 开启全新独立会话。
+
+    Args:
+        container: 全局应用装配容器。
+        material_id: 资料主键。
+        version_id: 版本主键。
+        user_id: 租户用户主键。
+    """
+    user_ref = generate_user_ref(user_id)
+    logger.info(
+        "starting background material parsing",
+        extra={
+            "user_ref": user_ref,
+            "target_id": str(material_id),
+            "error_code": 0,
+        },
+    )
+    try:
+        with container.get_session() as session:
+            material_service = container.create_material_service(session=session)
+            material_service.parse_material_pipeline(
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+            )
+    except Exception as exc:
+        logger.error(
+            "background material parsing failed",
+            extra={
+                "user_ref": user_ref,
+                "target_id": str(material_id),
+                "error_code": 50001,
+                "details": str(exc),
+            },
+        )
+
+
+run_parse_material_background = run_material_pipeline_background
 
 
 @router.post(
@@ -53,9 +109,11 @@ async def upload_material(
     file: Annotated[UploadFile, File(description="待解析学习资料文件二进制流")],
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
+    background_tasks: BackgroundTasks,
     title: Annotated[str | None, Form(description="资料展示标题 (为空时使用文件名)")] = None,
     source_type: Annotated[str, Form(description="资料来源渠道 (local/wechat)")] = "local",
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
 ) -> MaterialUploadResponse:
     """上传文件创建学习资料并触发异步解析流水线。
 
@@ -68,6 +126,8 @@ async def upload_material(
         idempotency_key: 可选的请求防重幂等键。
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
+        background_tasks: FastAPI 后台任务管理器。
+        container: 可选全局应用容器依赖。
 
     Returns:
         MaterialUploadResponse: 创建就绪的资料与版本初始元数据。
@@ -81,6 +141,15 @@ async def upload_material(
         source_type=source_type,
         idempotency_key=idempotency_key,
     )
+    if container is not None:
+        background_tasks.add_task(
+            run_material_pipeline_background,
+            container,
+            material.id,
+            version.id,
+            user.id,
+        )
+
     return MaterialUploadResponse(
         id=material.id,
         version_id=version.id,
@@ -464,6 +533,8 @@ __all__ = [
     "list_materials",
     "reshoot_material_page",
     "router",
+    "run_material_pipeline_background",
+    "run_parse_material_background",
     "soft_delete_material",
     "switch_material_version",
     "trigger_material_parse",

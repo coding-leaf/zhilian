@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { mount } from '@vue/test-utils';
+import { setActivePinia, createPinia } from 'pinia';
 import KnowledgeTreeNode from '@/subpackages/material/components/KnowledgeTreeNode.vue';
+import { useMaterialStore } from '@/stores/materialStore';
 import type { KnowledgeTreeNode as KnowledgeNodeType } from '@/types/material';
 
 describe('KnowledgeTreeNode.vue', () => {
@@ -127,5 +129,32 @@ describe('KnowledgeTreeNode.vue', () => {
       },
     });
     expect(wrapperCollapsed.text()).not.toContain('指令系统与寻址方式');
+  });
+
+  it('cascades selection to descendants via materialStore when Pinia is active', async () => {
+    setActivePinia(createPinia());
+    const store = useMaterialStore();
+    expect(store.selectedKnowledgeIds).toEqual([]);
+
+    const wrapper = mount(KnowledgeTreeNode, {
+      props: {
+        node: sampleNode,
+        selectedIds: store.selectedKnowledgeIds,
+      },
+    });
+
+    const checkboxArea = wrapper.find('.checkbox-hit-area');
+    await checkboxArea.trigger('tap');
+
+    // Both kp-root and kp-child-1 should be selected
+    expect(store.selectedKnowledgeIds).toContain('kp-root');
+    expect(store.selectedKnowledgeIds).toContain('kp-child-1');
+
+    // Tap again to unselect both
+    await wrapper.setProps({ selectedIds: store.selectedKnowledgeIds });
+    await checkboxArea.trigger('tap');
+
+    expect(store.selectedKnowledgeIds).not.toContain('kp-root');
+    expect(store.selectedKnowledgeIds).not.toContain('kp-child-1');
   });
 });

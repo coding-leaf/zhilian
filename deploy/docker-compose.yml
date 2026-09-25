@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: zhilian-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${ZHILIAN_DB__USER:-zhilian_app}
+      POSTGRES_PASSWORD: ${ZHILIAN_DB__PASSWORD:-zhilian_secure_password_2026}
+      POSTGRES_DB: ${ZHILIAN_DB__NAME:-zhilian}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ZHILIAN_DB__USER:-zhilian_app} -d ${ZHILIAN_DB__NAME:-zhilian}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - zhilian-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: zhilian-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - zhilian-net
+
+  minio:
+    image: alpine/minio:latest-release
+    container_name: zhilian-minio
+    restart: unless-stopped
+    user: "0:0"
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${ZHILIAN_STORAGE__ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${ZHILIAN_STORAGE__SECRET_KEY:-minioadmin_secret_2026}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - zhilian-net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  zhilian-net:
+    driver: bridge

@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.models.question import (
@@ -362,7 +363,8 @@ class QuestionRepository:
 
         result = self.session.execute(stmt)
         self.session.flush()
-        return int(result.rowcount)
+        count = result.rowcount if isinstance(result, CursorResult) else 0
+        return int(count)
 
     # ==========================================
     # QuestionQualityCheck 质检记录操作

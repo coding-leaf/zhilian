@@ -289,6 +289,30 @@ class OCRAuthError(OCRError):
         )
 
 
+class OCRQuotaError(OCRError):
+    """OCR 识别服务配额超限或并发受限异常 (错误码 30019, HTTP 429)。
+
+    当第三方 OCR 服务当日调用量超限 (如百度 17) 或 QPS 并发受限 (如百度 18) 时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "OCR服务配额超限或请求频次过高",
+        details: dict[str, Any] | None = None,
+        *,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            details=details,
+            error_code=30019,
+            status_code=429,
+            code=code,
+            detail=detail,
+        )
+
+
 class EmbeddingError(AppError):
     """向量化服务基础异常 (错误码 30007, HTTP 502)。
 
@@ -1215,6 +1239,7 @@ __all__ = [
     "MissingSourceSnippetError",
     "OCRAuthError",
     "OCRError",
+    "OCRQuotaError",
     "OCRReshootExceededError",
     "OCRTimeoutError",
     "PermissionDeniedError",

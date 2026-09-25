@@ -57,7 +57,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { getActivePinia } from 'pinia';
+import { useMaterialStore } from '@/stores/materialStore';
 import type { KnowledgeTreeNode as KnowledgeNodeType } from '@/types/material';
+import KnowledgeTreeNode from './KnowledgeTreeNode.vue';
+import { collectNodeAndDescendantIds } from '../utils/tree';
 
 interface Props {
   node: KnowledgeNodeType;
@@ -94,6 +98,12 @@ const isCollapsed = computed<boolean>(() => {
 });
 
 function handleToggleSelect(): void {
+  const ids = collectNodeAndDescendantIds(props.node);
+  const willSelect = !isSelected.value;
+  if (getActivePinia()) {
+    const materialStore = useMaterialStore();
+    materialStore.toggleKnowledgeSubtree(ids, willSelect);
+  }
   emit('toggle-select', props.node.id);
 }
 

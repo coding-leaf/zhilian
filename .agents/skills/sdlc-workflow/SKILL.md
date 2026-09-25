@@ -20,7 +20,7 @@ description: 引导 AI-Native SDLC 各阶段工件（intent.md / spec.md / plan.
 7. **Blast Radius**：核心进程崩溃爆炸半径
 
 ### 分级准则与 Tier 3 强制升级触发器
-- **Tier 1 (Trivial)**：局部低风险、可逆、无契约/数据/安全影响（无需前置工件，直接建立证据与实现）。
+- **Tier 1 (Trivial / Fast Track)**：局部低风险、可逆、无对外契约/数据迁移/鉴权变动（改动 <= 2 个文件，如特定 Bug 修复、局部样式调整、完善现有单元测试）。**直通敏捷流**：无需前置 intent/spec/plan 工件与 task_cli 注册，直接遵循 Fail-repro First 测试先行闭环完成。
 - **Tier 2 (Normal)**：单模块特性或局部优化（执行完整的 intent → spec → plan 工件流转）。
 - **Tier 3 (High-risk)**：高危变更，强制方案评审与人类签批。**命中以下任一条件必须升为 Tier 3**：
   1. 跨越 >= 2 个独立顶级子系统/业务模块；

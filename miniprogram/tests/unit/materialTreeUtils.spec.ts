@@ -5,6 +5,7 @@ import {
   calculateKnowledgeCoverage,
   validateQuestionConfig,
   computeFieldDiffs,
+  collectNodeAndDescendantIds,
 } from '@/subpackages/material/utils/tree';
 import type { KnowledgeTreeNode } from '@/types/material';
 
@@ -57,6 +58,18 @@ describe('materialTreeUtils', () => {
     it('should handle empty or null input gracefully', () => {
       expect(flattenKnowledgeTree([])).toEqual([]);
       expect(flattenKnowledgeTree(null as unknown as KnowledgeTreeNode[])).toEqual([]);
+    });
+  });
+
+  describe('collectNodeAndDescendantIds', () => {
+    it('should collect root and all nested descendant ids recursively', () => {
+      const ids = collectNodeAndDescendantIds(sampleTree[0]);
+      expect(ids).toEqual(['kp-1', 'kp-1-1', 'kp-1-1-1', 'kp-1-2']);
+    });
+
+    it('should collect only node id for leaf nodes without children', () => {
+      const ids = collectNodeAndDescendantIds(sampleTree[1]);
+      expect(ids).toEqual(['kp-2']);
     });
   });
 

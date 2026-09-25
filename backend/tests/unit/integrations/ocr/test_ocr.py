@@ -786,6 +786,7 @@ def test_ocr_init_exports() -> None:
     import app.integrations.ocr as ocr_module
 
     expected_exports = [
+        "BaiduOCRAdapter",
         "FakeOCRAdapter",
         "OCROptions",
         "OCRPoint",

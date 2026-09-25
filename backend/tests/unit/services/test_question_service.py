@@ -498,6 +498,75 @@ class TestQuestionServiceFlow:
                 knowledge_point_id=point_id,
             )
 
+    def test_generate_questions_version_fallback_tolerance(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify smart version fallback when version_id is None, material_id, or mismatched."""
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        expected_version_id = helper_setup["version_id"]
+        point_id = helper_setup["point_id"]
+
+        canned_q = [
+            LLMGeneratedQuestionItem(
+                question_type=QuestionType.SINGLE_CHOICE.value,
+                stem="测试 敏捷开发 的核心理念？",
+                options=[
+                    LLMQuestionOptionItem(key="A", content="持续交付价值"),
+                    LLMQuestionOptionItem(key="B", content="完全不写文档"),
+                ],
+                answer="A",
+                source_snippet_index=0,
+            )
+        ]
+        stub_llm = StubQuestionLLM(
+            canned_outputs=[
+                LLMQuestionBatchOutput(questions=canned_q),
+                LLMQuestionBatchOutput(questions=canned_q),
+                LLMQuestionBatchOutput(questions=canned_q),
+            ]
+        )
+        service = QuestionService(
+            session=session,
+            llm=stub_llm,
+            embedding=FakeEmbeddingAdapter(),
+        )
+        options = GenerateQuestionsOptions(
+            question_types=["single_choice"],
+            count=1,
+            difficulty=3,
+        )
+
+        # 1. version_id is None -> auto resolves to expected_version_id
+        res1 = service.generate_questions(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=None,
+            knowledge_point_id=point_id,
+            options=options,
+        )
+        assert res1.version_id == expected_version_id
+
+        # 2. version_id == material_id -> auto resolves to expected_version_id
+        res2 = service.generate_questions(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=material_id,
+            knowledge_point_id=point_id,
+            options=options,
+        )
+        assert res2.version_id == expected_version_id
+
+        # 3. version_id is mismatched UUID -> auto resolves to expected_version_id
+        res3 = service.generate_questions(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=uuid.uuid4(),
+            knowledge_point_id=point_id,
+            options=options,
+        )
+        assert res3.version_id == expected_version_id
+
     def test_generate_seven_question_types_success(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:

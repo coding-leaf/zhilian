@@ -15,10 +15,21 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# 确保直接运行脚本时可定位根模块
+# 确保直接运行脚本时可定位根模块并适配 Windows 终端编码
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        reconfig_out = getattr(sys.stdout, "reconfigure", None)
+        if callable(reconfig_out):
+            reconfig_out(encoding="utf-8", errors="replace")
+        reconfig_err = getattr(sys.stderr, "reconfigure", None)
+        if callable(reconfig_err):
+            reconfig_err(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 VALID_STAGES = ["Plan", "Design", "Build", "Test", "Review", "Deploy"]
@@ -73,11 +84,13 @@ class TaskCard:
         ]
         if self.created:
             lines.append(f"- Created: {self.created}")
-        lines.extend([
-            f"- Next: {self.next_action}",
-            f"- Blocked: {self.blocked}",
-            f"- SDLC: {self.sdlc_path}",
-        ])
+        lines.extend(
+            [
+                f"- Next: {self.next_action}",
+                f"- Blocked: {self.blocked}",
+                f"- SDLC: {self.sdlc_path}",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
 
@@ -98,7 +111,9 @@ class TaskManager:
     def _ensure_active_tasks_file(self) -> None:
         if not self.active_tasks_file.exists():
             self.active_tasks_file.parent.mkdir(parents=True, exist_ok=True)
-            self.active_tasks_file.write_text(f"{ACTIVE_TASKS_HEADER}\n(暂无活跃任务)\n", encoding="utf-8")
+            self.active_tasks_file.write_text(
+                f"{ACTIVE_TASKS_HEADER}\n(暂无活跃任务)\n", encoding="utf-8"
+            )
 
     def _ensure_archive_file(self) -> None:
         if not self.archive_file.exists():
@@ -122,7 +137,9 @@ class TaskManager:
         tasks: dict[str, TaskCard] = {}
 
         # 匹配 ## <task_id> 块
-        pattern = re.compile(r"^##\s+([^\n]+)\n(.*?)(?=\n##|\Z)", re.MULTILINE | re.DOTALL)
+        pattern = re.compile(
+            r"^##\s+([^\n]+)\n(.*?)(?=\n##|\Z)", re.MULTILINE | re.DOTALL
+        )
         for match in pattern.finditer(clean_content):
             task_id = match.group(1).strip()
             body = match.group(2)
@@ -153,9 +170,19 @@ class TaskManager:
                 lines.append(card.to_markdown().strip())
                 lines.append("")
 
-        self.active_tasks_file.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        self.active_tasks_file.write_text(
+            "\n".join(lines).strip() + "\n", encoding="utf-8"
+        )
 
-    def _materialize_doc(self, task_id: str, doc_name: str, title: str, owner: str, risk_str: str, created_at: str | None = None) -> None:
+    def _materialize_doc(
+        self,
+        task_id: str,
+        doc_name: str,
+        title: str,
+        owner: str,
+        risk_str: str,
+        created_at: str | None = None,
+    ) -> None:
         task_artifact_dir = self.sdlc_dir / task_id
         task_artifact_dir.mkdir(parents=True, exist_ok=True)
         target_file = task_artifact_dir / doc_name
@@ -163,11 +190,19 @@ class TaskManager:
             return
 
         if created_at is None:
-            created_at = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+            created_at = (
+                datetime.datetime.now(datetime.timezone.utc)
+                .astimezone()
+                .strftime("%Y-%m-%d %H:%M")
+            )
 
         tpl_map = {
             "intent.md": ("intent.template.md", "[简明任务或缺陷标题]", title),
-            "spec.md": ("spec.template.md", "[技术方案与契约设计]", f"{title} - 技术契约"),
+            "spec.md": (
+                "spec.template.md",
+                "[技术方案与契约设计]",
+                f"{title} - 技术契约",
+            ),
             "plan.md": ("plan.template.md", "[实施与修改计划]", f"{title} - 实施计划"),
         }
         if doc_name not in tpl_map:
@@ -190,7 +225,9 @@ class TaskManager:
         )
         target_file.write_text(content, encoding="utf-8")
 
-    def _restore_or_materialize_doc(self, task_id: str, doc_name: str, title: str, card: TaskCard) -> None:
+    def _restore_or_materialize_doc(
+        self, task_id: str, doc_name: str, title: str, card: TaskCard
+    ) -> None:
         artifact_dir = self.sdlc_dir / task_id
         doc_file = artifact_dir / doc_name
         doc_bak = artifact_dir / f"{doc_name}.bak"
@@ -214,7 +251,9 @@ class TaskManager:
             raise ValueError(f"任务 '{task_id}' 已存在于活跃列表中！")
 
         if stage not in VALID_STAGES:
-            raise ValueError(f"无效的 Stage: '{stage}'。可选值: {', '.join(VALID_STAGES)}")
+            raise ValueError(
+                f"无效的 Stage: '{stage}'。可选值: {', '.join(VALID_STAGES)}"
+            )
 
         risk_str = f"Tier {tier}"
         if risk_str not in VALID_RISKS:
@@ -222,16 +261,26 @@ class TaskManager:
 
         sdlc_path = f"docs/sdlc/{task_id}/" if tier in (2, 3) else "None"
         if next_action is None:
-            next_action = "编写 intent.md 与初步方案" if tier in (2, 3) else "执行最小化代码实现与验证"
+            next_action = (
+                "编写 intent.md 与初步方案"
+                if tier in (2, 3)
+                else "执行最小化代码实现与验证"
+            )
 
-        created_at = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+        created_at = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .astimezone()
+            .strftime("%Y-%m-%d %H:%M")
+        )
 
         # Tier 2/3 按阶段物化工件 (默认 Plan 仅初始化 intent.md)
         created_docs: list[str] = []
         if tier in (2, 3):
             created_docs = STAGE_DOCS.get(stage, ["intent.md"])
             for doc in created_docs:
-                self._materialize_doc(task_id, doc, title, owner, risk_str, created_at=created_at)
+                self._materialize_doc(
+                    task_id, doc, title, owner, risk_str, created_at=created_at
+                )
 
         card = TaskCard(
             task_id=task_id,
@@ -248,7 +297,9 @@ class TaskManager:
         self._save_active_tasks(tasks)
         print(f"✅ 成功创建任务 [{task_id}] ({risk_str})")
         if tier in (2, 3):
-            print(f"📁 已初始化工件目录: docs/sdlc/{task_id}/ ({', '.join(created_docs)})")
+            print(
+                f"📁 已初始化工件目录: docs/sdlc/{task_id}/ ({', '.join(created_docs)})"
+            )
 
     def update(
         self,
@@ -268,7 +319,9 @@ class TaskManager:
 
         if stage is not None:
             if stage not in VALID_STAGES:
-                raise ValueError(f"无效的 Stage: '{stage}'。可选值: {', '.join(VALID_STAGES)}")
+                raise ValueError(
+                    f"无效的 Stage: '{stage}'。可选值: {', '.join(VALID_STAGES)}"
+                )
             old_stage = card.stage
             card.stage = stage
 
@@ -294,7 +347,9 @@ class TaskManager:
                                 doc_path.rename(bak_path)
                             else:
                                 doc_path.unlink()
-                            print(f"📦 阶段回退 ({old_stage} -> {stage}): 已安全备份 {doc} 为 {doc}.bak，避免门禁死锁")
+                            print(
+                                f"📦 阶段回退 ({old_stage} -> {stage}): 已安全备份 {doc} 为 {doc}.bak，避免门禁死锁"
+                            )
 
                 # 场景 2: 向前推进或恢复 (Advance / Restore)
                 title = task_id
@@ -311,12 +366,16 @@ class TaskManager:
 
         if status is not None:
             if status not in VALID_STATUSES:
-                raise ValueError(f"无效的 Status: '{status}'。可选值: {', '.join(VALID_STATUSES)}")
+                raise ValueError(
+                    f"无效的 Status: '{status}'。可选值: {', '.join(VALID_STATUSES)}"
+                )
             card.status = status
 
         if risk is not None:
             if risk not in VALID_RISKS:
-                raise ValueError(f"无效的 Risk: '{risk}'。可选值: {', '.join(VALID_RISKS)}")
+                raise ValueError(
+                    f"无效的 Risk: '{risk}'。可选值: {', '.join(VALID_RISKS)}"
+                )
             card.risk = risk
 
         if owner is not None:
@@ -341,7 +400,9 @@ class TaskManager:
         all_passed = True
 
         for card in targets:
-            print(f"\n🔍 检查任务: [{card.task_id}] (Stage: {card.stage}, Risk: {card.risk})")
+            print(
+                f"\n🔍 检查任务: [{card.task_id}] (Stage: {card.stage}, Risk: {card.risk})"
+            )
             issues = []
 
             # 1. 基础状态校验
@@ -359,14 +420,22 @@ class TaskManager:
                     # 防偷跑校验 (Anti-leapfrog check)
                     if card.stage == "Plan":
                         if (artifact_dir / "spec.md").exists():
-                            issues.append("当前处于 Plan 阶段，严禁提前创建/修改 spec.md (需经用户审批 intent 并推进至 Design)")
+                            issues.append(
+                                "当前处于 Plan 阶段，严禁提前创建/修改 spec.md (需经用户审批 intent 并推进至 Design)"
+                            )
                         if (artifact_dir / "plan.md").exists():
-                            issues.append("当前处于 Plan 阶段，严禁提前创建/修改 plan.md (需经用户审批并推进至 Build)")
+                            issues.append(
+                                "当前处于 Plan 阶段，严禁提前创建/修改 plan.md (需经用户审批并推进至 Build)"
+                            )
                     elif card.stage == "Design":
                         if (artifact_dir / "plan.md").exists():
-                            issues.append("当前处于 Design 阶段，严禁提前创建/修改 plan.md (需经用户审批 spec 并推进至 Build)")
+                            issues.append(
+                                "当前处于 Design 阶段，严禁提前创建/修改 plan.md (需经用户审批 spec 并推进至 Build)"
+                            )
 
-                    stage_docs = STAGE_DOCS.get(card.stage, ["intent.md", "spec.md", "plan.md"])
+                    stage_docs = STAGE_DOCS.get(
+                        card.stage, ["intent.md", "spec.md", "plan.md"]
+                    )
 
                     for doc_name in stage_docs:
                         doc_file = artifact_dir / doc_name
@@ -389,7 +458,9 @@ class TaskManager:
                                 if m:
                                     unfilled.extend(m)
                             if unfilled:
-                                issues.append(f"{doc_name} 包含尚未填写的占位符: {unfilled[:2]}")
+                                issues.append(
+                                    f"{doc_name} 包含尚未填写的占位符: {unfilled[:2]}"
+                                )
 
             # 3. 阻塞状态提醒
             if card.status == "blocked" and card.blocked == "None":
@@ -420,7 +491,9 @@ class TaskManager:
 
         self._ensure_archive_file()
         if completed_date is None:
-            completed_date = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+            completed_date = (
+                datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+            )
 
         # 追加到 ARCHIVE.md
         archive_content = self.archive_file.read_text(encoding="utf-8")
@@ -465,9 +538,15 @@ class TaskManager:
         print(f"\n📋 当前活跃任务总览 ({len(tasks)} 个 | 阶段分布: {stats_str}):")
         print("-" * 75)
         for t in tasks.values():
-            status_icon = "🚧" if t.status == "in_progress" else ("🚫" if t.status == "blocked" else "👀")
+            status_icon = (
+                "🚧"
+                if t.status == "in_progress"
+                else ("🚫" if t.status == "blocked" else "👀")
+            )
             created_str = f" | Created: {t.created}" if t.created else ""
-            print(f"{status_icon} [{t.task_id}] ({t.risk}) | Stage: {t.stage} | Status: {t.status} | Owner: {t.owner}{created_str}")
+            print(
+                f"{status_icon} [{t.task_id}] ({t.risk}) | Stage: {t.stage} | Status: {t.status} | Owner: {t.owner}{created_str}"
+            )
             print(f"   Next: {t.next_action}")
             if t.blocked != "None":
                 print(f"   Blocked: {t.blocked}")
@@ -479,7 +558,11 @@ class TaskManager:
             raise KeyError(f"未找到活跃任务 '{task_id}'")
 
         card = tasks[task_id]
-        status_icon = "🚧" if card.status == "in_progress" else ("🚫" if card.status == "blocked" else "👀")
+        status_icon = (
+            "🚧"
+            if card.status == "in_progress"
+            else ("🚫" if card.status == "blocked" else "👀")
+        )
         print(f"\n{status_icon} 任务卡片快照: [{card.task_id}]")
         print("-" * 65)
         print(f"  • Stage:       {card.stage}")
@@ -512,9 +595,15 @@ class TaskManager:
                     )
                     signoff_str = ""
                     if signoff_match:
-                        res = signoff_match.group(1) or signoff_match.group(2) or signoff_match.group(3)
+                        res = (
+                            signoff_match.group(1)
+                            or signoff_match.group(2)
+                            or signoff_match.group(3)
+                        )
                         signoff_str = f" | 结论: {res.strip()}"
-                    print(f"  ✅ {doc:<10} (存在, {lines_cnt} 行, {size_bytes} 字节{signoff_str})")
+                    print(
+                        f"  ✅ {doc:<10} (存在, {lines_cnt} 行, {size_bytes} 字节{signoff_str})"
+                    )
                 elif bak_path.exists():
                     print(f"  📦 {doc:<10} (已备份为 {doc}.bak - 阶段回退保护中)")
                 else:
@@ -527,7 +616,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="task_cli",
         description="SDLC 任务生命周期管理工具 (task_cli)",
     )
-    parser.add_argument("--root", type=str, default=None, help="指定项目根目录路径 (默认自动推导)")
+    parser.add_argument(
+        "--root", type=str, default=None, help="指定项目根目录路径 (默认自动推导)"
+    )
 
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -535,17 +626,35 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("list", help="列出当前所有活跃任务")
 
     # show
-    show_parser = subparsers.add_parser("show", help="展示指定任务的卡片全貌与工件生命周期快照")
+    show_parser = subparsers.add_parser(
+        "show", help="展示指定任务的卡片全貌与工件生命周期快照"
+    )
     show_parser.add_argument("task_id", help="任务标识")
 
     # create
-    create_parser = subparsers.add_parser("create", help="创建新任务并初始化对应工件与卡片")
-    create_parser.add_argument("task_id", help="任务标识，如 TASK-001 或 core-rubric-scorer")
+    create_parser = subparsers.add_parser(
+        "create", help="创建新任务并初始化对应工件与卡片"
+    )
+    create_parser.add_argument(
+        "task_id", help="任务标识，如 TASK-001 或 core-rubric-scorer"
+    )
     create_parser.add_argument("--title", required=True, help="简明任务标题或缺陷摘要")
-    create_parser.add_argument("--tier", type=int, choices=[1, 2, 3], default=2, help="风险分级 (1: 轻量, 2: 常规, 3: 高危)")
-    create_parser.add_argument("--owner", default="Dev", help="任务负责人/角色 (默认: Dev)")
-    create_parser.add_argument("--stage", default="Plan", choices=VALID_STAGES, help="初始阶段 (默认: Plan)")
-    create_parser.add_argument("--next", dest="next_action", default=None, help="下一步具体动作")
+    create_parser.add_argument(
+        "--tier",
+        type=int,
+        choices=[1, 2, 3],
+        default=2,
+        help="风险分级 (1: 轻量, 2: 常规, 3: 高危)",
+    )
+    create_parser.add_argument(
+        "--owner", default="Dev", help="任务负责人/角色 (默认: Dev)"
+    )
+    create_parser.add_argument(
+        "--stage", default="Plan", choices=VALID_STAGES, help="初始阶段 (默认: Plan)"
+    )
+    create_parser.add_argument(
+        "--next", dest="next_action", default=None, help="下一步具体动作"
+    )
 
     # update
     update_parser = subparsers.add_parser("update", help="更新任务阶段、状态或卡片信息")
@@ -559,21 +668,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     # check
     check_parser = subparsers.add_parser("check", help="执行门禁检查与工件完整性校验")
-    check_parser.add_argument("task_id", nargs="?", default=None, help="待检查的任务标识 (可选，默认检查全部)")
+    check_parser.add_argument(
+        "task_id", nargs="?", default=None, help="待检查的任务标识 (可选，默认检查全部)"
+    )
 
     # archive
-    archive_parser = subparsers.add_parser("archive", help="完成验收并归档任务，沉淀成果到 ARCHIVE.md")
+    archive_parser = subparsers.add_parser(
+        "archive", help="完成验收并归档任务，沉淀成果到 ARCHIVE.md"
+    )
     archive_parser.add_argument("task_id", help="任务标识")
     archive_parser.add_argument("--outcome", required=True, help="交付成果摘要")
-    archive_parser.add_argument("--commit", dest="commit_pr", required=True, help="关联 Commit SHA 或 PR 链接")
-    archive_parser.add_argument("--verify", required=True, help="验证结果或测试通过情况 (如: 42 tests passed)")
-    archive_parser.add_argument("--final-stage", default="Deploy", choices=VALID_STAGES, help="最终阶段 (默认: Deploy)")
-    archive_parser.add_argument("--date", default=None, help="完成日期 (YYYY-MM-DD，默认今天)")
+    archive_parser.add_argument(
+        "--commit", dest="commit_pr", required=True, help="关联 Commit SHA 或 PR 链接"
+    )
+    archive_parser.add_argument(
+        "--verify", required=True, help="验证结果或测试通过情况 (如: 42 tests passed)"
+    )
+    archive_parser.add_argument(
+        "--final-stage",
+        default="Deploy",
+        choices=VALID_STAGES,
+        help="最终阶段 (默认: Deploy)",
+    )
+    archive_parser.add_argument(
+        "--date", default=None, help="完成日期 (YYYY-MM-DD，默认今天)"
+    )
 
     # delete
     del_parser = subparsers.add_parser("delete", help="注销或删除任务")
     del_parser.add_argument("task_id", help="任务标识")
-    del_parser.add_argument("--force", action="store_true", help="是否同时强行删除 docs/sdlc/<task-id>/ 目录")
+    del_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="是否同时强行删除 docs/sdlc/<task-id>/ 目录",
+    )
 
     return parser
 

@@ -74,6 +74,19 @@ describe('MaterialStore Knowledge Tree & Selection Extensions', () => {
     expect(store.selectedCount).toBe(1);
   });
 
+  it('should toggle knowledge subtree selection properly', () => {
+    const store = useMaterialStore();
+    // Select subtree
+    store.toggleKnowledgeSubtree(['node-1', 'node-1-1'], true);
+    expect(store.selectedKnowledgeIds).toEqual(['node-1', 'node-1-1']);
+    expect(store.selectedCount).toBe(2);
+
+    // Unselect subtree
+    store.toggleKnowledgeSubtree(['node-1', 'node-1-1'], false);
+    expect(store.selectedKnowledgeIds).toEqual([]);
+    expect(store.selectedCount).toBe(0);
+  });
+
   it('should select all knowledge points and clear selection', () => {
     const store = useMaterialStore();
     store.selectAllKnowledge(['node-1', 'node-1-1', 'node-2']);

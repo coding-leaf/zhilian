@@ -6,18 +6,18 @@
 
 ## 1. 核心命令与物理闭环 (Commands & Verification)
 
-- **工具链自测**：`python3 -m unittest discover tests`（验证脚手架生命周期与统计工具）。
-- **门禁合规检查**：`python3 tooling/check_sdlc_integrity.py`（验证活跃任务工件完整性与防跳步约束）。
-- **分层依赖校验**：`python3 tooling/check_layers.py --root backend/app`（校验架构单向导入合法性）。
-- **后端质量全量基线**（进入 `backend` 目录执行）：
+- **工具链自测**：`uv run python -m unittest discover tests`（验证脚手架生命周期与统计工具）。
+- **门禁合规检查**：`uv run python tooling/check_sdlc_integrity.py`（验证活跃任务工件完整性与防跳步约束）。
+- **分层依赖校验**：`uv run python tooling/check_layers.py --root backend/app`（校验架构单向导入合法性）。
+- **后端质量全量基线**（进入 `backend` 目录，优先使用 `uv run` 确保使用 Python 3.12 虚拟环境）：
   ```bash
   cd backend && \
-  ruff format --check . && \
-  ruff check . && \
-  mypy app && \
-  bandit -r app -ll && \
-  pip-audit --strict && \
-  pytest tests --cov=app --cov-branch --cov-fail-under=80
+  uv run ruff format --check . && \
+  uv run ruff check . && \
+  uv run mypy app && \
+  uv run bandit -r app -ll && \
+  uv run pip-audit --strict && \
+  uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
   ```
   - `ruff format --check .`：严格检查行宽 100；
   - `ruff check .`：执行 Python 静态质量扫描（启用 E, F, I, N, UP, B, SIM, S, RUF, ASYNC 规则集）；

@@ -10,6 +10,17 @@ import ast
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        reconfig_out = getattr(sys.stdout, "reconfigure", None)
+        if callable(reconfig_out):
+            reconfig_out(encoding="utf-8", errors="replace")
+        reconfig_err = getattr(sys.stderr, "reconfigure", None)
+        if callable(reconfig_err):
+            reconfig_err(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # 禁止在计算核中导入的外部重型库或上层模块
 ALGORITHM_FORBIDDEN_MODULES: set[str] = {
     "fastapi",

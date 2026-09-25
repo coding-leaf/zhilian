@@ -3,7 +3,7 @@
  * 遵循 AGENTS.md 规范：单文件 <= 300 行、零表情包、全英文标识符。
  */
 
-const DEFAULT_API_BASE_URL = 'http://10.39.144.79:8000';
+const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000';
 
 /**
  * 获取当前有效的 API 基础前缀地址。
