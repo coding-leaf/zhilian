@@ -46,3 +46,5 @@
 | ZL-137 | 完成 P0 端到端全链路闭环集成测试与 16 维越权阻断矩阵，通过全系统前后端与 SDLC 门禁基线审计 | Deploy | `ZL-137` | pytest 1016 passed (cov 95.39%), miniprogram 405 passed, check_layers 0 violations, check_sdlc_integrity ok | 2026-09-25 |
 | ZL-139 | 完成Postgres16/pgvector/Redis7/MinIO真实容器编排、双层注册中心与百度OCR适配，解除单例Session跨租户竞争 | Deploy | `HEAD` | 单测与真实中间件集成测试全绿 | 2026-09-25 |
 | ZL-140 | 实现pypdf原生PDF提取、FastAPI BackgroundTasks独立Session异步解析闭环、知识树自动抽取落库与LLMOptions模型参数回退修复 | Deploy | `HEAD` | 52项单元测试全绿，真实PDF讲义解析成功抽取18个知识节点 | 2026-09-25 |
+| ZL-141 | 修复生题 404 与知识树子考点递归展开级联选择，补齐大模型多选题数组答案与评分细则数据容错 | Deploy | `02bf56b` | 前端410单测通过，后端1090+单测全绿，真实大模型混合出题落地 | 2026-09-26 |
+| ZL-142 | 尝试改造登录鉴权、资料卡片重试与 LangGraph Tool Calling，因改动耦合导致前端运行时异常已安全回退 | Fall | `Reverted` | 放弃 76a7b07，安全回滚至 02bf56b 稳定基线 | 2026-09-26 |
