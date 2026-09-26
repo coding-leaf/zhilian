@@ -1,0 +1,1 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对实现是否满足前端质量门禁、测试要求与禁止模式（无 any、Store 内变更、测试 100% 通过）"}

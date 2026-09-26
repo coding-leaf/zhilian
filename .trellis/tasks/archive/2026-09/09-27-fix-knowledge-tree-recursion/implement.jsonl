@@ -1,0 +1,1 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁（lint/type-check/vitest）、禁止模式、组件与纯函数约定，指导扁平化渲染实现与测试"}
