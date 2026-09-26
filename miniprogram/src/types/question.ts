@@ -35,7 +35,8 @@ export interface QuestionItem {
 export interface QuestionGenerateRequest {
   material_id: string;
   version_id?: string;
-  knowledge_point_id: string;
+  knowledge_point_id?: string;
+  knowledge_point_ids?: string[];
   count?: number;
   difficulty?: number;
   question_types?: QuestionType[];
@@ -95,6 +96,7 @@ export interface QuestionGenerateResponse {
   material_id: string;
   version_id: string;
   knowledge_point_id: string;
+  knowledge_point_ids?: string[];
   total_generated: number;
   qualified_count: number;
   pending_count: number;

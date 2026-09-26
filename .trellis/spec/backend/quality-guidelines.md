@@ -205,3 +205,47 @@ LLMOptions(temperature=0.3)   # tool schema 无 strict=true → 模型输出 opt
 - 区分「模型能力」与「代码缺陷」：若 prompt/schema 明确正确而模型仍违约 → 模型不遵从（换模型/开 strict）；若 prompt/schema 有误 → 改代码。
 - 中转站可用模型查询：`GET {ZHILIAN_LLM__BASE_URL}/models`（Bearer 鉴权，勿回显密钥）。
 
+---
+
+### Scenario: Multi-Knowledge-Point Question Generation
+
+#### 1. Scope / Trigger
+- 一次请求需覆盖多个知识点出题（前端知识树多选考点后生成）。
+
+#### 2. Signatures
+- `POST /api/v1/questions/generate`；请求新增**可选** `knowledge_point_ids: list[UUID]`（保留 `knowledge_point_id`）；响应新增**可选** `knowledge_point_ids: list[UUID]`。
+- Service: `QuestionService.generate_questions_for_knowledge_points(user_id, material_id, version_id, knowledge_point_ids, options) -> MultiKnowledgePointGenerationResult`
+- 纯函数: `distribute_count(total: int, n: int) -> list[int]`
+
+#### 3. Contracts
+- **向后兼容**：仅传 `knowledge_point_id` 时走原单考点链路，行为与响应结构完全不变；新增字段一律为**附加可选**。
+- **优先级**：`knowledge_point_ids` 非空优先；否则用 `knowledge_point_id`；两者皆空 → 校验失败（422）。
+- **题量分配**：均分 + 余数前置（前 `rem` 个各 `base+1`）；**每考点至少 1 题**；`total < n` 时实际总数 = n。非法入参（`total<=0` 或 `n<=0`）抛 `ValueError`。
+- **聚合**：`qualified_questions`/`pending_questions`/`quality_checks` 按调用顺序拼接；计数求和；`knowledge_point_id`（旧字段）= 首个考点；`knowledge_point_ids`（新字段）= 全量去重保序。
+- **fail-fast**：任一考点异常（`KnowledgeNotFoundError`/`MissingSourceSnippetError`）立即抛出，不静默跳过、不做部分成功降级（跨考点非原子，如需全有或全无另立任务）。
+- **纯函数无 IO**：`distribute_count` 不得引入仓储/网络依赖（守 import-linter）。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误：把 RRF/无下限的简单整除当分配，total<n 时某些考点 0 题；或静默跳过失败考点
+per = total // n
+for kp in kps:
+    try:
+        generate(kp, per)   # 0 题；且吞错继续
+    except Exception:
+        pass
+```
+##### Correct
+```python
+# 正确：均分+余数前置+每考点>=1；fail-fast
+counts = distribute_count(total, n)     # (2,3) -> [1,1,1]
+for kp, cnt in zip(kps, counts):
+    generate(kp, cnt)                   # 异常直接向上抛
+```
+
+#### 5. Tests Required
+- `distribute_count` 边界：`(6,3)=[2,2,2]`、`(7,3)=[3,2,2]`、`(2,3)=[1,1,1]`、`(1,1)=[1]`、非法入参抛错。
+- 编排：调用次数=去重考点数；各考点题量；聚合计数；题目 `knowledge_point_id` 覆盖集合；fail-fast（失败后不再调用后续考点）。
+- API：多考点请求返回 `knowledge_point_ids` 与聚合题目；**旧单考点请求零回归**。
+

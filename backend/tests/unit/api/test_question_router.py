@@ -38,7 +38,10 @@ from app.models.question import (
     QuestionQualityCheck,
 )
 from app.models.user import User
-from app.services.question import QuestionGenerationResult
+from app.services.question import (
+    MultiKnowledgePointGenerationResult,
+    QuestionGenerationResult,
+)
 
 
 def create_test_app() -> FastAPI:
@@ -640,6 +643,137 @@ async def test_tenant_cross_access_isolation(
     assert response.status_code == 403
     data = response.json()
     assert data["code"] == 20002
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_multi_knowledge_points_success(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Tests multi-knowledge-point generation routes to the orchestration method."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    mat_id = uuid.uuid4()
+    ver_id = uuid.uuid4()
+    kp_ids = [uuid.uuid4() for _ in range(3)]
+    fake_questions = [
+        make_fake_question(
+            user_id=mock_user.id,
+            material_id=mat_id,
+            version_id=ver_id,
+            knowledge_point_id=kp,
+        )
+        for kp in kp_ids
+    ]
+
+    mock_question_service.generate_questions_for_knowledge_points.return_value = (
+        MultiKnowledgePointGenerationResult(
+            batch_id="batch_multi",
+            material_id=mat_id,
+            version_id=ver_id,
+            knowledge_point_id=kp_ids[0],
+            knowledge_point_ids=tuple(kp_ids),
+            requested_count=6,
+            total_generated=3,
+            qualified_questions=fake_questions,
+            pending_questions=[],
+            quality_checks=[],
+            retry_count=1,
+        )
+    )
+
+    payload = {
+        "material_id": str(mat_id),
+        "version_id": str(ver_id),
+        "knowledge_point_ids": [str(kp) for kp in kp_ids],
+        "count": 6,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/questions/generate", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["batch_id"] == "batch_multi"
+    assert data["knowledge_point_id"] == str(kp_ids[0])
+    assert data["knowledge_point_ids"] == [str(kp) for kp in kp_ids]
+    assert data["total_generated"] == 3
+    assert data["qualified_count"] == 3
+    assert data["pending_count"] == 0
+    assert len(data["qualified_questions"]) == 3
+    assert {q["knowledge_point_id"] for q in data["qualified_questions"]} == {
+        str(kp) for kp in kp_ids
+    }
+
+    mock_question_service.generate_questions_for_knowledge_points.assert_called_once()
+    mock_question_service.generate_questions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_single_id_list_uses_single_path(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Tests a single-element knowledge_point_ids routes to the legacy single path."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    mat_id = uuid.uuid4()
+    ver_id = uuid.uuid4()
+    kp_id = uuid.uuid4()
+    fake_q = make_fake_question(
+        user_id=mock_user.id,
+        material_id=mat_id,
+        version_id=ver_id,
+        knowledge_point_id=kp_id,
+    )
+    mock_question_service.generate_questions.return_value = QuestionGenerationResult(
+        batch_id="batch_single",
+        material_id=mat_id,
+        version_id=ver_id,
+        knowledge_point_id=kp_id,
+        total_generated=1,
+        qualified_questions=[fake_q],
+        pending_questions=[],
+        quality_checks=[],
+        retry_count=0,
+    )
+
+    payload = {
+        "material_id": str(mat_id),
+        "version_id": str(ver_id),
+        "knowledge_point_ids": [str(kp_id)],
+        "count": 3,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/questions/generate", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["knowledge_point_ids"] == [str(kp_id)]
+    mock_question_service.generate_questions.assert_called_once()
+    mock_question_service.generate_questions_for_knowledge_points.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_questions_requires_knowledge_point_target(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Tests 422 when neither knowledge_point_id nor knowledge_point_ids is provided."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    payload = {"material_id": str(uuid.uuid4()), "count": 3}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/questions/generate", json=payload)
+
+    assert response.status_code == 422
+    mock_question_service.generate_questions.assert_not_called()
+    mock_question_service.generate_questions_for_knowledge_points.assert_not_called()
 
 
 def test_default_dependency_provider() -> None:

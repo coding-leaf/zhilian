@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class QuestionGenerateRequest(BaseModel):
@@ -20,7 +20,14 @@ class QuestionGenerateRequest(BaseModel):
     version_id: uuid.UUID | None = Field(
         default=None, description="归属资料版本主键 UUIDv4，若缺省或不匹配将智能对齐"
     )
-    knowledge_point_id: uuid.UUID = Field(..., description="出题目标知识点主键 UUIDv4")
+    knowledge_point_id: uuid.UUID | None = Field(
+        default=None,
+        description="出题目标知识点主键 UUIDv4（单考点，向后兼容；优先 knowledge_point_ids）",
+    )
+    knowledge_point_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="出题目标知识点主键列表（多考点，优先于 knowledge_point_id）",
+    )
 
     @field_validator("version_id", mode="before")
     @classmethod
@@ -28,6 +35,13 @@ class QuestionGenerateRequest(BaseModel):
         if v == "" or v is None:
             return None
         return v
+
+    @model_validator(mode="after")
+    def _require_knowledge_point_target(self) -> "QuestionGenerateRequest":
+        """校验至少提供一个考点（列表优先，单考点字段兜底）。"""
+        if not self.knowledge_point_ids and self.knowledge_point_id is None:
+            raise ValueError("knowledge_point_id 与 knowledge_point_ids 至少提供一个")
+        return self
 
     count: int = Field(default=5, ge=1, le=20, description="出题目标数量，1~20，默认 5")
     difficulty: int = Field(default=3, ge=1, le=5, description="题目难度系数，1~5，默认 3")
@@ -96,6 +110,10 @@ class QuestionGenerateResponse(BaseModel):
     material_id: uuid.UUID = Field(..., description="归属学习资料主键")
     version_id: uuid.UUID = Field(..., description="归属资料版本标识")
     knowledge_point_id: uuid.UUID = Field(..., description="所属知识点标识")
+    knowledge_point_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="本次覆盖的全部知识点标识（多考点；单考点时等于 [knowledge_point_id]）",
+    )
     total_generated: int = Field(..., description="本次总生成题目数")
     qualified_count: int = Field(default=0, description="质检合格入库题数")
     pending_count: int = Field(default=0, description="质检未通过进入待处理区题数")

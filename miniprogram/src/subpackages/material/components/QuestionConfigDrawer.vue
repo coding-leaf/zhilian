@@ -26,6 +26,7 @@
         <view class="config-section">
           <text class="section-label">考点范围</text>
           <text class="section-tip">已选考点: {{ selectedKpCount }} 项</text>
+          <text v-if="distributionHint" class="section-tip">{{ distributionHint }}</text>
         </view>
 
         <!-- 出题量步进器 (1~50题边界约束，默认10题) -->
@@ -180,6 +181,18 @@ const selectedKpCount = computed<number>(() => {
   return props.knowledgePointId ? 1 : 0;
 });
 
+// 题量分配提示：与后端「均分 + 每考点至少 1 题」规则保持一致。
+const distributionHint = computed<string>(() => {
+  const kpCount = selectedKpCount.value;
+  if (kpCount === 0) {
+    return '';
+  }
+  if (questionCount.value < kpCount) {
+    return `每个考点至少 1 题，实际将生成 ${kpCount} 题`;
+  }
+  return `已选 ${kpCount} 个考点，共 ${questionCount.value} 题`;
+});
+
 function clampCount(val: number): number {
   if (isNaN(val) || val < 1) return 1;
   if (val > 50) return 50;
@@ -253,8 +266,13 @@ async function handleSubmit(): Promise<void> {
     return;
   }
 
-  const targetKpId = props.knowledgePointId || props.selectedKnowledgeIds[0];
-  if (!targetKpId) {
+  const selectedIds =
+    props.selectedKnowledgeIds.length > 0
+      ? props.selectedKnowledgeIds
+      : props.knowledgePointId
+        ? [props.knowledgePointId]
+        : [];
+  if (selectedIds.length === 0) {
     uni.showToast({ title: '请至少选择一个考点', icon: 'none' });
     return;
   }
@@ -265,7 +283,9 @@ async function handleSubmit(): Promise<void> {
     const res = await generateQuestions({
       material_id: props.materialId,
       version_id: props.versionId || undefined,
-      knowledge_point_id: targetKpId,
+      // 保留首位考点以兼容旧后端；同时提交全部已选考点。
+      knowledge_point_id: selectedIds[0],
+      knowledge_point_ids: selectedIds,
       count: questionCount.value,
       difficulty: selectedDifficulty.value,
       question_types: selectedTypes.value as QuestionType[],

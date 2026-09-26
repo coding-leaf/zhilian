@@ -296,6 +296,54 @@ describe('QuestionConfigDrawer.vue', () => {
     });
   });
 
+  it('submits all selected knowledge points and shows the distribution hint', async () => {
+    const generateSpy = vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockGenerateResponse,
+    });
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        versionId: 'ver_001',
+        selectedKnowledgeIds: ['kp_001', 'kp_002', 'kp_003'],
+      },
+    });
+
+    expect(wrapper.text()).toContain('已选 3 个考点，共 10 题');
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        material_id: 'mat_001',
+        version_id: 'ver_001',
+        knowledge_point_id: 'kp_001',
+        knowledge_point_ids: ['kp_001', 'kp_002', 'kp_003'],
+        count: 10,
+      }),
+    );
+  });
+
+  it('warns when the requested count is lower than the number of knowledge points', async () => {
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001', 'kp_002', 'kp_003'],
+      },
+    });
+
+    const input = wrapper.find('.count-input');
+    await input.trigger('input', { detail: { value: '2' } });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('每个考点至少 1 题，实际将生成 3 题');
+  });
+
   it('shows a fallback toast when the question page fails to open', async () => {
     vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
       code: 200,

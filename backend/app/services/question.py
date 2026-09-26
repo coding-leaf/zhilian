@@ -100,6 +100,23 @@ class QuestionGenerationResult:
 
 
 @dataclass(frozen=True)
+class MultiKnowledgePointGenerationResult:
+    """多考点出题聚合结果传输对象。"""
+
+    batch_id: str
+    material_id: uuid.UUID
+    version_id: uuid.UUID
+    knowledge_point_id: uuid.UUID
+    knowledge_point_ids: Sequence[uuid.UUID]
+    requested_count: int
+    total_generated: int
+    qualified_questions: Sequence[Question]
+    pending_questions: Sequence[Question]
+    quality_checks: Sequence[QuestionQualityCheck]
+    retry_count: int
+
+
+@dataclass(frozen=True)
 class SnippetCandidate:
     """检索命中供出题使用的候选切片不可变对象。"""
 
@@ -364,6 +381,30 @@ class LLMQuestionBatchOutput(BaseModel):
 # ==============================================================================
 # 纯数据处理与上下文组装辅助函数 (McCabe V(G) <= 8)
 # ==============================================================================
+
+
+def distribute_count(total: int, n: int) -> list[int]:
+    """将总题量按考点数量均分，余数前置且每个考点至少 1 题。
+
+    Args:
+        total: 期望生成的总题量（正整数）。
+        n: 考点数量（正整数）。
+
+    Returns:
+        list[int]: 与考点一一对应的题量分配列表，长度等于 n 且每项 >= 1。
+            当 total < n 时退化为每个考点各 1 题（实际总数 = n）。
+
+    Raises:
+        ValueError: 当 total 或 n 非正整数时抛出。
+    """
+    if total <= 0:
+        raise ValueError("total 必须为正整数")
+    if n <= 0:
+        raise ValueError("n 必须为正整数")
+    if total < n:
+        return [1] * n
+    base, remainder = divmod(total, n)
+    return [base + 1 if idx < remainder else base for idx in range(n)]
 
 
 def aggregate_snippet_context(
@@ -1002,6 +1043,106 @@ class QuestionService:
             pending_questions=pending_questions,
             quality_checks=saved_checks,
             retry_count=retry_count,
+        )
+
+    def generate_questions_for_knowledge_points(
+        self,
+        *,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
+        knowledge_point_ids: Sequence[uuid.UUID],
+        options: GenerateQuestionsOptions | None = None,
+    ) -> MultiKnowledgePointGenerationResult:
+        """多考点编排：按考点均分题量并逐个复用单考点流程后聚合结果。
+
+        题量分配遵循「均分 + 余数前置 + 每考点至少 1 题」；任一考点生成失败时
+        fail-fast 抛出既有异常，不做静默降级。
+
+        Args:
+            user_id: 租户用户主键。
+            material_id: 学习资料主键。
+            version_id: 可选的资料版本主键（若为空或不符将智能对齐）。
+            knowledge_point_ids: 目标知识点主键序列（去重后保序）。
+            options: 可选的生成控制选项，count 表示多考点总题量。
+
+        Returns:
+            MultiKnowledgePointGenerationResult: 聚合后的多考点生成结果。
+
+        Raises:
+            ValueError: 当 knowledge_point_ids 为空时抛出。
+            MaterialNotFoundError: 资料或版本不存在或跨租户越权。
+            KnowledgeNotFoundError: 任一知识点不存在、越权或版本不匹配。
+            MissingSourceSnippetError: 任一知识点检索不到与匹配的有效切片。
+        """
+        ordered_kp_ids = list(dict.fromkeys(knowledge_point_ids))
+        if not ordered_kp_ids:
+            raise ValueError("knowledge_point_ids 不能为空")
+
+        effective_options = options if options is not None else GenerateQuestionsOptions()
+        counts = distribute_count(effective_options.count, len(ordered_kp_ids))
+        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+
+        aggregated_qualified: list[Question] = []
+        aggregated_pending: list[Question] = []
+        aggregated_checks: list[QuestionQualityCheck] = []
+        total_generated = 0
+        total_retry = 0
+        aligned_version_id: uuid.UUID | None = None
+
+        for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True):
+            per_kp_options = GenerateQuestionsOptions(
+                question_types=effective_options.question_types,
+                count=kp_count,
+                difficulty=effective_options.difficulty,
+                max_retries=effective_options.max_retries,
+            )
+            result = self.generate_questions(
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version_id,
+                knowledge_point_id=kp_id,
+                options=per_kp_options,
+            )
+            if aligned_version_id is None:
+                aligned_version_id = result.version_id
+            total_generated += result.total_generated
+            total_retry += result.retry_count
+            aggregated_qualified.extend(result.qualified_questions)
+            aggregated_pending.extend(result.pending_questions)
+            aggregated_checks.extend(result.quality_checks)
+
+        if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
+            raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+
+        logger.info(
+            "multi knowledge point question generation completed",
+            extra={
+                "timestamp": datetime.now(UTC).isoformat(),
+                "level": "INFO",
+                "logger_name": __name__,
+                "request_id": batch_id,
+                "target_id": ",".join(str(kp) for kp in ordered_kp_ids),
+                "knowledge_point_count": len(ordered_kp_ids),
+                "requested_count": effective_options.count,
+                "actual_total": total_generated,
+                "retry_count": total_retry,
+                "error_code": 0,
+            },
+        )
+
+        return MultiKnowledgePointGenerationResult(
+            batch_id=batch_id,
+            material_id=material_id,
+            version_id=aligned_version_id,
+            knowledge_point_id=ordered_kp_ids[0],
+            knowledge_point_ids=tuple(ordered_kp_ids),
+            requested_count=effective_options.count,
+            total_generated=total_generated,
+            qualified_questions=aggregated_qualified,
+            pending_questions=aggregated_pending,
+            quality_checks=aggregated_checks,
+            retry_count=total_retry,
         )
 
     def get_question(

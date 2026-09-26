@@ -28,9 +28,47 @@ from app.schemas.question import (
     QuestionQualityCheckResponse,
     QuestionUpdateRequest,
 )
-from app.services.question import GenerateQuestionsOptions, QuestionService
+from app.services.question import (
+    GenerateQuestionsOptions,
+    MultiKnowledgePointGenerationResult,
+    QuestionGenerationResult,
+    QuestionService,
+)
 
 router = APIRouter(tags=["questions"])
+
+
+def _build_generate_response(
+    result: QuestionGenerationResult | MultiKnowledgePointGenerationResult,
+    knowledge_point_ids: list[uuid.UUID],
+) -> QuestionGenerateResponse:
+    """将单/多考点生成结果统一映射为出题响应模型。
+
+    Args:
+        result: 单考点或多考点生成结果对象。
+        knowledge_point_ids: 本次覆盖的全部知识点标识列表。
+
+    Returns:
+        QuestionGenerateResponse: 出题生成与门禁质检结果概要及题目明细。
+    """
+    qualified_items = result.qualified_questions
+    pending_items = result.pending_questions
+    check_items = result.quality_checks
+
+    return QuestionGenerateResponse(
+        batch_id=result.batch_id,
+        material_id=result.material_id,
+        version_id=result.version_id,
+        knowledge_point_id=result.knowledge_point_id,
+        knowledge_point_ids=knowledge_point_ids,
+        total_generated=result.total_generated,
+        qualified_count=len(qualified_items),
+        pending_count=len(pending_items),
+        retry_count=result.retry_count,
+        qualified_questions=[QuestionDetailResponse.model_validate(q) for q in qualified_items],
+        pending_questions=[QuestionDetailResponse.model_validate(q) for q in pending_items],
+        quality_checks=[QuestionQualityCheckResponse.model_validate(qc) for qc in check_items],
+    )
 
 
 @router.post(
@@ -65,29 +103,34 @@ async def generate_questions(
         difficulty=payload.difficulty,
         max_retries=payload.max_retries,
     )
+    target_kp_ids = list(payload.knowledge_point_ids)
+    if not target_kp_ids and payload.knowledge_point_id is not None:
+        target_kp_ids = [payload.knowledge_point_id]
+
+    # 多考点：走均分编排；单考点：保持既有单考点链路（向后兼容）。
+    if len(target_kp_ids) > 1:
+        multi_result = question_service.generate_questions_for_knowledge_points(
+            user_id=user.id,
+            material_id=payload.material_id,
+            version_id=payload.version_id,
+            knowledge_point_ids=target_kp_ids,
+            options=options,
+        )
+        return _build_generate_response(
+            result=multi_result,
+            knowledge_point_ids=list(multi_result.knowledge_point_ids),
+        )
+
     result = question_service.generate_questions(
         user_id=user.id,
         material_id=payload.material_id,
         version_id=payload.version_id,
-        knowledge_point_id=payload.knowledge_point_id,
+        knowledge_point_id=target_kp_ids[0],
         options=options,
     )
-    qualified_items = getattr(result, "qualified_questions", []) or []
-    pending_items = getattr(result, "pending_questions", []) or []
-    check_items = getattr(result, "quality_checks", []) or []
-
-    return QuestionGenerateResponse(
-        batch_id=result.batch_id,
-        material_id=result.material_id,
-        version_id=result.version_id,
-        knowledge_point_id=result.knowledge_point_id,
-        total_generated=result.total_generated,
-        qualified_count=getattr(result, "qualified_count", len(qualified_items)),
-        pending_count=getattr(result, "pending_count", len(pending_items)),
-        retry_count=result.retry_count,
-        qualified_questions=[QuestionDetailResponse.model_validate(q) for q in qualified_items],
-        pending_questions=[QuestionDetailResponse.model_validate(q) for q in pending_items],
-        quality_checks=[QuestionQualityCheckResponse.model_validate(qc) for qc in check_items],
+    return _build_generate_response(
+        result=result,
+        knowledge_point_ids=[result.knowledge_point_id],
     )
 
 
