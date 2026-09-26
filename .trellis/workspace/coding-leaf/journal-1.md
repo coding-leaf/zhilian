@@ -100,4 +100,29 @@
   - 历史不一致（非本任务）：前端题量上限 50 vs 后端 `count le=20`（输入 >20 会 422）。
   - 另开后端任务：知识树节点数量偏少 / 出题质量调优。
 
+---
+
+## 2026-09-27 - 修复知识点树递归组件渲染崩溃（去递归扁平化） (fix-knowledge-tree-recursion)
+
+- **背景**: 用户在微信开发者工具导入 `miniprogram/dist/dev/mp-weixin` 后，资料「知识点树」页整页崩溃：`TypeError: Cannot read properties of undefined (reading 'children')`，并伴随 `Setting data field "uP" to undefined is invalid`，考点树完全不可用，阻断「选考点 → 生成题目」链路。
+- **根因定位（证据驱动）**:
+  - 编译产物 `KnowledgeTreeNode.js` 中 `hasChildren = Array.isArray(props.node.children)` 是渲染最先求值的计算属性；`props.node === undefined` 时首抛即为 `reading 'children'`。
+  - uni-app mp-weixin 通过单一 `u-p`/`uP` 字符串 + 模块级 `propsCaches[父uid]` 透传 props（`common/vendor.js` 的 `renderProps`/`findComponentPropsData`）；`uP` 丢失即回退 `{}`，子组件全部 props 为 `undefined`。
+  - 触发面：`KnowledgeTreeNode.vue` 的**递归自引用组件**（`import` 自身 + 模板递归），新增于 `a388e1c`。后端 `get_knowledge_tree` 返回的嵌套树与契约均正常，**非数据问题**。
+- **实现（方案 B：去递归扁平化）**:
+  - 新增纯函数 `flattenVisibleTree(nodes, collapsedMap)`：前序遍历输出「可见行 `{node, depth}`」，折叠节点自身保留、其子孙裁剪；含 `Array.isArray`/空节点守卫。
+  - `KnowledgeTreeNode.vue` 去自引用、去递归模板、清理无用 handler 与样式，退化为「非递归行组件」；级联勾选仍走 `collectNodeAndDescendantIds` + `toggleKnowledgeSubtree`（行内 `node` 仍含 `children`）。
+  - 页面 `knowledge-tree/index.vue` 改为对 `visibleRows` 单层 `v-for` + `:level="row.depth"` 缩进；`allFlatNodes`（全选/覆盖率）保持全量语义。
+  - 同步单测：utils 新增 `flattenVisibleTree` 5 例；组件用例改为「折叠箭头/叶子占位 + 不递归渲染子节点」；页面新增「折叠隐藏子孙」与「折叠态全选仍全量」2 例。
+- **规范沉淀**: `.trellis/spec/frontend/quality-guidelines.md` 新增《WeChat Mini-Program 禁止递归组件，深层树用扁平化渲染》——记录 `u-p`/`propsCaches` 陷阱、`flattenVisibleTree` 契约、错误矩阵与 Wrong/Correct。
+- **验证成果**:
+  - 前端 `pnpm run lint` / `type-check` / `test:unit`（54 files / 452 passed，较基线 444 新增 8 例）全绿。
+  - `pnpm run build:mp-weixin` 通过；编译产物 `KnowledgeTreeNode.json` 的 `usingComponents` 不再含自引用键，组件 `.js` 不再含自引用加载器，页面 wxml 为单层 `wx:for`。
+  - 提交：`5b68fea`(fix) + archive 提交；任务已归档 `archive/2026-09/09-27-fix-knowledge-tree-recursion`。
+- **遗留/待确认**:
+  - 未在真机/微信开发者工具实机验证（本环境无法自动化小程序运行时）；已通过单测 + 编译产物断言间接验证，建议用户重跑 `dev:mp-weixin` 后确认 AC1–AC4。
+  - 佐证：同仓 `questions` 页已验证可用的 `QuestionCard` 正是「v-for + 组件对象 props」模式，说明 `u-p` 透传本身可用，本次崩溃与递归自引用强相关。
+  - `Some selectors are not allowed in component wxss` 等告警与本崩溃无因果，未处理。
+
+
 
