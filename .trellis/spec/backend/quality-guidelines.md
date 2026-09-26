@@ -171,3 +171,37 @@ SnippetCandidate(score=item.vector_score)  # 0–1，可与 0.35 比较
 - 单测必须预置**贴近真实的分数**（`vector_score` 高、`final_score` 低），否则 mock 的假高分（`final_score=0.91`）会掩盖真实缺陷。
 - 断言：高 `vector_score` + 低 `final_score` 的候选能通过门禁（守回归）。
 
+---
+
+### Scenario: LLM Structured Output Adherence (Model Selection & Strict-Mode Gap)
+
+#### 1. Scope / Trigger
+- 所有经 `run_structured_agent_workflow`（LangGraph Schema-as-Tool）的结构化 LLM 调用：出题、知识树抽取、判分、诊断等。
+
+#### 2. Contracts
+- 该路径由 `agent_graph.pydantic_to_tool_schema` 自动生成 function schema，并用 `tool_choice={"type":"function",...}` **强制调用该函数**；但**未开启 `strict`**，因此只是“强制调用”，**不约束参数内容**，模型仍可产出违反 schema 的 arguments。
+- **弱模型会系统性违反 schema**：实测 `gemini-3.5-flash-lite`（经中转）对出题稳定返回 `options: [true, false]`（应为 `[{"key":"A","content":"..."}]`），3/3 复现，导致 `questions` 阶段恒失败（`LLMResponseFormatError`）。
+- 因此：真实链路验证与生产**优先选强模型**（实测 `gemini-3.8-flash-high` 一次通过，11/11 阶段全绿）。
+- 若必须使用弱模型，需要实现 **OpenAI Structured Outputs 严格模式**（见下），且需确认上游/中转支持。
+
+#### 3. Wrong vs Correct
+##### Wrong
+```python
+# 弱模型 + 无 strict：prompt 写了格式也拦不住
+LLMOptions(temperature=0.3)   # tool schema 无 strict=true → 模型输出 options:[true,false]
+```
+##### Correct
+```python
+# 方案 A（首选，零代码）：配置强模型
+# backend/.env: ZHILIAN_LLM__MODEL=gemini-3.8-flash-high
+# 方案 B（弱模型兜底，需代码）：严格函数调用
+#   tool 定义加 "strict": true，并对 model_json_schema() 递归补
+#   additionalProperties:false + 全字段 required；
+#   或用 response_format={"type":"json_schema","json_schema":{"strict":true,...}}
+```
+
+#### 4. Diagnosis Recipe
+- 失败归因入口：`python -m app.cli smoke --json` → 读 `failed_stage` + `error` 精确定位环节。
+- 区分「模型能力」与「代码缺陷」：若 prompt/schema 明确正确而模型仍违约 → 模型不遵从（换模型/开 strict）；若 prompt/schema 有误 → 改代码。
+- 中转站可用模型查询：`GET {ZHILIAN_LLM__BASE_URL}/models`（Bearer 鉴权，勿回显密钥）。
+

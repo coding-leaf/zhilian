@@ -58,4 +58,20 @@
   - 提交 `cd628ab`；规范沉淀《Headless CLI 契约》《检索打分语义 RRF vs 余弦》写入 backend quality-guidelines。
 - **遗留**: `smoke --image` 的 OCR 子链路仍为 `skipped`（需用户提供真实含字图片）；`context._probe_*` 极端异常串建议后续统一过滤。
 
+---
+
+## 2026-09-26 - 真实链路复验：定位弱模型 schema 不遵从并换模型闭环 (cli real verification)
+
+- **背景**: 归档后用 CLI 做真实验证，复现 `smoke` 在 `questions` 阶段失败。
+- **排查过程（3 次真实运行 + 1 次定向复现）**:
+  - run #2 `smoke`：`failed_stage=questions`，`Expecting value: line 1 column 1 (char 0)`（LLM 返回空内容），questions 耗时 304s。
+  - run #3 `question generate`（用落库实体定向复现）：`LLMResponseFormatError`，模型返回 `options: [true,false]`（应为 `[{"key":"A","content":"..."}]`）。
+  - run #4 `smoke`（原配置重跑）：错误与 #3 **字节级一致** → 排除偶发，判定为**系统性**。
+  - 排查确认 prompt（`question.py:452-461`）与 schema 均明确正确 → **非代码缺陷**，是模型对 tool schema 不遵从。
+- **根因定位**: 结构化路径虽用 `tool_choice` 强制 Function Calling，但 `pydantic_to_tool_schema`（`agent_graph.py:42-55`）**未开 `strict:true`**，非严格模式只“强制调用”不“约束参数”，弱模型即可违约。
+- **解法（配置，零代码）**: 探明中转站可用模型（`GET /v1/models`）后，将 `ZHILIAN_LLM__MODEL` 由 `gemini-3.5-flash-lite` 改为 `gemini-3.8-flash-high` → `smoke` **exit 0，11/11 阶段全绿，57s**（run `e87e48b9`，生成 3 题）。
+- **重要澄清**: 上次修的 RRF/余弦检索门禁修复**在真实数据上有效**（每次失败都已穿过检索进入 LLM 调用），不必回调。
+- **规范沉淀**: backend quality-guidelines 新增《LLM Structured Output Adherence（模型选择与 strict 缺口）》：优先强模型、弱模型需开 strict、失败归因方法。
+- **遗留/可选**: 若需兼容弱模型，可开新任务实现 `strict:true` + `additionalProperties:false` 规范化，或扩展 `response_format` 支持 `json_schema`（当前仅支持字符串 `{"type": ...}`）。
+
 
