@@ -315,9 +315,12 @@ class MaterialService:
                 status=MaterialStatus.PENDING.value,
             )
 
-            # 秒传查重检测：检查该用户是否已有完全相同内容哈希的激活版本
+            # 秒传查重检测：检查该用户是否已有完全相同内容哈希的激活版本或历史失败版本
             existing_ver = self.repo.find_version_by_hash(user_id, content_hash)
-            if existing_ver is not None and existing_ver.parse_status == ParseStatus.READY.value:
+            if existing_ver is not None and (
+                existing_ver.parse_status == ParseStatus.READY.value
+                or existing_ver.parse_status == ParseStatus.FAILED.value
+            ):
                 storage_key = existing_ver.storage_key
             else:
                 storage_key = build_material_storage_key(
@@ -627,6 +630,73 @@ class MaterialService:
             except Exception:
                 self.session.rollback()
             raise
+
+    def retry_material_pipeline(
+        self,
+        *,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> tuple[Material, MaterialVersion]:
+        """就地重试资料解析流水线。
+
+        校验租户归属，获取最新版本，将版本状态重置为 QUEUED，清空 error_message 与 failed_stage，
+        将资料主表状态重置为 PENDING，并触发异步队列入队调度。
+
+        Args:
+            material_id: 资料标识。
+            user_id: 租户用户标识。
+
+        Returns:
+            tuple[Material, MaterialVersion]: 重置就绪的资料与版本实体。
+
+        Raises:
+            MaterialNotFoundError: 资料或对应版本不存在。
+        """
+        user_ref = generate_user_ref(user_id)
+        material = self.repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("学习资料不存在")
+
+        version = self.repo.get_latest_version(material_id, user_id)
+        if version is None:
+            raise MaterialNotFoundError("资料对应版本不存在")
+
+        self.repo.update_version_status(
+            version_id=version.id,
+            user_id=user_id,
+            status=ParseStatus.QUEUED.value,
+            reset_errors=True,
+        )
+        self.repo.update_material_status(
+            material_id=material_id,
+            user_id=user_id,
+            status=MaterialStatus.PENDING.value,
+            current_version_id=version.id,
+        )
+        self.session.commit()
+
+        if self.queue is not None:
+            self.queue.enqueue(
+                task_name="parse_material_pipeline",
+                payload={
+                    "material_id": str(material_id),
+                    "version_id": str(version.id),
+                    "user_id": str(user_id),
+                },
+                user_id=str(user_id),
+            )
+
+        logger.info(
+            "material pipeline retry scheduled",
+            extra={
+                "user_ref": user_ref,
+                "target_id": str(material_id),
+                "error_code": 0,
+            },
+        )
+        self.session.refresh(material)
+        self.session.refresh(version)
+        return material, version
 
     def retry_ocr_pages(
         self,

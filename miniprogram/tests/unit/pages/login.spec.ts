@@ -3,6 +3,7 @@ import { setActivePinia, createPinia } from 'pinia';
 import { mount } from '@vue/test-utils';
 import LoginPage from '@/pages/auth/login.vue';
 import { useUserStore } from '@/stores/userStore';
+import * as authApi from '@/api/auth';
 
 describe('Auth Login Page', () => {
   beforeEach(() => {
@@ -20,9 +21,20 @@ describe('Auth Login Page', () => {
     expect(emojiRegex.test(wrapper.text())).toBe(false);
   });
 
-  it('performs mock login authorization and updates user store', async () => {
+  it('performs login authorization via api and updates user store with valid token', async () => {
     const userStore = useUserStore();
     const showToastSpy = vi.spyOn(uni, 'showToast');
+    vi.spyOn(authApi, 'loginByWechat').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        access_token: 'real_access_token_123',
+        refresh_token: 'real_refresh_token_123',
+        token_type: 'Bearer',
+        expires_in: 7200,
+      },
+    });
+
     const wrapper = mount(LoginPage);
 
     const loginBtn = wrapper.find('.wechat-login-btn');
@@ -31,10 +43,29 @@ describe('Auth Login Page', () => {
     await loginBtn.trigger('tap');
 
     expect(userStore.isAuthenticated).toBe(true);
-    expect(userStore.profile?.id).toBe('usr_mock_001');
+    expect(userStore.tokens?.access_token).toBe('real_access_token_123');
     expect(showToastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: '登录成功',
+      }),
+    );
+  });
+
+  it('does not set tokens when login API fails', async () => {
+    const userStore = useUserStore();
+    const showToastSpy = vi.spyOn(uni, 'showToast');
+    vi.spyOn(authApi, 'loginByWechat').mockRejectedValue(new Error('Network Error'));
+
+    const wrapper = mount(LoginPage);
+    const loginBtn = wrapper.find('.wechat-login-btn');
+
+    await loginBtn.trigger('tap');
+
+    expect(userStore.isAuthenticated).toBe(false);
+    expect(userStore.tokens).toBeNull();
+    expect(showToastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Network Error',
       }),
     );
   });

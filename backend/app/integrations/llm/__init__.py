@@ -13,6 +13,7 @@ from app.integrations.llm.agent_graph import (
     call_model_node,
     decide_after_validation,
     fallback_node,
+    pydantic_to_tool_schema,
     repair_prompt_node,
     run_structured_agent_workflow,
     validate_output_node,
@@ -28,6 +29,7 @@ from app.integrations.llm.protocol import (
     LLMOptions,
     LLMProtocol,
     LLMResponse,
+    LLMToolCall,
     LLMUsage,
 )
 
@@ -38,6 +40,7 @@ __all__ = [
     "LLMOptions",
     "LLMProtocol",
     "LLMResponse",
+    "LLMToolCall",
     "LLMUsage",
     "OpenAICompatibleLLMAdapter",
     "build_structured_agent_graph",
@@ -46,6 +49,7 @@ __all__ = [
     "create_structured_agent_graph",
     "decide_after_validation",
     "fallback_node",
+    "pydantic_to_tool_schema",
     "repair_prompt_node",
     "run_structured_agent_workflow",
     "validate_output_node",

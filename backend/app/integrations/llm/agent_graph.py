@@ -39,11 +39,29 @@ class AgentWorkflowState(TypedDict, total=False):
     status: Literal["pending", "success", "failed"]
 
 
+def pydantic_to_tool_schema(
+    model: type[BaseModel],
+    name: str = "submit_structured_output",
+) -> dict[str, Any]:
+    """将 Pydantic 模型自动转为 OpenAPI function schema。"""
+    description = (model.__doc__ or "").strip() or f"Submit structured data for {name}"
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": model.model_json_schema(),
+        },
+    }
+
+
 def call_model_node(
     state: AgentWorkflowState,
     config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
-    """节点 1: 调用底层适配器生成文本。
+    """节点 1: 注入 Schema-as-Tool 配置并调用底层适配器生成结果。
+
+    若指定了 response_model，自动生成 OpenAPI Tool 规范并注入 options.tools 与 tool_choice。
 
     Args:
         state: 当前状态图上下文。
@@ -56,8 +74,33 @@ def call_model_node(
     if adapter is None:
         raise ValueError("AgentWorkflowState 中未指定有效 adapter")
     messages = state.get("messages", [])
-    options = state.get("options")
-    response = adapter.generate(messages, options)
+    current_options = state.get("options")
+    response_model = state.get("response_model")
+
+    effective_options = current_options
+    if response_model is not None:
+        tool_schema = pydantic_to_tool_schema(response_model)
+        tool_name = tool_schema["function"]["name"]
+        tools = [tool_schema]
+        tool_choice: str | dict[str, Any] = {"type": "function", "function": {"name": tool_name}}
+
+        if current_options is not None:
+            effective_options = LLMOptions(
+                model=current_options.model,
+                temperature=current_options.temperature,
+                max_tokens=current_options.max_tokens,
+                timeout=current_options.timeout,
+                response_format=current_options.response_format,
+                tools=current_options.tools or tools,
+                tool_choice=current_options.tool_choice or tool_choice,
+            )
+        else:
+            effective_options = LLMOptions(
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+
+    response = adapter.generate(messages, effective_options)
     return {"raw_response": response}
 
 
@@ -65,7 +108,7 @@ def validate_output_node(
     state: AgentWorkflowState,
     config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
-    """节点 2: 清洗 Markdown 并执行 Pydantic 反序列化校验。
+    """节点 2: 优先解析 Tool Call 参数，兼容文本与 Markdown JSON 反序列化校验。
 
     Args:
         state: 当前状态图上下文。
@@ -89,7 +132,15 @@ def validate_output_node(
             "status": "failed",
             "error_message": "未指定 response_model",
         }
-    content_str = raw_response.content.strip()
+
+    content_str = ""
+    # 优先解析 raw_response.tool_calls[0].arguments，向下兼容普通纯文本与 Markdown
+    if raw_response.tool_calls and len(raw_response.tool_calls) > 0:
+        first_tool = raw_response.tool_calls[0]
+        content_str = first_tool.arguments.strip()
+
+    if not content_str:
+        content_str = raw_response.content.strip()
 
     # 提取 Markdown 代码块中的 JSON 内容（若存在多个代码块，默认优先匹配首个有效 JSON 块）
     markdown_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content_str)
@@ -147,7 +198,12 @@ def repair_prompt_node(
     retry_count = state.get("retry_count", 0) + 1
     current_messages = list(state.get("messages", []))
     raw_response = state.get("raw_response")
-    raw_content = raw_response.content if raw_response else ""
+    raw_content = ""
+    if raw_response:
+        if raw_response.tool_calls and len(raw_response.tool_calls) > 0:
+            raw_content = raw_response.tool_calls[0].arguments
+        else:
+            raw_content = raw_response.content
     error_message = state.get("error_message") or "Unknown validation error"
 
     current_messages.append(LLMMessage(role="assistant", content=raw_content or "{}"))
@@ -285,6 +341,7 @@ __all__ = [
     "call_model_node",
     "decide_after_validation",
     "fallback_node",
+    "pydantic_to_tool_schema",
     "repair_prompt_node",
     "run_structured_agent_workflow",
     "validate_output_node",

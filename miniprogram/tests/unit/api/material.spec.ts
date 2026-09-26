@@ -5,6 +5,7 @@ import {
   fetchMaterialDetail,
   fetchMaterialStatus,
   deleteMaterial,
+  retryMaterial,
   fetchKnowledgeTree,
   uploadMaterial,
   retakeMaterialPage,
@@ -118,6 +119,32 @@ describe('Material API Module', () => {
     expect(requestSpy).toHaveBeenCalledWith({
       url: '/api/v1/materials/mat_001',
       method: 'DELETE',
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should call retryMaterial with POST /api/v1/materials/:id/retry', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'mat_001',
+        title: 'Computer Network',
+        file_format: 'pdf',
+        file_size: 1024,
+        source_type: 'local',
+        status: 'pending',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await retryMaterial('mat_001');
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/mat_001/retry',
+      method: 'POST',
     });
     expect(res).toEqual(mockResponse);
   });

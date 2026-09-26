@@ -26,6 +26,7 @@ from app.integrations.llm.protocol import (
     LLMOptions,
     LLMProtocol,
     LLMResponse,
+    LLMToolCall,
     LLMUsage,
 )
 
@@ -205,6 +206,10 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
                 payload["max_tokens"] = options.max_tokens
             if options.response_format is not None:
                 payload["response_format"] = {"type": options.response_format}
+            if options.tools is not None:
+                payload["tools"] = list(options.tools)
+            if options.tool_choice is not None:
+                payload["tool_choice"] = options.tool_choice
 
         data = self._send_request_with_retries(payload, effective_timeout)
 
@@ -214,7 +219,21 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
 
         first_choice = choices[0]
         message_data = first_choice.get("message", {})
-        content = message_data.get("content", "")
+        content = message_data.get("content", "") or ""
+
+        raw_tool_calls = message_data.get("tool_calls")
+        tool_calls: list[LLMToolCall] | None = None
+        if raw_tool_calls and isinstance(raw_tool_calls, list):
+            tool_calls = []
+            for tc in raw_tool_calls:
+                fn = tc.get("function", {})
+                tool_calls.append(
+                    LLMToolCall(
+                        id=str(tc.get("id", "")),
+                        name=str(fn.get("name", "")),
+                        arguments=str(fn.get("arguments", "")),
+                    )
+                )
 
         raw_usage = data.get("usage", {})
         usage = LLMUsage(
@@ -229,6 +248,7 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
             usage=usage,
             model=model_name,
             duration_ms=duration_ms,
+            tool_calls=tool_calls,
         )
 
     def generate_structured(

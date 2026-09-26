@@ -8,7 +8,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -32,6 +32,15 @@ class LLMMessage:
 
 
 @dataclass(frozen=True)
+class LLMToolCall:
+    """大模型工具调用数据传输对象。"""
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
 class LLMOptions:
     """大模型调用控制选项。"""
 
@@ -40,6 +49,8 @@ class LLMOptions:
     max_tokens: int | None = None
     timeout: float = 30.0
     response_format: str | None = None
+    tools: Sequence[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """防御性参数合法性校验。"""
@@ -73,6 +84,7 @@ class LLMResponse:
     usage: LLMUsage
     model: str
     duration_ms: float = 0.0
+    tool_calls: Sequence[LLMToolCall] | None = None
 
 
 @runtime_checkable
@@ -130,5 +142,6 @@ __all__ = [
     "LLMOptions",
     "LLMProtocol",
     "LLMResponse",
+    "LLMToolCall",
     "LLMUsage",
 ]

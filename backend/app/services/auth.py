@@ -11,9 +11,12 @@ import hashlib
 import logging
 import time
 import uuid
+from typing import cast
 
+import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 from app.core.security import (
     create_access_token,
@@ -83,14 +86,58 @@ class AuthService:
     def _resolve_wechat_openid(self, code: str) -> str:
         """解析微信登录凭证换取 OpenID。
 
-        在无真实外部网络连接时通过确定性逻辑转换 OpenID。
+        支持双模：
+        1. 开发/测试模式：针对 dev_code 与 mock_/dev_ 前缀映射确定性账号，避免用户分裂；
+        2. 生产环境（配置了 wechat_app_id 与 wechat_app_secret 且非测试码）：
+           调用微信官方 jscode2session 置换真实 OpenID；
+        3. 兜底回退：若未配置微信凭据，则按哈希/前缀规则映射。
 
         Args:
             code: 微信临时登录凭证。
 
         Returns:
             str: 格式化后的 OpenID 字符串。
+
+        Raises:
+            AuthenticationError: 微信授权服务调用失败或返回错误码。
         """
+        # 1. 确定性测试/开发凭证映射
+        if code == "dev_code":
+            return "wx_dev_deterministic_user"
+        if code.startswith(("dev_", "mock_")):
+            return f"wx_dev_{code}"
+
+        # 2. 真实微信鉴权置换
+        settings = get_settings()
+        if settings.wechat_app_id and settings.wechat_app_secret:
+            secret_value = settings.wechat_app_secret.get_secret_value()
+            if secret_value:
+                try:
+                    url = "https://api.weixin.qq.com/sns/jscode2session"
+                    params = {
+                        "appid": settings.wechat_app_id,
+                        "secret": secret_value,
+                        "js_code": code,
+                        "grant_type": "authorization_code",
+                    }
+                    response = httpx.get(url, params=params, timeout=10.0)
+                    response.raise_for_status()
+                    data = response.json()
+                    if "openid" in data:
+                        return cast(str, data["openid"])
+                    err_code = data.get("errcode", -1)
+                    err_msg = data.get("errmsg", "未知错误")
+                    raise AuthenticationError(
+                        f"微信授权登录失败 (错误码 {err_code}): {err_msg}",
+                        details={"errcode": err_code, "errmsg": err_msg},
+                    )
+                except httpx.HTTPError as exc:
+                    raise AuthenticationError(
+                        f"微信授权接口网络请求失败: {exc}",
+                        details={"error": str(exc)},
+                    ) from exc
+
+        # 3. 兜底回退（未配置微信密钥的开发/单测环境）
         if len(code) <= 50:
             return f"wx_{code}"
         hashed_suffix = hashlib.sha256(code.encode("utf-8")).hexdigest()[:28]

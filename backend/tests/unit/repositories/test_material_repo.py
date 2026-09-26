@@ -597,3 +597,35 @@ class TestMaterialRepositorySecurity:
         latest_ver = repo.get_latest_version_by_hash(user_id, "bulk_hash_123")
         assert latest_ver is not None
         assert latest_ver.id == ver.id
+
+        # Test get_latest_version
+        latest_by_mat = repo.get_latest_version(mat.id, user_id)
+        assert latest_by_mat is not None
+        assert latest_by_mat.id == ver.id
+
+        # Test update_version_status with reset_errors
+        repo.update_version_status(
+            version_id=ver.id,
+            user_id=user_id,
+            status=ParseStatus.FAILED.value,
+            error_message="some error",
+            failed_stage="ocr",
+        )
+        session.commit()
+        ver_failed = repo.get_version_by_id(ver.id, user_id)
+        assert ver_failed is not None
+        assert ver_failed.error_message == "some error"
+        assert ver_failed.failed_stage == "ocr"
+
+        repo.update_version_status(
+            version_id=ver.id,
+            user_id=user_id,
+            status=ParseStatus.QUEUED.value,
+            reset_errors=True,
+        )
+        session.commit()
+        ver_reset = repo.get_version_by_id(ver.id, user_id)
+        assert ver_reset is not None
+        assert ver_reset.parse_status == ParseStatus.QUEUED.value
+        assert ver_reset.error_message is None
+        assert ver_reset.failed_stage is None

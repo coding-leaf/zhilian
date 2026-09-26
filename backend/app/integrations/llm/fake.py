@@ -22,6 +22,7 @@ from app.integrations.llm.protocol import (
     LLMOptions,
     LLMProtocol,
     LLMResponse,
+    LLMToolCall,
     LLMUsage,
 )
 
@@ -114,6 +115,22 @@ class FakeLLMAdapter(LLMProtocol):
         digest = hashlib.sha256(last_content.encode("utf-8")).hexdigest()
         return f"Fake deterministic response [{digest[:12]}]"
 
+    def _make_mock_tool_calls(
+        self, options: LLMOptions | None, content: str
+    ) -> list[LLMToolCall] | None:
+        """根据传入的 options.tools 自动构造模拟工具调用响应。"""
+        if options and options.tools:
+            first_tool = options.tools[0]
+            tool_name = first_tool.get("function", {}).get("name", "submit_structured_output")
+            return [
+                LLMToolCall(
+                    id="call_fake_001",
+                    name=tool_name,
+                    arguments=content,
+                )
+            ]
+        return None
+
     def generate(
         self,
         messages: Sequence[LLMMessage],
@@ -140,7 +157,16 @@ class FakeLLMAdapter(LLMProtocol):
             for match_key, resp in canned.items():
                 if match_key in msg.content:
                     if isinstance(resp, LLMResponse):
+                        if options and options.tools and resp.tool_calls is None:
+                            return LLMResponse(
+                                content=resp.content,
+                                usage=resp.usage,
+                                model=resp.model,
+                                duration_ms=resp.duration_ms,
+                                tool_calls=self._make_mock_tool_calls(options, resp.content),
+                            )
                         return resp
+                    tool_calls = self._make_mock_tool_calls(options, resp)
                     return LLMResponse(
                         content=resp,
                         usage=LLMUsage(
@@ -150,10 +176,12 @@ class FakeLLMAdapter(LLMProtocol):
                         ),
                         model=model_name,
                         duration_ms=1.0,
+                        tool_calls=tool_calls,
                     )
 
         # 默认确定性返回
         content = self._generate_deterministic_content(messages)
+        tool_calls = self._make_mock_tool_calls(options, content)
         return LLMResponse(
             content=content,
             usage=LLMUsage(
@@ -163,6 +191,7 @@ class FakeLLMAdapter(LLMProtocol):
             ),
             model=model_name,
             duration_ms=1.0,
+            tool_calls=tool_calls,
         )
 
     def generate_structured(

@@ -399,6 +399,14 @@ class AppSettings(BaseSettings):
         default=SecretStr("zhilian-development-secret-key-32bytes-min!"),
         description="系统核心 JWT 签名私钥",
     )
+    wechat_app_id: str | None = Field(
+        default=None,
+        description="微信小程序 AppID",
+    )
+    wechat_app_secret: SecretStr | None = Field(
+        default=None,
+        description="微信小程序 AppSecret",
+    )
 
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

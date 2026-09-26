@@ -995,3 +995,36 @@ def test_parse_pipeline_knowledge_chaining(
     failed_mat = service.repo.get_material_by_id(mat2.id, user_id)
     assert failed_mat is not None
     assert failed_mat.status == MaterialStatus.FAILED.value
+
+    # 3. 验证就地重试：调用 retry_material_pipeline 后状态重置为 PENDING / QUEUED 且错误清空
+    retried_mat, retried_ver = service.retry_material_pipeline(
+        material_id=mat2.id,
+        user_id=user_id,
+    )
+    assert retried_mat.status == MaterialStatus.PENDING.value
+    assert retried_ver.parse_status == ParseStatus.QUEUED.value
+    assert retried_ver.error_message is None
+    assert retried_ver.failed_stage is None
+
+    # 4. 验证同哈希文件历史版本为 FAILED 时重新上传：复用 storage_key 并重新调度
+    # 先将 ver2 重新标为 FAILED 模拟先前失败
+    service.repo.update_version_status(
+        version_id=ver2.id,
+        user_id=user_id,
+        status=ParseStatus.FAILED.value,
+        error_message="previous failure",
+        failed_stage="chunking",
+    )
+    service.session.commit()
+
+    mat3, ver3 = service.create_material(
+        user_id=user_id,
+        title="线性代数讲义_重传.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    assert mat3.id != mat2.id
+    assert ver3.storage_key == ver2.storage_key
+    assert ver3.parse_status == ParseStatus.QUEUED.value
+    assert mat3.status == MaterialStatus.PENDING.value

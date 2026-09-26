@@ -458,6 +458,66 @@ async def reshoot_material_page(
     )
 
 
+@router.post(
+    "/{material_id}/retry",
+    response_model=MaterialDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="一键重试学习资料解析流水线",
+)
+async def retry_material_pipeline(
+    material_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    material_service: Annotated[MaterialService, Depends(get_material_service)],
+    background_tasks: BackgroundTasks,
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
+) -> MaterialDetailResponse:
+    """重试解析失败的学习资料流水线。
+
+    校验租户归属，将最新版本的状态由 FAILED 重置为 QUEUED，清空失败原因，
+    将资料状态重置为 PENDING，并重新拉起异步流水线。
+
+    Args:
+        material_id: 资料主键。
+        user: 当前登录租户用户对象。
+        material_service: 资料领域编排服务。
+        background_tasks: FastAPI 后台任务管理器。
+        container: 全局应用容器依赖。
+
+    Returns:
+        MaterialDetailResponse: 重新进入就绪队列的资料详情。
+    """
+    material, version = material_service.retry_material_pipeline(
+        material_id=material_id,
+        user_id=user.id,
+    )
+    if container is not None:
+        background_tasks.add_task(
+            run_material_pipeline_background,
+            container,
+            material.id,
+            version.id,
+            user.id,
+        )
+
+    versions_count = getattr(material, "versions_count", None)
+    if versions_count is None:
+        versions = getattr(material, "versions", [])
+        versions_count = len(versions)
+
+    return MaterialDetailResponse(
+        id=material.id,
+        title=material.title,
+        file_format=material.file_format,
+        file_size=material.file_size,
+        source_type=material.source_type,
+        status=material.status,
+        current_version_id=material.current_version_id or version.id,
+        versions_count=versions_count,
+        created_at=material.created_at,
+        updated_at=material.updated_at,
+    )
+
+
 @router.delete(
     "/{material_id}/hard",
     response_model=MaterialDeleteResponse,
@@ -532,6 +592,7 @@ __all__ = [
     "list_material_versions",
     "list_materials",
     "reshoot_material_page",
+    "retry_material_pipeline",
     "router",
     "run_material_pipeline_background",
     "run_parse_material_background",

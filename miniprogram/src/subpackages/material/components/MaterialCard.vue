@@ -16,8 +16,11 @@
       <view v-if="keyPointsSummary" class="points-text">{{ keyPointsSummary }}</view>
     </view>
     <view class="card-footer">
-      <text class="footer-hint">查看解析与考点</text>
-      <button class="delete-btn" @tap.stop="handleDelete">删除</button>
+      <text class="footer-hint">{{ isFailed ? '解析异常，可尝试重试' : '查看解析与考点' }}</text>
+      <view class="footer-actions">
+        <button v-if="isFailed" class="retry-btn" @tap.stop="handleRetry">重试解析</button>
+        <button class="delete-btn" @tap.stop="handleDelete">删除</button>
+      </view>
     </view>
   </view>
 </template>
@@ -33,6 +36,7 @@ interface Props {
 interface Emits {
   (e: 'click', material: MaterialItem): void;
   (e: 'delete', material: MaterialItem): void;
+  (e: 'retry', material: MaterialItem): void;
 }
 
 const props = defineProps<Props>();
@@ -77,6 +81,12 @@ const keyPointsSummary = computed(() => {
   const count = raw.key_points_count ?? raw.points_count;
   return typeof count === 'number' && count > 0 ? `${count} 个核心考点` : null;
 });
+
+const isFailed = computed(() => String(props.material.status || '').toLowerCase() === 'failed');
+
+function handleRetry(): void {
+  emit('retry', props.material);
+}
 
 function handleDelete(): void {
   uni.showModal({
@@ -164,6 +174,21 @@ function handleDelete(): void {
 .footer-hint {
   font-size: 22rpx;
   color: #94a3b8;
+}
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.retry-btn {
+  font-size: 22rpx;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 9999rpx;
+  padding: 4rpx 18rpx;
+  line-height: 1.5;
+  margin: 0;
 }
 .delete-btn {
   font-size: 22rpx;

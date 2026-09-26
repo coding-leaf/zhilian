@@ -60,11 +60,59 @@ uv run pytest tests             # Full unit & integration test suite
 
 ---
 
-## Code Review Checklist
+## Architectural Contracts & Cross-Layer Patterns
 
-1. Does `uv run ruff check .` pass without warnings or errors?
-2. Does `uv run ruff format --check .` indicate zero formatting discrepancies?
-3. Does `uv run mypy app` pass with zero type errors?
-4. Does `uv run lint-imports` satisfy all architectural contracts?
-5. Do all tests pass via `uv run pytest tests`?
-6. Are any newly created temporary files or sqlite artifacts properly ignored by `.gitignore`?
+### Scenario: Material Parsing Retry & Idempotent Re-queueing
+
+#### 1. Scope / Trigger
+- 学习资料解析中断或失败后，前端发起单资料就地重试，或重复上传同哈希失败文件。
+
+#### 2. Signatures
+- API: `POST /api/v1/materials/{id}/retry` -> `MaterialDetailResponse` (HTTP 200)
+- Service: `MaterialService.retry_material_pipeline(material_id: uuid.UUID, user_id: uuid.UUID) -> MaterialVersion`
+
+#### 3. Contracts
+- 校验租户归属（必须匹配 `user_id`，杜绝越权）。
+- 将最新版本 `parse_status` 重置为 `QUEUED`，同时必须显式将 `error_message` 和 `failed_stage` 清空为 `None`。
+- 将资料主实体 `status` 重置为 `PENDING`。
+- 异步重新提交后台解析任务。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误做法：仅重置 parse_status，遗留历史 error_message 和 failed_stage，导致前端误判仍处于失败
+version.parse_status = ParseStatus.QUEUED.value
+material.status = MaterialStatus.PENDING.value
+```
+##### Correct
+```python
+# 正确做法：彻底清理错误信息与失败阶段，重置为排队解析
+version.parse_status = ParseStatus.QUEUED.value
+version.error_message = None
+version.failed_stage = None
+material.status = MaterialStatus.PENDING.value
+```
+
+---
+
+### Scenario: Dual-Mode Auth & Deterministic Development OpenID
+
+#### 1. Scope / Trigger
+- 小程序登录鉴权支持本地开发联调与线上真实环境无缝切换，避免生成临时假账号分裂数据。
+
+#### 2. Contracts
+- 若传入固定 `dev_code`，强制解析为确定性 OpenID `wx_dev_deterministic_user`。
+- 若传入 `dev_` 或 `mock_` 前缀，强制解析为 `wx_dev_{code}`。
+- 前端在授权失败时，严禁向本地 Store 写入任意未验证或伪造的 Token（如 `mock_access_token_*`），避免 401 拦截器死锁。
+
+---
+
+### Scenario: LangGraph Schema-as-Tool Calling Pipeline
+
+#### 1. Scope / Trigger
+- LLM 结构化抽取（知识考点抽取、题目生成等）强制采用原生 OpenAPI Function Calling 模式。
+
+#### 2. Contracts
+- 模型选项通过 `LLMOptions(tools=[...], tool_choice={"type": "function", ...})` 透传。
+- 状态图节点 `validate_output_node` 优先从 `raw_response.tool_calls` 提取入参反序列化，仅在未命中工具调用时才作为纯文本降级处理。
+

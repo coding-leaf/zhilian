@@ -20,12 +20,14 @@ from app.integrations.llm import (
     LLMMessage,
     LLMOptions,
     LLMResponse,
+    LLMToolCall,
     LLMUsage,
     OpenAICompatibleLLMAdapter,
     build_structured_agent_graph,
     call_model_node,
     decide_after_validation,
     fallback_node,
+    pydantic_to_tool_schema,
     repair_prompt_node,
     run_structured_agent_workflow,
     validate_output_node,
@@ -86,6 +88,48 @@ class TestAgentGraphWorkflow:
         assert obj.mastery_rate == 0.92
         assert obj.suggestions == ["拓展竞赛题"]
         assert resp.content == markdown_content
+
+    def test_pydantic_to_tool_schema(self) -> None:
+        """测试将 Pydantic 模型自动转为 OpenAPI function schema 结构。"""
+        schema = pydantic_to_tool_schema(StudentReport)
+        assert schema["type"] == "function"
+        assert schema["function"]["name"] == "submit_structured_output"
+        assert "student_id" in schema["function"]["parameters"]["properties"]
+        assert "mastery_rate" in schema["function"]["parameters"]["properties"]
+
+    def test_graph_native_tool_calling_success(self) -> None:
+        """测试大模型直接通过原生 Tool Calling 返回结构化数据（无 Markdown 正则依赖）。"""
+        fake_adapter = FakeLLMAdapter()
+        tool_args = '{"student_id": "STU999", "mastery_rate": 0.99, "suggestions": ["冲刺名校"]}'
+        # content 为空字符串，纯依赖 tool_calls 返回
+        tool_call_resp = LLMResponse(
+            content="",
+            usage=LLMUsage(prompt_tokens=15, completion_tokens=15, total_tokens=30),
+            model="qwen-max",
+            duration_ms=1.5,
+            tool_calls=[
+                LLMToolCall(
+                    id="call_direct_tool_01",
+                    name="submit_structured_output",
+                    arguments=tool_args,
+                )
+            ],
+        )
+        fake_adapter.set_canned_response("原生工具调用", tool_call_resp)
+
+        obj, resp = run_structured_agent_workflow(
+            adapter=fake_adapter,
+            messages=[LLMMessage(role="user", content="原生工具调用测试")],
+            response_model=StudentReport,
+        )
+
+        assert isinstance(obj, StudentReport)
+        assert obj.student_id == "STU999"
+        assert obj.mastery_rate == 0.99
+        assert obj.suggestions == ["冲刺名校"]
+        assert resp.tool_calls is not None
+        assert len(resp.tool_calls) == 1
+        assert resp.tool_calls[0].arguments == tool_args
 
     def test_graph_single_repair_flow(self) -> None:
         """测试单次残缺输出触发 repair_prompt_node 自愈重试并成功。"""

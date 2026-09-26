@@ -31,6 +31,7 @@
           :material="item"
           @click="handleCardClick"
           @delete="handleCardDelete"
+          @retry="handleCardRetry"
         />
       </view>
     </view>
@@ -48,7 +49,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
-import { fetchMaterialList, deleteMaterial } from '@/api/material';
+import { fetchMaterialList, deleteMaterial, retryMaterial } from '@/api/material';
 import MaterialCard from '../../components/MaterialCard.vue';
 import MaterialUpload from '@/components/common/MaterialUpload.vue';
 import type { MaterialItem } from '@/types/material';
@@ -130,6 +131,23 @@ async function handleCardDelete(item: MaterialItem): Promise<void> {
   }
 }
 
+async function handleCardRetry(item: MaterialItem): Promise<void> {
+  try {
+    if (typeof uni !== 'undefined' && typeof uni.showLoading === 'function') {
+      uni.showLoading({ title: '正在发起重试...' });
+    }
+    await retryMaterial(item.id);
+    uni.showToast({ title: '已发起重新解析', icon: 'success' });
+    await loadData(true);
+  } catch {
+    uni.showToast({ title: '重试失败，请稍后重试', icon: 'none' });
+  } finally {
+    if (typeof uni !== 'undefined' && typeof uni.hideLoading === 'function') {
+      uni.hideLoading();
+    }
+  }
+}
+
 function handleOpenUpload(): void {
   uploadVisible.value = true;
 }
@@ -162,6 +180,7 @@ defineExpose({
   handleSelectTab,
   handleCardClick,
   handleCardDelete,
+  handleCardRetry,
   handleOpenUpload,
   handleUploadSuccess,
 });

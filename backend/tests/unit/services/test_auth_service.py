@@ -206,3 +206,21 @@ class TestAuthService:
         # Attempt to refresh should fail
         with pytest.raises(AuthenticationError):
             service.refresh_tokens(tokens.refresh_token)
+
+    def test_deterministic_dev_code_resolution(self, session: Session) -> None:
+        """Verify dev_code always maps to fixed deterministic user."""
+        service = AuthService(session)
+        user1, _ = service.login_with_wechat(code="dev_code")
+        user2, _ = service.login_with_wechat(code="dev_code")
+
+        assert user1.id == user2.id
+        assert user1.openid == "wx_dev_deterministic_user"
+
+    def test_dev_prefix_code_resolution(self, session: Session) -> None:
+        """Verify mock_ and dev_ prefixes map with wx_dev_ prefix."""
+        service = AuthService(session)
+        user1, _ = service.login_with_wechat(code="dev_test_user_99")
+        assert user1.openid == "wx_dev_dev_test_user_99"
+
+        user2, _ = service.login_with_wechat(code="mock_token_abc")
+        assert user2.openid == "wx_dev_mock_token_abc"

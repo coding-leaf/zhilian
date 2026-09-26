@@ -77,6 +77,19 @@ export function deleteMaterial(
 }
 
 /**
+ * 一键重试解析失败的学习资料流水线。
+ *
+ * @param materialId 目标资料主键 ID。
+ * @returns 统一响应包，包含重新进入处理态的资料最新详情。
+ */
+export function retryMaterial(materialId: string): Promise<ApiResponse<MaterialItem>> {
+  return request<MaterialItem>({
+    url: `/api/v1/materials/${materialId}/retry`,
+    method: 'POST',
+  });
+}
+
+/**
  * 获取指定学习资料的知识树树形拓扑结构。
  *
  * @param materialId 目标资料主键 ID。

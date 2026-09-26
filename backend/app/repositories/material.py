@@ -364,6 +364,31 @@ class MaterialRepository:
         )
         return self.session.execute(stmt).scalars().first()
 
+    def get_latest_version(
+        self,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> MaterialVersion | None:
+        """获取指定资料的最新版本（按版本号降序第一条）。
+
+        Args:
+            material_id: 资料主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            MaterialVersion | None: 最新版本实体，不存在或越权返回 None。
+        """
+        stmt = (
+            select(MaterialVersion)
+            .where(
+                MaterialVersion.material_id == material_id,
+                MaterialVersion.user_id == user_id,
+            )
+            .order_by(MaterialVersion.version_number.desc())
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalars().first()
+
     def get_latest_version_by_hash(
         self,
         user_id: uuid.UUID,
@@ -382,6 +407,7 @@ class MaterialRepository:
         failed_stage: str | None = None,
         raw_text_storage_key: str | None = None,
         is_active: bool | None = None,
+        reset_errors: bool = False,
     ) -> bool:
         """更新版本细粒度解析状态与执行结果。
 
@@ -393,6 +419,7 @@ class MaterialRepository:
             failed_stage: 失败阶段标识。
             raw_text_storage_key: 提取文本存储键。
             is_active: 激活状态。
+            reset_errors: 是否清空错误提示与失败阶段。
 
         Returns:
             bool: 成功更新返回 True，未找到或越权返回 False。
@@ -401,10 +428,14 @@ class MaterialRepository:
         if version is None:
             return False
         version.parse_status = status
-        if error_message is not None:
-            version.error_message = error_message
-        if failed_stage is not None:
-            version.failed_stage = failed_stage
+        if reset_errors:
+            version.error_message = None
+            version.failed_stage = None
+        else:
+            if error_message is not None:
+                version.error_message = error_message
+            if failed_stage is not None:
+                version.failed_stage = failed_stage
         if raw_text_storage_key is not None:
             version.raw_text_storage_key = raw_text_storage_key
         if is_active is not None:

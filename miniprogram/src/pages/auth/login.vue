@@ -40,15 +40,9 @@ async function handleWeChatLogin(): Promise<void> {
   isSubmitting.value = true;
 
   try {
-    let tokenData = {
-      access_token: 'mock_access_token_' + Date.now(),
-      refresh_token: 'mock_refresh_token_' + Date.now(),
-      token_type: 'Bearer',
-      expires_in: 3600,
-    };
-
-    try {
-      if (typeof uni !== 'undefined' && typeof uni.login === 'function') {
+    let code = 'dev_code';
+    if (typeof uni !== 'undefined' && typeof uni.login === 'function') {
+      try {
         const loginRes = await new Promise<UniApp.LoginRes>((resolve, reject) => {
           uni.login({
             provider: 'weixin',
@@ -57,23 +51,27 @@ async function handleWeChatLogin(): Promise<void> {
           });
         });
         if (loginRes?.code) {
-          const res = await loginByWechat({
-            code: loginRes.code,
-            nickname: '学员用户',
-          });
-          if (res?.data?.access_token) {
-            tokenData = res.data;
-          }
+          code = loginRes.code;
         }
+      } catch {
+        // 在无微信真实客户端或开发测试环境下使用标准开发 code
+        code = 'dev_code';
       }
-    } catch {
-      // 容错使用开发凭据
     }
 
-    userStore.setTokens(tokenData);
+    const res = await loginByWechat({
+      code,
+      nickname: '学员用户',
+    });
+
+    if (!res?.data?.access_token) {
+      throw new Error(res?.message || '登录失败，未获取到有效凭据');
+    }
+
+    userStore.setTokens(res.data);
 
     userStore.setUserProfile({
-      id: 'usr_mock_001',
+      id: 'usr_current',
       nickname: '学员用户',
       avatar_url: '',
       created_at: new Date().toISOString(),
@@ -89,9 +87,10 @@ async function handleWeChatLogin(): Promise<void> {
         url: '/pages/index/index',
       });
     }, 500);
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '登录失败，请重试';
     uni.showToast({
-      title: '登录失败，请重试',
+      title: message,
       icon: 'none',
     });
   } finally {

@@ -209,4 +209,32 @@ describe('MaterialListPage (list/index.vue)', () => {
     await wrapper.vm.handleCardDelete(sampleMaterials[0]);
     expect(deleteSpy).toHaveBeenCalledWith('mat_01');
   });
+
+  it('triggers retry API when card emits retry', async () => {
+    vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        items: [sampleMaterials[0]],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    const retrySpy = vi.spyOn(materialApi, 'retryMaterial').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        ...sampleMaterials[0],
+        status: 'pending',
+      },
+    });
+
+    const wrapper = mount(MaterialListPage);
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await wrapper.vm.handleCardRetry(sampleMaterials[0]);
+    expect(retrySpy).toHaveBeenCalledWith('mat_01');
+  });
 });

@@ -210,4 +210,43 @@ describe('MaterialDetailPage (detail/index.vue)', () => {
     expect(materialStore.currentMaterialId).toBe('mat_detail_01');
     expect(materialStore.activeVersion).toBe('ver_001');
   });
+
+  it('renders failed box and retry button when material status is failed, and retries successfully', async () => {
+    const failedDetail: MaterialItem = {
+      ...baseDetail,
+      status: 'failed',
+    };
+
+    vi.spyOn(materialApi, 'fetchMaterialDetail').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: failedDetail,
+    });
+    const retrySpy = vi.spyOn(materialApi, 'retryMaterial').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        ...failedDetail,
+        status: 'pending',
+      },
+    });
+
+    const wrapper = mount(MaterialDetailPage, {
+      props: {
+        id: 'mat_detail_01',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('资料解析遇到异常');
+    const retryBtn = wrapper.find('.retry-action-btn');
+    expect(retryBtn.exists()).toBe(true);
+    expect(retryBtn.text()).toContain('重试解析');
+
+    await retryBtn.trigger('tap');
+    expect(retrySpy).toHaveBeenCalledWith('mat_detail_01');
+  });
 });

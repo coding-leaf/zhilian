@@ -115,4 +115,24 @@ describe('MaterialCard.vue', () => {
     expect(wrapper.emitted('delete')).toBeTruthy();
     expect(wrapper.emitted('delete')?.[0]).toEqual([baseMaterial]);
   });
+
+  it('renders retry button and emits retry event when status is failed', async () => {
+    const failedMaterial: MaterialItem = {
+      ...baseMaterial,
+      status: 'failed',
+    };
+    const wrapper = mount(MaterialCard, {
+      props: {
+        material: failedMaterial,
+      },
+    });
+
+    const retryBtn = wrapper.find('.retry-btn');
+    expect(retryBtn.exists()).toBe(true);
+    expect(retryBtn.text()).toContain('重试解析');
+
+    await retryBtn.trigger('tap');
+    expect(wrapper.emitted('retry')).toBeTruthy();
+    expect(wrapper.emitted('retry')?.[0]).toEqual([failedMaterial]);
+  });
 });

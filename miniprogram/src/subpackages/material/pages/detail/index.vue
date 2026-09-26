@@ -62,6 +62,12 @@
             <text class="ready-title">考点解析已完成</text>
             <text class="ready-sub">已生成知识点大纲树与练习索引</text>
           </view>
+          <view v-else-if="isFailed" class="failed-box">
+            <text class="failed-title">资料解析遇到异常</text>
+            <text class="failed-sub"
+              >解析过程意外中断或解析质量未达标，可点击下方按钮发起就地重试</text
+            >
+          </view>
           <view v-else-if="isRetakeRequired" class="warning-box">
             <text class="warning-title">等待重新拍摄</text>
             <text class="warning-sub"
@@ -75,6 +81,16 @@
 
         <view class="section-footer">
           <button
+            v-if="isFailed"
+            class="action-btn retry-action-btn"
+            :loading="isRetrying"
+            :disabled="isRetrying"
+            @tap="handleRetryPipeline"
+          >
+            重试解析
+          </button>
+          <button
+            v-else
             class="action-btn"
             :class="{ disabled: !isReady }"
             :disabled="!isReady"
@@ -100,7 +116,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
-import { fetchMaterialDetail } from '@/api/material';
+import { fetchMaterialDetail, retryMaterial } from '@/api/material';
 import { resolveMaterialStatusTag } from '@/subpackages/material/utils/copywriting';
 import { useMaterialPolling } from '../../composables/useMaterialPolling';
 import RetakeDrawer from '../../components/RetakeDrawer.vue';
@@ -139,6 +155,11 @@ const isParsing = computed(() => {
 const isReady = computed(() => {
   const s = String(detail.value?.status || '').toUpperCase();
   return s === 'READY' || s === 'COMPLETED';
+});
+
+const isFailed = computed(() => {
+  const s = String(detail.value?.status || '').toUpperCase();
+  return s === 'FAILED';
 });
 
 const isRetakeRequired = computed(() => {
@@ -222,6 +243,27 @@ function handleNavigateKnowledgeTree(): void {
   });
 }
 
+const isRetrying = ref(false);
+
+async function handleRetryPipeline(): Promise<void> {
+  if (isRetrying.value || !targetId.value) return;
+  isRetrying.value = true;
+  try {
+    const res = await retryMaterial(targetId.value);
+    if (res && res.data) {
+      detail.value = res.data;
+      materialStore.updateMaterialStatus(res.data.id, res.data.status);
+    }
+    uni.showToast({ title: '已重新发起解析', icon: 'success' });
+    startPolling();
+    void loadDetail();
+  } catch {
+    uni.showToast({ title: '发起重试失败，请重试', icon: 'none' });
+  } finally {
+    isRetrying.value = false;
+  }
+}
+
 onLoad((query?: Record<string, string | undefined>) => {
   if (query?.id) {
     targetId.value = query.id;
@@ -240,12 +282,15 @@ defineExpose({
   isRetakeDrawerVisible,
   unqualifiedPages,
   isPolling,
+  isFailed,
+  isRetrying,
   loadDetail,
   startPolling,
   stopPolling,
   handleOpenRetakeDrawer,
   handleRetakeSuccess,
   handleNavigateKnowledgeTree,
+  handleRetryPipeline,
 });
 </script>
 

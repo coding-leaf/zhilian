@@ -192,6 +192,27 @@
   margin-bottom: 6rpx;
 }
 
+.failed-box {
+  background-color: #fef2f2;
+  border-radius: 12rpx;
+  padding: 16rpx;
+}
+
+.failed-title {
+  display: block;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #991b1b;
+  margin-bottom: 6rpx;
+}
+
+.failed-sub {
+  display: block;
+  font-size: 22rpx;
+  color: #b91c1c;
+  line-height: 1.4;
+}
+
 .parsing-sub,
 .ready-sub,
 .warning-sub,
@@ -216,4 +237,9 @@
     background-color: #cbd5e1;
     color: #94a3b8;
   }
+}
+
+.retry-action-btn {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
 }

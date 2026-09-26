@@ -342,6 +342,69 @@ class TestOpenAICompatibleLLMAdapter:
         _, kwargs = mock_client.post.call_args
         assert kwargs.get("timeout") == 60.0
 
+    def test_openai_tool_calls_payload_and_parsing(self) -> None:
+        """测试 options.tools 与 options.tool_choice 注入 payload 并正确解析 tool_calls 响应。"""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc123",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_structured_output",
+                                    "arguments": '{"score": 95}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+        }
+        mock_client.post.return_value = mock_response
+
+        adapter = OpenAICompatibleLLMAdapter(
+            api_key="sk-test",
+            client=mock_client,
+        )
+
+        test_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_structured_output",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        resp = adapter.generate(
+            [LLMMessage(role="user", content="请打分")],
+            options=LLMOptions(
+                tools=test_tools,
+                tool_choice={"type": "function", "function": {"name": "submit_structured_output"}},
+            ),
+        )
+
+        _, kwargs = mock_client.post.call_args
+        sent_payload = kwargs.get("json", {})
+        assert sent_payload.get("tools") == test_tools
+        assert sent_payload.get("tool_choice") == {
+            "type": "function",
+            "function": {"name": "submit_structured_output"},
+        }
+
+        assert resp.tool_calls is not None
+        assert len(resp.tool_calls) == 1
+        assert resp.tool_calls[0].id == "call_abc123"
+        assert resp.tool_calls[0].name == "submit_structured_output"
+        assert resp.tool_calls[0].arguments == '{"score": 95}'
+
     def test_openai_auth_error_no_retry(self) -> None:
         """测试 401/403 鉴权失败立即阻断抛出 LLMAuthError，无多余重试。"""
         mock_client = MagicMock()

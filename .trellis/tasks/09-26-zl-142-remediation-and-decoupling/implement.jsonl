@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码门禁、测试覆盖率与架构分层规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端组件设计、状态管理、类型检查与单测规范"}

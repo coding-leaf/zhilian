@@ -1078,3 +1078,75 @@ async def test_upload_material_triggers_background_tasks(
         version_id=version_id,
         user_id=mock_user.id,
     )
+
+
+@pytest.mark.asyncio
+async def test_retry_material_success(mock_user: User, mock_material_service: MagicMock) -> None:
+    """Tests POST /api/v1/materials/{material_id}/retry success flow."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    material_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    fake_material = Material(
+        id=material_id,
+        user_id=mock_user.id,
+        title="重试测试.pdf",
+        file_format="pdf",
+        file_size=2048,
+        source_type=SourceType.LOCAL.value,
+        status=MaterialStatus.PENDING.value,
+    )
+    fake_material.created_at = now
+    fake_material.updated_at = now
+
+    fake_version = MaterialVersion(
+        id=version_id,
+        material_id=material_id,
+        user_id=mock_user.id,
+        version_number=1,
+        storage_key="users/test/materials/v1.pdf",
+        content_hash="hash_retry_123",
+        parse_status=ParseStatus.QUEUED.value,
+    )
+
+    mock_material_service.retry_material_pipeline.return_value = (fake_material, fake_version)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(f"/api/v1/materials/{material_id}/retry")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == str(material_id)
+    assert data["status"] == MaterialStatus.PENDING.value
+    assert data["current_version_id"] == str(version_id)
+    mock_material_service.retry_material_pipeline.assert_called_once_with(
+        material_id=material_id,
+        user_id=mock_user.id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_material_not_found(mock_user: User, mock_material_service: MagicMock) -> None:
+    """Tests POST /api/v1/materials/{material_id}/retry when material does not exist."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    material_id = uuid.uuid4()
+    mock_material_service.retry_material_pipeline.side_effect = MaterialNotFoundError(
+        "学习资料不存在"
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(f"/api/v1/materials/{material_id}/retry")
+
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == 40004
+    assert "学习资料不存在" in data["message"]
