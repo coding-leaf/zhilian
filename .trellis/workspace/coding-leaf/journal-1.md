@@ -18,4 +18,24 @@
   - 后端通过 `ruff format`、`ruff check`、`mypy`、`lint-imports`（5 contracts kept）、`pytest`（1080 passed, 覆盖率 94.39%）。
   - 前端通过 `eslint`、`vue-tsc`、`vitest`（410 passed）。
 
+---
+
+## 2026-09-26 - 资料列表为空/解析进度/鉴权画像修复 (fix-material-and-auth)
+
+- **背景**: 用户实机反馈三大端到端缺陷——「全部」标签返回空、上传后解析无进度提示、怀疑登录授权丢态。
+- **根因**:
+  - 列表页在 `all` 标签传 `status=undefined`，后端 `Material.status == status` 恒假导致空结果；`ready` 因精确匹配才可见。
+  - 列表页与首页共享 Store，分页结果全量覆盖首页概览切片；且只在 `onMounted` 加载，二级返回白屏。
+  - 冷启动只恢复 `auth_tokens`，`profile` 受 3-key 白名单限制未持久化，导致「已登录却显示未登录」假象。
+- **实现**:
+  - 前后端双向清洗空状态参数；Service 统一状态语义（`parsing`→`pending+parsing`、`ready/completed`→`ready`、`retake_required`→空）。
+  - 响应新增 `parse_status`/`progress_percentage`；卡片展示进度并提供手动【开始解析/重新解析】按钮 + 自适应退避轮询。
+  - `userStore.hydrateProfile()` 在 `onLaunch`/`onShow`/登录后静默水合画像；列表页 `listData` 与全局 Store 隔离，`onShow` 保活。
+  - 修复质检阶段发现的 N+1：`selectinload(Material.versions)` 批量预加载，列表版本查询 O(N)→固定 1 次（实测 3 条 SQL）。
+- **遗留（新任务范围）**: 「待重拍」Tab 恒空——后端 `MaterialStatus` 无 `retake_required` 状态，需模型层改造才能真正支持。
+- **验证成果**:
+  - 后端 `ruff`/`format`/`mypy`(109 files)/`lint-imports`(5 kept)/`pytest`（1090 passed）。
+  - 前端 `lint`/`type-check` 全绿、`vitest`（52 files / 424 passed）。
+  - 提交 `86bc24e`；规范沉淀《Material Status Filter & Parse Progress Contract》写入前端 quality-guidelines。
+
 
