@@ -74,4 +74,30 @@
 - **规范沉淀**: backend quality-guidelines 新增《LLM Structured Output Adherence（模型选择与 strict 缺口）》：优先强模型、弱模型需开 strict、失败归因方法。
 - **遗留/可选**: 若需兼容弱模型，可开新任务实现 `strict:true` + `additionalProperties:false` 规范化，或扩展 `response_format` 支持 `json_schema`（当前仅支持字符串 `{"type": ...}`）。
 
+---
+
+## 2026-09-27 - 出题体验前端闭环与可核验 (question-gen-frontend-ux)
+
+- **背景**: 用户实机反馈——点击生题原地不动、无进度、无法确认生题效果；多选考点未生效；跳转/入口逻辑混乱。
+- **侦察定位的真实缺陷**:
+  - 生成后仅关闭抽屉 + 同页切 Tab（无跳转/无进度，失败只弹 toast）。
+  - `QuestionConfigDrawer` 只发 `selectedKnowledgeIds[0]`，其余已选考点被静默丢弃，UI 却显示「已选 N 项」。
+  - 题目仅存本地 ref，从不调 `fetchQuestionList`，退出重进即丢，无独立题目入口。
+- **任务结构（父 + 3 子，逐个评审门）**:
+  - `verify-list`：新增独立题目页 `subpackages/material/pages/questions/index`，`fetchQuestionList` 持久加载、本地 `listData` 隔离、复用编辑/痕迹抽屉、分页去重；抽出 `QuestionCard` 并迁移知识树卡片。
+  - `progress-nav`：抽屉内「进行中面板」（阶段轮播+计时）、全表单禁用防重复、成功后跳题目页（`material_id` + fail 兜底）、空结果/网络/业务错误分类可重试、出题接口超时 180s；移除知识树页本地题目 Tab（消除双数据源）。
+  - `multi-kp`：后端 `knowledge_point_ids` 可选字段 + `distribute_count`（均分+余数前置+每考点≥1）+ `generate_questions_for_knowledge_points` 编排（聚合、fail-fast）+ 路由分流；前端传全部已选考点 + 分布提示。
+- **规范沉淀**:
+  - 前端：《Material Subpackage Navigation Param Contract》（统一 `material_id`、`navigateTo` 必带 `fail`、生成成功跳转目标统一、页面本地 `listData`）。
+  - 后端：《Multi-Knowledge-Point Question Generation》（向后兼容、分配规则、聚合、fail-fast、纯函数无 IO）。
+- **验证成果**:
+  - 后端 `ruff`/`format`(216)/`mypy`(125)/`lint-imports`(5 kept)/`pytest`（1130 passed）。
+  - 前端 `lint`/`type-check`/`test:unit`（54 files / 444 passed）。
+  - 提交：`95f89bf`(verify-list) → `48fb3cc`(progress-nav) → `3fce14f`(multi-kp)；三个子任务与父任务均已归档。
+- **遗留/待确认**:
+  - OQ-1：用户「很多跳转逻辑有问题」的具体复现未提供，未针对性修复（已统一分包导航参数契约）。
+  - AC6：多考点真实链路覆盖未跑（CLI 未扩展多考点，建议真机验证）。
+  - 历史不一致（非本任务）：前端题量上限 50 vs 后端 `count le=20`（输入 >20 会 422）。
+  - 另开后端任务：知识树节点数量偏少 / 出题质量调优。
+
 
