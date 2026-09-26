@@ -32,6 +32,46 @@ export function flattenKnowledgeTree(nodes: KnowledgeTreeNode[]): KnowledgeTreeN
 }
 
 /**
+ * 扁平化可见行数据结构：节点及其渲染深度 (根节点深度为 1)。
+ */
+export interface KnowledgeTreeRow {
+  node: KnowledgeTreeNode;
+  depth: number;
+}
+
+/**
+ * 前序遍历知识点树，输出折叠感知的可见行列表。
+ *
+ * 被折叠节点的子孙不进入结果，但折叠节点自身始终保留；用于微信小程序端
+ * 以单层列表 + 缩进替代递归组件渲染，规避递归组件 props 透传失效问题。
+ *
+ * @param nodes 嵌套的知识点树根节点数组。
+ * @param collapsedMap 折叠状态映射 (key 为节点 ID，true 表示已折叠)。
+ * @returns 可见行列表，按前序遍历顺序排列。
+ */
+export function flattenVisibleTree(
+  nodes: KnowledgeTreeNode[],
+  collapsedMap: Record<string, boolean> = {},
+): KnowledgeTreeRow[] {
+  const rows: KnowledgeTreeRow[] = [];
+
+  function traverse(list: KnowledgeTreeNode[], depth: number): void {
+    if (!Array.isArray(list)) return;
+    for (const node of list) {
+      if (!node || !node.id) continue;
+      rows.push({ node, depth });
+      const isCollapsed = Boolean(collapsedMap[node.id]);
+      if (!isCollapsed && Array.isArray(node.children) && node.children.length > 0) {
+        traverse(node.children, depth + 1);
+      }
+    }
+  }
+
+  traverse(nodes, 1);
+  return rows;
+}
+
+/**
  * 递归收集指定节点及其所有子孙节点的 ID 列表。
  *
  * @param node 目标知识点节点。

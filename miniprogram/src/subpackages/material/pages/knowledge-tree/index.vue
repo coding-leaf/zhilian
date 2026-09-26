@@ -49,10 +49,10 @@
       </view>
       <view v-else class="tree-list">
         <KnowledgeTreeNode
-          v-for="node in rootNodes"
-          :key="node.id"
-          :node="node"
-          :level="1"
+          v-for="row in visibleRows"
+          :key="row.node.id"
+          :node="row.node"
+          :level="row.depth"
           :selected-ids="materialStore.selectedKnowledgeIds"
           :collapsed-map="materialStore.knowledgeTreeCollapsedMap"
           @toggle-select="handleToggleSelect"
@@ -97,7 +97,11 @@ import { ref, computed, onMounted } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
 import { fetchKnowledgeTree, fetchMaterialDetail } from '@/api/material';
-import { flattenKnowledgeTree, calculateKnowledgeCoverage } from '../../utils/tree';
+import {
+  flattenKnowledgeTree,
+  flattenVisibleTree,
+  calculateKnowledgeCoverage,
+} from '../../utils/tree';
 import KnowledgeTreeNode from '../../components/KnowledgeTreeNode.vue';
 import QuestionConfigDrawer from '../../components/QuestionConfigDrawer.vue';
 
@@ -115,6 +119,9 @@ const loading = ref<boolean>(false);
 const isConfigDrawerOpen = ref<boolean>(false);
 
 const rootNodes = computed(() => materialStore.currentKnowledgeTree);
+const visibleRows = computed(() =>
+  flattenVisibleTree(materialStore.currentKnowledgeTree, materialStore.knowledgeTreeCollapsedMap),
+);
 const allFlatNodes = computed(() => flattenKnowledgeTree(materialStore.currentKnowledgeTree));
 const totalNodesCount = computed<number>(() => allFlatNodes.value.length);
 const selectedCount = computed<number>(() => materialStore.selectedCount);

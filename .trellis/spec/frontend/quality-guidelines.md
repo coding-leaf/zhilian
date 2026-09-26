@@ -223,4 +223,72 @@ uni.navigateTo({
 #### 4. Tests Required
 - 页面单测覆盖参数解析：`material_id` / `materialId` / `id` 三种入参均能正确加载。
 
+---
+
+### Scenario: WeChat Mini-Program 禁止递归组件，深层树用扁平化渲染
+
+#### 1. Scope / Trigger
+- 微信小程序 (`mp-weixin`) 端渲染任意深度层级数据（知识点树、目录、组织树等）。
+- 历史缺陷：`KnowledgeTreeNode.vue` 在模板中递归调用自身 + 自引用导入，页面整页崩溃 `TypeError: Cannot read properties of undefined (reading 'children')`，并伴随 `Setting data field "uP" to undefined is invalid`。
+
+#### 2. Signatures
+```typescript
+// miniprogram/src/subpackages/material/utils/tree.ts
+export interface KnowledgeTreeRow {
+  node: KnowledgeTreeNode;
+  depth: number; // 根为 1
+}
+export function flattenVisibleTree(
+  nodes: KnowledgeTreeNode[],
+  collapsedMap?: Record<string, boolean>,
+): KnowledgeTreeRow[];
+```
+
+#### 3. Contracts
+- **禁止组件模板递归自渲染**：不得在组件内 `import` 自身，也不得在模板中递归 `<Self v-for="child in node.children">`。
+- uni-app mp-weixin 通过单一 `u-p`/`uP` 字符串 + 模块级 `propsCaches` 透传 props（`common/vendor.js` 的 `renderProps` / `findComponentPropsData`）；递归自引用组件会使该链路丢失 props，子组件 `props.node` 变为 `undefined`，计算属性首抛 `reading 'children'`。
+- **深层树渲染路径**：数据仍是嵌套树 → 用纯函数 `flattenVisibleTree` 前序展开为「可见行（`node` + `depth`），折叠节点的子孙被裁剪」→ 页面**单层** `v-for` 渲染行组件，`level` 传渲染 `depth`。
+- 折叠/级联语义：行组件持有完整 `node`（含 `children`），级联勾选继续用 `collectNodeAndDescendantIds` + `toggleKnowledgeSubtree`；「全选/覆盖率」基于全量 `flattenKnowledgeTree`，与折叠状态无关。
+
+#### 4. Validation & Error Matrix
+- `nodes` 非数组 / `null` -> `flattenVisibleTree` 返回 `[]`，不抛错。
+- 节点项为 `null`/`undefined`/无 `id` -> 跳过该行，不抛错。
+- 折叠节点 `collapsedMap[id] === true` -> 该节点自身保留、其子孙不进入结果。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```vue
+<!-- 禁止：组件递归自引用，mp-weixin 下 props 透传丢失 → 整页崩溃 -->
+<script setup lang="ts">
+import KnowledgeTreeNode from './KnowledgeTreeNode.vue'; // 自引用导入
+</script>
+<template>
+  <KnowledgeTreeNode v-for="child in node.children" :node="child" />
+</template>
+```
+##### Correct
+```vue
+<!-- 页面：纯函数扁平化 + 单层 v-for -->
+<script setup lang="ts">
+import { computed } from 'vue';
+import { flattenVisibleTree } from '../../utils/tree';
+const visibleRows = computed(() =>
+  flattenVisibleTree(materialStore.currentKnowledgeTree, materialStore.knowledgeTreeCollapsedMap),
+);
+</script>
+<template>
+  <KnowledgeTreeNode
+    v-for="row in visibleRows"
+    :key="row.node.id"
+    :node="row.node"
+    :level="row.depth"
+  />
+</template>
+```
+
+#### 6. Tests Required
+- 纯函数单测：默认全展开的 `id`/`depth` 序列、折叠根节点仅保留自身、折叠中间节点仅裁剪其子树、空/`null`/畸形输入不抛错。
+- 页面单测断言：折叠后子孙文本消失且节点自身保留；折叠态下「全选」仍覆盖整棵树。
+- 编译产物断言：组件 `.json` 的 `usingComponents` 不含自引用键；组件 `.js` 不含自引用模块加载器。
+
 

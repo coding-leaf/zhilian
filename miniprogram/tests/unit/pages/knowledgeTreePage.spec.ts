@@ -244,4 +244,58 @@ describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
     expect(wrapper.find('.view-tabs').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('临界区是指访问临界资源的代码段吗？');
   });
+
+  it('hides descendants of a collapsed node from the flat list but keeps the node itself', async () => {
+    vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockTreeResponse,
+    });
+
+    const materialStore = useMaterialStore();
+    const wrapper = mount(KnowledgeTreePage, {
+      props: {
+        materialId: 'mat_001',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(wrapper.text()).toContain('进程与线程模型');
+
+    materialStore.toggleNodeCollapse('node-1');
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('操作系统概述');
+    expect(wrapper.text()).not.toContain('进程与线程模型');
+    expect(wrapper.text()).toContain('存储器管理机制');
+  });
+
+  it('select all still targets the whole tree regardless of collapse state', async () => {
+    vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockTreeResponse,
+    });
+
+    const materialStore = useMaterialStore();
+    const wrapper = mount(KnowledgeTreePage, {
+      props: {
+        materialId: 'mat_001',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    materialStore.toggleNodeCollapse('node-1');
+    await wrapper.vm.$nextTick();
+
+    const selectAllBtn = wrapper.findAll('.tool-btn').find((b) => b.text().includes('全选'));
+    await selectAllBtn?.trigger('tap');
+
+    expect(materialStore.selectedCount).toBe(3);
+    expect(wrapper.text()).toContain('考点覆盖率 100%');
+  });
 });

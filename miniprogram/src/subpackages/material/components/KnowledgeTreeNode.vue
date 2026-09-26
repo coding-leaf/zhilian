@@ -38,20 +38,6 @@
         </text>
       </view>
     </view>
-
-    <!-- 递归子节点列表 -->
-    <view v-if="hasChildren && !isCollapsed" class="node-children-list">
-      <KnowledgeTreeNode
-        v-for="child in node.children"
-        :key="child.id"
-        :node="child"
-        :level="level + 1"
-        :selected-ids="selectedIds"
-        :collapsed-map="collapsedMap"
-        @toggle-select="handleChildToggleSelect"
-        @toggle-collapse="handleChildToggleCollapse"
-      />
-    </view>
   </view>
 </template>
 
@@ -60,7 +46,6 @@ import { computed } from 'vue';
 import { getActivePinia } from 'pinia';
 import { useMaterialStore } from '@/stores/materialStore';
 import type { KnowledgeTreeNode as KnowledgeNodeType } from '@/types/material';
-import KnowledgeTreeNode from './KnowledgeTreeNode.vue';
 import { collectNodeAndDescendantIds } from '../utils/tree';
 
 interface Props {
@@ -109,14 +94,6 @@ function handleToggleSelect(): void {
 
 function handleToggleCollapse(): void {
   emit('toggle-collapse', props.node.id);
-}
-
-function handleChildToggleSelect(id: string): void {
-  emit('toggle-select', id);
-}
-
-function handleChildToggleCollapse(id: string): void {
-  emit('toggle-collapse', id);
 }
 </script>
 
@@ -221,9 +198,5 @@ function handleChildToggleCollapse(id: string): void {
   margin-left: $spacing-xs;
   font-size: 20rpx;
   line-height: 1;
-}
-
-.node-children-list {
-  width: 100%;
 }
 </style>

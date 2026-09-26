@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   flattenKnowledgeTree,
+  flattenVisibleTree,
   filterNodesByIds,
   calculateKnowledgeCoverage,
   validateQuestionConfig,
@@ -58,6 +59,37 @@ describe('materialTreeUtils', () => {
     it('should handle empty or null input gracefully', () => {
       expect(flattenKnowledgeTree([])).toEqual([]);
       expect(flattenKnowledgeTree(null as unknown as KnowledgeTreeNode[])).toEqual([]);
+    });
+  });
+
+  describe('flattenVisibleTree', () => {
+    it('should expand all nodes by default with correct depths', () => {
+      const rows = flattenVisibleTree(sampleTree);
+      expect(rows.map((r) => r.node.id)).toEqual(['kp-1', 'kp-1-1', 'kp-1-1-1', 'kp-1-2', 'kp-2']);
+      expect(rows.map((r) => r.depth)).toEqual([1, 2, 3, 2, 1]);
+    });
+
+    it('should hide descendants of a collapsed node but keep the node itself', () => {
+      const rows = flattenVisibleTree(sampleTree, { 'kp-1': true });
+      expect(rows.map((r) => r.node.id)).toEqual(['kp-1', 'kp-2']);
+      expect(rows.map((r) => r.depth)).toEqual([1, 1]);
+    });
+
+    it('should hide only the subtree below a collapsed intermediate node', () => {
+      const rows = flattenVisibleTree(sampleTree, { 'kp-1-1': true });
+      expect(rows.map((r) => r.node.id)).toEqual(['kp-1', 'kp-1-1', 'kp-1-2', 'kp-2']);
+      expect(rows.map((r) => r.depth)).toEqual([1, 2, 2, 1]);
+    });
+
+    it('should handle empty or null input gracefully', () => {
+      expect(flattenVisibleTree([])).toEqual([]);
+      expect(flattenVisibleTree(null as unknown as KnowledgeTreeNode[])).toEqual([]);
+    });
+
+    it('should skip malformed/empty node entries without throwing', () => {
+      const malformed = [null, undefined, sampleTree[1]] as unknown as KnowledgeTreeNode[];
+      const rows = flattenVisibleTree(malformed);
+      expect(rows.map((r) => r.node.id)).toEqual(['kp-2']);
     });
   });
 

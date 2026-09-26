@@ -113,22 +113,33 @@ describe('KnowledgeTreeNode.vue', () => {
     expect(wrapper.emitted('toggle-collapse')?.[0]).toEqual(['kp-root']);
   });
 
-  it('hides children list when collapsedMap has true for node id', () => {
-    const wrapperExpanded = mount(KnowledgeTreeNode, {
+  it('renders a collapse hit area for nodes with children and a placeholder for leaves', () => {
+    const parent = mount(KnowledgeTreeNode, {
+      props: {
+        node: sampleNode,
+      },
+    });
+    expect(parent.find('.collapse-hit-area').exists()).toBe(true);
+    expect(parent.find('.collapse-placeholder').exists()).toBe(false);
+
+    const leaf = mount(KnowledgeTreeNode, {
+      props: {
+        node: { id: 'kp-leaf', name: '叶子考点', level: 2 },
+      },
+    });
+    expect(leaf.find('.collapse-placeholder').exists()).toBe(true);
+    expect(leaf.find('.collapse-hit-area').exists()).toBe(false);
+  });
+
+  it('renders only its own node without recursive descendants (row component)', () => {
+    const wrapper = mount(KnowledgeTreeNode, {
       props: {
         node: sampleNode,
         collapsedMap: { 'kp-root': false },
       },
     });
-    expect(wrapperExpanded.text()).toContain('指令系统与寻址方式');
-
-    const wrapperCollapsed = mount(KnowledgeTreeNode, {
-      props: {
-        node: sampleNode,
-        collapsedMap: { 'kp-root': true },
-      },
-    });
-    expect(wrapperCollapsed.text()).not.toContain('指令系统与寻址方式');
+    expect(wrapper.text()).toContain('计算机组成原理');
+    expect(wrapper.text()).not.toContain('指令系统与寻址方式');
   });
 
   it('cascades selection to descendants via materialStore when Pinia is active', async () => {
