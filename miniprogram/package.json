@@ -6,7 +6,7 @@
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
-    "build:host": "uni build -p mp-weixin && mkdir -p /mnt/d/zhilian-mp && cp -ru dist/build/mp-weixin/* /mnt/d/zhilian-mp/ && echo '==> Successfully synced to D:\\zhilian-mp'",
+    "build:host": "uni build -p mp-weixin && node scripts/sync-host.mjs",
     "lint": "eslint . --ext .vue,.js,.ts",
     "type-check": "vue-tsc --noEmit",
     "test:unit": "vitest run"
