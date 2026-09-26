@@ -8,6 +8,8 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { TokenPairResponse, UserProfileResponse } from '../types/auth';
 import { storage } from '../utils/storage';
+import { fetchUserProfile } from '../api/user';
+import { AppError } from '../utils/error';
 
 export const useUserStore = defineStore('user', () => {
   // State
@@ -55,6 +57,39 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  async function hydrateProfile(): Promise<UserProfileResponse | null> {
+    if (!tokens.value) {
+      initFromStorage();
+    }
+    if (!tokens.value?.access_token) {
+      return null;
+    }
+    try {
+      const res = await fetchUserProfile();
+      if (res?.data) {
+        setProfile(res.data);
+        return res.data;
+      }
+      return null;
+    } catch (err: unknown) {
+      const errObj =
+        typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : {};
+      const isAuthError =
+        err instanceof AppError
+          ? err.status_code === 401 || err.code === 20001
+          : errObj.status_code === 401 ||
+            errObj.statusCode === 401 ||
+            errObj.code === 20001 ||
+            errObj.code === 401;
+
+      if (isAuthError) {
+        clearTokens();
+        clearProfile();
+      }
+      return null;
+    }
+  }
+
   function logout(): void {
     clearTokens();
     clearProfile();
@@ -74,6 +109,7 @@ export const useUserStore = defineStore('user', () => {
     setUserProfile,
     clearProfile,
     initFromStorage,
+    hydrateProfile,
     logout,
   };
 });

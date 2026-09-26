@@ -30,6 +30,7 @@ from app.api.deps.container import get_container
 from app.api.deps.material import get_material_service
 from app.container import AppContainer
 from app.core.security import generate_user_ref
+from app.models.material import MaterialStatus
 from app.models.user import User
 from app.schemas.material import (
     MaterialDeleteResponse,
@@ -199,10 +200,19 @@ async def list_materials(
     calc_offset = offset if offset is not None else (page - 1) * calc_limit
     calc_page = (calc_offset // calc_limit) + 1 if limit is not None else page
 
+    cleaned_status: str | None = None
+    if status_filter:
+        trimmed = status_filter.strip().lower()
+        # 同时接纳资料主状态与前端语义别名（completed/retake_required），
+        # 仅将空串、占位符（all/undefined/null）等伪状态清洗为不加过滤。
+        valid_statuses = {s.value for s in MaterialStatus} | {"completed", "retake_required"}
+        if trimmed in valid_statuses:
+            cleaned_status = trimmed
+
     items, total = material_service.list_materials(
         user_id=user.id,
         keyword=keyword,
-        status=status_filter,
+        status=cleaned_status,
         page=calc_page,
         page_size=calc_limit,
         limit=calc_limit,
@@ -218,6 +228,8 @@ async def list_materials(
                 source_type=item.source_type,
                 status=item.status,
                 current_version_id=item.current_version_id,
+                parse_status=getattr(item, "parse_status", None),
+                progress_percentage=getattr(item, "progress_percentage", None),
                 created_at=item.created_at,
                 updated_at=item.updated_at,
             )
@@ -269,6 +281,8 @@ async def get_material_detail(
         source_type=material.source_type,
         status=material.status,
         current_version_id=material.current_version_id,
+        parse_status=getattr(material, "parse_status", None),
+        progress_percentage=getattr(material, "progress_percentage", None),
         versions_count=versions_count,
         created_at=material.created_at,
         updated_at=material.updated_at,

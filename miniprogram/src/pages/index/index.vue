@@ -176,6 +176,9 @@ onMounted(() => {
 
 onShow(() => {
   practiceStore.loadDraftFromStorage();
+  if (hasLoadedOnce.value && !loading.value) {
+    void loadDashboardData(false);
+  }
 });
 
 onPullDownRefresh(async () => {

@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.material import (
     Material,
@@ -110,6 +110,7 @@ class MaterialRepository:
         offset: int = 0,
         keyword: str | None = None,
         status: str | None = None,
+        statuses: list[str] | None = None,
     ) -> list[Material]:
         """分页获取用户所属资料列表。
 
@@ -119,10 +120,15 @@ class MaterialRepository:
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
             keyword: 可选标题模糊搜索词。
-            status: 可选资料生命周期状态过滤。
+            status: 可选资料生命周期状态过滤（单值）。
+            statuses: 可选资料生命周期状态集合过滤（优先于 status，支持多状态聚合）。
 
         Returns:
-            list[Material]: 资料实体列表。
+            list[Material]: 资料实体列表，版本集合已通过 selectinload 预加载。
+
+        Note:
+            使用 ``selectinload`` 一次性批量预加载 ``Material.versions``（固定 1 次额外查询），
+            避免上层逐条解析进度时的 N+1 查询。
         """
         stmt = select(Material).where(
             Material.user_id == user_id,
@@ -130,10 +136,17 @@ class MaterialRepository:
         )
         if keyword:
             stmt = stmt.where(Material.title.ilike(f"%{keyword}%"))
-        if status:
+        if statuses is not None:
+            stmt = stmt.where(Material.status.in_(statuses))
+        elif status:
             stmt = stmt.where(Material.status == status)
 
-        stmt = stmt.order_by(Material.created_at.desc()).limit(limit).offset(offset)
+        stmt = (
+            stmt.options(selectinload(Material.versions))
+            .order_by(Material.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return list(self.session.execute(stmt).scalars().all())
 
     def list_materials_by_user(
@@ -145,6 +158,7 @@ class MaterialRepository:
         offset: int = 0,
         keyword: str | None = None,
         status: str | None = None,
+        statuses: list[str] | None = None,
     ) -> tuple[list[Material], int]:
         """分页获取用户所属资料列表及符合条件的总记录数。
 
@@ -154,7 +168,8 @@ class MaterialRepository:
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
             keyword: 可选标题模糊搜索词。
-            status: 可选资料生命周期状态过滤。
+            status: 可选资料生命周期状态过滤（单值）。
+            statuses: 可选资料生命周期状态集合过滤（优先于 status，支持多状态聚合）。
 
         Returns:
             tuple[list[Material], int]: (资料实体列表, 总记录数)。
@@ -165,7 +180,9 @@ class MaterialRepository:
         )
         if keyword:
             count_stmt = count_stmt.where(Material.title.ilike(f"%{keyword}%"))
-        if status:
+        if statuses is not None:
+            count_stmt = count_stmt.where(Material.status.in_(statuses))
+        elif status:
             count_stmt = count_stmt.where(Material.status == status)
 
         total = self.session.execute(count_stmt).scalar_one()
@@ -177,6 +194,7 @@ class MaterialRepository:
             offset=offset,
             keyword=keyword,
             status=status,
+            statuses=statuses,
         )
         return items, int(total)
 

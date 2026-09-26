@@ -223,12 +223,27 @@ export async function request<T = unknown>(options: RequestOptions): Promise<Api
     }
   }
 
+  const method = (options.method || 'GET').toUpperCase();
+  let requestData = options.data;
+  if (
+    method === 'GET' &&
+    requestData &&
+    typeof requestData === 'object' &&
+    !Array.isArray(requestData)
+  ) {
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(requestData as Record<string, unknown>)) {
+      if (v !== undefined && v !== null && v !== '') cleaned[k] = v;
+    }
+    requestData = cleaned;
+  }
+
   let response: UniApp.RequestSuccessCallbackResult;
   try {
     response = await callUniRequest({
       url: resolveUrl(options.url),
       method: options.method || 'GET',
-      data: options.data as string | AnyObject | ArrayBuffer | undefined,
+      data: requestData as string | AnyObject | ArrayBuffer | undefined,
       header: headers,
       timeout: options.timeout || 15000,
     });

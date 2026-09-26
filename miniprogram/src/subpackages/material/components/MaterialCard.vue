@@ -14,11 +14,23 @@
         <text>{{ formattedSize }} · {{ formattedDate }}</text>
       </view>
       <view v-if="keyPointsSummary" class="points-text">{{ keyPointsSummary }}</view>
+
+      <view v-if="isParsing || isPending" class="progress-section">
+        <view class="progress-meta">
+          <text class="step-text">{{ currentStepText }}</text>
+          <text class="percent-text">{{ displayProgress }}%</text>
+        </view>
+        <view class="progress-bar-bg">
+          <view class="progress-bar-fill" :style="{ width: displayProgress + '%' }"></view>
+        </view>
+      </view>
     </view>
     <view class="card-footer">
-      <text class="footer-hint">{{ isFailed ? '解析异常，可尝试重试' : '查看解析与考点' }}</text>
+      <text class="footer-hint">{{ footerHint }}</text>
       <view class="footer-actions">
-        <button v-if="isFailed" class="retry-btn" @tap.stop="handleRetry">重试解析</button>
+        <button v-if="isPending" class="start-btn" @tap.stop="handleTriggerParse">开始解析</button>
+        <button v-else-if="isParsing" class="parsing-btn" disabled>解析中...</button>
+        <button v-else-if="isFailed" class="retry-btn" @tap.stop="handleRetry">重试解析</button>
         <button class="delete-btn" @tap.stop="handleDelete">删除</button>
       </view>
     </view>
@@ -34,9 +46,7 @@ interface Props {
   material: MaterialItem;
 }
 interface Emits {
-  (e: 'click', material: MaterialItem): void;
-  (e: 'delete', material: MaterialItem): void;
-  (e: 'retry', material: MaterialItem): void;
+  (e: 'click' | 'delete' | 'retry' | 'trigger-parse', material: MaterialItem): void;
 }
 
 const props = defineProps<Props>();
@@ -48,6 +58,17 @@ const THEMES: Record<string, { bg: string; color: string; border: string }> = {
   warning: { bg: '#fffbeb', color: '#92400e', border: '#fde68a' },
   danger: { bg: '#fef2f2', color: '#991b1b', border: '#fecaca' },
   info: { bg: '#f1f5f9', color: '#64748b', border: '#e2e8f0' },
+};
+
+const PARSE_STEP_LABELS: Record<string, string> = {
+  queued: '排队等待中...',
+  parsing_doc: '正在解析文本大纲...',
+  ocr_processing: '正在进行 OCR 识别...',
+  extracting_knowledge: '正在提取核心考点...',
+  auditing_knowledge: '正在质检验收知识点...',
+  embedding_generation: '正在构建向量索引...',
+  ready: '解析完成',
+  failed: '解析失败',
 };
 
 const formatLabel = computed(() => (props.material.file_format || 'doc').toUpperCase());
@@ -83,6 +104,37 @@ const keyPointsSummary = computed(() => {
 });
 
 const isFailed = computed(() => String(props.material.status || '').toLowerCase() === 'failed');
+const isParsing = computed(() => String(props.material.status || '').toLowerCase() === 'parsing');
+const isPending = computed(() => String(props.material.status || '').toLowerCase() === 'pending');
+
+const currentStepText = computed(() => {
+  const ps = props.material.parse_status;
+  if (ps && PARSE_STEP_LABELS[ps]) {
+    return PARSE_STEP_LABELS[ps];
+  }
+  if (isParsing.value) return '正在深度解析中，正在提取考点大纲...';
+  if (isPending.value) return '等待开始解析...';
+  return '';
+});
+
+const displayProgress = computed(() => {
+  if (typeof props.material.progress_percentage === 'number') {
+    return Math.min(Math.max(props.material.progress_percentage, 0), 100);
+  }
+  if (isParsing.value) return 30;
+  return 0;
+});
+
+const footerHint = computed(() => {
+  if (isFailed.value) return '解析异常，可尝试重试';
+  if (isParsing.value) return '正在解析中，请稍候';
+  if (isPending.value) return '待解析，可手动触发';
+  return '查看解析与考点';
+});
+
+function handleTriggerParse(): void {
+  emit('trigger-parse', props.material);
+}
 
 function handleRetry(): void {
   emit('retry', props.material);
@@ -166,6 +218,39 @@ function handleDelete(): void {
   color: #2563eb;
   font-weight: 600;
 }
+.progress-section {
+  margin-top: 14rpx;
+  background: #f8fafc;
+  border-radius: 12rpx;
+  padding: 12rpx 16rpx;
+}
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 22rpx;
+  margin-bottom: 8rpx;
+}
+.step-text {
+  color: #2563eb;
+  font-weight: 500;
+}
+.percent-text {
+  color: #64748b;
+  font-weight: 600;
+}
+.progress-bar-bg {
+  height: 8rpx;
+  background: #e2e8f0;
+  border-radius: 4rpx;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 4rpx;
+  transition: width 0.3s ease;
+}
 .card-footer {
   margin-top: 16rpx;
   padding-top: 12rpx;
@@ -180,24 +265,30 @@ function handleDelete(): void {
   align-items: center;
   gap: 12rpx;
 }
-.retry-btn {
+.start-btn,
+.retry-btn,
+.delete-btn,
+.parsing-btn {
   font-size: 22rpx;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
   border-radius: 9999rpx;
   padding: 4rpx 18rpx;
   line-height: 1.5;
   margin: 0;
 }
+.start-btn,
+.retry-btn {
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.parsing-btn {
+  color: #94a3b8;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
 .delete-btn {
-  font-size: 22rpx;
   color: #ef4444;
   background: #fef2f2;
   border: 1px solid #fecaca;
-  border-radius: 9999rpx;
-  padding: 4rpx 18rpx;
-  line-height: 1.5;
-  margin: 0;
 }
 </style>

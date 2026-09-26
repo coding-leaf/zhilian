@@ -851,25 +851,138 @@ class MaterialService:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
         return material
 
+    @staticmethod
+    def _resolve_status_filter(status: str | None) -> list[str] | None:
+        """将前端筛选语义解析为后端可用的生命周期状态集合。
+
+        - ``parsing``（解析中）聚合 ``pending`` 与 ``parsing`` 两个阶段；
+        - ``ready`` / ``completed``（已完成）统一映射为 ``ready``；
+        - ``retake_required``（待重拍）在资料主表无对应状态，返回空集合以正确过滤为空；
+        - 其余合法状态保持单值过滤。
+
+        Args:
+            status: 前端传入的状态筛选值，可为空。
+
+        Returns:
+            list[str] | None: 目标状态集合；``None`` 表示不做状态过滤。
+        """
+        if status is None:
+            return None
+        normalized = status.strip().lower()
+        if not normalized:
+            return None
+        if normalized == "parsing":
+            return [MaterialStatus.PENDING.value, MaterialStatus.PARSING.value]
+        if normalized in ("ready", "completed"):
+            return [MaterialStatus.READY.value]
+        if normalized == "retake_required":
+            return []
+        return [normalized]
+
+    @staticmethod
+    def _calculate_progress_percentage(
+        parse_status: str | None,
+        material_status: str | None = None,
+    ) -> int | None:
+        """根据细粒度解析流水线状态或资料主状态计算进度百分比 (0-100)。"""
+        if parse_status is not None:
+            status_map: dict[str, int] = {
+                ParseStatus.QUEUED.value: 10,
+                ParseStatus.PARSING_DOC.value: 30,
+                ParseStatus.OCR_PROCESSING.value: 30,
+                ParseStatus.EXTRACTING_KNOWLEDGE.value: 60,
+                ParseStatus.AUDITING_KNOWLEDGE.value: 75,
+                ParseStatus.EMBEDDING_GENERATION.value: 85,
+                ParseStatus.READY.value: 100,
+                ParseStatus.FAILED.value: 0,
+            }
+            if parse_status in status_map:
+                return status_map[parse_status]
+
+        if material_status == MaterialStatus.READY.value:
+            return 100
+        if material_status == MaterialStatus.PENDING.value:
+            return 0
+        if material_status == MaterialStatus.FAILED.value:
+            return 0
+        if material_status == MaterialStatus.PARSING.value:
+            return 30
+        return None
+
+    def _resolve_version_parse_status(
+        self,
+        material: Material,
+        user_id: uuid.UUID,
+    ) -> tuple[str | None, int | None]:
+        """关联装配当前激活版本（或最新版本）的细粒度解析状态与进度百分比。
+
+        适用于单条详情路径（逐条查询版本）。列表路径请改用
+        ``_pick_loaded_version`` + ``_compose_parse_status`` 以避免 N+1 查询。
+        """
+        version: MaterialVersion | None = None
+        if material.current_version_id is not None:
+            version = self.repo.get_version_by_id(material.current_version_id, user_id)
+        if version is None:
+            version = self.repo.get_latest_version(material.id, user_id)
+
+        return self._compose_parse_status(material, version)
+
+    @staticmethod
+    def _pick_loaded_version(material: Material) -> MaterialVersion | None:
+        """从已预加载的 ``material.versions`` 内存集合中挑选目标版本。
+
+        选择语义与逐条查询完全等价：
+        1. 若 ``current_version_id`` 非空且命中已加载版本集合，取该版本；
+        2. 否则取 ``version_number`` 最大者（``versions`` 关系已按版本号降序排列，
+           首元素即为最新版本）。
+
+        调用方须确保 ``material.versions`` 已通过仓储层 ``selectinload`` 预加载，
+        从而以固定 1 次批量查询替代逐条版本查询。
+        """
+        versions = list(material.versions or [])
+        if not versions:
+            return None
+        if material.current_version_id is not None:
+            for version in versions:
+                if version.id == material.current_version_id:
+                    return version
+        return versions[0]
+
+    @staticmethod
+    def _compose_parse_status(
+        material: Material,
+        version: MaterialVersion | None,
+    ) -> tuple[str | None, int | None]:
+        """根据目标版本与资料主状态合成细粒度解析状态与进度百分比。"""
+        parse_status: str | None = version.parse_status if version is not None else None
+        progress_percentage = MaterialService._calculate_progress_percentage(
+            parse_status, material.status
+        )
+        return parse_status, progress_percentage
+
     def get_material_detail(
         self,
         *,
         material_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> Material:
-        """获取资料详情（包含历史版本），阻断跨租户越权。
+        """获取资料详情（包含历史版本与解析阶段进度），阻断跨租户越权。
 
         Args:
             material_id: 资料标识。
             user_id: 租户用户标识。
 
         Returns:
-            Material: 包含历史版本的资料实体。
+            Material: 包含历史版本与解析阶段进度的资料实体。
 
         Raises:
             MaterialNotFoundError: 资料不存在或已软删除。
         """
-        return self.get_material(material_id=material_id, user_id=user_id)
+        material = self.get_material(material_id=material_id, user_id=user_id)
+        parse_status, progress_pct = self._resolve_version_parse_status(material, user_id)
+        material.parse_status = parse_status  # type: ignore[attr-defined]
+        material.progress_percentage = progress_pct  # type: ignore[attr-defined]
+        return material
 
     def list_materials(
         self,
@@ -884,7 +997,7 @@ class MaterialService:
         is_deleted: bool = False,
         **kwargs: Any,
     ) -> tuple[list[Material], int]:
-        """分页获取用户所属资料列表及符合条件总记录数。
+        """分页获取用户所属资料列表及符合条件总记录数，并装配解析进度信息。
 
         Args:
             user_id: 租户用户标识。
@@ -906,15 +1019,23 @@ class MaterialService:
 
         calc_limit = limit if limit is not None else page_size
         calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
+        resolved_statuses = self._resolve_status_filter(status)
 
-        return self.repo.list_materials_by_user(
+        items, total = self.repo.list_materials_by_user(
             user_id=resolved_user_id,
             is_deleted=is_deleted,
             limit=calc_limit,
             offset=calc_offset,
             keyword=keyword,
-            status=status,
+            status=None,
+            statuses=resolved_statuses,
         )
+        for item in items:
+            version = self._pick_loaded_version(item)
+            parse_status, progress_pct = self._compose_parse_status(item, version)
+            item.parse_status = parse_status  # type: ignore[attr-defined]
+            item.progress_percentage = progress_pct  # type: ignore[attr-defined]
+        return items, total
 
     def list_material_versions(
         self,

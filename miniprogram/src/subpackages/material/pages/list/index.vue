@@ -13,11 +13,11 @@
     </view>
 
     <view class="list-container">
-      <view v-if="loading && materialStore.materialsList.length === 0" class="loading-state">
+      <view v-if="loading && listData.length === 0" class="loading-state">
         <text class="loading-text">正在加载资料...</text>
       </view>
 
-      <view v-else-if="materialStore.materialsList.length === 0" class="empty-state">
+      <view v-else-if="listData.length === 0" class="empty-state">
         <view class="empty-badge">空</view>
         <text class="empty-title">暂无学习资料</text>
         <text class="empty-desc">上传课件、讲义或真题，开始智能练习</text>
@@ -26,12 +26,13 @@
 
       <view v-else class="cards-list">
         <MaterialCard
-          v-for="item in materialStore.materialsList"
+          v-for="item in listData"
           :key="item.id"
           :material="item"
           @click="handleCardClick"
           @delete="handleCardDelete"
           @retry="handleCardRetry"
+          @trigger-parse="handleCardTriggerParse"
         />
       </view>
     </view>
@@ -46,10 +47,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { onShow, onHide, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
-import { fetchMaterialList, deleteMaterial, retryMaterial } from '@/api/material';
+import {
+  fetchMaterialList,
+  fetchMaterialStatus,
+  deleteMaterial,
+  retryMaterial,
+  triggerMaterialParse,
+} from '@/api/material';
 import MaterialCard from '../../components/MaterialCard.vue';
 import MaterialUpload from '@/components/common/MaterialUpload.vue';
 import type { MaterialItem } from '@/types/material';
@@ -68,6 +75,7 @@ const tabs: TabItem[] = [
 ];
 
 const materialStore = useMaterialStore();
+const listData = ref<MaterialItem[]>([]);
 const activeTab = ref('all');
 const page = ref(1);
 const pageSize = 20;
@@ -76,9 +84,93 @@ const loading = ref(false);
 const uploadVisible = ref(false);
 
 const currentStatus = computed(() => {
+  if (activeTab.value === 'all') return undefined;
   const item = tabs.find((t) => t.key === activeTab.value);
   return item?.status;
 });
+
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let currentPollInterval = 1500;
+const backoffFactor = 1.5;
+const maxPollInterval = 8000;
+const maxTimeoutMs = 180000;
+let pollStartTime = 0;
+let isPageVisible = true;
+let isComponentMounted = false;
+
+function stopPolling(): void {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function checkAndStartPolling(): void {
+  stopPolling();
+  if (!isPageVisible) {
+    return;
+  }
+  const hasPending = listData.value.some(
+    (item) => item.status === 'parsing' || item.status === 'pending',
+  );
+  if (!hasPending) {
+    return;
+  }
+  pollStartTime = Date.now();
+  currentPollInterval = 1500;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll(): void {
+  stopPolling();
+  const delay = currentPollInterval;
+  currentPollInterval = Math.min(Math.round(currentPollInterval * backoffFactor), maxPollInterval);
+
+  pollTimer = setTimeout(async () => {
+    if (!isPageVisible || Date.now() - pollStartTime > maxTimeoutMs) {
+      stopPolling();
+      return;
+    }
+    await pollPendingItems();
+  }, delay);
+}
+
+async function pollPendingItems(): Promise<void> {
+  const pendingItems = listData.value.filter(
+    (item) => item.status === 'parsing' || item.status === 'pending',
+  );
+  if (pendingItems.length === 0) {
+    stopPolling();
+    return;
+  }
+
+  try {
+    const results = await Promise.allSettled(
+      pendingItems.map((item) => fetchMaterialStatus(item.id)),
+    );
+    for (const res of results) {
+      if (res.status === 'fulfilled' && res.value?.data) {
+        const updated = res.value.data;
+        const targetIndex = listData.value.findIndex((m) => m.id === updated.id);
+        if (targetIndex >= 0) {
+          listData.value[targetIndex] = { ...listData.value[targetIndex], ...updated };
+          materialStore.addMaterial(listData.value[targetIndex]);
+        }
+      }
+    }
+  } catch {
+    // 忽略偶发网络轮询异常
+  }
+
+  const stillPending = listData.value.some(
+    (item) => item.status === 'parsing' || item.status === 'pending',
+  );
+  if (stillPending && isPageVisible && Date.now() - pollStartTime <= maxTimeoutMs) {
+    scheduleNextPoll();
+  } else {
+    stopPolling();
+  }
+}
 
 async function loadData(reset = false): Promise<void> {
   if (loading.value) return;
@@ -96,10 +188,14 @@ async function loadData(reset = false): Promise<void> {
       const items = res.data.items || [];
       total.value = res.data.total ?? items.length;
       if (reset) {
-        materialStore.setMaterialsList(items);
+        listData.value = items;
       } else {
-        materialStore.appendMaterialsList(items);
+        listData.value = [...listData.value, ...items];
       }
+      for (const item of items) {
+        materialStore.addMaterial(item);
+      }
+      checkAndStartPolling();
     }
   } catch (err: unknown) {
     uni.showToast({ title: '加载资料失败', icon: 'none' });
@@ -111,6 +207,7 @@ async function loadData(reset = false): Promise<void> {
 function handleSelectTab(key: string): void {
   if (activeTab.value === key) return;
   activeTab.value = key;
+  stopPolling();
   void loadData(true);
 }
 
@@ -148,6 +245,23 @@ async function handleCardRetry(item: MaterialItem): Promise<void> {
   }
 }
 
+async function handleCardTriggerParse(item: MaterialItem): Promise<void> {
+  try {
+    if (typeof uni !== 'undefined' && typeof uni.showLoading === 'function') {
+      uni.showLoading({ title: '正在开始解析...' });
+    }
+    await triggerMaterialParse(item.id);
+    uni.showToast({ title: '已开始解析', icon: 'success' });
+    await loadData(true);
+  } catch {
+    uni.showToast({ title: '发起解析失败，请稍后重试', icon: 'none' });
+  } finally {
+    if (typeof uni !== 'undefined' && typeof uni.hideLoading === 'function') {
+      uni.hideLoading();
+    }
+  }
+}
+
 function handleOpenUpload(): void {
   uploadVisible.value = true;
 }
@@ -163,26 +277,48 @@ onPullDownRefresh(async () => {
 });
 
 onReachBottom(async () => {
-  if (materialStore.materialsList.length < total.value && !loading.value) {
+  if (listData.value.length < total.value && !loading.value) {
     page.value += 1;
     await loadData(false);
   }
 });
 
+onShow(() => {
+  isPageVisible = true;
+  void loadData(true);
+});
+
+onHide(() => {
+  if (!isComponentMounted) return;
+  isPageVisible = false;
+  stopPolling();
+});
+
+onUnmounted(() => {
+  isComponentMounted = false;
+  isPageVisible = false;
+  stopPolling();
+});
+
 onMounted(() => {
+  isComponentMounted = true;
   void loadData(true);
 });
 
 defineExpose({
   loadData,
+  listData,
   activeTab,
   uploadVisible,
   handleSelectTab,
   handleCardClick,
   handleCardDelete,
   handleCardRetry,
+  handleCardTriggerParse,
   handleOpenUpload,
   handleUploadSuccess,
+  checkAndStartPolling,
+  stopPolling,
 });
 </script>
 

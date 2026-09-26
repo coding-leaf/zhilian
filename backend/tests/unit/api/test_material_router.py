@@ -290,6 +290,8 @@ async def test_get_material_detail_success(
     assert payload["status"] == "ready"
     assert payload["current_version_id"] == str(version_id)
     assert payload["versions_count"] == 1
+    assert "parse_status" in payload
+    assert "progress_percentage" in payload
 
     mock_material_service.get_material_detail.assert_called_once_with(
         material_id=material_id,
@@ -447,6 +449,62 @@ async def test_list_materials_default_params(
         limit=20,
         offset=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_list_materials_status_filter_normalization(
+    mock_user: User, mock_material_service: MagicMock
+) -> None:
+    """Tests GET /api/v1/materials cleans invalid or empty status to None."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    mock_material_service.list_materials.return_value = ([], 0)
+
+    for invalid_status in ["", "   ", "all", "undefined", "null", "invalid_val"]:
+        mock_material_service.reset_mock()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/v1/materials?status={invalid_status}")
+
+        assert response.status_code == 200
+        mock_material_service.list_materials.assert_called_once_with(
+            user_id=mock_user.id,
+            keyword=None,
+            status=None,
+            page=1,
+            page_size=20,
+            limit=20,
+            offset=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_materials_status_filter_passthrough_known_aliases(
+    mock_user: User, mock_material_service: MagicMock
+) -> None:
+    """Tests GET /api/v1/materials forwards valid statuses and frontend aliases."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    mock_material_service.list_materials.return_value = ([], 0)
+
+    for known_status in ["parsing", "ready", "pending", "failed", "retake_required", "completed"]:
+        mock_material_service.reset_mock()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/v1/materials?status={known_status}")
+
+        assert response.status_code == 200
+        mock_material_service.list_materials.assert_called_once_with(
+            user_id=mock_user.id,
+            keyword=None,
+            status=known_status,
+            page=1,
+            page_size=20,
+            limit=20,
+            offset=0,
+        )
 
 
 @pytest.mark.asyncio

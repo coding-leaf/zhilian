@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 import { useUserStore } from '@/stores/userStore';
 import { storage } from '@/utils/storage';
+import * as userApi from '@/api/user';
+import { AppError } from '@/utils/error';
 import type { TokenPairResponse, UserProfileResponse } from '@/types/auth';
 
 describe('UserStore', () => {
@@ -102,5 +104,49 @@ describe('UserStore', () => {
     expect(store.profile).toBeNull();
     expect(store.isAuthenticated).toBe(false);
     expect(storage.getItem('auth_tokens')).toBeNull();
+  });
+
+  it('should hydrate profile from server when tokens exist', async () => {
+    storage.setItem('auth_tokens', mockTokens);
+    const fetchSpy = vi.spyOn(userApi, 'fetchUserProfile').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: mockProfile,
+    });
+
+    const store = useUserStore();
+    const result = await store.hydrateProfile();
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(result).toEqual(mockProfile);
+    expect(store.profile).toEqual(mockProfile);
+    expect(store.nickname).toBe('TestUser');
+  });
+
+  it('should return null on hydrateProfile without tokens', async () => {
+    const fetchSpy = vi.spyOn(userApi, 'fetchUserProfile');
+    const store = useUserStore();
+    const result = await store.hydrateProfile();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    expect(store.profile).toBeNull();
+  });
+
+  it('should clear tokens when hydrateProfile encounters 401 unauthorized', async () => {
+    storage.setItem('auth_tokens', mockTokens);
+    vi.spyOn(userApi, 'fetchUserProfile').mockRejectedValue(
+      new AppError(20001, '登录状态已过期，请重新登录', { status_code: 401 }),
+    );
+
+    const store = useUserStore();
+    store.initFromStorage();
+    expect(store.isAuthenticated).toBe(true);
+
+    const result = await store.hydrateProfile();
+    expect(result).toBeNull();
+    expect(store.tokens).toBeNull();
+    expect(store.isAuthenticated).toBe(false);
+    expect(store.profile).toBeNull();
   });
 });

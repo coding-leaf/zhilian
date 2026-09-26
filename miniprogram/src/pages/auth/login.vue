@@ -77,6 +77,8 @@ async function handleWeChatLogin(): Promise<void> {
       created_at: new Date().toISOString(),
     });
 
+    void userStore.hydrateProfile();
+
     uni.showToast({
       title: '登录成功',
       icon: 'success',

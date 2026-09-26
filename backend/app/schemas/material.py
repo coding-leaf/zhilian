@@ -77,6 +77,10 @@ class MaterialDetailResponse(BaseModel):
     current_version_id: uuid.UUID | None = Field(
         default=None, description="当前激活版本标识 UUIDv4"
     )
+    parse_status: str | None = Field(default=None, description="细粒度解析流水线状态")
+    progress_percentage: int | None = Field(
+        default=None, ge=0, le=100, description="解析进度百分比 (0-100)"
+    )
     versions_count: int = Field(default=0, ge=0, description="关联历史版本总数")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
@@ -95,6 +99,10 @@ class MaterialListItem(BaseModel):
     status: str = Field(..., description="资料生命周期主状态")
     current_version_id: uuid.UUID | None = Field(
         default=None, description="当前激活版本标识 UUIDv4"
+    )
+    parse_status: str | None = Field(default=None, description="细粒度解析流水线状态")
+    progress_percentage: int | None = Field(
+        default=None, ge=0, le=100, description="解析进度百分比 (0-100)"
     )
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")

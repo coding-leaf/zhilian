@@ -15,6 +15,7 @@ import type {
   MaterialUploadResponse,
   MaterialReshootResponse,
   RetakePageResponse,
+  MaterialParseResponse,
 } from '../types/material';
 
 /**
@@ -26,10 +27,18 @@ import type {
 export function fetchMaterialList(
   params?: MaterialListQueryParams,
 ): Promise<ApiResponse<PageResult<MaterialItem>>> {
+  const cleaned: Record<string, unknown> = {};
+  if (params) {
+    for (const [key, val] of Object.entries(params)) {
+      if (val !== undefined && val !== null && val !== '') {
+        cleaned[key] = val;
+      }
+    }
+  }
   return request<PageResult<MaterialItem>>({
     url: '/api/v1/materials',
     method: 'GET',
-    data: params,
+    data: Object.keys(cleaned).length > 0 ? cleaned : undefined,
   });
 }
 
@@ -86,6 +95,27 @@ export function retryMaterial(materialId: string): Promise<ApiResponse<MaterialI
   return request<MaterialItem>({
     url: `/api/v1/materials/${materialId}/retry`,
     method: 'POST',
+  });
+}
+
+/**
+ * 触发或重新调度学习资料解析流水线。
+ *
+ * @param materialId 目标资料主键 ID。
+ * @param options 可选参数（指定版本与是否同步阻塞）。
+ * @returns 统一响应包，包含调度或执行结果。
+ */
+export function triggerMaterialParse(
+  materialId: string,
+  options?: { versionId?: string; sync?: boolean },
+): Promise<ApiResponse<MaterialParseResponse>> {
+  return request<MaterialParseResponse>({
+    url: `/api/v1/materials/${materialId}/parse`,
+    method: 'POST',
+    data: {
+      version_id: options?.versionId,
+      sync: options?.sync ?? false,
+    },
   });
 }
 

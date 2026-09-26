@@ -744,17 +744,107 @@ class TestMaterialCreationAndLifecycle:
         items, total = service.list_materials(user_id=user_id, keyword="Math")
         assert total == 1
         assert items[0].id == mat1.id
+        assert getattr(items[0], "parse_status", None) == ParseStatus.QUEUED.value
+        assert getattr(items[0], "progress_percentage", None) == 10
+
+        mat_detail = service.get_material_detail(material_id=mat1.id, user_id=user_id)
+        assert getattr(mat_detail, "parse_status", None) == ParseStatus.QUEUED.value
+        assert getattr(mat_detail, "progress_percentage", None) == 10
 
         _items_all, total_all = service.list_materials(
             user_id=user_id, status=MaterialStatus.PENDING.value
         )
         assert total_all == 2
 
+        # parsing 语义聚合 pending + parsing 两个阶段
+        _items_parsing, total_parsing = service.list_materials(user_id=user_id, status="parsing")
+        assert total_parsing == 2
+
+        # completed 别名收敛到 ready，当前无 ready 资料
+        _items_completed, total_completed = service.list_materials(
+            user_id=user_id, status="completed"
+        )
+        assert total_completed == 0
+
+        # retake_required 在资料主表无对应状态，须过滤为空而非放行全部
+        _items_retake, total_retake = service.list_materials(
+            user_id=user_id, status="retake_required"
+        )
+        assert total_retake == 0
+
         versions = service.list_material_versions(user_id=user_id, material_id=mat1.id)
         assert len(versions) == 1
 
         with pytest.raises(MaterialNotFoundError):
             service.list_material_versions(user_id=user_id, material_id=uuid.uuid4())
+
+    def test_list_materials_resolves_parse_status_without_n_plus_one(
+        self,
+        service: MaterialService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """列表装配解析状态须基于预加载版本集合，禁止逐条查询版本表 (N+1 回归防护)。
+
+        同时覆盖两条版本选择分支：
+        - 非命中分支：``current_version_id`` 为空，回退取最新版本 (queued/10)；
+        - 命中分支：解析完成后 ``current_version_id`` 绑定就绪版本 (ready/100)。
+        """
+        user_id = uuid.uuid4()
+        for index in range(3):
+            content = f"用于验证列表状态装配的教材内容 {index}".encode()
+            service.create_material(
+                user_id=user_id,
+                title=f"N1-{index}.txt",
+                file_format="txt",
+                file_size=len(content),
+                file_content=content,
+            )
+
+        # 完成其中一个资料的解析，使其绑定 current_version_id，覆盖命中分支
+        created_items, created_total = service.repo.list_materials_by_user(user_id=user_id)
+        assert created_total == 3
+        ready_material = created_items[0]
+        ready_version = service.repo.get_latest_version(ready_material.id, user_id)
+        assert ready_version is not None
+        service.parse_material_pipeline(
+            material_id=ready_material.id,
+            version_id=ready_version.id,
+            user_id=user_id,
+        )
+
+        query_counts = {"by_id": 0, "latest": 0}
+        original_by_id = service.repo.get_version_by_id
+        original_latest = service.repo.get_latest_version
+
+        def counting_by_id(version_id: uuid.UUID, uid: uuid.UUID) -> object:  # type: ignore[no-untyped-def]
+            query_counts["by_id"] += 1
+            return original_by_id(version_id, uid)
+
+        def counting_latest(material_id: uuid.UUID, uid: uuid.UUID) -> object:  # type: ignore[no-untyped-def]
+            query_counts["latest"] += 1
+            return original_latest(material_id, uid)
+
+        monkeypatch.setattr(service.repo, "get_version_by_id", counting_by_id)
+        monkeypatch.setattr(service.repo, "get_latest_version", counting_latest)
+
+        items, total = service.list_materials(user_id=user_id)
+
+        # 断言列表路径不再逐条查询版本表
+        assert total == 3
+        assert query_counts["by_id"] == 0
+        assert query_counts["latest"] == 0
+
+        # 断言装配结果与逐条查询语义等价
+        status_by_id = {item.id: item for item in items}
+        refreshed_ready = status_by_id[ready_material.id]
+        assert getattr(refreshed_ready, "parse_status", None) == ParseStatus.READY.value
+        assert getattr(refreshed_ready, "progress_percentage", None) == 100
+
+        for item in items:
+            if item.id == ready_material.id:
+                continue
+            assert getattr(item, "parse_status", None) == ParseStatus.QUEUED.value
+            assert getattr(item, "progress_percentage", None) == 10
 
     def test_switch_material_version_flow(self, service: MaterialService) -> None:
         """Verify switch_material_version success and error conditions."""

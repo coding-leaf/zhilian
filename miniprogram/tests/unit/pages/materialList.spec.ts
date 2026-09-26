@@ -237,4 +237,108 @@ describe('MaterialListPage (list/index.vue)', () => {
     await wrapper.vm.handleCardRetry(sampleMaterials[0]);
     expect(retrySpy).toHaveBeenCalledWith('mat_01');
   });
+
+  it('triggers parse via POST /api/v1/materials/{id}/parse on the manual start action', async () => {
+    vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        items: [sampleMaterials[0]],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    const parseSpy = vi.spyOn(materialApi, 'triggerMaterialParse').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        material_id: 'mat_01',
+        version_id: 'ver_01',
+        parse_status: 'queued',
+        is_active: false,
+        message: '解析流水线任务已加入队列',
+      },
+    });
+
+    const wrapper = mount(MaterialListPage);
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await wrapper.vm.handleCardTriggerParse(sampleMaterials[0]);
+    expect(parseSpy).toHaveBeenCalledWith('mat_01');
+  });
+
+  it('maintains independent listData and incrementally adds to materialStore without wiping existing items', async () => {
+    const materialStore = useMaterialStore();
+    const existingHomeItem: MaterialItem = {
+      id: 'mat_home_01',
+      title: '首页专有概览资料',
+      file_format: 'pdf',
+      file_size: 500,
+      source_type: 'local',
+      status: 'ready',
+      created_at: '2026-09-25T08:00:00Z',
+    };
+    materialStore.setMaterialsList([existingHomeItem]);
+
+    vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        items: sampleMaterials,
+        total: 2,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    const wrapper = mount(MaterialListPage);
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(wrapper.vm.listData).toHaveLength(2);
+    // 验证全局 materialStore 包含原首页资料 + 新增资料，未被覆盖清空
+    expect(materialStore.materialsList.some((m) => m.id === 'mat_home_01')).toBe(true);
+    expect(materialStore.materialsList.some((m) => m.id === 'mat_01')).toBe(true);
+    expect(materialStore.materialsList.some((m) => m.id === 'mat_02')).toBe(true);
+  });
+
+  it('polls status when pending/parsing items exist and stops polling upon completion', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+        code: 200,
+        message: 'success',
+        data: {
+          items: [sampleMaterials[1]], // mat_02 is parsing
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
+      });
+
+      const statusSpy = vi.spyOn(materialApi, 'fetchMaterialStatus').mockResolvedValue({
+        code: 200,
+        message: 'success',
+        data: {
+          ...sampleMaterials[1],
+          status: 'ready',
+        },
+      });
+
+      const wrapper = mount(MaterialListPage);
+      await wrapper.vm.$nextTick();
+      await vi.advanceTimersByTimeAsync(20);
+
+      // 触发轮询时钟
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(statusSpy).toHaveBeenCalledWith('mat_02');
+
+      // 验证状态在 listData 中更新为 ready
+      expect(wrapper.vm.listData[0].status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

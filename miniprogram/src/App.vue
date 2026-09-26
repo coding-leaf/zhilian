@@ -10,10 +10,12 @@ const userStore = useUserStore();
 
 onLaunch(() => {
   userStore.initFromStorage();
+  void userStore.hydrateProfile();
 });
 
 onShow(() => {
-  // 应用进入前台运行
+  // 应用进入前台运行，静默水合校验最新画像
+  void userStore.hydrateProfile();
 });
 
 onHide(() => {

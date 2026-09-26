@@ -26,6 +26,8 @@ export interface MaterialItem {
   status: MaterialStatus;
   current_version_id?: string | null;
   versions_count?: number;
+  parse_status?: string | null;
+  progress_percentage?: number | null;
   created_at: string;
   updated_at?: string;
 }
@@ -120,4 +122,15 @@ export interface MaterialReshootResponse {
   reshoot_count: number;
   parse_status: string;
   unqualified_reason?: string | null;
+}
+
+/**
+ * 资料解析调度响应 DTO
+ */
+export interface MaterialParseResponse {
+  material_id: string;
+  version_id: string;
+  parse_status: string;
+  is_active: boolean;
+  message: string;
 }
