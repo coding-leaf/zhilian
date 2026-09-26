@@ -48,6 +48,48 @@
   gap: $spacing-lg;
 }
 
+.progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+  padding: $spacing-md;
+  border-radius: $radius-md;
+  background-color: $--wot-color-theme-light;
+}
+
+.progress-stages {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+}
+
+.progress-stage {
+  flex: 1;
+  text-align: center;
+  padding: 12rpx 0;
+  border-radius: $radius-pill;
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-5;
+  background-color: #ffffff;
+
+  &.active {
+    background-color: $--wot-color-theme;
+    color: #ffffff;
+    font-weight: $font-weight-bold;
+  }
+
+  &.done {
+    color: $--wot-color-theme;
+    font-weight: $font-weight-bold;
+  }
+}
+
+.progress-timer {
+  text-align: center;
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+}
+
 .config-section {
   display: flex;
   flex-direction: column;
@@ -143,6 +185,11 @@
     border-color: $--wot-color-theme;
     color: $--wot-color-theme;
     font-weight: $font-weight-bold;
+  }
+
+  &.disabled {
+    opacity: 0.5;
+    pointer-events: none;
   }
 }
 

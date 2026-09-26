@@ -27,66 +27,38 @@
       </view>
     </view>
 
-    <!-- 视图模式切换 -->
-    <view v-if="generatedQuestions.length > 0" class="view-tabs">
-      <button class="tab-btn" :class="{ active: currentTab === 'tree' }" @tap="currentTab = 'tree'">
-        知识架构树
-      </button>
-      <button
-        class="tab-btn"
-        :class="{ active: currentTab === 'questions' }"
-        @tap="currentTab = 'questions'"
-      >
-        题目列表 ({{ generatedQuestions.length }})
-      </button>
+    <!-- 考点树视图（题目统一在独立题目页查看，避免双数据源） -->
+    <view class="toolbar-card">
+      <view class="toolbar-left">
+        <text class="section-heading">知识架构树</text>
+      </view>
+      <view class="toolbar-actions">
+        <button class="tool-btn" @tap="handleSelectAll">全选</button>
+        <button class="tool-btn" @tap="handleClearSelection">清空</button>
+      </view>
     </view>
 
-    <!-- 考点树视图 -->
-    <template v-if="currentTab === 'tree'">
-      <view class="toolbar-card">
-        <view class="toolbar-left">
-          <text class="section-heading">知识架构树</text>
-        </view>
-        <view class="toolbar-actions">
-          <button class="tool-btn" @tap="handleSelectAll">全选</button>
-          <button class="tool-btn" @tap="handleClearSelection">清空</button>
-        </view>
+    <view class="tree-container">
+      <view v-if="loading" class="loading-state">
+        <wd-loading size="40rpx" />
+        <text class="state-text">正在加载知识点树...</text>
       </view>
-
-      <view class="tree-container">
-        <view v-if="loading" class="loading-state">
-          <wd-loading size="40rpx" />
-          <text class="state-text">正在加载知识点树...</text>
-        </view>
-        <view v-else-if="rootNodes.length === 0" class="empty-state">
-          <wd-icon name="info" size="64rpx" color="var(--color-gray-5)" />
-          <text class="state-text">暂无知识点数据</text>
-        </view>
-        <view v-else class="tree-list">
-          <KnowledgeTreeNode
-            v-for="node in rootNodes"
-            :key="node.id"
-            :node="node"
-            :level="1"
-            :selected-ids="materialStore.selectedKnowledgeIds"
-            :collapsed-map="materialStore.knowledgeTreeCollapsedMap"
-            @toggle-select="handleToggleSelect"
-            @toggle-collapse="handleToggleCollapse"
-          />
-        </view>
+      <view v-else-if="rootNodes.length === 0" class="empty-state">
+        <wd-icon name="info" size="64rpx" color="var(--color-gray-5)" />
+        <text class="state-text">暂无知识点数据</text>
       </view>
-    </template>
-
-    <!-- 题目预览列表视图 -->
-    <view v-else class="questions-container">
-      <QuestionCard
-        v-for="q in generatedQuestions"
-        :key="q.id"
-        :question="q"
-        @edit="handleOpenEdit"
-        @audit="handleOpenAudit"
-        @delete="handleDeleteQuestion"
-      />
+      <view v-else class="tree-list">
+        <KnowledgeTreeNode
+          v-for="node in rootNodes"
+          :key="node.id"
+          :node="node"
+          :level="1"
+          :selected-ids="materialStore.selectedKnowledgeIds"
+          :collapsed-map="materialStore.knowledgeTreeCollapsedMap"
+          @toggle-select="handleToggleSelect"
+          @toggle-collapse="handleToggleCollapse"
+        />
+      </view>
     </view>
 
     <!-- 底部吸底操作栏 -->
@@ -109,25 +81,13 @@
       </button>
     </view>
 
-    <!-- 抽屉挂载 -->
+    <!-- 出题配置抽屉：成功后组件内直接跳转独立题目页 -->
     <QuestionConfigDrawer
       :visible="isConfigDrawerOpen"
       :material-id="targetMaterialId"
       :version-id="currentVersionId"
       :selected-knowledge-ids="materialStore.selectedKnowledgeIds"
-      @success="handleGenerateSuccess"
       @close="isConfigDrawerOpen = false"
-    />
-    <QuestionEditDrawer
-      :visible="isEditDrawerOpen"
-      :question="editingQuestion"
-      @updated="handleQuestionUpdated"
-      @close="isEditDrawerOpen = false"
-    />
-    <QuestionAuditDrawer
-      :visible="isAuditDrawerOpen"
-      :question-id="auditingQuestionId"
-      @close="isAuditDrawerOpen = false"
     />
   </view>
 </template>
@@ -137,14 +97,9 @@ import { ref, computed, onMounted } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
 import { fetchKnowledgeTree, fetchMaterialDetail } from '@/api/material';
-import { deleteQuestion } from '@/api/question';
-import type { QuestionItem } from '@/types/question';
 import { flattenKnowledgeTree, calculateKnowledgeCoverage } from '../../utils/tree';
 import KnowledgeTreeNode from '../../components/KnowledgeTreeNode.vue';
-import QuestionCard from '../../components/QuestionCard.vue';
 import QuestionConfigDrawer from '../../components/QuestionConfigDrawer.vue';
-import QuestionEditDrawer from '../../components/QuestionEditDrawer.vue';
-import QuestionAuditDrawer from '../../components/QuestionAuditDrawer.vue';
 
 interface Props {
   materialId?: string;
@@ -157,13 +112,7 @@ const targetMaterialId = ref<string>('');
 const currentVersionId = ref<string>('');
 const materialTitle = ref<string>('学习资料考点大纲');
 const loading = ref<boolean>(false);
-const currentTab = ref<'tree' | 'questions'>('tree');
-const generatedQuestions = ref<QuestionItem[]>([]);
 const isConfigDrawerOpen = ref<boolean>(false);
-const isEditDrawerOpen = ref<boolean>(false);
-const isAuditDrawerOpen = ref<boolean>(false);
-const editingQuestion = ref<QuestionItem | null>(null);
-const auditingQuestionId = ref<string>('');
 
 const rootNodes = computed(() => materialStore.currentKnowledgeTree);
 const allFlatNodes = computed(() => flattenKnowledgeTree(materialStore.currentKnowledgeTree));
@@ -225,44 +174,6 @@ function handleGenerateQuestions(): void {
   isConfigDrawerOpen.value = true;
 }
 
-function handleGenerateSuccess(questions: QuestionItem[]): void {
-  generatedQuestions.value = [...questions, ...generatedQuestions.value];
-  currentTab.value = 'questions';
-}
-
-function handleOpenEdit(q: QuestionItem): void {
-  editingQuestion.value = q;
-  isEditDrawerOpen.value = true;
-}
-
-function handleOpenAudit(questionId: string): void {
-  auditingQuestionId.value = questionId;
-  isAuditDrawerOpen.value = true;
-}
-
-function handleQuestionUpdated(updated: QuestionItem): void {
-  const idx = generatedQuestions.value.findIndex((item) => item.id === updated.id);
-  if (idx !== -1) generatedQuestions.value[idx] = updated;
-}
-
-function handleDeleteQuestion(questionId: string): void {
-  uni.showModal({
-    title: '确认删除',
-    content: '确定要删除该题目吗？此操作将记录入不可变审计历史。',
-    success: async (res) => {
-      if (res.confirm) {
-        try {
-          await deleteQuestion(questionId, '用户手动删除');
-          generatedQuestions.value = generatedQuestions.value.filter((q) => q.id !== questionId);
-          uni.showToast({ title: '已删除题目', icon: 'success' });
-        } catch {
-          uni.showToast({ title: '删除失败，请重试', icon: 'none' });
-        }
-      }
-    },
-  });
-}
-
 function handleGoQuestionList(): void {
   if (!targetMaterialId.value) {
     uni.showToast({ title: '缺少资料信息', icon: 'none' });
@@ -270,6 +181,9 @@ function handleGoQuestionList(): void {
   }
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?material_id=${targetMaterialId.value}`,
+    fail: () => {
+      uni.showToast({ title: '题目页打开失败，请稍后重试', icon: 'none' });
+    },
   });
 }
 

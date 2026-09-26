@@ -50,6 +50,7 @@ describe('Question API Module', () => {
       url: '/api/v1/questions/generate',
       method: 'POST',
       data: payload,
+      timeout: 180000,
     });
     expect(res).toEqual(mockResponse);
   });

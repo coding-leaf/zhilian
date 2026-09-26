@@ -4,7 +4,6 @@ import { setActivePinia, createPinia } from 'pinia';
 import KnowledgeTreePage from '@/subpackages/material/pages/knowledge-tree/index.vue';
 import { useMaterialStore } from '@/stores/materialStore';
 import * as materialApi from '@/api/material';
-import * as questionApi from '@/api/question';
 import type { KnowledgeTreeResponse } from '@/types/material';
 
 describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
@@ -179,23 +178,14 @@ describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
     });
   });
 
-  it('switches to question list upon question generation success and supports edit, audit and delete', async () => {
+  it('navigates to the standalone question page with material_id from the overview link', async () => {
     vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
       code: 200,
       message: 'success',
       data: mockTreeResponse,
     });
-    const deleteSpy = vi.spyOn(questionApi, 'deleteQuestion').mockResolvedValue({
-      code: 200,
-      message: 'success',
-      data: { id: 'q_test_1', is_deleted: true },
-    });
-    const showModalSpy = vi.fn(
-      (opts: { success?: (res: { confirm: boolean; cancel: boolean }) => void }) => {
-        opts.success?.({ confirm: true, cancel: false });
-      },
-    );
-    (globalThis as unknown as { uni: Record<string, unknown> }).uni.showModal = showModalSpy;
+    const navigateSpy = vi.fn();
+    (globalThis as unknown as { uni: Record<string, unknown> }).uni.navigateTo = navigateSpy;
 
     const wrapper = mount(KnowledgeTreePage, {
       props: {
@@ -206,56 +196,52 @@ describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
     await wrapper.vm.$nextTick();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // Simulate config drawer emitting success
+    const link = wrapper.find('.material-link');
+    await link.trigger('tap');
+
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/subpackages/material/pages/questions/index?material_id=mat_001',
+        fail: expect.any(Function),
+      }),
+    );
+  });
+
+  it('keeps questions in the standalone page instead of a local tab (no dual data source)', async () => {
+    vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockTreeResponse,
+    });
+
+    const wrapper = mount(KnowledgeTreePage, {
+      props: {
+        materialId: 'mat_001',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
     const configDrawer = wrapper.findComponent({ name: 'QuestionConfigDrawer' });
     expect(configDrawer.exists()).toBe(true);
+    expect(configDrawer.props('materialId')).toBe('mat_001');
 
-    const generatedQuestion = {
-      id: 'q_test_1',
-      material_id: 'mat_001',
-      version_id: 'ver_001',
-      knowledge_point_id: 'node-1',
-      question_type: 'single_choice',
-      stem: '临界区是指访问临界资源的代码段吗？',
-      answer: '是的，进程中访问临界资源的那段代码称为临界区。',
-      difficulty: 3,
-    };
-
-    configDrawer.vm.$emit('success', [generatedQuestion]);
+    // Emitting success no longer injects a local question list / tab on this page
+    configDrawer.vm.$emit('success', [
+      {
+        id: 'q_test_1',
+        material_id: 'mat_001',
+        version_id: 'ver_001',
+        knowledge_point_id: 'node-1',
+        question_type: 'single_choice',
+        stem: '临界区是指访问临界资源的代码段吗？',
+        difficulty: 3,
+      },
+    ]);
     await wrapper.vm.$nextTick();
 
-    // Verify tabs rendered and question list displayed
-    expect(wrapper.text()).toContain('题目列表 (1)');
-    expect(wrapper.text()).toContain('临界区是指访问临界资源的代码段吗？');
-    expect(wrapper.text()).toContain('单选题');
-
-    // Trigger Edit
-    const editBtn = wrapper.find('.action-btn.primary');
-    await editBtn.trigger('tap');
-    const editDrawer = wrapper.findComponent({ name: 'QuestionEditDrawer' });
-    expect(editDrawer.props('visible')).toBe(true);
-
-    // Simulate edit drawer update
-    editDrawer.vm.$emit('updated', {
-      ...generatedQuestion,
-      stem: '更新后的临界区定义题目？',
-    });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('更新后的临界区定义题目？');
-
-    // Trigger Audit
-    const auditBtn = wrapper.findAll('.action-btn')[1];
-    await auditBtn.trigger('tap');
-    const auditDrawer = wrapper.findComponent({ name: 'QuestionAuditDrawer' });
-    expect(auditDrawer.props('visible')).toBe(true);
-    expect(auditDrawer.props('questionId')).toBe('q_test_1');
-
-    // Trigger Delete
-    const deleteBtn = wrapper.find('.action-btn.danger');
-    await deleteBtn.trigger('tap');
-
-    expect(deleteSpy).toHaveBeenCalledWith('q_test_1', '用户手动删除');
-    await wrapper.vm.$nextTick();
-    expect(wrapper.text()).not.toContain('更新后的临界区定义题目？');
+    expect(wrapper.find('.view-tabs').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('临界区是指访问临界资源的代码段吗？');
   });
 });

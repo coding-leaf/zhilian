@@ -1,8 +1,26 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { mount, flushPromises } from '@vue/test-utils';
 import QuestionConfigDrawer from '@/subpackages/material/components/QuestionConfigDrawer.vue';
 import * as questionApi from '@/api/question';
+import { AppError } from '@/utils/error';
+import type { ApiResponse } from '@/types/common';
 import type { QuestionGenerateResponse } from '@/types/question';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('QuestionConfigDrawer.vue', () => {
   const mockGenerateResponse: QuestionGenerateResponse = {
@@ -36,6 +54,10 @@ describe('QuestionConfigDrawer.vue', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders correctly with default 10 questions and selected types', () => {
@@ -107,7 +129,6 @@ describe('QuestionConfigDrawer.vue', () => {
 
     const capsules = wrapper.findAll('.capsule-item');
     // Initially all 4 types selected
-    // Unselect 3 types
     await capsules[0].trigger('tap'); // remove single_choice
     await capsules[1].trigger('tap'); // remove multiple_choice
     await capsules[2].trigger('tap'); // remove fill_in_blank
@@ -141,13 +162,100 @@ describe('QuestionConfigDrawer.vue', () => {
     expect(diffCapsules[2].classes()).toContain('active');
   });
 
-  it('successfully generates questions and emits success event', async () => {
+  it('shows the in-progress panel with stage text and elapsed timer, blocking duplicate submit', async () => {
+    const deferred = createDeferred<ApiResponse<QuestionGenerateResponse>>();
+    const generateSpy = vi
+      .spyOn(questionApi, 'generateQuestions')
+      .mockReturnValue(deferred.promise);
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    const submitBtn = wrapper.find('.submit-btn');
+    await submitBtn.trigger('tap');
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.progress-panel').exists()).toBe(true);
+    expect(wrapper.text()).toContain('检索切片');
+    expect(wrapper.text()).toContain('命制题目');
+    expect(wrapper.text()).toContain('质检门禁');
+    expect(wrapper.text()).toContain('已等待 0 秒');
+
+    // Duplicate taps must not trigger another generation request
+    await submitBtn.trigger('tap');
+    await submitBtn.trigger('tap');
+    expect(generateSpy).toHaveBeenCalledTimes(1);
+
+    deferred.resolve({ code: 200, message: 'success', data: mockGenerateResponse });
+    await flushPromises();
+  });
+
+  it('advances stages, ticks elapsed seconds and clears timers on unmount', async () => {
+    vi.useFakeTimers();
+    const deferred = createDeferred<ApiResponse<QuestionGenerateResponse>>();
+    vi.spyOn(questionApi, 'generateQuestions').mockReturnValue(deferred.promise);
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(wrapper.text()).toContain('已等待 3 秒');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wrapper.find('.progress-stage.active').text()).toBe('命制题目');
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    wrapper.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('blocks closing while generation is in progress', async () => {
+    const deferred = createDeferred<ApiResponse<QuestionGenerateResponse>>();
+    vi.spyOn(questionApi, 'generateQuestions').mockReturnValue(deferred.promise);
+    const toastSpy = vi.spyOn(uni, 'showToast');
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await wrapper.find('.close-btn').trigger('tap');
+
+    expect(toastSpy).toHaveBeenCalledWith({
+      title: '正在生成题目，请稍候',
+      icon: 'none',
+    });
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.find('.drawer-mask').exists()).toBe(true);
+
+    deferred.resolve({ code: 200, message: 'success', data: mockGenerateResponse });
+    await flushPromises();
+  });
+
+  it('successfully generates questions, closes the drawer and navigates to the question page', async () => {
     const generateSpy = vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
       code: 200,
       message: 'success',
       data: mockGenerateResponse,
     });
     const toastSpy = vi.spyOn(uni, 'showToast');
+    const navigateSpy = vi.spyOn(uni, 'navigateTo');
 
     const wrapper = mount(QuestionConfigDrawer, {
       props: {
@@ -171,7 +279,8 @@ describe('QuestionConfigDrawer.vue', () => {
       }),
     );
 
-    await wrapper.vm.$nextTick();
+    await flushPromises();
+
     expect(toastSpy).toHaveBeenCalledWith({
       title: '出题成功',
       icon: 'success',
@@ -180,6 +289,119 @@ describe('QuestionConfigDrawer.vue', () => {
     expect(wrapper.emitted('success')).toBeDefined();
     expect(wrapper.emitted('success')?.[0]?.[0]).toEqual(mockGenerateResponse.qualified_questions);
     expect(wrapper.emitted('update:visible')?.[0]?.[0]).toBe(false);
+
+    expect(navigateSpy).toHaveBeenCalledWith({
+      url: '/subpackages/material/pages/questions/index?material_id=mat_001',
+      fail: expect.any(Function),
+    });
+  });
+
+  it('shows a fallback toast when the question page fails to open', async () => {
+    vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockGenerateResponse,
+    });
+    const toastSpy = vi.spyOn(uni, 'showToast');
+    const navigateSpy = vi.fn();
+    (globalThis as unknown as { uni: Record<string, unknown> }).uni.navigateTo = navigateSpy;
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    const options = navigateSpy.mock.calls[0][0] as { fail?: () => void };
+    expect(typeof options.fail).toBe('function');
+    options.fail?.();
+
+    expect(toastSpy).toHaveBeenCalledWith({
+      title: '题目页打开失败，请稍后重试',
+      icon: 'none',
+    });
+  });
+
+  it('keeps the drawer open with a retry hint when no qualified questions are produced', async () => {
+    vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { ...mockGenerateResponse, qualified_count: 0, qualified_questions: [] },
+    });
+    const toastSpy = vi.spyOn(uni, 'showToast');
+    const navigateSpy = vi.spyOn(uni, 'navigateTo');
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    expect(toastSpy).toHaveBeenCalledWith({
+      title: '本次未产出合格题目，可调整考点或题量后重试',
+      icon: 'none',
+    });
+    expect(wrapper.emitted('success')).toBeUndefined();
+    expect(wrapper.emitted('update:visible')).toBeUndefined();
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(wrapper.find('.drawer-mask').exists()).toBe(true);
+  });
+
+  it('shows a network retry message for network or timeout errors', async () => {
+    vi.spyOn(questionApi, 'generateQuestions').mockRejectedValue(new AppError(-1));
+    const toastSpy = vi.spyOn(uni, 'showToast');
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    expect(toastSpy).toHaveBeenCalledWith({
+      title: '网络异常，请重试',
+      icon: 'none',
+    });
+    // Configuration is preserved and the drawer stays open for retry
+    expect(wrapper.find('.drawer-mask').exists()).toBe(true);
+    expect(wrapper.find('.submit-btn').classes()).not.toContain('disabled');
+  });
+
+  it('shows the backend message for business errors', async () => {
+    vi.spyOn(questionApi, 'generateQuestions').mockRejectedValue(
+      new AppError(40003, '当前资料没有可用知识切片，暂无法出题'),
+    );
+    const toastSpy = vi.spyOn(uni, 'showToast');
+
+    const wrapper = mount(QuestionConfigDrawer, {
+      props: {
+        visible: true,
+        materialId: 'mat_001',
+        selectedKnowledgeIds: ['kp_001'],
+      },
+    });
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    expect(toastSpy).toHaveBeenCalledWith({
+      title: '当前资料没有可用知识切片，暂无法出题',
+      icon: 'none',
+    });
   });
 
   it('handles generate questions failure gracefully', async () => {
@@ -197,7 +419,7 @@ describe('QuestionConfigDrawer.vue', () => {
     const submitBtn = wrapper.find('.submit-btn');
     await submitBtn.trigger('tap');
 
-    await wrapper.vm.$nextTick();
+    await flushPromises();
     expect(toastSpy).toHaveBeenCalledWith({
       title: 'Network error',
       icon: 'none',
@@ -219,7 +441,7 @@ describe('QuestionConfigDrawer.vue', () => {
     const submitBtn = wrapper.find('.submit-btn');
     await submitBtn.trigger('tap');
 
-    await wrapper.vm.$nextTick();
+    await flushPromises();
     expect(toastSpy).toHaveBeenCalledWith({
       title: '生成题目失败，请稍后重试',
       icon: 'none',

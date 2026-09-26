@@ -17,6 +17,9 @@ import type {
   QuestionAuditLogsResponse,
 } from '../types/question';
 
+/** 出题流水线单次请求超时（毫秒），真实生成耗时可 30s+，故放宽至 3 分钟。 */
+export const GENERATE_QUESTIONS_TIMEOUT = 180000;
+
 /**
  * 触发出题生成流水线并执行质检门禁。
  *
@@ -30,6 +33,7 @@ export function generateQuestions(
     url: '/api/v1/questions/generate',
     method: 'POST',
     data: payload,
+    timeout: GENERATE_QUESTIONS_TIMEOUT,
   });
 }
 

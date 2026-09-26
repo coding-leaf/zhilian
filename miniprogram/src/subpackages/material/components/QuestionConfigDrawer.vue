@@ -7,6 +7,21 @@
       </view>
 
       <view class="drawer-content">
+        <!-- 生成进行中面板：阶段文案轮播 + 已耗时计时（流程示意，非真实进度） -->
+        <view v-if="submitting" class="progress-panel">
+          <view class="progress-stages">
+            <view
+              v-for="(stage, idx) in stages"
+              :key="stage"
+              class="progress-stage"
+              :class="{ active: idx === stageIndex, done: idx < stageIndex }"
+            >
+              {{ stage }}
+            </view>
+          </view>
+          <text class="progress-timer">已等待 {{ elapsedSeconds }} 秒，流程示意仅供参考</text>
+        </view>
+
         <!-- 考点范围提示 -->
         <view class="config-section">
           <text class="section-label">考点范围</text>
@@ -21,6 +36,7 @@
             <button
               class="step-btn"
               :class="{ disabled: questionCount <= 1 || submitting }"
+              :disabled="submitting"
               @tap="handleStepMinus"
             >
               -
@@ -36,6 +52,7 @@
             <button
               class="step-btn"
               :class="{ disabled: questionCount >= 50 || submitting }"
+              :disabled="submitting"
               @tap="handleStepPlus"
             >
               +
@@ -53,7 +70,7 @@
               v-for="item in questionTypeOptions"
               :key="item.value"
               class="capsule-item"
-              :class="{ active: selectedTypes.includes(item.value) }"
+              :class="{ active: selectedTypes.includes(item.value), disabled: submitting }"
               @tap="handleToggleType(item.value)"
             >
               {{ item.label }}
@@ -70,7 +87,7 @@
               v-for="item in difficultyOptions"
               :key="item.value"
               class="capsule-item"
-              :class="{ active: selectedDifficulty === item.value }"
+              :class="{ active: selectedDifficulty === item.value, disabled: submitting }"
               @tap="handleSelectDifficulty(item.value)"
             >
               {{ item.label }}
@@ -98,6 +115,13 @@ import { ref, computed } from 'vue';
 import type { QuestionItem, QuestionType } from '@/types/question';
 import { generateQuestions } from '@/api/question';
 import { validateQuestionConfig } from '../utils/tree';
+import {
+  DIFFICULTY_OPTIONS,
+  QUESTION_TYPE_OPTIONS,
+  navigateToQuestionPage,
+  resolveGenerateErrorMessage,
+} from '../utils/questionGeneration';
+import { useGenerationProgress } from '../composables/useGenerationProgress';
 
 interface Props {
   visible?: boolean;
@@ -113,7 +137,6 @@ interface Emits {
   (e: 'update:modelValue', val: boolean): void;
   (e: 'close'): void;
   (e: 'success', questions: QuestionItem[]): void;
-  (e: 'generate-success', questions: QuestionItem[]): void;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -132,12 +155,16 @@ const questionCount = ref<number>(10);
 const selectedDifficulty = ref<number>(3);
 const submitting = ref<boolean>(false);
 
-const questionTypeOptions = [
-  { label: '单选题', value: 'single_choice' },
-  { label: '多选题', value: 'multiple_choice' },
-  { label: '填空题', value: 'fill_in_blank' },
-  { label: '主观简答题', value: 'short_answer' },
-];
+const {
+  stages,
+  stageIndex,
+  elapsedSeconds,
+  start: startProgress,
+  stop: stopProgress,
+} = useGenerationProgress();
+
+const questionTypeOptions = QUESTION_TYPE_OPTIONS;
+const difficultyOptions = DIFFICULTY_OPTIONS;
 
 const selectedTypes = ref<string[]>([
   'single_choice',
@@ -145,12 +172,6 @@ const selectedTypes = ref<string[]>([
   'fill_in_blank',
   'short_answer',
 ]);
-
-const difficultyOptions = [
-  { label: '基础巩固', value: 2 },
-  { label: '默认/自适应', value: 3 },
-  { label: '进阶挑战', value: 4 },
-];
 
 const selectedKpCount = computed<number>(() => {
   if (props.selectedKnowledgeIds.length > 0) {
@@ -206,10 +227,18 @@ function handleSelectDifficulty(val: number): void {
   selectedDifficulty.value = val;
 }
 
-function handleClose(): void {
+function emitClose(): void {
   emit('update:visible', false);
   emit('update:modelValue', false);
   emit('close');
+}
+
+function handleClose(): void {
+  if (submitting.value) {
+    uni.showToast({ title: '正在生成题目，请稍候', icon: 'none' });
+    return;
+  }
+  emitClose();
 }
 
 async function handleSubmit(): Promise<void> {
@@ -231,6 +260,7 @@ async function handleSubmit(): Promise<void> {
   }
 
   submitting.value = true;
+  startProgress();
   try {
     const res = await generateQuestions({
       material_id: props.materialId,
@@ -242,15 +272,19 @@ async function handleSubmit(): Promise<void> {
     });
 
     const questions: QuestionItem[] = res.data?.qualified_questions || [];
+    if (questions.length === 0) {
+      uni.showToast({ title: '本次未产出合格题目，可调整考点或题量后重试', icon: 'none' });
+      return;
+    }
+
     emit('success', questions);
-    emit('generate-success', questions);
+    emitClose();
+    navigateToQuestionPage(props.materialId);
     uni.showToast({ title: '出题成功', icon: 'success' });
-    handleClose();
   } catch (err: unknown) {
-    const errorPayload = err as { message?: string; errMsg?: string };
-    const errorMsg = errorPayload?.message || errorPayload?.errMsg || '生成题目失败，请稍后重试';
-    uni.showToast({ title: errorMsg, icon: 'none' });
+    uni.showToast({ title: resolveGenerateErrorMessage(err), icon: 'none' });
   } finally {
+    stopProgress();
     submitting.value = false;
   }
 }
