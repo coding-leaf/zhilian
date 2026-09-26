@@ -38,4 +38,24 @@
   - 前端 `lint`/`type-check` 全绿、`vitest`（52 files / 424 passed）。
   - 提交 `86bc24e`；规范沉淀《Material Status Filter & Parse Progress Contract》写入前端 quality-guidelines。
 
+---
+
+## 2026-09-26 - Headless CLI 与真实链路闭环验证 (headless-cli-closed-loop)
+
+- **背景**: 缺少可被 AI/开发者脚本化驱动、并对真实功能做端到端断言的验证通道；mock 单测全绿 ≠ 真机可用。
+- **实现**（分 3 Stage，每阶段设评审门）:
+  - 新增 `backend/app/cli/`（`python -m app.cli`，标准库 argparse）：`doctor/db/auth/material/question/practice/grading/diagnosis/smoke`。
+  - 真实链路硬门禁：`fake/memory/sqlite` 回落 → 退出码 3（业务前中止）；基础设施不可达 → 4；断言失败 → 2；密钥/token/DB 密码全脱敏。
+  - `smoke` 编排 11 阶段（preflight→login→import→parse→snippets→tree→questions→practice→grading→report→summary），逐阶段 JSON 归因。
+  - `fixtures.py`：中文讲义 TXT + 真实最小 DOCX（zipfile）生成。
+- **真实链路暴露并修复的缺陷**:
+  1. **出题检索门禁分数错配（致命）**：`_retrieve_and_gate_snippets` 用 RRF `final_score`（≈0.016）比相似度阈值 0.35 → 真实检索命中亦被拒；改用 `vector_score`（余弦 0–1）。铁证：真实候选 `vector_score=0.88 / final_score=0.035`，而 mock 预置假的 `final_score=0.91`。
+  2. **DOCX/PPTX 解析**：原裸 `content.decode(errors="ignore")` 对 ZIP 容器必失败；改 `zipfile + ElementTree`（按 localname 抽 `w:t`/`a:t`，损坏抛 `MaterialInvalidError`）。
+  3. **子 Agent 派发不稳**：`implement.jsonl` 注入巨型通用指南 + 派发 prompt 重复粘贴工件 → 载荷超限触发上游 `Bad Request`；精简清单 + `.trellis/config.yaml` 加 `context_injection` 上限。
+- **实现修复**: 真实 `smoke` 由退出码 2 → **0（11/11 阶段全绿，~52s）**，证据存于任务归档 `stage3-real-smoke-success.json`。
+- **验证成果**:
+  - 后端 `ruff`/`format`(214)/`mypy`(125)/`lint-imports`(5 kept)/`pytest`（1113 passed）。
+  - 提交 `cd628ab`；规范沉淀《Headless CLI 契约》《检索打分语义 RRF vs 余弦》写入 backend quality-guidelines。
+- **遗留**: `smoke --image` 的 OCR 子链路仍为 `skipped`（需用户提供真实含字图片）；`context._probe_*` 极端异常串建议后续统一过滤。
+
 
