@@ -515,9 +515,6 @@ class TestQuestionMigration:
         engine = create_engine("sqlite:///:memory:")
         try:
             with engine.begin() as connection:
-                # 1. Prerequisite: create users table
-                Base.metadata.tables["users"].create(connection)
-
                 from alembic.operations import Operations
                 from alembic.runtime.migration import MigrationContext
 

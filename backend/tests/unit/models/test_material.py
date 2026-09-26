@@ -534,9 +534,6 @@ class TestMaterialMigration:
 
         engine = create_engine("sqlite:///:memory:")
         with engine.begin() as connection:
-            # First create users table as prerequisite
-            Base.metadata.tables["users"].create(connection)
-
             from alembic.operations import Operations
             from alembic.runtime.migration import MigrationContext
 
@@ -569,4 +566,4 @@ class TestMaterialMigration:
             assert "material_snippets" not in table_names_after_downgrade
             assert "material_versions" not in table_names_after_downgrade
             assert "materials" not in table_names_after_downgrade
-            assert "users" in table_names_after_downgrade
+            assert "users" not in table_names_after_downgrade

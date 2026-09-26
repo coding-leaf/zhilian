@@ -13,6 +13,7 @@
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -383,9 +384,21 @@ def test_s3_adapter_secret_key_masked() -> None:
     assert "https://s3.example.com" in repr_output
 
 
-def test_s3_adapter_missing_boto3_raises_connection_error() -> None:
+def test_s3_adapter_missing_boto3_raises_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """当运行环境缺少 boto3 时实例化未注入 client 的适配器抛出 StorageConnectionError。"""
-    # 真实环境中由于未安装 boto3，直接实例化无 client 的 S3StorageAdapter 应触发异常
+    import builtins
+
+    real_import = builtins.__import__
+
+    def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "boto3":
+            raise ImportError("No module named boto3")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+
     with pytest.raises(StorageConnectionError, match="boto3 库未安装"):
         S3StorageAdapter(
             endpoint_url="http://localhost:9000",

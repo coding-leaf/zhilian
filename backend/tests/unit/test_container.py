@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.container import AppContainer
-from app.core.config import AppSettings, DatabaseSettings, StorageSettings
+from app.core.config import AppSettings, DatabaseSettings, LLMSettings, OCRSettings, StorageSettings
 from app.integrations.container import ProviderRegistry
 from app.services.auth import AuthService
 from app.services.diagnosis import DiagnosisService
@@ -169,6 +169,8 @@ async def test_app_container_check_health() -> None:
         env="development",
         db=DatabaseSettings(db_url="sqlite:///:memory:"),
         storage=StorageSettings(provider="memory", bucket_name="zhilian-materials"),
+        llm=LLMSettings(provider="fake"),
+        ocr=OCRSettings(provider="fake"),
     )
     container = AppContainer.create(settings=settings)
 

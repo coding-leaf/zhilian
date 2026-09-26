@@ -11,7 +11,11 @@ ENV/
 
 # Testing & Coverage
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.import_linter_cache/
 .coverage
+.coverage.*
 htmlcov/
 coverage.xml
 coverage.json

@@ -3,10 +3,11 @@ import { defineConfig } from 'vite';
 import uniPkg from '@dcloudio/vite-plugin-uni';
 
 // Handle CJS/ESM interop for @dcloudio/vite-plugin-uni
+const uniPkgRecord = uniPkg as unknown as { default?: { default?: unknown } | unknown };
 const uni =
   typeof uniPkg === 'function'
     ? uniPkg
-    : (uniPkg as any).default?.default || (uniPkg as any).default || uniPkg;
+    : (uniPkgRecord.default as { default?: unknown })?.default || uniPkgRecord.default || uniPkg;
 
 // https://vitejs.dev/config/
 export default defineConfig({

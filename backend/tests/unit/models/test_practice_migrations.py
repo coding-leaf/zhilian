@@ -7,8 +7,6 @@ import importlib
 
 from sqlalchemy import create_engine, inspect
 
-from app.models.base import Base
-
 
 class TestPracticeMigration:
     """Test suite for 0003 Alembic migration upgrade and downgrade symmetry."""
@@ -26,9 +24,6 @@ class TestPracticeMigration:
         engine = create_engine("sqlite:///:memory:")
         try:
             with engine.begin() as connection:
-                # 1. Prerequisite: create users table
-                Base.metadata.tables["users"].create(connection)
-
                 from alembic.operations import Operations
                 from alembic.runtime.migration import MigrationContext
 

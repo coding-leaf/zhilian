@@ -1,0 +1,44 @@
+version: '3'
+
+tasks:
+  verify-backend:
+    desc: Run all backend quality gates (ruff format/check, mypy, import-linter, pytest with 80% coverage)
+    dir: backend
+    cmds:
+      - uv run ruff format --check .
+      - uv run ruff check .
+      - uv run mypy app
+      - uv run lint-imports
+      - uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
+
+  verify-frontend:
+    desc: Run all frontend quality gates (eslint, vue-tsc typecheck, vitest unit tests)
+    dir: miniprogram
+    cmds:
+      - pnpm run lint
+      - pnpm run type-check
+      - pnpm run test:unit
+
+  verify:
+    desc: Execute full-stack physical verification gates (Backend + Frontend)
+    cmds:
+      - task: verify-backend
+      - task: verify-frontend
+
+  test-backend:
+    desc: Run fast backend unit tests without coverage overhead
+    dir: backend
+    cmds:
+      - uv run pytest tests
+
+  test-frontend:
+    desc: Run fast frontend unit tests
+    dir: miniprogram
+    cmds:
+      - pnpm run test:unit
+
+  format:
+    desc: Auto-format backend and frontend source code
+    cmds:
+      - cmd: cd backend && uv run ruff format . && uv run ruff check --fix .
+      - cmd: cd miniprogram && pnpm run lint --fix

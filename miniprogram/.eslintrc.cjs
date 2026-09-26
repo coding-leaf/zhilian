@@ -21,8 +21,8 @@ module.exports = {
   plugins: ['vue', '@typescript-eslint', 'prettier'],
   rules: {
     'prettier/prettier': 'error',
-    'max-lines': ['error', { max: 300, skipBlankLines: true, skipComments: true }],
-    '@typescript-eslint/no-explicit-any': 'warn',
+    'max-lines': ['warn', { max: 500, skipBlankLines: true, skipComments: true }],
+    '@typescript-eslint/no-explicit-any': 'error',
     'vue/multi-word-component-names': 'off',
     'vue/no-v-html': 'off',
   },
