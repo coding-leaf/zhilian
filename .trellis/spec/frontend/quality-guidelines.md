@@ -190,4 +190,37 @@ stmt = stmt.options(selectinload(Material.versions))
 version = self._pick_loaded_version(item)  # versions[0] 即最新，或命中 current_version_id
 ```
 
+---
+
+### Scenario: Material Subpackage Navigation Param Contract
+
+#### 1. Scope / Trigger
+- 资料分包内页面间跳转（`list` / `detail` / `knowledge-tree` / `questions` / `practice` / `report`）与生成成功后的跳转。
+
+#### 2. Contracts
+- **主键参数名统一为 `material_id`**（snake_case，与后端查询参数一致）；接收页必须兼容 `materialId` / `id` 兜底解析，禁止只认一种导致「跳过去却空白」。
+- 所有 `uni.navigateTo` 必须带 `fail` 兜底提示，禁止静默无响应（用户会以为「原地不动」）。
+- 生成成功后跳转目标统一：`/subpackages/material/pages/questions/index?material_id=<id>`。
+- 页面数据源：二级列表页使用**页面本地 `listData`**，`onShow` 安全刷新；禁止用分页结果全量覆盖全局 Store。
+
+#### 3. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：同一资料主键在不同页面用不同参数名，接收页解析失败 → 空白/原地不动
+uni.navigateTo({ url: `/subpackages/material/pages/detail/index?id=${id}` });        // 发送 id
+// detail 页只读 query.material_id → undefined → 不加载
+```
+##### Correct
+```typescript
+// 正确：统一 material_id，接收页兼容兜底，且带 fail 提示
+uni.navigateTo({
+  url: `/subpackages/material/pages/questions/index?material_id=${id}`,
+  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+});
+// 接收页：initPage(q?.material_id || q?.materialId || q?.id || props.id)
+```
+
+#### 4. Tests Required
+- 页面单测覆盖参数解析：`material_id` / `materialId` / `id` 三种入参均能正确加载。
+
 

@@ -9,6 +9,7 @@
     <view class="overview-card">
       <view class="material-header">
         <text class="material-title">{{ materialTitle }}</text>
+        <text class="material-link" @tap="handleGoQuestionList">查看题目列表</text>
       </view>
       <view class="stats-grid">
         <view class="stat-item">
@@ -78,22 +79,14 @@
 
     <!-- 题目预览列表视图 -->
     <view v-else class="questions-container">
-      <view v-for="q in generatedQuestions" :key="q.id" class="question-card">
-        <view class="q-header">
-          <text class="q-type-badge">{{ formatQuestionType(q.question_type) }}</text>
-          <text class="q-difficulty">难度 {{ q.difficulty }}</text>
-        </view>
-        <text class="q-stem">{{ q.stem }}</text>
-        <view class="q-answer-box">
-          <text class="ans-label">参考答案：</text>
-          <text class="ans-content">{{ q.answer }}</text>
-        </view>
-        <view class="q-actions">
-          <button class="action-btn primary" @tap="handleOpenEdit(q)">编辑</button>
-          <button class="action-btn" @tap="handleOpenAudit(q.id)">修改痕迹</button>
-          <button class="action-btn danger" @tap="handleDeleteQuestion(q.id)">删除</button>
-        </view>
-      </view>
+      <QuestionCard
+        v-for="q in generatedQuestions"
+        :key="q.id"
+        :question="q"
+        @edit="handleOpenEdit"
+        @audit="handleOpenAudit"
+        @delete="handleDeleteQuestion"
+      />
     </view>
 
     <!-- 底部吸底操作栏 -->
@@ -148,6 +141,7 @@ import { deleteQuestion } from '@/api/question';
 import type { QuestionItem } from '@/types/question';
 import { flattenKnowledgeTree, calculateKnowledgeCoverage } from '../../utils/tree';
 import KnowledgeTreeNode from '../../components/KnowledgeTreeNode.vue';
+import QuestionCard from '../../components/QuestionCard.vue';
 import QuestionConfigDrawer from '../../components/QuestionConfigDrawer.vue';
 import QuestionEditDrawer from '../../components/QuestionEditDrawer.vue';
 import QuestionAuditDrawer from '../../components/QuestionAuditDrawer.vue';
@@ -269,15 +263,14 @@ function handleDeleteQuestion(questionId: string): void {
   });
 }
 
-function formatQuestionType(type?: string): string {
-  const map: Record<string, string> = {
-    single_choice: '单选题',
-    multiple_choice: '多选题',
-    true_false: '判断题',
-    fill_in_blank: '填空题',
-    short_answer: '主观简答题',
-  };
-  return (type && map[type]) || type || '题目';
+function handleGoQuestionList(): void {
+  if (!targetMaterialId.value) {
+    uni.showToast({ title: '缺少资料信息', icon: 'none' });
+    return;
+  }
+  uni.navigateTo({
+    url: `/subpackages/material/pages/questions/index?material_id=${targetMaterialId.value}`,
+  });
 }
 
 function initData(id?: string): void {

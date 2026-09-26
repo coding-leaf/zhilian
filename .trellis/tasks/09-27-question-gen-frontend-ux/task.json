@@ -1,0 +1,30 @@
+{
+  "id": "question-gen-frontend-ux",
+  "name": "question-gen-frontend-ux",
+  "title": "出题体验前端闭环与可核验",
+  "description": "点击生成题目后原地不动、无进度、无法确认生题效果；多选考点未生效；跳转/入口逻辑混乱。父任务统筹前端出题交互闭环（进度/跳转/多考点/可核验），知识树与出题质量另开任务。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-27-question-gen-progress-nav",
+    "09-27-question-gen-multi-kp",
+    "09-27-question-gen-verify-list"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

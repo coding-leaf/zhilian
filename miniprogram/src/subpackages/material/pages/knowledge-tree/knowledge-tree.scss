@@ -54,6 +54,13 @@
       color: $--wot-color-gray-9;
       line-height: $line-height-normal;
     }
+
+    .material-link {
+      font-size: $font-size-caption;
+      font-weight: $font-weight-medium;
+      color: $--wot-color-theme;
+      flex-shrink: 0;
+    }
   }
 
   .stats-grid {
@@ -265,89 +272,4 @@
   gap: $spacing-md;
 }
 
-.question-card {
-  background-color: #ffffff;
-  border-radius: $radius-lg;
-  border: 1rpx solid $--wot-color-gray-4;
-  padding: $spacing-lg;
-  box-shadow: $shadow-card;
-  display: flex;
-  flex-direction: column;
-  gap: $spacing-sm;
-
-  .q-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-
-    .q-type-badge {
-      font-size: 20rpx;
-      padding: 4rpx 14rpx;
-      border-radius: $radius-pill;
-      background-color: $--wot-color-theme-light;
-      color: $--wot-color-theme;
-      font-weight: $font-weight-bold;
-    }
-
-    .q-difficulty {
-      font-size: $font-size-caption;
-      color: $--wot-color-gray-6;
-    }
-  }
-
-  .q-stem {
-    font-size: $font-size-card;
-    font-weight: $font-weight-bold;
-    color: $--wot-color-gray-9;
-    line-height: $line-height-card;
-  }
-
-  .q-answer-box {
-    background-color: $--wot-color-gray-1;
-    border-radius: $radius-md;
-    padding: $spacing-sm;
-    font-size: $font-size-caption;
-    color: $--wot-color-gray-7;
-    line-height: $line-height-normal;
-
-    .ans-label {
-      font-weight: $font-weight-bold;
-      color: $--wot-color-gray-8;
-    }
-  }
-
-  .q-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: $spacing-sm;
-    margin-top: $spacing-xs;
-
-    .action-btn {
-      font-size: $font-size-caption;
-      color: $--wot-color-gray-7;
-      background-color: $--wot-color-gray-2;
-      border: 1rpx solid $--wot-color-gray-4;
-      border-radius: $radius-pill;
-      padding: 8rpx 20rpx;
-      line-height: 1.2;
-      margin: 0;
-
-      &::after {
-        border: none;
-      }
-
-      &.primary {
-        color: $--wot-color-theme;
-        background-color: $--wot-color-theme-light;
-        border-color: $--wot-color-theme-border;
-      }
-
-      &.danger {
-        color: $--wot-color-danger-text;
-        background-color: $--wot-color-danger-bg;
-        border-color: $--wot-color-danger-border;
-      }
-    }
-  }
-}
 
