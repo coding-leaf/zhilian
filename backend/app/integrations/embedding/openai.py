@@ -44,7 +44,7 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
             api_key: 大模型服务凭证 Key。
             base_url: 接口基础 URL，默认通义千问兼容接入点。
             model: 向量模型名称，默认 text-embedding-v3。
-            dimensions: 输出向量维度，默认 1024。
+            dimensions: 期望输出维度（仅用于响应校验，不随请求发送），默认 1024。
             timeout: 单次请求超时时间（秒），默认 20.0。
             max_retries: 偶发错误重试上限，默认 3。
             client: 可选外部注入的 HTTP 客户端实例（测试打桩用）。
@@ -174,10 +174,11 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
         model = options.model if options else self.model
         dimensions = options.dimensions if options else self.dimensions
 
+        # 定维模型（如 bge-large-zh-v1.5）会拒收 dimensions 字段，故不随请求发送；
+        # 维度契约改由下方响应校验保障（库表固定 1024 维）。
         payload = {
             "model": model,
             "input": text,
-            "dimensions": dimensions,
         }
 
         data = self._send_request_with_retries(payload)
@@ -214,7 +215,6 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
         payload = {
             "model": model,
             "input": list(texts),
-            "dimensions": dimensions,
         }
 
         data = self._send_request_with_retries(payload)

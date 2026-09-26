@@ -1,0 +1,107 @@
+{
+  "command": "smoke",
+  "status": "failed",
+  "run_id": "ac8fc28e",
+  "failed_stage": "parse",
+  "error": "资料解析失败: 大模型服务响应超时",
+  "exit_code": 2,
+  "ocr_leg": "skipped",
+  "duration_ms": 490609,
+  "entities": {
+    "user_id": "37cb579e-1ff7-426b-b733-5ba60497b014",
+    "material_id": "e752af33-1f57-489e-ab8c-0bc016343a39",
+    "version_id": "58256545-dd04-4157-80a2-7865eea8bf24",
+    "file_format": "txt"
+  },
+  "stages": [
+    {
+      "name": "preflight",
+      "status": "ok",
+      "elapsed_ms": 594,
+      "details": {
+        "allow_fake": false,
+        "providers": {
+          "llm": {
+            "provider": "openai",
+            "model": "gemini-3.5-flash-lite",
+            "api_key_configured": true
+          },
+          "ocr": {
+            "provider": "baidu",
+            "api_key_configured": true,
+            "secret_key_configured": true
+          },
+          "embedding": {
+            "provider": "openai",
+            "model": "BAAI/bge-large-zh-v1.5",
+            "dimension": 1024,
+            "api_key_configured": true
+          },
+          "search": {
+            "provider": "pgvector",
+            "vector_dimension": 1024
+          },
+          "storage": {
+            "provider": "minio",
+            "endpoint_configured": true,
+            "access_key_configured": true,
+            "secret_key_configured": true
+          },
+          "queue": {
+            "provider": "memory"
+          },
+          "idempotency": {
+            "provider": "memory"
+          }
+        },
+        "infrastructure": {
+          "database": {
+            "reachable": true,
+            "detail": "dialect=postgresql"
+          },
+          "redis": {
+            "reachable": true,
+            "detail": "ping ok"
+          },
+          "minio": {
+            "reachable": true,
+            "detail": "tcp 127.0.0.1:9000 open"
+          }
+        },
+        "database_revision": "0003_create_practice_tables",
+        "storage_bucket": "zhilian-materials"
+      }
+    },
+    {
+      "name": "login",
+      "status": "ok",
+      "elapsed_ms": 69,
+      "ids": {
+        "user_id": "37cb579e-1ff7-426b-b733-5ba60497b014"
+      }
+    },
+    {
+      "name": "import",
+      "status": "ok",
+      "elapsed_ms": 60,
+      "ids": {
+        "material_id": "e752af33-1f57-489e-ab8c-0bc016343a39",
+        "version_id": "58256545-dd04-4157-80a2-7865eea8bf24",
+        "file_format": "txt"
+      }
+    },
+    {
+      "name": "parse",
+      "status": "failed",
+      "elapsed_ms": 489884,
+      "error": "资料解析失败: 大模型服务响应超时"
+    }
+  ],
+  "remediation": "请依据 failed_stage 定位失败环境（文档格式/Provider 配置）后重试。",
+  "details": {
+    "parse_status": "failed",
+    "failed_stage": "knowledge_extraction",
+    "error_message": "大模型服务响应超时",
+    "error_code": 30012
+  }
+}

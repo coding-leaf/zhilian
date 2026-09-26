@@ -1,0 +1,181 @@
+{
+  "command": "smoke",
+  "status": "ok",
+  "run_id": "bc172e24",
+  "exit_code": 0,
+  "duration_ms": 51794,
+  "ocr_leg": "skipped",
+  "keep": false,
+  "entities": {
+    "user_id": "8241a30c-d4f8-4d92-b380-bde0805465d0",
+    "material_id": "18d3303e-9b1b-40b3-a2c2-5ff7f6816c6b",
+    "version_id": "a982648e-61ef-435e-bb24-3e75c2dfa530",
+    "file_format": "txt",
+    "parse_status": "ready",
+    "snippet_count": 6,
+    "embedded_snippet_count": 6,
+    "knowledge_point_id": "42720e8a-592d-4ca9-8af1-766150afe2ae",
+    "knowledge_tree_node_count": 15,
+    "question_count": 1,
+    "practice_id": "69dfb319-72f8-4b33-a012-fa897a8670c0",
+    "answered_count": 1,
+    "practice_status": "completed",
+    "graded_items": 1,
+    "grading_total_score": 0.0,
+    "report_id": "0273fb41-fedd-4066-8774-9c2178a1a73b"
+  },
+  "stages": [
+    {
+      "name": "preflight",
+      "status": "ok",
+      "elapsed_ms": 456,
+      "details": {
+        "allow_fake": false,
+        "providers": {
+          "llm": {
+            "provider": "openai",
+            "model": "gemini-3.5-flash-lite",
+            "api_key_configured": true
+          },
+          "ocr": {
+            "provider": "baidu",
+            "api_key_configured": true,
+            "secret_key_configured": true
+          },
+          "embedding": {
+            "provider": "openai",
+            "model": "BAAI/bge-large-zh-v1.5",
+            "dimension": 1024,
+            "api_key_configured": true
+          },
+          "search": {
+            "provider": "pgvector",
+            "vector_dimension": 1024
+          },
+          "storage": {
+            "provider": "minio",
+            "endpoint_configured": true,
+            "access_key_configured": true,
+            "secret_key_configured": true
+          },
+          "queue": {
+            "provider": "memory"
+          },
+          "idempotency": {
+            "provider": "memory"
+          }
+        },
+        "infrastructure": {
+          "database": {
+            "reachable": true,
+            "detail": "dialect=postgresql"
+          },
+          "redis": {
+            "reachable": true,
+            "detail": "ping ok"
+          },
+          "minio": {
+            "reachable": true,
+            "detail": "tcp 127.0.0.1:9000 open"
+          }
+        },
+        "database_revision": "0003_create_practice_tables",
+        "storage_bucket": "zhilian-materials"
+      }
+    },
+    {
+      "name": "login",
+      "status": "ok",
+      "elapsed_ms": 43,
+      "ids": {
+        "user_id": "8241a30c-d4f8-4d92-b380-bde0805465d0"
+      }
+    },
+    {
+      "name": "import",
+      "status": "ok",
+      "elapsed_ms": 24,
+      "ids": {
+        "material_id": "18d3303e-9b1b-40b3-a2c2-5ff7f6816c6b",
+        "version_id": "a982648e-61ef-435e-bb24-3e75c2dfa530",
+        "file_format": "txt"
+      }
+    },
+    {
+      "name": "parse",
+      "status": "ok",
+      "elapsed_ms": 20772,
+      "ids": {
+        "parse_status": "ready"
+      }
+    },
+    {
+      "name": "snippets",
+      "status": "ok",
+      "elapsed_ms": 4,
+      "ids": {
+        "snippet_count": "6",
+        "embedded_snippet_count": "6"
+      }
+    },
+    {
+      "name": "tree",
+      "status": "ok",
+      "elapsed_ms": 7,
+      "ids": {
+        "knowledge_point_id": "42720e8a-592d-4ca9-8af1-766150afe2ae",
+        "node_count": "15"
+      }
+    },
+    {
+      "name": "questions",
+      "status": "ok",
+      "elapsed_ms": 30290,
+      "ids": {
+        "question_count": "1"
+      },
+      "details": {
+        "question_ids": [
+          "cfc4a9a7-d6bb-4a3c-80a4-5ad8359acc4d"
+        ]
+      }
+    },
+    {
+      "name": "practice",
+      "status": "ok",
+      "elapsed_ms": 81,
+      "ids": {
+        "practice_id": "69dfb319-72f8-4b33-a012-fa897a8670c0",
+        "question_count": "1",
+        "answered_count": "1"
+      }
+    },
+    {
+      "name": "grading",
+      "status": "ok",
+      "elapsed_ms": 40,
+      "ids": {
+        "graded_items": "1",
+        "total_items": "1"
+      }
+    },
+    {
+      "name": "report",
+      "status": "ok",
+      "elapsed_ms": 72,
+      "ids": {
+        "report_id": "0273fb41-fedd-4066-8774-9c2178a1a73b",
+        "score_rate": "0.0"
+      }
+    },
+    {
+      "name": "summary",
+      "status": "ok",
+      "elapsed_ms": 0,
+      "details": {
+        "stage_count": 11,
+        "question_count": 1
+      }
+    }
+  ]
+}

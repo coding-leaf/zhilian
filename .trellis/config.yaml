@@ -156,3 +156,13 @@ channel:
 #
 # prompt_injection:
 #   skip_keyword: "no-trellis"   # "" disables the escape hatch entirely
+
+#-------------------------------------------------------------------------------
+# Sub-agent context injection limits (active override)
+#-------------------------------------------------------------------------------
+# Tightened to keep dispatched sub-agent prompts small enough for the
+# configured model context window. Oversized artifacts degrade to index lines.
+context_injection:
+  max_file_bytes: 16384
+  max_artifact_bytes: 32768
+  max_total_bytes: 65536

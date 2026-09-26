@@ -615,11 +615,14 @@ class QuestionService:
                     version_id=version_id,
                 )
                 for item in search_res.items:
+                    # 门禁与提示词元数据均以「余弦相似度」为准（0-1）；
+                    # final_score 是 RRF 融合排名分（量级约 1/(rrf_k+rank) ≈ 0.016），
+                    # 不可用于 0.35 相似度阈值判定，否则真实检索命中也必被拒。
                     search_candidates.append(
                         SnippetCandidate(
                             snippet_id=item.snippet_id,
                             content=item.content,
-                            score=item.final_score,
+                            score=item.vector_score,
                             chapter_title=item.chapter_title,
                         )
                     )

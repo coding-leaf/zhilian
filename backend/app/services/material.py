@@ -12,7 +12,9 @@ import hashlib
 import io
 import logging
 import uuid
+import zipfile
 from typing import TYPE_CHECKING, Any
+from xml.etree import ElementTree
 
 import pypdf
 from sqlalchemy.orm import Session
@@ -154,26 +156,159 @@ def _extract_text_from_pdf(content: bytes) -> str:
 def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]:
     """从原始文件二进制中提取段落文本序列。
 
+    支持格式：
+    - `txt` / `md`：UTF-8 文本按空行或换行切段；
+    - `pdf`：pypdf 页文本抽取；
+    - `docx` / `pptx`：OOXML（ZIP 容器）正文 XML 文本抽取；
+    - 其他格式：返回空列表。
+
     Args:
         content: 原生文件二进制。
         file_format: 文件格式扩展名。
 
     Returns:
         list[str]: 提取的段落文本列表。
+
+    Raises:
+        MaterialInvalidError: docx/pptx 文件损坏、非 ZIP 容器或缺关键成员。
     """
     normalized_format = file_format.lower().lstrip(".")
+    if normalized_format == "docx":
+        return _extract_paragraphs_from_docx(content)
+    if normalized_format == "pptx":
+        return _extract_paragraphs_from_pptx(content)
+
     if normalized_format in ("txt", "md"):
         text = content.decode("utf-8", errors="replace")
     elif normalized_format == "pdf":
         text = _extract_text_from_pdf(content)
-    elif normalized_format in ("docx", "pptx"):
-        text = content.decode("utf-8", errors="ignore")
     else:
         text = ""
 
     raw_paragraphs = text.split("\n\n") if "\n\n" in text else text.split("\n")
     paragraphs = [p.strip() for p in raw_paragraphs if p.strip()]
     return paragraphs if paragraphs else ([text.strip()] if text.strip() else [])
+
+
+def _local_name(tag: str) -> str:
+    """剥离 XML 命名空间前缀，返回标签本地名。"""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _extract_paragraphs_from_docx(content: bytes) -> list[str]:
+    """从真实 DOCX（ZIP 容器）中抽取正文段落文本。
+
+    读取 `word/document.xml`，以纯函数方式按 `w:p` 段落聚合所有 `w:t` 文本节点。
+
+    Args:
+        content: DOCX 原生二进制字节流。
+
+    Returns:
+        list[str]: 按文档顺序排列的非空段落文本。
+
+    Raises:
+        MaterialInvalidError: 非有效 ZIP 容器、缺少 `word/document.xml`、
+            正文 XML 损坏或未包含可提取文本。
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            document_xml = archive.read("word/document.xml")
+    except (zipfile.BadZipFile, KeyError, OSError) as exc:
+        raise MaterialInvalidError(
+            "DOCX 文档损坏或格式不支持（非有效 OOXML ZIP 容器）",
+            details={"error": str(exc)},
+        ) from exc
+
+    try:
+        root = ElementTree.fromstring(document_xml)  # noqa: S314 - 标准库解析受控 OOXML，禁新增生产依赖
+    except ElementTree.ParseError as exc:
+        raise MaterialInvalidError(
+            "DOCX 正文 XML 损坏，无法解析",
+            details={"error": str(exc)},
+        ) from exc
+
+    paragraphs: list[str] = []
+    for node in root.iter():
+        if _local_name(node.tag) != "p":
+            continue
+        merged = "".join(
+            child.text or "" for child in node.iter() if _local_name(child.tag) == "t"
+        ).strip()
+        if merged:
+            paragraphs.append(merged)
+
+    if not paragraphs:
+        raise MaterialInvalidError(
+            "DOCX 文档未包含可提取的正文文本",
+            details={"paragraph_count": 0},
+        )
+    return paragraphs
+
+
+def _slide_sort_key(name: str) -> int:
+    """从幻灯片成员路径中提取数字序号用于稳定排序。"""
+    stem = name.rsplit("/", 1)[-1]
+    digits = "".join(char for char in stem if char.isdigit())
+    return int(digits) if digits else 0
+
+
+def _extract_paragraphs_from_pptx(content: bytes) -> list[str]:
+    """从真实 PPTX（ZIP 容器）中抽取幻灯片文本。
+
+    读取 `ppt/slides/slide*.xml`（按幻灯片序号排序），抽取全部 `a:t` 文本节点。
+
+    Args:
+        content: PPTX 原生二进制字节流。
+
+    Returns:
+        list[str]: 按幻灯片顺序排列的非空文本片段。
+
+    Raises:
+        MaterialInvalidError: 非有效 ZIP 容器、缺失幻灯片成员、XML 损坏或无文本。
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            slide_names = sorted(
+                (
+                    name
+                    for name in archive.namelist()
+                    if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+                ),
+                key=_slide_sort_key,
+            )
+            if not slide_names:
+                raise MaterialInvalidError(
+                    "PPTX 文件缺少幻灯片内容",
+                    details={"slide_count": 0},
+                )
+            slide_payloads = [(name, archive.read(name)) for name in slide_names]
+    except (zipfile.BadZipFile, KeyError, OSError) as exc:
+        raise MaterialInvalidError(
+            "PPTX 文件损坏或格式不支持（非有效 OOXML ZIP 容器）",
+            details={"error": str(exc)},
+        ) from exc
+
+    fragments: list[str] = []
+    for name, payload in slide_payloads:
+        try:
+            slide_root = ElementTree.fromstring(payload)  # noqa: S314 - 标准库解析受控 OOXML
+        except ElementTree.ParseError as exc:
+            raise MaterialInvalidError(
+                f"PPTX 幻灯片 XML 损坏: {name}",
+                details={"error": str(exc)},
+            ) from exc
+        for node in slide_root.iter():
+            if _local_name(node.tag) == "t":
+                text = (node.text or "").strip()
+                if text:
+                    fragments.append(text)
+
+    if not fragments:
+        raise MaterialInvalidError(
+            "PPTX 文档未包含可提取的正文文本",
+            details={"slide_count": len(slide_names)},
+        )
+    return fragments
 
 
 def build_material_storage_key(

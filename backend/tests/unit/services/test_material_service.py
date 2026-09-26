@@ -699,11 +699,19 @@ class TestMaterialCreationAndLifecycle:
         assert service.idempotency.acquire_lock(idem_key, str(user_id)) is True
 
     def test_parse_material_pipeline_docx_success(self, service: MaterialService) -> None:
-        """Verify docx document pipeline parsing."""
+        """Verify docx document pipeline parsing with a real OOXML ZIP container."""
+        from app.cli.fixtures import build_minimal_docx
+
         user_id = uuid.uuid4()
-        raw_text = "数据结构与算法分析：平衡二叉树、红黑树以及图的最短路径算法。\n\n" * 3
-        # PK\x03\x04 magic for docx
-        docx_bytes = b"PK\x03\x04" + raw_text.encode("utf-8")
+        paragraphs = [
+            "数据结构与算法分析：平衡二叉树、红黑树以及图的最短路径算法。",
+            "栈遵循后进先出原则，队列遵循先进先出原则，二者是最基础的线性结构。",
+            "二叉搜索树的中序遍历结果有序，平均查找时间复杂度为 O(log n)。",
+            "Dijkstra 算法用于求解边权非负图的单源最短路径问题。",
+            "归并排序与快速排序平均时间复杂度均为 O(n log n)。",
+            "哈希表通过散列函数实现平均 O(1) 的查找性能，需要处理冲突。",
+        ]
+        docx_bytes = build_minimal_docx(paragraphs)
 
         mat, ver = service.create_material(
             user_id=user_id,

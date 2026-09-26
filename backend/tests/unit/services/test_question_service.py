@@ -1052,7 +1052,10 @@ class TestQuestionServiceCRUDAndAudit:
             content="在 看板方法 中，其核心实践包含 可视化工作流 与限制在制品两条实践。",
             chapter_title="第二章 精益看板",
             source_info={"page": 2},
-            final_score=0.91,
+            # 真实契约：相似度门禁读取向量余弦分（0-1）；final_score 为 RRF 排名分（小量级）。
+            # 若实现误用 final_score，本用例将因低于 0.35 阈值而失败，从而守住该缺陷回归。
+            vector_score=0.91,
+            final_score=0.032,
         )
         search_adapter.set_canned_candidates([candidate])
 

@@ -116,3 +116,58 @@ material.status = MaterialStatus.PENDING.value
 - 模型选项通过 `LLMOptions(tools=[...], tool_choice={"type": "function", ...})` 透传。
 - 状态图节点 `validate_output_node` 优先从 `raw_response.tool_calls` 提取入参反序列化，仅在未命中工具调用时才作为纯文本降级处理。
 
+---
+
+### Scenario: Headless CLI Closed-Loop Verification (`python -m app.cli`)
+
+#### 1. Scope / Trigger
+- 需要以脚本方式驱动真实业务链路（鉴权→上传→解析→知识树→出题→练习→判分→报告）做端到端闭环验证时。
+
+#### 2. Signatures
+```bash
+python -m app.cli doctor [--require-real] [--json]
+python -m app.cli db upgrade | db reset --yes
+python -m app.cli auth login --code <code>
+python -m app.cli material upload --file <path> [--user-id|--code]
+python -m app.cli material parse --material-id <uuid>
+python -m app.cli question generate --material-id <uuid> [--knowledge-point-id <uuid>]
+python -m app.cli smoke [--file <path>] [--image <path>] [--json]
+```
+
+#### 3. Contracts
+- **强制真实链路**：`smoke` / `doctor --require-real` 在检测到 `llm/embedding/search=fake`、`storage=memory`、`db=sqlite` 或密钥缺失时，**必须在任何业务动作前中止**，输出结构化缺口清单（环境变量键 + 期望形态），不得静默回落到 fake。
+- **退出码契约**：`0` 成功；`1` 运行时错误；`2` 断言失败（含 `failed_stage`/原始 `error`）；`3` 配置缺失/非真实 Provider；`4` 基础设施不可达。
+- **脱敏**：任何输出不得包含密钥/token/DB 密码明文；DB URL 脱敏为 `***@host/db`；token 仅输出 `has_*_token` 布尔。
+- **装配原则**：必须经 `AppContainer` 工厂装配服务与 `container.get_session()` 管理会话；解析必须走 `parse_material_pipeline`，禁止绕过业务逻辑。
+
+#### 4. Tests Required
+- 离线单测（SQLite + fake Provider，`--allow-fake`，零联网）：断言退出码契约与「配置缺口时不执行任何业务」。
+- 至少一次真实运行的 `smoke` 退出码 0 作为交付证据。
+
+---
+
+### Scenario: Retrieval Score Semantics (RRF vs Cosine) at Relevance Gates
+
+#### 1. Scope / Trigger
+- 任何用「检索结果分数」做相关性/相似度阈值的业务门禁（出题、RAG 选片、报告定位等）。
+
+#### 2. Contracts
+- `SearchSnippetCandidate` 同时携带三种分：`vector_score`（余弦相似度，0–1）、`bm25_score`（词法分，无界）、`final_score`（**RRF 融合排名分**，量级约 `1/(rrf_k+rank) ≈ 0.016`）。
+- **相似度阈值判定必须用 `vector_score`**；`final_score` 仅用于**排序/召回融合**，严禁用于阈值比较。
+
+#### 3. Wrong vs Correct
+##### Wrong
+```python
+# 错误：拿 RRF 融合分去比余弦阈值，真实命中也必被拒（0.016 < 0.35）
+SnippetCandidate(score=item.final_score)   # 门禁 if max_score < 0.35: raise
+```
+##### Correct
+```python
+# 正确：阈值语义是「相似度」，取余弦分
+SnippetCandidate(score=item.vector_score)  # 0–1，可与 0.35 比较
+```
+
+#### 4. Tests Required
+- 单测必须预置**贴近真实的分数**（`vector_score` 高、`final_score` 低），否则 mock 的假高分（`final_score=0.91`）会掩盖真实缺陷。
+- 断言：高 `vector_score` + 低 `final_score` 的候选能通过门禁（守回归）。
+
