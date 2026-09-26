@@ -49,9 +49,29 @@
 - OQ-2：题目页放置位置（建议 `subpackages/material/pages/questions/index`）与标题命名，待 design 确认。
 - OQ-3：多考点时题量如何在各考点间分配（均分/按权重），待 design 确认。
 
-## 7. 集成评审（Integration Review）
+## 7. 集成评审（Integration Review）— 已完成
 
-- 全部子任务完成后，在父任务记录：端到端路径（知识树选多考点 → 生成 → 进度 → 跳题目页 → 核验 → 重进仍在），并给出前后端门禁数字。
+**端到端路径（代码层已闭环）**：
+知识树多选 N 考点 → 生成（进行中面板：阶段文案+计时，全表单禁用）→ 后端按考点均分出题并聚合 → 成功 → 跳转独立题目页（`material_id`，fail 兜底）→ 题目页从后端持久加载并支持编辑/删除/痕迹 → 退出重进仍在（`onShow` 重拉）。
+
+**跨子任务验收结果**
+
+| AC | 结果 | 证据 |
+|---|---|---|
+| AC-P1 多考点真实覆盖 | ✅ 单元/API 层已断言 | `test_question_multi_kp.py`（分配/聚合/覆盖集合/fail-fast）、`test_question_router.py`（多考点路由） |
+| AC-P2 进度可见 + 防重复 | ✅ | `QuestionConfigDrawer` 进行中面板 + 单测（连点仅 1 次请求） |
+| AC-P3 成功后跳题目页 + 持久化 | ✅ | 跳转单测 + 题目页 `fetchQuestionList` 持久加载单测 |
+| AC-P4 题目页可核验 | ✅ | `questionList.spec.ts`（渲染/空态/删除更新/参数解析） |
+| AC-P5 失败/空结果可重试 | ✅ | 单测：空结果留抽屉提示、网络/业务错误分类 |
+| AC-P6 门禁全绿 | ✅ | 后端 1130 passed / 5 contracts kept；前端 54 文件 / 444 passed |
+
+**子任务归档**：`verify-list`、`progress-nav`、`multi-kp` 均已归档（`archive/2026-09/`）。
+**提交**：`95f89bf`(verify-list) → `48fb3cc`(progress-nav) → `3fce14f`(multi-kp)。
+
+**待用户真机确认（本父任务外）**：
+- AC6 真实链路多考点覆盖（需真实 Provider，CLI 未扩展多考点；建议真机验证）。
+- OQ-1：「跳转逻辑有问题」的具体复现（用户未提供，未针对性修复；已统一分包导航参数契约为 `material_id`）。
+- 非本任务遗留：前端题量上限 50 vs 后端 `count le=20` 不一致（输入 >20 会 422）；知识树节点数量/出题质量（另开后端任务）。
 
 ## Notes
 
