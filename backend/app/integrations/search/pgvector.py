@@ -165,17 +165,17 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
                 )
                 snippet_bm25_scores[sid_str] = bm25_score
 
-            # 确定各通道名次 (1-indexed)
+            # 确定各通道名次 (1-indexed，原地优化字典取值，避免高频二次查找)
             sorted_vec_ids = sorted(
-                snippet_vector_scores.keys(),
-                key=lambda sid: snippet_vector_scores[sid],
+                snippet_vector_scores,
+                key=snippet_vector_scores.__getitem__,
                 reverse=True,
             )
             vec_ranks = {sid: rank for rank, sid in enumerate(sorted_vec_ids, start=1)}
 
             sorted_bm25_ids = sorted(
-                snippet_bm25_scores.keys(),
-                key=lambda sid: snippet_bm25_scores[sid],
+                snippet_bm25_scores,
+                key=snippet_bm25_scores.__getitem__,
                 reverse=True,
             )
             bm25_ranks = {sid: rank for rank, sid in enumerate(sorted_bm25_ids, start=1)}

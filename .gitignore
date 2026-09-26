@@ -43,5 +43,24 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-backend/.env
-frontend/.env
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+backend/.env*
+!backend/.env.example
+frontend/.env*
+!frontend/.env.example
+miniprogram/.env*
+!miniprogram/.env.example
+
+# Temporary & Log Files
+*.log
+*.tmp
+*.bak
+*.orig
+
+# OS & Filesystem Artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini

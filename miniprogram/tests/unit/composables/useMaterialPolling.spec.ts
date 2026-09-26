@@ -210,4 +210,130 @@ describe('useMaterialPolling Composable', () => {
     await vi.advanceTimersByTimeAsync(4000);
     expect(statusSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('should adaptively back off polling interval by 1.5x up to maxInterval', async () => {
+    const parsingResponse = {
+      code: 0,
+      message: 'success',
+      data: { id: 'mat_backoff', status: 'parsing', title: 'Doc' } as MaterialItem,
+    };
+
+    const statusSpy = vi
+      .spyOn(materialApi, 'fetchMaterialStatus')
+      .mockResolvedValue(parsingResponse);
+
+    const { isPolling, startPolling } = useMaterialPolling('mat_backoff', {
+      interval: 1500,
+      backoffFactor: 1.5,
+      maxInterval: 8000,
+      immediate: true,
+    });
+
+    startPolling();
+    expect(isPolling.value).toBe(true);
+
+    // Call 1: Immediate at t=0
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+
+    // 1st interval is 1500ms
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
+
+    // 2nd interval is round(1500 * 1.5) = 2250ms
+    await vi.advanceTimersByTimeAsync(2249);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(3);
+
+    // 3rd interval is round(2250 * 1.5) = 3375ms
+    await vi.advanceTimersByTimeAsync(3374);
+    expect(statusSpy).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(4);
+
+    // 4th interval is round(3375 * 1.5) = 5063ms
+    await vi.advanceTimersByTimeAsync(5062);
+    expect(statusSpy).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(5);
+
+    // 5th interval is round(5063 * 1.5) = 7595ms
+    await vi.advanceTimersByTimeAsync(7594);
+    expect(statusSpy).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(6);
+
+    // 6th interval is min(round(7595 * 1.5), 8000) = 8000ms (capped at maxInterval)
+    await vi.advanceTimersByTimeAsync(7999);
+    expect(statusSpy).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(statusSpy).toHaveBeenCalledTimes(7);
+  });
+
+  it('should trigger onTimeout and showToast after default 3 minutes (180000ms)', async () => {
+    const parsingResponse = {
+      code: 0,
+      message: 'success',
+      data: { id: 'mat_default_timeout', status: 'parsing', title: 'Doc' } as MaterialItem,
+    };
+
+    vi.spyOn(materialApi, 'fetchMaterialStatus').mockResolvedValue(parsingResponse);
+    const toastSpy = vi.spyOn(uni, 'showToast');
+    const onTimeout = vi.fn();
+
+    const { isPolling, startPolling } = useMaterialPolling('mat_default_timeout', {
+      immediate: true,
+      onTimeout,
+    });
+
+    startPolling();
+    expect(isPolling.value).toBe(true);
+
+    // Advance 180s
+    await vi.advanceTimersByTimeAsync(180000);
+
+    expect(isPolling.value).toBe(false);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '解析等待超时，请稍后刷新查看',
+        icon: 'none',
+      }),
+    );
+  });
+
+  it('should gracefully handle API error and continue backoff scheduling', async () => {
+    const errorSpy = vi.fn();
+    const networkError = new Error('Network timeout');
+    const statusSpy = vi
+      .spyOn(materialApi, 'fetchMaterialStatus')
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce({
+        code: 0,
+        message: 'success',
+        data: { id: 'mat_err', status: 'COMPLETED', title: 'Resolved' } as MaterialItem,
+      });
+
+    const { isPolling, error, startPolling } = useMaterialPolling('mat_err', {
+      interval: 1500,
+      backoffFactor: 1.5,
+      immediate: true,
+      onError: errorSpy,
+    });
+
+    startPolling();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(networkError);
+    expect(error.value).toBe(networkError);
+    expect(isPolling.value).toBe(true);
+
+    // After backoff of 1500ms, retry occurs and completes
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
+    expect(isPolling.value).toBe(false);
+  });
 });

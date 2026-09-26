@@ -102,11 +102,15 @@ def reciprocal_rank_fusion(
     if not ranked_lists:
         return []
 
-    channel_weights = list(weights) if weights else [1.0] * len(ranked_lists)
+    channel_weights = list(weights) if weights else None
     scores: dict[str, float] = {}
 
     for channel_index, ranked in enumerate(ranked_lists):
-        weight = channel_weights[channel_index] if channel_index < len(channel_weights) else 1.0
+        weight = (
+            channel_weights[channel_index]
+            if channel_weights and channel_index < len(channel_weights)
+            else 1.0
+        )
         for rank, doc_id in enumerate(ranked, start=1):
             scores[doc_id] = scores.get(doc_id, 0.0) + weight / (k + rank)
 
@@ -124,11 +128,12 @@ def _normalize_score_map(scores: dict[str, float]) -> dict[str, float]:
     """
     if not scores:
         return {}
-    values = list(scores.values())
-    min_val, max_val = min(values), max(values)
+    min_val = min(scores.values())
+    max_val = max(scores.values())
     if math.isclose(max_val, min_val):
         return {k: 1.0 for k in scores}
-    return {k: (v - min_val) / (max_val - min_val) for k, v in scores.items()}
+    spread = max_val - min_val
+    return {k: (v - min_val) / spread for k, v in scores.items()}
 
 
 def weighted_score_fusion(
@@ -167,6 +172,8 @@ def weighted_score_fusion(
 def cosine_similarity(vector_a: Sequence[float], vector_b: Sequence[float]) -> float:
     """计算两个同维度浮点向量的余弦相似度。
 
+    优化说明：单趟迭代累加内积与模长平方，规避多次循环与重复切片。
+
     Args:
         vector_a: 向量 A。
         vector_b: 向量 B。
@@ -177,14 +184,18 @@ def cosine_similarity(vector_a: Sequence[float], vector_b: Sequence[float]) -> f
     if len(vector_a) != len(vector_b) or not vector_a:
         return 0.0
 
-    dot_product = sum(a * b for a, b in zip(vector_a, vector_b, strict=False))
-    norm_a = math.sqrt(sum(a * a for a in vector_a))
-    norm_b = math.sqrt(sum(b * b for b in vector_b))
+    dot_product = 0.0
+    norm_a_sq = 0.0
+    norm_b_sq = 0.0
+    for a, b in zip(vector_a, vector_b, strict=False):
+        dot_product += a * b
+        norm_a_sq += a * a
+        norm_b_sq += b * b
 
-    if norm_a <= 0.0 or norm_b <= 0.0:
+    if norm_a_sq <= 0.0 or norm_b_sq <= 0.0:
         return 0.0
 
-    raw_similarity = dot_product / (norm_a * norm_b)
+    raw_similarity = dot_product / math.sqrt(norm_a_sq * norm_b_sq)
     return max(-1.0, min(1.0, raw_similarity))
 
 

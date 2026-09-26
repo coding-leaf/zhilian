@@ -52,10 +52,54 @@ pnpm run test:unit     # Vitest unit test suite
 
 ---
 
-## Code Review Checklist
+## Architectural Contracts & Composables Patterns
 
-1. Does `pnpm run lint` pass without errors?
-2. Does `pnpm run type-check` (vue-tsc) report zero type errors?
-3. Does `pnpm run test:unit` pass all tests?
-4. Are all component props and composable return values properly typed without `any`?
-5. Is responsive styling and uni-app lifecycle handling clean and leak-free?
+### Scenario: Long Polling with Adaptive Exponential Backoff
+
+#### 1. Scope / Trigger
+- 资料解析、报告生成等长耗时异步任务的前端轮询检测。
+
+#### 2. Signatures
+```typescript
+interface UseMaterialPollingOptions {
+  materialId?: MaybeRef<string>;
+  initialInterval?: number; // 默认 1500ms
+  maxInterval?: number;     // 默认 8000ms
+  backoffFactor?: number;   // 默认 1.5
+  maxTimeoutMs?: number;    // 默认 180,000ms (3分钟熔断保护)
+  onTimeout?: () => void;
+  onSuccess?: (material: MaterialItem) => void;
+  onError?: (error: unknown) => void;
+}
+```
+
+#### 3. Contracts
+- 严禁使用固定无退避的 `setInterval` 长期轮询。
+- 必须基于 `setTimeout` 调度并支持动态退避递增：$t_{next} = \min(t \times \text{factor}, t_{max})$。
+- 必须包含超时熔断保护（默认 3 分钟），超时后必须主动释放定时器并提示用户，防止单页面无线挂起。
+- 在页面卸载 (`onUnmounted`) 或命中终态（`READY`, `FAILED`, `COMPLETED`, `RETAKE_REQUIRED`）时必须即刻停帧清除定时器。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误做法：固定死循环轮询，无超时与退避，导致客户端卡顿与服务端压力激增
+const timer = setInterval(async () => {
+  await fetchDetail();
+}, 2000);
+```
+##### Correct
+```typescript
+// 正确做法：自适应退避与超时熔断保护
+const scheduleNext = (currentInterval: number) => {
+  if (Date.now() - startTime > maxTimeoutMs) {
+    stopPolling();
+    onTimeout?.();
+    return;
+  }
+  timer = setTimeout(async () => {
+    await pollAction();
+    scheduleNext(Math.min(currentInterval * backoffFactor, maxInterval));
+  }, currentInterval);
+};
+```
+

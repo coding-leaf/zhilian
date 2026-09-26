@@ -2,10 +2,10 @@
  * 资料解析状态智能轮询组合式函数。
  *
  * 负责在资料处于 pending 或 parsing 阶段时定时查询最新解析状态。
- * 遵循生命周期守护与零泄漏原则：
- * - 2000ms 默认轮询周期；
+ * 遵循生命周期守护与自适应退避原则：
+ * - 初始 1500ms 轮询间隔，采用自适应指数退避 (1.5x，上限 8000ms)；
  * - 状态转为 COMPLETED / READY / FAILED / RETAKE_REQUIRED 时自动终止；
- * - 60s 最大超时兜底熔断，杜绝无休止请求；
+ * - 默认 180s (3分钟) 最大超时兜底熔断，超时自动停止并提醒用户；
  * - 绑定 onUnmounted 钩子，组件销毁时强力清理定时器；
  * - 单文件 <= 300 行，零 Emoji。
  */
@@ -15,9 +15,13 @@ import { fetchMaterialStatus } from '../../../api/material';
 import type { MaterialItem, MaterialStatus } from '../../../types/material';
 
 export interface UseMaterialPollingOptions {
-  /** 轮询间隔毫秒数，默认 2000ms (2s) */
+  /** 初始轮询间隔毫秒数，默认 1500ms (1.5s) */
   interval?: number;
-  /** 最大轮询超时毫秒数，默认 60000ms (60s) */
+  /** 指数退避增量倍数，默认 1.5 */
+  backoffFactor?: number;
+  /** 最大单次轮询间隔毫秒数，默认 8000ms (8s) */
+  maxInterval?: number;
+  /** 最大轮询超时毫秒数，默认 180000ms (3分钟) */
   maxTimeout?: number;
   /** 是否在 startPolling 时立即触发首次请求，默认 true */
   immediate?: boolean;
@@ -27,6 +31,8 @@ export interface UseMaterialPollingOptions {
   onComplete?: (data: MaterialItem) => void;
   /** 错误回调 */
   onError?: (err: unknown) => void;
+  /** 超时兜底回调 */
+  onTimeout?: () => void;
 }
 
 export function useMaterialPolling(
@@ -34,12 +40,15 @@ export function useMaterialPolling(
   options: UseMaterialPollingOptions = {},
 ) {
   const {
-    interval = 2000,
-    maxTimeout = 60000,
+    interval = 1500,
+    backoffFactor = 1.5,
+    maxInterval = 8000,
+    maxTimeout = 180000,
     immediate = true,
     onStatusChange,
     onComplete,
     onError,
+    onTimeout,
   } = options;
 
   const status = ref<MaterialStatus | null>(null);
@@ -47,9 +56,10 @@ export function useMaterialPolling(
   const isPolling = ref<boolean>(false);
   const error = ref<unknown | null>(null);
 
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   let startTime = 0;
+  let currentInterval = interval;
 
   const isTerminalStatus = (currentStatus: string): boolean => {
     const normalized = currentStatus.toUpperCase();
@@ -63,7 +73,7 @@ export function useMaterialPolling(
 
   const stopPolling = () => {
     if (pollTimer !== null) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
     if (timeoutTimer !== null) {
@@ -73,19 +83,51 @@ export function useMaterialPolling(
     isPolling.value = false;
   };
 
+  const handleTimeout = () => {
+    stopPolling();
+    if (onTimeout) {
+      onTimeout();
+    }
+    if (typeof uni !== 'undefined' && typeof uni.showToast === 'function') {
+      uni.showToast({
+        title: '解析等待超时，请稍后刷新查看',
+        icon: 'none',
+      });
+    }
+  };
+
+  const scheduleNext = () => {
+    if (!isPolling.value) {
+      return;
+    }
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    const delay = currentInterval;
+    currentInterval = Math.min(Math.round(currentInterval * backoffFactor), maxInterval);
+
+    pollTimer = setTimeout(() => {
+      void poll();
+    }, delay);
+  };
+
   const poll = async () => {
     const id = unref(materialId);
-    if (!id) {
+    if (!id || !isPolling.value) {
       return;
     }
 
     if (startTime > 0 && Date.now() - startTime >= maxTimeout) {
-      stopPolling();
+      handleTimeout();
       return;
     }
 
     try {
       const res = await fetchMaterialStatus(id);
+      if (!isPolling.value) {
+        return;
+      }
       const data = res.data;
       if (data) {
         materialData.value = data;
@@ -101,13 +143,19 @@ export function useMaterialPolling(
           if ((normalized === 'COMPLETED' || normalized === 'READY') && onComplete) {
             onComplete(data);
           }
+          return;
         }
       }
+      scheduleNext();
     } catch (err: unknown) {
+      if (!isPolling.value) {
+        return;
+      }
       error.value = err;
       if (onError) {
         onError(err);
       }
+      scheduleNext();
     }
   };
 
@@ -119,18 +167,17 @@ export function useMaterialPolling(
     isPolling.value = true;
     error.value = null;
     startTime = Date.now();
+    currentInterval = interval;
 
     timeoutTimer = setTimeout(() => {
-      stopPolling();
+      handleTimeout();
     }, maxTimeout);
 
     if (immediate) {
       void poll();
+    } else {
+      scheduleNext();
     }
-
-    pollTimer = setInterval(() => {
-      void poll();
-    }, interval);
   };
 
   if (getCurrentInstance()) {
