@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-MAT.md", "reason": "MAT 切片审计缺陷原始记录与复现线索 (BUG-MAT-005 ~ 011)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端组件规范、状态管理与分层开发准则"}
+{"file": ".trellis/spec/guides/index.md", "reason": "项目通用设计模式与无 any 质量约束"}

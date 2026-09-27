@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核诊断掌握度 DTO 同步与错题列表分页契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核仓储层 join 与 count 下推"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核生命周期双触发与事件防重"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核前后端枚举（ErrorType）、字段名与分页元数据跨层一致"}

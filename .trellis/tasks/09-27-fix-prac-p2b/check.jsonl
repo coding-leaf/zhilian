@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核后端幂等性与异常处理实现"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端会话卸载与组件渲染门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "复核前端新增 API 与类型规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核前后端 time_elapsed_seconds 与作答格式一致性"}

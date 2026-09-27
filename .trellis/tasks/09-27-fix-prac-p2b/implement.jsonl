@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端接口与异常处理质量规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "模型及字段交互规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范总入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与测试规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端 TypeScript 强类型规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层 DTO 与字段契约核对准则"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-PRAC.md", "reason": "PRAC 切片 BUG-PRAC-012 至 017 原始证据与根因"}

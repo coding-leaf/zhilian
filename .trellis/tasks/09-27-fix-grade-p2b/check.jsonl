@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核算法舍入确定性与判题服务质量"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核判题记录 is_final 事务一致性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端组件细则渲染与文本输入限制"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核跨层字段契约一致性"}

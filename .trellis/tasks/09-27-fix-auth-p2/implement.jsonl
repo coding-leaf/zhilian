@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-AUTH.md", "reason": "AUTH 切片审计事实源文件，包含 BUG-AUTH-004 到 BUG-AUTH-011 详细位置与分析"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范总览与架构原则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量、异常处理与类型约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库会话生命周期与连接池管理规约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端架构总览与 Pinia Store 状态管理规则"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量规范与测试准则"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端严禁 any 与类型安全规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约对齐与前后端接口协同指引"}

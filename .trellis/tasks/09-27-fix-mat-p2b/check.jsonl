@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核后端防护逻辑与边界约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核数据库唯一约束与关联保存"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端组件校验与文件处理"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核跨层字段契约一致性"}

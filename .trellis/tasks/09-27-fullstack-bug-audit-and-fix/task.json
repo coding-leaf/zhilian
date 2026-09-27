@@ -26,7 +26,17 @@
     "09-27-fix-qgen-p1",
     "09-27-fix-grade-p1",
     "09-27-fix-diag-read-p1",
-    "09-27-fix-diag-wrongbook-p1"
+    "09-27-fix-diag-wrongbook-p1",
+    "09-27-fix-auth-p2",
+    "09-27-fix-mat-p2a",
+    "09-27-fix-mat-p2b",
+    "09-27-fix-qgen-p2",
+    "09-27-fix-prac-p2a",
+    "09-27-fix-prac-p2b",
+    "09-27-fix-grade-p2a",
+    "09-27-fix-grade-p2b",
+    "09-27-fix-diag-p2a",
+    "09-27-fix-diag-p2b"
   ],
   "parent": null,
   "relatedFiles": [],

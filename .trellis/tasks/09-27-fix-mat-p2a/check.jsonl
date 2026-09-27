@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-MAT.md", "reason": "对照 MAT 切片验收标准核查缺陷修复完整性"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端 Lint、Type-check 与组件单测覆盖率门禁标准"}

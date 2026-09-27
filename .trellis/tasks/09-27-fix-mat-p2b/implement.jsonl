@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与防护规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库操作、唯一约束与事务规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端组件校验与参数传递规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约字段与前后端对齐方法"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-MAT.md", "reason": "BUG-MAT-012..018 原始证据与复现"}

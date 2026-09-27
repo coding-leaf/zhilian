@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "含字段契约与判题/报告相关场景，GRADE 修复判定依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "字段与 DTO 契约规范（PracticeItemDetailResponse/QuestionSnapshotDTO）"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端包规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与字段契约场景"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约规范（AttemptGradingItem/OriginalSnippet）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层字段名核对方法（hit_keywords/missing_keywords/source_snippet）"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-GRADE.md", "reason": "BUG-GRADE-003~008 完整证据与复现"}

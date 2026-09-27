@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁与测试复核标准"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁标准"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型检查与禁止类型强转复核"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "状态机与枚举一致性检查"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-PRAC.md", "reason": "PRAC 验收标准依据"}

@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与测试规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLAlchemy 异常处理规范与 DTO 契约"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与组件空态标准"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型安全规范，禁止 any"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层 Header 命名与 DTO 别名规范"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-DIAG.md", "reason": "BUG-DIAG-016~022 审计根因与复现证据"}

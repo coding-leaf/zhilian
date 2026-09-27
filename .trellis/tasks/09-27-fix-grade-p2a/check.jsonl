@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与断言规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与单元测试要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端跨层核验方法"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-GRADE.md", "reason": "GRADE 切片原始审计事实与证据"}

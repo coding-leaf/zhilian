@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "出题多考点与题目字段契约规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端门禁与出题抽屉/列表交互规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约规范，严禁 any"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约字段与参数传递核对指南"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-QGEN.md", "reason": "BUG-QGEN-002..006,008 完整审计证据与复现分析"}

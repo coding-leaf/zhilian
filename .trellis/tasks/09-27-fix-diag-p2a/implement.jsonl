@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "含字段契约与报告/诊断相关场景规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "仓储层 SQL/分页下推与关联查询规范（material_id 下推、count 一致）"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端包规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端生命周期请求去重、事件去重与类型规范"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约与接口泛型规范（ApiResponse 与 WrongRecordItem）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层字段名、枚举值与语义对齐方法"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-DIAG.md", "reason": "BUG-DIAG-009…015 完整审计证据与复现"}

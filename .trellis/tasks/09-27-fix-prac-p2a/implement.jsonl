@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量门禁与字段契约场景"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "ORM 字段与状态机模型设计指南"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端代码质量规范与门禁"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型安全规范，禁止 any 与 as unknown"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层状态与契约同步思维准则"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-PRAC.md", "reason": "BUG-PRAC-005 至 011 完整证据与根因链条"}

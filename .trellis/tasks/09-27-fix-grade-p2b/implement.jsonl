@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端规范入口"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "算法精度、错误处理与判题服务质量指导"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "判题记录生效状态与事务一致性规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "自评与重判弹窗交互及字段规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "自评与重判跨层契约核对"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-GRADE.md", "reason": "GRADE 切片 009-013, 016 原始审计证据"}
