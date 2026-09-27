@@ -258,3 +258,49 @@ class TestAuthService:
 
         user2, _ = service.login_with_wechat(code="mock_token_abc")
         assert user2.openid == "wx_dev_mock_token_abc"
+
+    def test_update_user_profile_success(self, session: Session) -> None:
+        """Verify update_user_profile persists both nickname and avatar_url (BUG-AUTH-004)."""
+        service = AuthService(session)
+        user, _ = service.login_with_wechat(
+            code="test_update_profile",
+            nickname="OldName",
+            avatar_url="https://example.com/old.png",
+        )
+
+        profile = service.update_user_profile(
+            user.id,
+            nickname="NewName",
+            avatar_url="https://example.com/new.png",
+        )
+
+        assert profile.id == user.id
+        assert profile.nickname == "NewName"
+        assert profile.avatar_url == "https://example.com/new.png"
+
+        reloaded = UserRepository(session).get_user_by_id(user.id)
+        assert reloaded is not None
+        assert reloaded.nickname == "NewName"
+        assert reloaded.avatar_url == "https://example.com/new.png"
+
+    def test_update_user_profile_partial_keeps_existing(self, session: Session) -> None:
+        """Verify partial update with only nickname keeps the existing avatar_url."""
+        service = AuthService(session)
+        user, _ = service.login_with_wechat(
+            code="test_update_partial",
+            nickname="KeepName",
+            avatar_url="https://example.com/keep.png",
+        )
+
+        profile = service.update_user_profile(user.id, nickname="ChangedOnly")
+
+        assert profile.nickname == "ChangedOnly"
+        assert profile.avatar_url == "https://example.com/keep.png"
+
+    def test_update_user_profile_not_found_raises(self, session: Session) -> None:
+        """Verify update_user_profile raises AuthenticationError for unknown user."""
+        service = AuthService(session)
+        with pytest.raises(AuthenticationError) as exc_info:
+            service.update_user_profile(uuid.uuid4(), nickname="Ghost")
+        assert exc_info.value.code == 20001
+        assert "用户不存在" in exc_info.value.message

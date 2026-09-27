@@ -334,6 +334,23 @@ def test_revoke_tokens_authenticated_success(
     mock_auth_service.revoke_tokens.assert_called_once_with(user_id=mock_user.id)
 
 
+def test_revoke_tokens_service_failure_returns_false(
+    client: TestClient,
+    mock_auth_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试 revoke service 返回 False 时响应体透传 success=False (BUG-AUTH-009)。"""
+    mock_auth_service.revoke_tokens.return_value = False
+
+    response = client.post("/api/v1/auth/revoke")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["success"] is False
+    assert "失败" in data["message"]
+    mock_auth_service.revoke_tokens.assert_called_once_with(user_id=mock_user.id)
+
+
 def test_revoke_tokens_unauthenticated_missing_header_401(
     mock_auth_service: MagicMock,
 ) -> None:

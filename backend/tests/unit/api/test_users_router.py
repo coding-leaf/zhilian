@@ -325,3 +325,121 @@ def test_tenant_isolation_propagation_delete_account(
     client_bob = TestClient(app)
     client_bob.delete("/api/v1/users/me")
     assert mock_user_service.delete_account.call_args.kwargs["user_id"] == user_bob.id
+
+
+# ==============================================================================
+# 4. PUT /api/v1/users/me 画像更新测试用例 (BUG-AUTH-004)
+# ==============================================================================
+
+
+def test_put_users_me_update_success(
+    client: TestClient,
+    mock_user_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试已认证用户通过 PUT 更新昵称与头像返回 200 与最新画像。"""
+    updated_profile = UserProfileResponse(
+        id=mock_user.id,
+        nickname="更新后的昵称",
+        avatar_url="https://example.com/updated_avatar.jpg",
+        created_at=datetime(2026, 9, 24, 10, 0, 0, tzinfo=UTC),
+    )
+    mock_user_service.update_user_profile.return_value = updated_profile
+
+    response = client.put(
+        "/api/v1/users/me",
+        json={
+            "nickname": "更新后的昵称",
+            "avatar_url": "https://example.com/updated_avatar.jpg",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["id"] == str(mock_user.id)
+    assert data["nickname"] == "更新后的昵称"
+    assert data["avatar_url"] == "https://example.com/updated_avatar.jpg"
+    mock_user_service.update_user_profile.assert_called_once_with(
+        user_id=mock_user.id,
+        nickname="更新后的昵称",
+        avatar_url="https://example.com/updated_avatar.jpg",
+    )
+
+
+def test_put_users_me_partial_update_single_field(
+    client: TestClient,
+    mock_user_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试仅提交 nickname 时头像字段保持 None 透传，服务层不覆盖既有头像。"""
+    mock_user_service.update_user_profile.return_value = UserProfileResponse(
+        id=mock_user.id,
+        nickname="仅改昵称",
+        avatar_url=mock_user.avatar_url or "",
+        created_at=None,
+    )
+
+    response = client.put("/api/v1/users/me", json={"nickname": "仅改昵称"})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["nickname"] == "仅改昵称"
+    mock_user_service.update_user_profile.assert_called_once_with(
+        user_id=mock_user.id,
+        nickname="仅改昵称",
+        avatar_url=None,
+    )
+
+
+def test_put_users_me_extra_fields_forbidden_422(client: TestClient) -> None:
+    """测试更新画像请求体携带未定义字段被 extra='forbid' 拦截返回 422。"""
+    response = client.put(
+        "/api/v1/users/me",
+        json={"nickname": "合法昵称", "forbidden_extra_payload": "malicious"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_put_users_me_user_not_found_401(
+    client: TestClient,
+    mock_user_service: MagicMock,
+) -> None:
+    """测试服务层识别用户不存在时抛出 401 (20001)。"""
+    mock_user_service.update_user_profile.side_effect = AuthenticationError("用户不存在或已注销")
+
+    response = client.put("/api/v1/users/me", json={"nickname": "幽灵"})
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    data = response.json()
+    assert data["code"] == 20001
+    assert "用户不存在或已注销" in data["message"]
+
+
+def test_put_users_me_unauthenticated_missing_header_401(
+    mock_user_service: MagicMock,
+) -> None:
+    """测试未携带 Authorization 凭据头访问 PUT /users/me 被 401 (20001) 拦截。"""
+    app = create_test_app()
+    app.dependency_overrides[get_user_service] = lambda: mock_user_service
+    unauth_client = TestClient(app)
+
+    response = unauth_client.put("/api/v1/users/me", json={"nickname": "anonymous"})
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    data = response.json()
+    assert data["code"] == 20001
+    assert "请求头缺失认证凭据" in data["message"]
+
+
+def test_delete_users_me_service_failure_returns_false(
+    client: TestClient,
+    mock_user_service: MagicMock,
+) -> None:
+    """测试 DELETE /users/me 在 service 返回 False 时透传 success=False (BUG-AUTH-009)。"""
+    mock_user_service.delete_account.return_value = False
+
+    response = client.delete("/api/v1/users/me")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["success"] is False
+    assert "失败" in data["message"]

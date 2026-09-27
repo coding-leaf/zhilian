@@ -5,8 +5,11 @@ and tenant isolation security guarantees required by AGENTS.md and spec.md.
 """
 
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Annotated, Any
+from unittest.mock import MagicMock
 
 import jwt
 import pytest
@@ -15,6 +18,7 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from app.api.deps.auth import (
+    get_auth_service,
     get_current_token_payload,
     get_current_user,
     get_current_user_id,
@@ -405,3 +409,75 @@ class TestAuthPositiveFlow:
         with pytest.raises(NotImplementedError) as exc_info:
             await get_current_user(payload)
         assert "用户服务数据加载器尚未装配" in str(exc_info.value)
+
+
+class _FakeAuthService:
+    """Minimal AuthService facade returning a canned user entity."""
+
+    def __init__(self, user: User | None) -> None:
+        self._user = user
+
+    def get_user_by_id(self, user_id: uuid.UUID) -> User | None:
+        return self._user
+
+
+class _FakeContainer:
+    """Minimal AppContainer stand-in tracking managed session teardown."""
+
+    def __init__(self, user: User | None) -> None:
+        self._user = user
+        self.closed = False
+
+    @contextmanager
+    def get_session(self) -> Generator[object, None, None]:
+        try:
+            yield object()
+        finally:
+            self.closed = True
+
+    def create_auth_service(self, session: object) -> _FakeAuthService:
+        return _FakeAuthService(self._user)
+
+    def create_user_service(self, session: object) -> _FakeAuthService:
+        return _FakeAuthService(self._user)
+
+
+class TestAuthDependencySessionRecycling:
+    """BUG-AUTH-011: fallback database sessions must be managed and closed."""
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_fallback_closes_managed_session(self) -> None:
+        """Verify get_current_user fallback uses get_session() and closes it on return."""
+        user_id = uuid.uuid4()
+        user = User(
+            id=user_id,
+            openid="wx_fallback_recycle",
+            nickname="FallbackUser",
+            token_version=1,
+            is_active=True,
+            is_deleted=False,
+        )
+        fake_container = _FakeContainer(user=user)
+        fake_request = MagicMock(spec=Request)
+        fake_request.app.state.container = fake_container
+
+        payload = {"sub": str(user_id), "token_version": 1}
+        result = await get_current_user(payload, request=fake_request, auth_service=None)
+
+        assert result is user
+        assert fake_container.closed is True
+
+    def test_get_auth_service_fallback_closes_session_on_teardown(self) -> None:
+        """Verify get_auth_service fallback session is closed when the dependency tears down."""
+        fake_container = _FakeContainer(user=None)
+        fake_request = MagicMock(spec=Request)
+        fake_request.app.state.container = fake_container
+
+        service_gen = get_auth_service(fake_request)
+        service = next(service_gen)
+
+        assert service is not None
+        assert fake_container.closed is False
+
+        service_gen.close()
+        assert fake_container.closed is True

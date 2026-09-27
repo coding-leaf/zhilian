@@ -11,6 +11,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
+from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps.auth import get_auth_service, get_current_user
 from app.models.user import User
@@ -40,7 +41,8 @@ async def login(
     Returns:
         TokenResponse: 包含 access_token 与 refresh_token 的响应对象。
     """
-    _, token_response = auth_service.login_with_wechat(
+    _, token_response = await run_in_threadpool(
+        auth_service.login_with_wechat,
         code=request.code,
         nickname=request.nickname,
         avatar_url=request.avatar_url,
@@ -89,8 +91,9 @@ async def revoke(
     Returns:
         UserActionResponse: 操作执行结果提示响应对象。
     """
-    auth_service.revoke_tokens(user_id=current_user.id)
-    return UserActionResponse(success=True, message="已成功注销所有登录凭据")
+    success = auth_service.revoke_tokens(user_id=current_user.id)
+    message = "已成功注销所有登录凭据" if success else "注销所有登录凭据失败"
+    return UserActionResponse(success=success, message=message)
 
 
 __all__ = ["router"]

@@ -344,6 +344,46 @@ class AuthService:
 
         return UserProfileResponse.model_validate(user)
 
+    def update_user_profile(
+        self,
+        user_id: uuid.UUID,
+        *,
+        nickname: str | None = None,
+        avatar_url: str | None = None,
+    ) -> UserProfileResponse:
+        """更新指定用户的基础画像资料并提交事务 (BUG-AUTH-004)。
+
+        仅更新显式提供 (非 None) 的字段，None 表示保持既有值不变。
+
+        Args:
+            user_id: 归属用户唯一标识 UUID。
+            nickname: 更新后的新昵称，为 None 表示不修改。
+            avatar_url: 更新后的新头像 URL，为 None 表示不修改。
+
+        Returns:
+            UserProfileResponse: 更新后的最新画像响应数据对象。
+
+        Raises:
+            AuthenticationError: 用户不存在、已注销或已停用时抛出。
+        """
+        try:
+            user = self.user_repo.update_profile(
+                user_id,
+                nickname=nickname,
+                avatar_url=avatar_url,
+            )
+            if user is None or user.is_deleted:
+                raise AuthenticationError("用户不存在或已注销")
+
+            if not user.is_active:
+                raise AuthenticationError("用户账号已被停用")
+
+            self.session.commit()
+            return UserProfileResponse.model_validate(user)
+        except Exception:
+            self.session.rollback()
+            raise
+
     def delete_account(self, user_id: uuid.UUID) -> bool:
         """软删除用户账号并递增 token_version 立即作废全端历史令牌。
 

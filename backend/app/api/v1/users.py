@@ -15,7 +15,11 @@ from fastapi import APIRouter, Depends, status
 from app.api.deps.auth import get_current_user
 from app.api.deps.user import get_user_service
 from app.models.user import User
-from app.schemas.user import UserActionResponse, UserProfileResponse
+from app.schemas.user import (
+    UpdateUserProfileRequest,
+    UserActionResponse,
+    UserProfileResponse,
+)
 from app.services.auth import AuthService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -43,6 +47,34 @@ async def get_current_user_profile(
     return user_service.get_user_profile(user_id=current_user.id)
 
 
+@router.put(
+    "/me",
+    response_model=UserProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="更新当前登录用户画像资料",
+)
+async def update_current_user_profile(
+    payload: UpdateUserProfileRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    user_service: Annotated[AuthService, Depends(get_user_service)],
+) -> UserProfileResponse:
+    """更新当前登录用户的昵称或头像画像资料。
+
+    Args:
+        payload: 画像更新请求体契约 (字段均可选，None 表示不修改)。
+        current_user: 当前已认证登录的用户实体。
+        user_service: 用户管理业务编排服务。
+
+    Returns:
+        UserProfileResponse: 更新后的最新用户画像响应对象。
+    """
+    return user_service.update_user_profile(
+        user_id=current_user.id,
+        nickname=payload.nickname,
+        avatar_url=payload.avatar_url,
+    )
+
+
 @router.delete(
     "/me",
     response_model=UserActionResponse,
@@ -60,10 +92,11 @@ async def delete_current_user_account(
         user_service: 用户管理业务编排服务。
 
     Returns:
-        UserActionResponse: 账号注销成功提示响应对象。
+        UserActionResponse: 账号注销结果提示响应对象。
     """
-    user_service.delete_account(user_id=current_user.id)
-    return UserActionResponse(success=True, message="账号已成功注销")
+    success = user_service.delete_account(user_id=current_user.id)
+    message = "账号已成功注销" if success else "注销账号失败"
+    return UserActionResponse(success=success, message=message)
 
 
 __all__ = ["router"]

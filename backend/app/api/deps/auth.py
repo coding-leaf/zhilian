@@ -8,6 +8,7 @@
 """
 
 import uuid
+from collections.abc import Generator
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -121,17 +122,19 @@ def validate_user_status(user: User | None, payload_token_version: int) -> User:
 def get_auth_service(
     request: Request = _DEFAULT_REQUEST,
     session: Annotated[Session | None, Depends(get_db_session)] = None,
-) -> AuthService:
+) -> Generator[AuthService, None, None]:
     """FastAPI 依赖项：获取 AuthService 服务实例。
 
     优先从请求生命周期的 AppContainer 中以单请求独立 Session 装配服务实例；
     在单元测试中通过 app.dependency_overrides[get_auth_service] 注入。
+    本依赖为生成器依赖：当请求级 Session 不可用时，fallback 自建 Session
+    由上下文管理器托管，并在请求结束时（生成器 teardown）自动 close，杜绝连接泄漏。
 
     Args:
         request: FastAPI 请求上下文对象。
         session: 单请求生命周期的数据库会话（由 get_db_session 供给）。
 
-    Returns:
+    Yields:
         AuthService: 认证与账号管理业务编排服务。
 
     Raises:
@@ -140,10 +143,13 @@ def get_auth_service(
     if request is not None and getattr(request, "app", None) is not None:
         container: AppContainer | None = getattr(request.app.state, "container", None)
         if container is not None:
-            actual_session = (
-                session if isinstance(session, Session) else container.session_factory()
-            )
-            return container.create_auth_service(session=actual_session)
+            if isinstance(session, Session):
+                yield container.create_auth_service(session=session)
+                return
+
+            with container.get_session() as managed_session:
+                yield container.create_auth_service(session=managed_session)
+            return
 
     raise NotImplementedError(
         "AuthService 生产装配工厂尚未挂载，"
@@ -190,10 +196,11 @@ async def get_current_user(
     if request is not None and getattr(request, "app", None) is not None:
         container: AppContainer | None = getattr(request.app.state, "container", None)
         if container is not None:
-            active_auth_svc = container.create_auth_service(session=container.session_factory())
-            user = active_auth_svc.get_user_by_id(user_uuid)
-            token_version = payload.get("token_version", 1)
-            return validate_user_status(user, token_version)
+            with container.get_session() as managed_session:
+                active_auth_svc = container.create_auth_service(session=managed_session)
+                user = active_auth_svc.get_user_by_id(user_uuid)
+                token_version = payload.get("token_version", 1)
+                return validate_user_status(user, token_version)
 
     raise NotImplementedError(
         "用户服务数据加载器尚未装配，"

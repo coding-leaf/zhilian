@@ -131,11 +131,15 @@ def test_deps_supply_services_from_container_without_overrides() -> None:
         fake_request = MagicMock(spec=Request)
         fake_request.app = app
 
-        auth_svc = get_auth_service(fake_request)
+        auth_service_gen = get_auth_service(fake_request)
+        auth_svc = next(auth_service_gen)
         assert isinstance(auth_svc, AuthService)
+        auth_service_gen.close()
 
-        user_svc = get_user_service(fake_request)
+        user_service_gen = get_user_service(fake_request)
+        user_svc = next(user_service_gen)
         assert isinstance(user_svc, AuthService)
+        user_service_gen.close()
 
         mat_svc = get_material_service(fake_request)
         assert isinstance(mat_svc, MaterialService)
@@ -184,4 +188,7 @@ def test_deps_raise_not_implemented_when_no_container() -> None:
         get_knowledge_service(fake_request)
 
     with pytest.raises(NotImplementedError):
-        get_auth_service(fake_request)
+        next(get_auth_service(fake_request))
+
+    with pytest.raises(NotImplementedError):
+        next(get_user_service(fake_request))

@@ -31,7 +31,20 @@ class UserActionResponse(BaseModel):
     message: str = Field(..., description="面向用户的操作结果提示文案")
 
 
+class UpdateUserProfileRequest(BaseModel):
+    """更新当前登录用户画像资料的请求契约 (BUG-AUTH-004)。
+
+    全字段可选：未提供 (None) 的字段表示不修改，保持既有画像不变。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    nickname: str | None = Field(default=None, max_length=50, description="用户昵称")
+    avatar_url: str | None = Field(default=None, max_length=500, description="用户头像 URL")
+
+
 __all__ = [
+    "UpdateUserProfileRequest",
     "UserActionResponse",
     "UserProfileResponse",
 ]
