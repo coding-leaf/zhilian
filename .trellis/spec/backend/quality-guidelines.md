@@ -709,3 +709,17 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - `round_half_up(9.25,0.5)==9.5`、`(7.25)==7.5`（对比 `round(9.25/0.5)*0.5==9.0`）；LLM 7.3→7.5、8.24→8.0；`is_correct` 显式覆盖与默认回退；算法异常时单 final + 原记录保留 + 不崩整卷。
+
+### Scenario: Diagnosis Mastery Counts, Filter Pushdown & Delete Contract
+
+#### 1. Scope / Trigger
+- 掌握度概览计数、错题本多维过滤（error_type/question_type/material_id）、删除错题响应字段。
+
+#### 2. Contracts
+- `UserMasteryOverviewResponse` 的 `mastered_count`/`learning_count` 必须与 `proficient_count`/`basic_count` 同步（before/after 校验器均须覆盖 dict 与 ORM/DTO），且**不得用 0 覆盖真实计数**。
+- 错题过滤必须**下推 SQL**（`error_type` 等值、`question_snapshot["question_type"].as_string()`、`material_id` 经 `KnowledgePoint` JOIN 且租户过滤）；`list` 与 `count` 必须共享同一 WHERE，`total` 反映过滤后真实总数；未知枚举值返回空而非静默全量。
+- 禁止内存 `limit=1000` 截断；分页与计数必须在 DB 层完成。
+- `DeleteWrongRecordResponse` 必须包含 `removed`（附加可选，默认 True）并在所有删除路径下发。
+
+#### 3. Tests Required
+- DTO 计数同步（dict/ORM）；error_type 简写归一与非法值空结果；question_type/material_id 过滤与 count 一致；>1000 行无截断且 total 精确；删除响应含 `removed`。

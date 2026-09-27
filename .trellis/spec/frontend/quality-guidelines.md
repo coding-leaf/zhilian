@@ -447,3 +447,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 首屏单次加载与切换 pid 重载；主观题入口覆盖三类、客观题不显示；未作答题隐藏重判；要点双层来源；切片空态。
+
+### Scenario: Wrong-Book Filter Enum Alignment & Reset Single-Trigger
+
+#### 1. Scope / Trigger
+- 错题筛选错误类型/题型枚举、重置筛选、删除错题响应字段消费。
+
+#### 2. Contracts
+- 错误类型筛选项必须发送后端权威枚举（`incomplete_expression`/`question_misreading`），并向下兼容旧简写（`incomplete`/`deviation`）。
+- 题型取值必须与后端 `QuestionType` 逐字一致（如 `fill_in_blank`，禁止 `fill_in_the_blank`）；所有消费点（筛选栏、卡片标签）统一。
+- 重置筛选只允许单通道触发（`filter-change`），禁止同时 `emit('reset')` 与 `emitChange()` 造成父组件双请求。
+- `deleteWrongRecord` 读取 `removed` 字段（`removed: boolean; success?: boolean`）。
+
+#### 3. Tests Required
+- 标准+旧枚举均可识别；`fill_in_blank` 渲染「填空题」；点击重置父组件仅 1 次 `loadData`；删除响应解构 `removed === true`。
