@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核字段契约与多考点场景"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核单事务提交边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端适配与门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核选项字段跨层一致"}
