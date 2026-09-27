@@ -291,4 +291,64 @@ const visibleRows = computed(() =>
 - 页面单测断言：折叠后子孙文本消失且节点自身保留；折叠态下「全选」仍覆盖整棵树。
 - 编译产物断言：组件 `.json` 的 `usingComponents` 不含自引用键；组件 `.js` 不含自引用模块加载器。
 
+---
+
+### Scenario: Submit Idempotency Key Persistence & Degraded Storage Writes
+
+#### 1. Scope / Trigger
+- 任何「客户端生成幂等键、服务端据此去重」的提交/上传（练习交卷、资料上传等），以及任何向 `uni.setStorageSync` 写入可能超限的本地草稿。
+
+#### 2. Signatures
+```typescript
+// miniprogram/src/subpackages/practice/utils/submitKey.ts
+export function getOrCreateSubmitKey(practiceId: string): string;
+export function clearSubmitKey(practiceId: string): void;
+
+// miniprogram/src/utils/storage.ts
+const MAX_STORAGE_BYTES = 20 * 1024; // setItem 超限抛 AppError(10001)
+```
+
+#### 3. Contracts
+- **幂等键每次业务会话只生成一次并持久化**：`getOrCreateSubmitKey` 必须落盘（不得只在内存/仅在已有草稿时落盘）。零作答直接交卷（`confirm_unanswered`）同样要先持久化，否则 App 重启后生成新键，重试不再幂等。
+- **清理时机**：仅在「确认成功」或「明确不可重试的业务终态」后 `clearSubmitKey`；网络超时/未知错误**必须保留**同一 key 供重试。
+- **写入必须可降级**：所有可能超限的 Storage 写入（保存草稿、**清理草稿**、写幂等键）都必须 try/catch；`AppError(10001)` 不得向上传播打断主流程。
+- **降级不得产生副作用**：写入失败后，store 内状态必须保留，且**远端同步调度（`setTimeout`/`saveAnswerDraft`）仍须注册**——写入失败只应影响本地备份，不应导致该次作答既未备份也未同步。
+- **成功路径尤其危险**：交卷成功后的本地清理（`clearDraftFromStorage`）若因超限抛错，会被外层 catch 误判为交卷失败，形成「后端已成功 → 前端卡死」死结；必须包 try/catch。
+
+#### 4. Validation & Error Matrix
+- 已有幂等键 + 重试 → 复用同一 key。
+- 成功/明确终态 → 清理 key。
+- Storage 写超限（>20KB）→ 捕获并降级，不抛出；主流程继续。
+- 清理草稿失败（成功路径）→ 捕获并降级，交卷仍视为成功并跳转。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：每次交卷新建 key，且仅在有草稿时落盘 —— 零作答交卷 App 重启后非幂等
+const key = generateIdempotencyKey();
+await submitPractice(id, key);
+
+// 错误：成功路径清理无保护，超限抛错被外层当作交卷失败
+function onSuccess() { clearDraftFromStorage(id); redirectToReport(); }
+```
+##### Correct
+```typescript
+// 正确：每会话一次并持久化（含零作答），成功/终态后清理
+const key = getOrCreateSubmitKey(id);
+await submitPractice(id, key);
+if (succeededOrTerminal) clearSubmitKey(id);
+
+// 正确：清理同样降级，不阻断成功跳转
+function onSuccess() {
+  try { clearDraftFromStorage(id); } catch (err) { reportWarning(err); }
+  redirectToReport();
+}
+```
+
+#### 6. Tests Required
+- 同一 practiceId 两次 `getOrCreateSubmitKey` 返回相同值，且**无草稿时也已落盘**。
+- `clearSubmitKey` 后重新生成新 key。
+- `storage.setItem` 抛 `AppError(10001)` 时：不抛出、store 作答保留、`saveAnswerDraft` 仍被调度（spy 断言）。
+- 交卷成功路径的 `clearDraftFromStorage` 抛错时：不阻断跳转，仍判定成功。
+
 
