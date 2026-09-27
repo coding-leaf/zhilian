@@ -22,11 +22,12 @@
 |---|---|---|---|
 | BUG-AUTH-004~011 | P2 | `09-27-fix-auth-p2` | 画像更新端点、刷新同步 store、401 重试上限、UTF-8 字节阈值、登录真源水合、service 返回值透传、微信登录线程池、fallback 会话托管 |
 | BUG-MAT-005~011 | P2 | `09-27-fix-mat-p2a` | 文件大小上限双端对齐、重拍类型统一、知识树状态重置、父子半选推导、列表分页去重、首屏单触发（006 判为设计收窄·非缺陷） |
+| BUG-MAT-012~018 | P2 | `09-27-fix-mat-p2b` | 上传读取前体积门禁（413）、考点/页数统计字段、H5 渠道来源、snippet 关联去重、temp_id 防坍缩、重拍旧对象清理 |
 
 ## 待处理
 
 - **P1 剩余**：无（GRADE/DIAG 全部 P1 已关闭）。
-- **P2 待办（剩余 52 条）**：`fix-mat-p2b`(7)、`fix-qgen-p2`(6)、`fix-prac-p2a`(7)、`fix-prac-p2b`(6)、`fix-grade-p2a`(6)、`fix-grade-p2b`(6)、`fix-diag-p2a`(7)、`fix-diag-p2b`(7)。已关闭：AUTH 8 条、MAT-A 7 条（含 1 条判定非缺陷）。
+- **P2 待办（剩余 45 条）**：`fix-qgen-p2`(6)、`fix-prac-p2a`(7)、`fix-prac-p2b`(6)、`fix-grade-p2a`(6)、`fix-grade-p2b`(6)、`fix-diag-p2a`(7)、`fix-diag-p2b`(7)。已关闭：AUTH 8、MAT-A 7（含 1 非缺陷）、MAT-B 7。
 - **非功能性**：31 条（重复造轮子/死代码）→ 独立重构任务，不在本轮。
 
 ## 口径
