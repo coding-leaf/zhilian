@@ -29,12 +29,17 @@
 | BUG-GRADE-003~008 | P2 | `09-27-fix-grade-p2a` | 要点/原文契约透传（生效记录+批量切片）、移除报告死分支、首屏单加载、主观题集合对齐、未作答禁重判 |
 | BUG-GRADE-009~013,016 | P2 | `09-27-fix-grade-p2b` | 确定性 half-up 0.5 舍入、LLM/重批粒度统一、`is_correct` 透传、细则结构化渲染、理由上限 500、判题记录顺序与异常降级 |
 | BUG-DIAG-009~015 | P2 | `09-27-fix-diag-p2a` | 掌握度计数同步、error_type/question_type/material_id 过滤下推（去掉 1000 截断）、删除 `removed` 字段、报告页单加载、重置单触发（014 与 GRADE-006 重叠已修） |
+| BUG-DIAG-016~022 | P2 | `09-27-fix-diag-p2b` | 报告状态重置、草稿元数据补齐、`Idempotency-Key` 幂等创建、报告生成竞态回查、薄弱点稳定排序、掌握度契约别名、报告页空态 |
 
 ## 待处理
 
-- **P1 剩余**：无（GRADE/DIAG 全部 P1 已关闭）。
-- **P2 待办（剩余 7 条）**：`fix-diag-p2b`(016-022)。已关闭：AUTH 8、MAT-A 7（含 1 非缺陷）、MAT-B 7、QGEN 6、PRAC-A 7、PRAC-B 6、GRADE-A 6、GRADE-B 6、DIAG-A 7。
+- **P0/P1/P2 剩余**：无（功能性缺陷 23 P0/P1 + 67 P2 全部清零）。
 - **非功能性**：31 条（重复造轮子/死代码）→ 独立重构任务，不在本轮。
+- **最终整体回归**：后端 `pytest 1228 passed` + 前端 `pnpm test:unit 59 files / 556 tests`，两端工具链全绿。
+
+## 关闭统计
+
+AUTH 8、MAT-A 7（1 条判非缺陷）、MAT-B 7、QGEN 6、PRAC-A 7、PRAC-B 6、GRADE-A 6、GRADE-B 6、DIAG-A 7、DIAG-B 7 = **67 条 P2 全关闭**；另 2 P0 + 21 P1 已于前序批次关闭。
 
 ## 口径
 
