@@ -198,6 +198,9 @@ async function handle401Error<T>(options: RequestOptions): Promise<ApiResponse<T
  */
 export async function request<T = unknown>(options: RequestOptions): Promise<ApiResponse<T>> {
   const isRefreshUrl = options.url.includes('/auth/refresh');
+  // Anonymous endpoints (login/refresh and other skipAuth calls) must never trigger
+  // silent refresh or login redirection on 401/20001: they surface the raw backend error.
+  const isAnonymous = options.skipAuth === true;
 
   // If silent token refreshing is currently in progress, enqueue immediately
   if (isRefreshing && !isRefreshUrl) {
@@ -259,9 +262,11 @@ export async function request<T = unknown>(options: RequestOptions): Promise<Api
     unknown
   >;
 
-  // Check 401 or business authentication failure code 20001
+  // Check 401 or business authentication failure code 20001.
+  // Only authenticated requests enter silent-refresh; anonymous endpoints fall through
+  // to the raw error interception below (no token clearing, no redirectToLogin).
   const is401 = statusCode === 401 || resData.code === 20001;
-  if (is401 && !isRefreshUrl) {
+  if (is401 && !isRefreshUrl && !isAnonymous) {
     return handle401Error<T>(options);
   }
 

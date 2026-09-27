@@ -139,6 +139,71 @@ describe('Unified Network Request Client', () => {
     expect(storage.getItem('auth_tokens')).toBeNull();
   });
 
+  it('should throw raw backend error on anonymous 401 without redirect or token clear', async () => {
+    storage.setItem('auth_tokens', {
+      access_token: 'stale_access_token',
+      refresh_token: 'stale_refresh_token',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    });
+
+    uni.request = vi.fn().mockResolvedValue({
+      statusCode: 401,
+      data: { code: 20001, message: '用户账号已被停用' },
+    });
+
+    try {
+      await request({
+        url: '/api/v1/auth/login',
+        method: 'POST',
+        data: { code: 'dev_code' },
+        skipAuth: true,
+      });
+      throw new Error('Expected request to reject');
+    } catch (err) {
+      const appErr = err as AppError;
+      expect(appErr).toBeInstanceOf(AppError);
+      expect(appErr.code).toBe(20001);
+      expect(appErr.message).toBe('用户账号已被停用');
+      expect(appErr.status_code).toBe(401);
+    }
+
+    expect(uni.reLaunch).not.toHaveBeenCalled();
+    expect(storage.getItem('auth_tokens')).not.toBeNull();
+  });
+
+  it('should surface business 20001 on anonymous endpoint without redirect', async () => {
+    storage.setItem('auth_tokens', {
+      access_token: 'stale_access_token',
+      refresh_token: 'stale_refresh_token',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    });
+
+    uni.request = vi.fn().mockResolvedValue({
+      statusCode: 200,
+      data: { code: 20001, message: '登录凭证无效，请重新授权' },
+    });
+
+    try {
+      await request({
+        url: '/api/v1/auth/login',
+        method: 'POST',
+        data: { code: 'dev_code' },
+        skipAuth: true,
+      });
+      throw new Error('Expected request to reject');
+    } catch (err) {
+      const appErr = err as AppError;
+      expect(appErr).toBeInstanceOf(AppError);
+      expect(appErr.code).toBe(20001);
+      expect(appErr.message).toBe('登录凭证无效，请重新授权');
+    }
+
+    expect(uni.reLaunch).not.toHaveBeenCalled();
+    expect(storage.getItem('auth_tokens')).not.toBeNull();
+  });
+
   it('should perform silent refresh on 401 and replay failed request', async () => {
     const initialTokens: TokenPairResponse = {
       access_token: 'old_access_token',

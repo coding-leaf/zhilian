@@ -59,10 +59,9 @@ async function handleWeChatLogin(): Promise<void> {
       }
     }
 
-    const res = await loginByWechat({
-      code,
-      nickname: '学员用户',
-    });
+    // 不提交硬编码昵称/头像：未获取真实微信画像时保持字段缺省，
+    // 由后端仅在字段被显式提供且非空时更新，避免覆盖用户真实画像。
+    const res = await loginByWechat({ code });
 
     if (!res?.data?.access_token) {
       throw new Error(res?.message || '登录失败，未获取到有效凭据');

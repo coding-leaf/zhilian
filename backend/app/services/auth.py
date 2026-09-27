@@ -182,11 +182,14 @@ class AuthService:
                 if not user.is_active:
                     raise AuthenticationError("用户账号已被停用")
 
-                if nickname is not None or avatar_url is not None:
+                # 仅在字段被显式提供且非空时更新画像，空串不得覆盖既有非空昵称/头像
+                clean_nickname = nickname.strip() if nickname and nickname.strip() else None
+                clean_avatar_url = avatar_url.strip() if avatar_url and avatar_url.strip() else None
+                if clean_nickname is not None or clean_avatar_url is not None:
                     self.user_repo.update_profile(
                         user.id,
-                        nickname=nickname,
-                        avatar_url=avatar_url,
+                        nickname=clean_nickname,
+                        avatar_url=clean_avatar_url,
                     )
 
             access_token = create_access_token(user.id, user.token_version)

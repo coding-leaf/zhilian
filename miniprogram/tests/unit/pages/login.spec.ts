@@ -51,6 +51,25 @@ describe('Auth Login Page', () => {
     );
   });
 
+  it('submits login payload without a hardcoded nickname', async () => {
+    const loginSpy = vi.spyOn(authApi, 'loginByWechat').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        access_token: 'real_access_token_123',
+        refresh_token: 'real_refresh_token_123',
+        token_type: 'Bearer',
+        expires_in: 7200,
+      },
+    });
+
+    const wrapper = mount(LoginPage);
+    await wrapper.find('.wechat-login-btn').trigger('tap');
+
+    expect(loginSpy).toHaveBeenCalledTimes(1);
+    expect(loginSpy).toHaveBeenCalledWith({ code: 'dev_code' });
+  });
+
   it('does not set tokens when login API fails', async () => {
     const userStore = useUserStore();
     const showToastSpy = vi.spyOn(uni, 'showToast');

@@ -70,6 +70,40 @@ class TestAuthService:
         assert user2.avatar_url == "https://example.com/updated.png"
         assert token_response.access_token is not None
 
+    def test_login_without_nickname_preserves_existing_profile(self, session: Session) -> None:
+        """Verify a repeated login omitting nickname/avatar keeps the profile (BUG-AUTH-002)."""
+        service = AuthService(session)
+        user1, _ = service.login_with_wechat(
+            code="test_preserve_profile",
+            nickname="真实昵称",
+            avatar_url="https://example.com/real.png",
+        )
+
+        user2, _ = service.login_with_wechat(code="test_preserve_profile")
+
+        assert user1.id == user2.id
+        assert user2.nickname == "真实昵称"
+        assert user2.avatar_url == "https://example.com/real.png"
+
+    def test_login_with_empty_nickname_does_not_overwrite(self, session: Session) -> None:
+        """Verify blank nickname/avatar values never clobber an existing non-empty profile."""
+        service = AuthService(session)
+        user1, _ = service.login_with_wechat(
+            code="test_empty_profile",
+            nickname="保留昵称",
+            avatar_url="https://example.com/keep.png",
+        )
+
+        user2, _ = service.login_with_wechat(
+            code="test_empty_profile",
+            nickname="",
+            avatar_url="",
+        )
+
+        assert user1.id == user2.id
+        assert user2.nickname == "保留昵称"
+        assert user2.avatar_url == "https://example.com/keep.png"
+
     def test_login_with_wechat_inactive_user_raises(self, session: Session) -> None:
         """Verify inactive user login raises AuthenticationError."""
         service = AuthService(session)
