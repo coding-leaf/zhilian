@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包规范索引，校验审计覆盖与质量检查对齐"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁，用于 check 阶段复核审计结论的依据"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端包规范索引，校验审计覆盖与质量检查对齐"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁，用于 check 阶段复核审计结论的依据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核跨层契约核对矩阵是否完整覆盖 6 切片"}

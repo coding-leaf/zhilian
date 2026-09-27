@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层一致性核对的方法论，用于 6 个垂直切片的前后端契约审查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "识别重复造轮子/多套实现的判据，用于 SMELL 类发现"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端分层规范入口与 Pre-Development/Quality 检查清单"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "后端错误处理约定，作为后端逻辑与异常审计的判定基线"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁基线，用于判定 ruff/mypy/lint-imports/pytest 失败项性质"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范入口与检查清单"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 状态管理约定，用于 store 状态/副作用与状态未重置审计"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约约定，用于类型漏洞与前后端契约不一致审计"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁基线，用于判定 eslint/vue-tsc/vitest 失败项性质"}
