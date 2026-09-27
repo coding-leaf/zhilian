@@ -148,6 +148,29 @@ def test_practice_create_request_empty_knowledge_points() -> None:
         )
 
 
+def test_practice_create_request_wrong_record_and_optional_material() -> None:
+    """测试 wrong_record 来源合法且 material_id 缺省时可创建 (由后端解析)。"""
+    kp_id = uuid.uuid4()
+
+    req = PracticeCreateRequest(
+        title="错题巩固练习",
+        knowledge_point_ids=[kp_id],
+        source_type="wrong_record",
+    )
+    assert req.source_type == "wrong_record"
+    assert req.material_id is None
+
+    # 显式提供 material_id 仍兼容
+    mat_id = uuid.uuid4()
+    req_with_material = PracticeCreateRequest(
+        title="错题巩固练习",
+        material_id=mat_id,
+        knowledge_point_ids=[kp_id],
+        source_type="wrong_record",
+    )
+    assert req_with_material.material_id == mat_id
+
+
 def test_question_snapshot_dto_valid() -> None:
     """测试题目 6 要素快照模型及其字段解析。"""
     snippet_id = uuid.uuid4()

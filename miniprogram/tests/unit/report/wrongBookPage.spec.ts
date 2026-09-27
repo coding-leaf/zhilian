@@ -346,4 +346,35 @@ describe('WrongBookPage (subpackages/report/pages/wrong-book/index.vue)', () => 
       url: '/subpackages/practice/pages/session/index?id=prac_session_5001',
     });
   });
+
+  it('disables continue practice bar when no target knowledge points are available', async () => {
+    const records = getMockWrongRecords().map((record) => ({
+      ...record,
+      knowledge_point_id: '',
+    }));
+    vi.spyOn(diagnosisApi, 'fetchWrongBook').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        items: records,
+        total: records.length,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    const wrapper = mount(WrongBookPage, {
+      global: { plugins: [pinia] },
+      props: { materialId: 'mat_001' },
+    });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.records-list').exists()).toBe(true);
+    });
+
+    const bottomBar = wrapper.findComponent({ name: 'ContinuePracticeBar' });
+    expect(bottomBar.exists()).toBe(true);
+    expect(bottomBar.props('knowledgePointIds')).toEqual([]);
+    expect(bottomBar.props('disabled')).toBe(true);
+  });
 });

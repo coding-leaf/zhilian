@@ -222,6 +222,28 @@ class TestPracticeServiceCreationAndAssembly:
         assert practice.question_count == 3
         assert len(practice.items) == 3
 
+    def test_create_practice_resolves_material_from_questions(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Verify material_id=None resolves from selected question (wrong_record source)."""
+        service = PracticeService(session)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        options = CreatePracticeOptions(
+            title="错题巩固练习",
+            material_id=None,
+            knowledge_point_ids=[kp1_id],
+            question_count=2,
+            source_type="wrong_record",
+        )
+        practice = service.create_practice(user_id, options)
+
+        assert practice.material_id == material_id
+        assert practice.source_type == "wrong_record"
+        assert practice.question_count == 2
+
     def test_weak_points_assembly_mode(self, session: Session, test_setup: dict[str, Any]) -> None:
         """Verify WEAK_POINTS mode prioritizes unmastered wrong questions
         and weak knowledge points.

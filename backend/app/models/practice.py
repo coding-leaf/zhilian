@@ -55,10 +55,12 @@ class PracticeSourceType(enum.StrEnum):
 
     NORMAL: 常规创建练习 (选定资料与知识点范围)
     WEAKNESS: 薄弱知识点强化 / 诊断报告末尾一键继续练习 (FR-58)
+    WRONG_RECORD: 错题本一键巩固练习 (错题来源)
     """
 
     NORMAL = "normal"
     WEAKNESS = "weakness"
+    WRONG_RECORD = "wrong_record"
 
 
 class GradingChannel(enum.StrEnum):

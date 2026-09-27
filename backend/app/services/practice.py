@@ -65,7 +65,7 @@ class CreatePracticeOptions:
     """创建练习与组卷高级配置选项。"""
 
     title: str
-    material_id: uuid.UUID
+    material_id: uuid.UUID | None
     knowledge_point_ids: Sequence[uuid.UUID]
     question_count: int = 10
     question_types: Sequence[str] | None = None
@@ -319,9 +319,14 @@ class PracticeService:
                 )
             snapshots.append(snapshot)
 
+        # Step 4.5: 解析归属资料 (缺省时由选中题目回填，支持错题本等无资料上下文来源)
+        resolved_material_id = options.material_id
+        if resolved_material_id is None:
+            resolved_material_id = scattered_questions[0].material_id
+
         try:
             practice = Practice(
-                material_id=options.material_id,
+                material_id=resolved_material_id,
                 title=options.title,
                 knowledge_point_ids=[str(kp) for kp in options.knowledge_point_ids],
                 question_types=list(options.question_types) if options.question_types else [],

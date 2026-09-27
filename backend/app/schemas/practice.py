@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # 允许的组卷模式白名单集合
 VALID_PRACTICE_MODES: set[str] = {"sequential", "random", "weak_points"}
 # 允许的练习来源类型白名单集合
-VALID_PRACTICE_SOURCE_TYPES: set[str] = {"normal", "weakness"}
+VALID_PRACTICE_SOURCE_TYPES: set[str] = {"normal", "weakness", "wrong_record"}
 
 
 class PracticeCreateRequest(BaseModel):
@@ -27,7 +27,10 @@ class PracticeCreateRequest(BaseModel):
         max_length=128,
         description="练习标题 (如: 计算机网络第3章-专项练习)",
     )
-    material_id: uuid.UUID = Field(..., description="归属学习资料主键 UUIDv4")
+    material_id: uuid.UUID | None = Field(
+        default=None,
+        description="归属学习资料主键 UUIDv4；缺省时由所选题目资料自动解析",
+    )
     knowledge_point_ids: list[uuid.UUID] = Field(
         ...,
         min_length=1,

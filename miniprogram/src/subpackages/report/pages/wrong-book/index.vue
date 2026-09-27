@@ -79,7 +79,7 @@
       :title="'错题巩固练习'"
       :button-text="continueButtonText"
       :show-info="selectedRecordCount > 0"
-      :disabled="wrongRecords.length === 0"
+      :disabled="wrongRecords.length === 0 || targetKnowledgePointIds.length === 0"
       @success="onContinueSuccess"
     />
   </view>

@@ -180,6 +180,40 @@ async def test_create_practice_success(
 
 
 @pytest.mark.asyncio
+async def test_create_practice_wrong_record_without_material(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """测试错题本来源且缺省 material_id 的继续练习请求透传成功 (201)。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    knowledge_point_id = uuid.uuid4()
+    practice = make_fake_practice(user_id=mock_user.id, title="错题巩固练习")
+    mock_practice_service.create_practice.return_value = practice
+
+    payload = {
+        "title": "错题巩固练习",
+        "knowledge_point_ids": [str(knowledge_point_id)],
+        "question_count": 5,
+        "source_type": "wrong_record",
+        "mode": "weak_points",
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/api/v1/practices", json=payload)
+
+    assert response.status_code == 201
+    called_kwargs = mock_practice_service.create_practice.call_args.kwargs
+    assert called_kwargs["options"].material_id is None
+    assert called_kwargs["options"].source_type == "wrong_record"
+
+
+@pytest.mark.asyncio
 async def test_create_practice_empty_questions_error(
     mock_user: User,
     mock_practice_service: MagicMock,
