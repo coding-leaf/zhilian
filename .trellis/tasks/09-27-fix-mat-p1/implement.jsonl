@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包规范入口与开发前检查清单"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "含资料重试/状态筛选/字段契约场景，MAT 修复判定依据"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新增状态枚举与查询需遵守 ORM/迁移规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误与状态异常语义"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端包规范入口"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与资料子包契约场景"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层状态/字段一致性核对方法"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-MAT.md", "reason": "BUG-MAT-001..004 完整证据与复现"}

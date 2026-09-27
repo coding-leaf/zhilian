@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核状态筛选、资料重试与字段契约场景"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核新增枚举/查询是否合规"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端上传/子包契约与门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核状态值与字段名跨层一致"}
