@@ -112,6 +112,29 @@ describe('CourseDetailPage (course/index.vue)', () => {
     );
   });
 
+  it('opens the smart-generation drawer and navigates to the folder question list on success', async () => {
+    const navigateSpy = vi.spyOn(uni, 'navigateTo');
+    const wrapper = mount(CourseDetailPage);
+    await flush();
+    wrapper.vm.targetFolderId = 'f1';
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('智能出题');
+
+    wrapper.vm.handleOpenGenerate();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.generateVisible).toBe(true);
+
+    wrapper.vm.handleGenerateSuccess('f1');
+    expect(wrapper.vm.generateVisible).toBe(false);
+    expect(navigateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/subpackages/material/pages/questions/index?folder_id=f1',
+        fail: expect.any(Function),
+      }),
+    );
+  });
+
   it('uploads attributed to this course by passing folderId to the upload modal', async () => {
     const wrapper = mount(CourseDetailPage);
     await flush();

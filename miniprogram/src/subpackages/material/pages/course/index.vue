@@ -17,6 +17,7 @@
         </view>
         <view class="summary-actions">
           <button class="primary-action" @tap="handleOpenUpload">上传资料</button>
+          <button class="ghost-action" @tap="handleOpenGenerate">智能出题</button>
           <button class="ghost-action" @tap="handleGoQuestions">课程题目</button>
         </view>
       </view>
@@ -57,6 +58,11 @@
       :allow-unclassified="true"
       @select="handleMoveSelect"
     />
+    <CourseGenerateDrawer
+      v-model:visible="generateVisible"
+      :folder-id="targetFolderId"
+      @success="handleGenerateSuccess"
+    />
   </view>
 </template>
 
@@ -76,6 +82,7 @@ import { fetchFolderDetail, fetchFolderList } from '@/api/folder';
 import MaterialCard from '../../components/MaterialCard.vue';
 import MaterialUpload from '@/components/common/MaterialUpload.vue';
 import MoveMaterialSheet from '@/components/course/MoveMaterialSheet.vue';
+import CourseGenerateDrawer from '@/components/course/CourseGenerateDrawer.vue';
 import type { MaterialItem } from '@/types/material';
 import type { FolderItem } from '@/types/folder';
 
@@ -90,6 +97,7 @@ const listData = ref<MaterialItem[]>([]);
 const loading = ref(false);
 const uploadVisible = ref(false);
 const moveVisible = ref(false);
+const generateVisible = ref(false);
 const moveTarget = ref<MaterialItem | null>(null);
 
 const courseName = computed(() => folder.value?.name || '课程详情');
@@ -212,6 +220,18 @@ async function handleMoveSelect(folderId: string | null): Promise<void> {
   }
 }
 
+function handleOpenGenerate(): void {
+  generateVisible.value = true;
+}
+
+function handleGenerateSuccess(folderId: string): void {
+  generateVisible.value = false;
+  uni.navigateTo({
+    url: `/subpackages/material/pages/questions/index?folder_id=${folderId}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+  });
+}
+
 function handleGoQuestions(): void {
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?folder_id=${targetFolderId.value}`,
@@ -255,11 +275,14 @@ defineExpose({
   loading,
   uploadVisible,
   moveVisible,
+  generateVisible,
   courseName,
   loadFolder,
   loadMaterials,
   handleOpenUpload,
   handleUploadSuccess,
+  handleOpenGenerate,
+  handleGenerateSuccess,
   handleCardClick,
   handleCardDelete,
   handleCardRetry,

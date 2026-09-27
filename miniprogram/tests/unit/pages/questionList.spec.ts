@@ -3,7 +3,10 @@ import { mount } from '@vue/test-utils';
 import { setActivePinia, createPinia } from 'pinia';
 import QuestionsPage from '@/subpackages/material/pages/questions/index.vue';
 import * as questionApi from '@/api/question';
+import * as practiceApi from '@/api/practice';
+import { usePracticeStore } from '@/stores/practiceStore';
 import type { QuestionItem } from '@/types/question';
+import type { PracticeSession } from '@/types/practice';
 
 describe('QuestionsPage (questions/index.vue)', () => {
   const sampleQuestions: QuestionItem[] = [
@@ -130,6 +133,7 @@ describe('QuestionsPage (questions/index.vue)', () => {
 
     expect(navigateSpy).toHaveBeenCalledWith({
       url: '/subpackages/material/pages/knowledge-tree/index?material_id=mat_001',
+      fail: expect.any(Function),
     });
   });
 
@@ -206,5 +210,94 @@ describe('QuestionsPage (questions/index.vue)', () => {
       expect.objectContaining({ material_id: 'mat_001', page: 2, page_size: 20 }),
     );
     expect(wrapper.vm.listData.map((q) => q.id)).toEqual(['q_001', 'q_002']);
+  });
+
+  it('resolves folder_id from props and forwards it to the question list API', async () => {
+    const fetchSpy = mockList(sampleQuestions);
+
+    const wrapper = mount(QuestionsPage, { props: { folderId: 'f1' } });
+    await wrapper.vm.$nextTick();
+    await flush();
+
+    expect(wrapper.vm.isFolderScope).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith({
+      folder_id: 'f1',
+      page: 1,
+      page_size: 20,
+    });
+    expect(wrapper.vm.listData.map((q) => q.id)).toEqual(['q_001', 'q_002']);
+  });
+
+  it('guides folder-scoped empty state to the course generate entry with a fail fallback', async () => {
+    mockList([]);
+    const navigateSpy = vi.spyOn(uni, 'navigateTo');
+
+    const wrapper = mount(QuestionsPage, { props: { folderId: 'f1' } });
+    await wrapper.vm.$nextTick();
+    await flush();
+
+    expect(wrapper.find('.empty-state').exists()).toBe(true);
+    expect(wrapper.text()).toContain('本课程暂无题目');
+    expect(wrapper.text()).toContain('去出题');
+
+    await wrapper.find('.empty-action-btn').trigger('tap');
+
+    expect(navigateSpy).toHaveBeenCalledWith({
+      url: '/subpackages/material/pages/course/index?folder_id=f1',
+      fail: expect.any(Function),
+    });
+  });
+
+  it('starts a folder-scoped practice via createPractice and navigates to the session', async () => {
+    mockList(sampleQuestions);
+    const session: PracticeSession = {
+      id: 'prac_1',
+      title: '课程练习',
+      material_id: '',
+      folder_id: 'f1',
+      status: 'in_progress',
+      questions: [],
+    };
+    const createSpy = vi.spyOn(practiceApi, 'createPractice').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: session,
+    });
+    const navigateSpy = vi.spyOn(uni, 'navigateTo');
+    const practiceStore = usePracticeStore();
+
+    const wrapper = mount(QuestionsPage, { props: { folderId: 'f1' } });
+    await wrapper.vm.$nextTick();
+    await flush();
+
+    expect(wrapper.find('.start-btn').exists()).toBe(true);
+    await wrapper.vm.handleStartPractice();
+    await flush();
+
+    expect(createSpy).toHaveBeenCalledWith({
+      title: '课程练习',
+      folder_id: 'f1',
+      question_count: 2,
+      question_types: ['single_choice', 'multiple_choice', 'true_false', 'short_answer'],
+      mode: 'sequential',
+    });
+    expect(practiceStore.sessionId).toBe('prac_1');
+    expect(navigateSpy).toHaveBeenCalledWith({
+      url: '/subpackages/practice/pages/session/index?id=prac_1',
+      fail: expect.any(Function),
+    });
+  });
+
+  it('disables start practice when the folder scope has no questions', async () => {
+    mockList([]);
+    const createSpy = vi.spyOn(practiceApi, 'createPractice');
+
+    const wrapper = mount(QuestionsPage, { props: { folderId: 'f1' } });
+    await wrapper.vm.$nextTick();
+    await flush();
+
+    expect(wrapper.find('.start-btn').exists()).toBe(false);
+    await wrapper.vm.handleStartPractice();
+    expect(createSpy).not.toHaveBeenCalled();
   });
 });

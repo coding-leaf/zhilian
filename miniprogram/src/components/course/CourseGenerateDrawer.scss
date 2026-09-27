@@ -1,0 +1,185 @@
+@import '@/uni.scss';
+
+.course-generate-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-end;
+  z-index: 999;
+}
+
+.course-generate-body {
+  width: 100%;
+  background: #ffffff;
+  border-radius: $radius-lg $radius-lg 0 0;
+  padding: $spacing-xl;
+  box-sizing: border-box;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(#{$spacing-xl} + env(safe-area-inset-bottom));
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-lg;
+}
+
+.drawer-title {
+  font-size: $font-size-section;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.close-btn {
+  font-size: $font-size-body;
+  color: $--wot-color-gray-7;
+  padding: $spacing-xs;
+}
+
+.drawer-content {
+  overflow-y: auto;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.section-label {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.section-tip {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-6;
+  margin-bottom: $spacing-xs;
+}
+
+.stepper-row {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+}
+
+.step-btn {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: $radius-md;
+  background-color: $--wot-color-gray-2;
+  color: $--wot-color-gray-8;
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1rpx solid $--wot-color-gray-4;
+  margin: 0;
+  padding: 0;
+
+  &::after {
+    border: none;
+  }
+
+  &.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+}
+
+.count-input {
+  width: 130rpx;
+  height: 72rpx;
+  text-align: center;
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+  background-color: $--wot-color-gray-1;
+  border: 1rpx solid $--wot-color-gray-4;
+  border-radius: $radius-md;
+}
+
+.count-unit {
+  font-size: $font-size-body;
+  color: $--wot-color-gray-7;
+}
+
+.capsule-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-sm;
+}
+
+.capsule-item {
+  padding: 14rpx 28rpx;
+  border-radius: $radius-pill;
+  font-size: $font-size-caption;
+  font-weight: $font-weight-medium;
+  border: 1rpx solid $--wot-color-gray-4;
+  background-color: $--wot-color-gray-1;
+  color: $--wot-color-gray-7;
+  transition: $transition-bounce;
+
+  &:active {
+    transform: $scale-active;
+  }
+
+  &.active {
+    background-color: $--wot-color-theme-light;
+    border-color: $--wot-color-theme;
+    color: $--wot-color-theme;
+    font-weight: $font-weight-bold;
+  }
+
+  &.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.drawer-footer {
+  margin-top: $spacing-xl;
+  display: flex;
+  flex-direction: column;
+}
+
+.submit-btn {
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: $radius-pill;
+  background-color: $--wot-color-theme;
+  color: #ffffff;
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  text-align: center;
+  box-shadow: $shadow-btn-primary;
+  border: none;
+  margin: 0;
+
+  &::after {
+    border: none;
+  }
+
+  &:active {
+    background-color: $--wot-color-theme-hover;
+    transform: $scale-active;
+  }
+
+  &.disabled,
+  &:disabled {
+    background-color: $--wot-color-gray-4;
+    color: $--wot-color-gray-6;
+    box-shadow: none;
+    pointer-events: none;
+  }
+}

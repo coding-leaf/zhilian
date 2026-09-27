@@ -1,0 +1,66 @@
+@import '@/uni.scss';
+
+.practice-start-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: $action-bar-height;
+  box-sizing: border-box;
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid $--wot-color-gray-4;
+  padding: 0 $spacing-xl env(safe-area-inset-bottom);
+  display: flex;
+  align-items: center;
+  gap: $spacing-lg;
+  z-index: 100;
+}
+
+.bar-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.bar-count {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.bar-tip {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-6;
+}
+
+.start-btn {
+  flex: 1;
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: $radius-pill;
+  background-color: $--wot-color-theme;
+  color: #ffffff;
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  text-align: center;
+  box-shadow: $shadow-btn-primary;
+  border: none;
+  margin: 0;
+
+  &::after {
+    border: none;
+  }
+
+  &:active {
+    background-color: $--wot-color-theme-hover;
+    transform: $scale-active;
+  }
+
+  &.disabled,
+  &:disabled {
+    background-color: $--wot-color-gray-4;
+    color: $--wot-color-gray-6;
+    box-shadow: none;
+    pointer-events: none;
+  }
+}

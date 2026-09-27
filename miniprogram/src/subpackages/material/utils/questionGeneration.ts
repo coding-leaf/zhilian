@@ -48,6 +48,31 @@ export function navigateToQuestionPage(materialId: string): void {
 }
 
 /**
+ * 题目列表空态文案：按范围（课程 / 单资料）返回标题、说明与操作按钮文案。
+ *
+ * @param isFolderScope 是否为课程文件夹范围。
+ * @returns 空态标题、说明与操作按钮文案。
+ */
+export function resolveQuestionListEmptyCopy(isFolderScope: boolean): {
+  title: string;
+  desc: string;
+  action: string;
+} {
+  if (isFolderScope) {
+    return {
+      title: '本课程暂无题目',
+      desc: '先在课程详情使用「智能出题」生成题目',
+      action: '去出题',
+    };
+  }
+  return {
+    title: '暂无题目，去知识树生成',
+    desc: '选择知识点并生成后，可在此核验出题效果',
+    action: '去知识树生成',
+  };
+}
+
+/**
  * 按错误类型解析出题失败提示文案。
  *
  * @param err 捕获到的未知错误。

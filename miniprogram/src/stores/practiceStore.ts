@@ -77,7 +77,7 @@ export const usePracticeStore = defineStore('practice', () => {
   function initSession(
     id: string,
     questionList: PracticeQuestion[],
-    meta?: { title?: string; material_id?: string },
+    meta?: { title?: string; material_id?: string; folder_id?: string },
   ): void {
     sessionId.value = id;
     questions.value = [...questionList];
@@ -93,6 +93,7 @@ export const usePracticeStore = defineStore('practice', () => {
         total_count: questionList.length,
         title: meta?.title,
         material_id: meta?.material_id,
+        folder_id: meta?.folder_id,
       };
     }
   }

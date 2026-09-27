@@ -5,21 +5,19 @@
       <text class="summary-count">共 {{ total }} 题</text>
     </view>
 
-    <!-- 首次加载态 -->
     <view v-if="loading && listData.length === 0" class="state-block">
       <wd-loading size="40rpx" />
       <text class="state-text">正在加载题目...</text>
     </view>
 
-    <!-- 空态 -->
+    <!-- 空态：按范围给出引导 -->
     <view v-else-if="listData.length === 0" class="state-block empty-state">
       <wd-icon name="info" size="64rpx" color="var(--color-gray-5)" />
-      <text class="state-title">暂无题目，去知识树生成</text>
-      <text class="state-desc">选择知识点并生成后，可在此核验出题效果</text>
-      <button class="empty-action-btn" @tap="handleGoKnowledgeTree">去知识树生成</button>
+      <text class="state-title">{{ emptyCopy.title }}</text>
+      <text class="state-desc">{{ emptyCopy.desc }}</text>
+      <button class="empty-action-btn" @tap="handleEmptyAction">{{ emptyCopy.action }}</button>
     </view>
 
-    <!-- 题目列表 -->
     <view v-else class="questions-container">
       <QuestionCard
         v-for="item in listData"
@@ -35,6 +33,8 @@
         <text v-else-if="hasMore" class="load-more-btn" @tap="handleLoadMore">加载更多</text>
         <text v-else class="load-more-text">已加载全部题目</text>
       </view>
+
+      <view v-if="isFolderScope" class="bottom-bar-placeholder" />
     </view>
 
     <!-- 复用抽屉组件 -->
@@ -49,6 +49,14 @@
       :question-id="auditingQuestionId"
       @close="isAuditDrawerOpen = false"
     />
+
+    <!-- 课程范围吸底「开始答题」 -->
+    <PracticeStartBar
+      v-if="isFolderScope && listData.length > 0"
+      :total="total"
+      :starting="starting"
+      @start="handleStartPractice"
+    />
   </view>
 </template>
 
@@ -56,47 +64,69 @@
 import { ref, computed } from 'vue';
 import { onLoad, onShow, onReachBottom } from '@dcloudio/uni-app';
 import { fetchQuestionList, deleteQuestion } from '@/api/question';
-import type { QuestionItem } from '@/types/question';
+import { createPractice } from '@/api/practice';
+import { usePracticeStore } from '@/stores/practiceStore';
+import type { QuestionItem, QuestionListQueryParams, QuestionType } from '@/types/question';
 import QuestionCard from '../../components/QuestionCard.vue';
 import QuestionEditDrawer from '../../components/QuestionEditDrawer.vue';
 import QuestionAuditDrawer from '../../components/QuestionAuditDrawer.vue';
+import PracticeStartBar from '@/components/course/PracticeStartBar.vue';
+import { resolveQuestionListEmptyCopy } from '../../utils/questionGeneration';
 
 interface QuestionPageQuery {
   material_id?: string;
   materialId?: string;
+  folder_id?: string;
+  folderId?: string;
   id?: string;
 }
 
 interface Props {
   materialId?: string;
+  folderId?: string;
   id?: string;
 }
 
 const props = defineProps<Props>();
 
+const practiceStore = usePracticeStore();
+
+const PRACTICE_QUESTION_TYPES: QuestionType[] = [
+  'single_choice',
+  'multiple_choice',
+  'true_false',
+  'short_answer',
+];
+
 const targetMaterialId = ref<string>('');
+const targetFolderId = ref<string>('');
 const listData = ref<QuestionItem[]>([]);
 const page = ref<number>(1);
 const pageSize = 20;
 const total = ref<number>(0);
 const loading = ref<boolean>(false);
+const starting = ref<boolean>(false);
 const isEditDrawerOpen = ref<boolean>(false);
 const isAuditDrawerOpen = ref<boolean>(false);
 const editingQuestion = ref<QuestionItem | null>(null);
 const auditingQuestionId = ref<string>('');
 
 const hasMore = computed<boolean>(() => listData.value.length < total.value);
+const isFolderScope = computed<boolean>(() => !!targetFolderId.value);
+const emptyCopy = computed(() => resolveQuestionListEmptyCopy(isFolderScope.value));
 
 async function loadQuestions(reset = false): Promise<void> {
-  if (!targetMaterialId.value || loading.value) return;
+  if ((!targetMaterialId.value && !targetFolderId.value) || loading.value) return;
   if (reset) page.value = 1;
   loading.value = true;
   try {
-    const res = await fetchQuestionList({
-      material_id: targetMaterialId.value,
-      page: page.value,
-      page_size: pageSize,
-    });
+    const params: QuestionListQueryParams = { page: page.value, page_size: pageSize };
+    if (targetFolderId.value) {
+      params.folder_id = targetFolderId.value;
+    } else {
+      params.material_id = targetMaterialId.value;
+    }
+    const res = await fetchQuestionList(params);
     const items: QuestionItem[] = res?.data?.items || [];
     total.value = res?.data?.total ?? items.length;
     if (reset) {
@@ -118,6 +148,37 @@ function handleLoadMore(): void {
   if (loading.value || !hasMore.value) return;
   page.value += 1;
   void loadQuestions(false);
+}
+
+async function handleStartPractice(): Promise<void> {
+  if (starting.value || !targetFolderId.value || total.value === 0) return;
+  starting.value = true;
+  try {
+    const res = await createPractice({
+      title: '课程练习',
+      folder_id: targetFolderId.value,
+      question_count: Math.min(total.value, 20),
+      question_types: PRACTICE_QUESTION_TYPES,
+      mode: 'sequential',
+    });
+    const session = res?.data;
+    if (!session?.id) {
+      uni.showToast({ title: '组卷失败，请重试', icon: 'none' });
+      return;
+    }
+    practiceStore.initSession(session.id, session.questions || [], {
+      title: session.title,
+      folder_id: targetFolderId.value,
+    });
+    uni.navigateTo({
+      url: `/subpackages/practice/pages/session/index?id=${session.id}`,
+      fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+    });
+  } catch {
+    uni.showToast({ title: '组卷失败，请重试', icon: 'none' });
+  } finally {
+    starting.value = false;
+  }
 }
 
 function handleOpenEdit(question: QuestionItem): void {
@@ -163,17 +224,40 @@ function handleGoKnowledgeTree(): void {
   }
   uni.navigateTo({
     url: `/subpackages/material/pages/knowledge-tree/index?material_id=${targetMaterialId.value}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
+}
+
+function handleGoCourseGenerate(): void {
+  if (!targetFolderId.value) return;
+  uni.navigateTo({
+    url: `/subpackages/material/pages/course/index?folder_id=${targetFolderId.value}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+  });
+}
+
+function handleEmptyAction(): void {
+  if (isFolderScope.value) {
+    handleGoCourseGenerate();
+    return;
+  }
+  handleGoKnowledgeTree();
 }
 
 let hasEntered = false;
 
 function initPage(query?: QuestionPageQuery): void {
-  if (targetMaterialId.value) return;
-  const resolved =
+  if (targetMaterialId.value || targetFolderId.value) return;
+  const folder = query?.folder_id || query?.folderId || props.folderId || '';
+  const material =
     query?.material_id || query?.materialId || query?.id || props.materialId || props.id || '';
-  if (!resolved) return;
-  targetMaterialId.value = resolved;
+  if (folder) {
+    targetFolderId.value = folder;
+  } else if (material) {
+    targetMaterialId.value = material;
+  } else {
+    return;
+  }
   void loadQuestions(true);
 }
 
@@ -183,23 +267,29 @@ onShow(() => {
     hasEntered = true;
     return;
   }
-  if (targetMaterialId.value) void loadQuestions(true);
+  if (targetMaterialId.value || targetFolderId.value) void loadQuestions(true);
 });
 onReachBottom(() => handleLoadMore());
 
 defineExpose({
   targetMaterialId,
+  targetFolderId,
+  isFolderScope,
   listData,
   loading,
+  starting,
   total,
   hasMore,
   loadQuestions,
   handleLoadMore,
+  handleStartPractice,
   handleOpenEdit,
   handleOpenAudit,
   handleQuestionUpdated,
   handleDeleteQuestion,
   handleGoKnowledgeTree,
+  handleGoCourseGenerate,
+  handleEmptyAction,
   initPage,
 });
 </script>

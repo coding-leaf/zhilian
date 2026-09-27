@@ -24,6 +24,7 @@ const EMPTY_SESSION: PracticeSession = {
   id: '',
   title: '练习作答',
   material_id: '',
+  folder_id: null,
   status: 'idle',
   questions: [],
 };
@@ -122,6 +123,7 @@ export function adaptPracticeSession(
     id: raw.practice_id ?? raw.id ?? '',
     title: raw.title ?? '练习作答',
     material_id: raw.material_id ?? '',
+    folder_id: raw.folder_id ?? null,
     status: adaptStatus(raw.status),
     questions,
     items: rawItems,

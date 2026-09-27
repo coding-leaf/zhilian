@@ -44,7 +44,13 @@ export interface QuestionItem {
 }
 
 export interface QuestionGenerateRequest {
-  material_id: string;
+  /**
+   * Owning material id. Optional because a course-folder scope (`folder_id`)
+   * may be used instead; at least one of `material_id` / `folder_id` is required.
+   */
+  material_id?: string;
+  /** Owning course folder id. When set, generation spans the folder's ready scope. */
+  folder_id?: string;
   version_id?: string;
   knowledge_point_id?: string;
   knowledge_point_ids?: string[];
@@ -124,9 +130,12 @@ export interface QuestionQualityCheck {
 
 export interface QuestionGenerateResponse {
   batch_id: string;
-  material_id: string;
-  version_id: string;
-  knowledge_point_id: string;
+  /** Null/absent for course-folder scope (backend contract). */
+  material_id?: string;
+  /** Null/absent for course-folder scope (backend contract). */
+  version_id?: string;
+  /** First covered knowledge point id; null for course-folder scope when empty. */
+  knowledge_point_id?: string;
   knowledge_point_ids?: string[];
   total_generated: number;
   qualified_count: number;
@@ -139,6 +148,8 @@ export interface QuestionGenerateResponse {
 
 export interface QuestionListQueryParams {
   material_id?: string;
+  /** Course folder scope filter. Mutually exclusive with `material_id`. */
+  folder_id?: string;
   knowledge_point_id?: string;
   question_type?: string;
   difficulty?: number;

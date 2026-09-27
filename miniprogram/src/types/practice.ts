@@ -105,7 +105,8 @@ export interface RawPracticeSession {
   practice_id?: string;
   id?: string;
   title?: string;
-  material_id?: string;
+  material_id?: string | null;
+  folder_id?: string | null;
   mode?: string;
   status?: string;
   total_count?: number;
@@ -126,7 +127,10 @@ export type PracticeStatus = 'idle' | 'in_progress' | 'paused' | 'submitted' | '
 export interface PracticeSession {
   id: string;
   title: string;
-  material_id: string;
+  /** Optional: course-folder scoped practices have no single owning material. */
+  material_id?: string;
+  /** Owning course folder id for folder-scoped practices. */
+  folder_id?: string | null;
   status: PracticeStatus;
   questions: PracticeQuestionItem[];
   /** Raw backend items passthrough used by report pages that need grading snapshots. */
@@ -146,6 +150,8 @@ export interface AnswerDraft {
   title?: string;
   /** Owning material id captured at session init (BUG-DIAG-017). */
   material_id?: string;
+  /** Owning course folder id captured at session init for folder-scoped practices. */
+  folder_id?: string;
 }
 
 export interface SubmitPracticeRequest {
@@ -156,8 +162,12 @@ export interface SubmitPracticeRequest {
 
 export interface CreatePracticePayload {
   title: string;
-  material_id: string;
-  knowledge_point_ids: string[];
+  /** Optional: folder-scoped practices omit it (backend `material_id` is nullable). */
+  material_id?: string;
+  /** Course folder scope; when set `knowledge_point_ids` may be empty. */
+  folder_id?: string;
+  /** Optional: folder scope derives the knowledge-point set from the folder. */
+  knowledge_point_ids?: string[];
   question_count?: number;
   question_types?: QuestionType[];
   difficulty?: number;

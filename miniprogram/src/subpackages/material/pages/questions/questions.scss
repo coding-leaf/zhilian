@@ -98,3 +98,8 @@
     color: $--wot-color-theme;
   }
 }
+
+.bottom-bar-placeholder {
+  height: $action-bar-height;
+  padding-bottom: env(safe-area-inset-bottom);
+}

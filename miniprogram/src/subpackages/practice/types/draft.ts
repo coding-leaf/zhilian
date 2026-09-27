@@ -38,6 +38,7 @@ export interface PracticeDraftRecord {
   total_count?: number;
   title?: string;
   material_id?: string;
+  folder_id?: string;
 }
 
 /**
