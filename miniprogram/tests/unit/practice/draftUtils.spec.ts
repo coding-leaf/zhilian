@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import {
   formatDurationSeconds,
   formatElapsedDuration,
@@ -15,6 +15,7 @@ import {
   generateIdempotencyKey,
 } from '@/subpackages/practice/utils/draft';
 import { storage } from '@/utils/storage';
+import { AppError } from '@/utils/error';
 import type { PracticeDraftRecord } from '@/subpackages/practice/types/draft';
 
 describe('Practice Draft Utilities (draft.ts)', () => {
@@ -36,6 +37,7 @@ describe('Practice Draft Utilities (draft.ts)', () => {
     };
 
     storage.clear();
+    vi.restoreAllMocks();
   });
 
   describe('formatDurationSeconds', () => {
@@ -153,6 +155,38 @@ describe('Practice Draft Utilities (draft.ts)', () => {
     it('handles negative or zero duration safely', () => {
       const record = createOrUpdateDraft(null, 'p_100', 'q_1', 'A', -5);
       expect(record.items.q_1.time_spent_seconds).toBe(0);
+    });
+
+    it('preserves an existing submit_key when the draft is updated (PRAC-003)', () => {
+      const first: PracticeDraftRecord = {
+        ...createOrUpdateDraft(null, 'p_100', 'q_1', 'A', 1),
+        submit_key: 'key-1',
+      };
+      const updated = createOrUpdateDraft(first, 'p_100', 'q_2', 'B', 1);
+      expect(updated.submit_key).toBe('key-1');
+    });
+  });
+
+  describe('saveDraftToStorage degradation (PRAC-004)', () => {
+    it('swallows storage overflow failures without throwing', () => {
+      const draft = createOrUpdateDraft(null, 'p_overflow', 'q_1', 'A', 5);
+      vi.spyOn(storage, 'setItem').mockImplementation(() => {
+        throw new AppError(10001, 'Storage key forbidden');
+      });
+
+      expect(() => saveDraftToStorage('p_overflow', draft)).not.toThrow();
+      // The in-memory record stays intact for the caller and remote sync.
+      expect(draft.items.q_1.user_answer).toBe('A');
+    });
+
+    it('never throws when clearing a draft fails after a successful submit (PRAC-004)', () => {
+      saveDraftToStorage('p_clear', createOrUpdateDraft(null, 'p_clear', 'q_1', 'A', 5));
+
+      vi.spyOn(storage, 'setItem').mockImplementation(() => {
+        throw new AppError(10001, 'Storage key forbidden');
+      });
+
+      expect(() => clearDraftFromStorage('p_clear')).not.toThrow();
     });
   });
 

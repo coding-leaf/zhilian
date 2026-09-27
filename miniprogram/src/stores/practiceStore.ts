@@ -7,10 +7,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { QuestionItem } from '../types/question';
-import type { PracticeQuestionOutline, AnswerDraft } from '../types/practice';
+import type { PracticeQuestionOutline, PracticeQuestionItem, AnswerDraft } from '../types/practice';
 import { storage } from '../utils/storage';
 
-export type PracticeQuestion = QuestionItem | PracticeQuestionOutline;
+export type PracticeQuestion = QuestionItem | PracticeQuestionOutline | PracticeQuestionItem;
 
 export const usePracticeStore = defineStore('practice', () => {
   // State

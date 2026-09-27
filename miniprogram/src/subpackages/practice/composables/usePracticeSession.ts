@@ -6,7 +6,7 @@
  */
 
 import { ref, computed } from 'vue';
-import { usePracticeStore, type PracticeQuestion } from '../../../stores/practiceStore';
+import { usePracticeStore } from '../../../stores/practiceStore';
 import { fetchPracticeSession, saveAnswerDraft } from '../../../api/practice';
 import {
   createOrUpdateDraft,
@@ -51,7 +51,7 @@ export function usePracticeSession() {
       const res = await fetchPracticeSession(id);
       if (res.data) {
         practiceTitle.value = res.data.title || '练习作答';
-        practiceStore.initSession(id, (res.data.questions as PracticeQuestion[]) || []);
+        practiceStore.initSession(id, res.data.questions || []);
         elapsedSeconds.value = res.data.time_elapsed_seconds || 0;
 
         // 从 Storage 恢复本地草稿

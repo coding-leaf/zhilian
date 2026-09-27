@@ -6,8 +6,14 @@
  */
 
 import { request } from '../utils/request';
+import { adaptPracticeResponse } from './adapters/practice';
 import type { ApiResponse } from '../types/common';
-import type { PracticeSession, CreatePracticePayload, SaveAnswerPayload } from '../types/practice';
+import type {
+  PracticeSession,
+  CreatePracticePayload,
+  SaveAnswerPayload,
+  RawPracticeSession,
+} from '../types/practice';
 
 /**
  * 创建练习会话并执行智能组卷。
@@ -15,14 +21,15 @@ import type { PracticeSession, CreatePracticePayload, SaveAnswerPayload } from '
  * @param payload 包含资料 ID、知识点列表与题量模式等出题配置。
  * @returns 统一响应包，包含已创建的练习详情与卷面题目快照。
  */
-export function createPractice(
+export async function createPractice(
   payload: CreatePracticePayload,
 ): Promise<ApiResponse<PracticeSession>> {
-  return request<PracticeSession>({
+  const res = await request<RawPracticeSession>({
     url: '/api/v1/practices',
     method: 'POST',
     data: payload,
   });
+  return adaptPracticeResponse(res);
 }
 
 /**
@@ -31,11 +38,14 @@ export function createPractice(
  * @param practiceId 练习主键 ID。
  * @returns 统一响应包，包含练习信息与题目列表。
  */
-export function fetchPracticeSession(practiceId: string): Promise<ApiResponse<PracticeSession>> {
-  return request<PracticeSession>({
+export async function fetchPracticeSession(
+  practiceId: string,
+): Promise<ApiResponse<PracticeSession>> {
+  const res = await request<RawPracticeSession>({
     url: `/api/v1/practices/${practiceId}`,
     method: 'GET',
   });
+  return adaptPracticeResponse(res);
 }
 
 /**

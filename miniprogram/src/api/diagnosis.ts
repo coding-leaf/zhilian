@@ -6,8 +6,9 @@
  */
 
 import { request } from '../utils/request';
+import { adaptPracticeResponse } from './adapters/practice';
 import type { ApiResponse, PageResult } from '../types/common';
-import type { PracticeSession } from '../types/practice';
+import type { PracticeSession, RawPracticeSession } from '../types/practice';
 import type {
   DiagnosisReport,
   UserMasteryOverview,
@@ -157,14 +158,14 @@ export function requestRegrade(
  * @param payload 包含资料 ID、薄弱知识点列表及来源报告 ID。
  * @returns 统一响应包，包含新生成的强化练习会话。
  */
-export function continuePractice(
+export async function continuePractice(
   payload: ContinuePracticePayload,
 ): Promise<ApiResponse<PracticeSession>> {
   const headers: Record<string, string> = {};
   if (payload.idempotency_key) {
     headers['X-Idempotency-Key'] = payload.idempotency_key;
   }
-  return request<PracticeSession>({
+  const res = await request<RawPracticeSession>({
     url: '/api/v1/practices',
     method: 'POST',
     headers: Object.keys(headers).length > 0 ? headers : undefined,
@@ -179,4 +180,5 @@ export function continuePractice(
       ...(payload.idempotency_key ? { idempotency_key: payload.idempotency_key } : {}),
     },
   });
+  return adaptPracticeResponse(res);
 }

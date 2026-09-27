@@ -113,6 +113,7 @@ export function createOrUpdateDraft(
     items: baseItems,
     answers: baseAnswers,
     updated_at: now,
+    ...(existing?.submit_key ? { submit_key: existing.submit_key } : {}),
   };
 }
 
@@ -177,15 +178,22 @@ export function extractPendingSyncItems(draft: PracticeDraftRecord | null): Prac
 /**
  * 将整场练习草稿保存到 Storage (key: practice_drafts)
  * 严格限制字段，绝对禁止存入题目全文。
+ *
+ * Storage 写入失败（如超出 20KB 上限或序列化异常）时降级为静默忽略，
+ * 保证 store 内已作答状态与远端同步调度不受影响 (PRAC-004)。
  */
 export function saveDraftToStorage(practiceId: string, draft: PracticeDraftRecord): void {
-  const currentMap =
-    (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) || {};
-  const nextMap: Record<string, PracticeDraftRecord> = {
-    ...currentMap,
-    [practiceId]: draft,
-  };
-  storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
+  try {
+    const currentMap =
+      (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) || {};
+    const nextMap: Record<string, PracticeDraftRecord> = {
+      ...currentMap,
+      [practiceId]: draft,
+    };
+    storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
+  } catch (error: unknown) {
+    console.warn('[practice] draft storage write degraded', error);
+  }
 }
 
 /**
@@ -202,16 +210,23 @@ export function loadDraftFromStorage(practiceId: string): PracticeDraftRecord | 
 
 /**
  * 从 Storage 清除指定练习草稿
+ *
+ * 写入失败时降级为静默忽略，避免交卷成功后清理草稿失败阻断跳转 (PRAC-004)。
  */
 export function clearDraftFromStorage(practiceId: string): void {
-  const currentMap =
-    (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) || null;
-  if (!currentMap || !currentMap[practiceId]) {
-    return;
+  try {
+    const currentMap =
+      (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) ||
+      null;
+    if (!currentMap || !currentMap[practiceId]) {
+      return;
+    }
+    const nextMap = { ...currentMap };
+    delete nextMap[practiceId];
+    storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
+  } catch (error: unknown) {
+    console.warn('[practice] draft storage clear degraded', error);
   }
-  const nextMap = { ...currentMap };
-  delete nextMap[practiceId];
-  storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
 }
 
 /**

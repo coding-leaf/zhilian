@@ -82,11 +82,9 @@ import BottomActionBar from '../../components/BottomActionBar.vue';
 import AnswerSheetDrawer from '../../components/AnswerSheetDrawer.vue';
 import SubmitConfirmModal from '../../components/SubmitConfirmModal.vue';
 import { submitPractice } from '../../../../api/practice';
-import {
-  clearDraftFromStorage,
-  calculateQuestionStats,
-  generateIdempotencyKey,
-} from '../../utils/draft';
+import { clearDraftFromStorage, calculateQuestionStats } from '../../utils/draft';
+import { getOrCreateSubmitKey, clearSubmitKey } from '../../utils/submitKey';
+import { AppError } from '../../../../utils/error';
 
 const practiceStore = usePracticeStore();
 const {
@@ -194,11 +192,12 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
   practiceStore.isSubmitting = true;
   try {
     await syncPendingDrafts().catch(() => {});
-    const idempotencyKey = generateIdempotencyKey();
+    const idempotencyKey = getOrCreateSubmitKey(targetPracticeId);
     await submitPractice(targetPracticeId, idempotencyKey, {
       confirm_unanswered: payload.confirm_unanswered,
     });
 
+    clearSubmitKey(targetPracticeId);
     clearDraftFromStorage(targetPracticeId);
     practiceStore.clearSession();
     confirmModalVisible.value = false;
@@ -211,6 +210,11 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
       url: `/subpackages/report/index?practice_id=${targetPracticeId}`,
     });
   } catch (err: unknown) {
+    // A 400 means the submission is already in a terminal state, so retrying is
+    // pointless; release the key. Network/timeout errors keep it for replay.
+    if (err instanceof AppError && err.status_code === 400) {
+      clearSubmitKey(targetPracticeId);
+    }
     const errorMsg = (err as { message?: string })?.message || '交卷失败，请重试';
     uni.showToast({
       title: errorMsg,

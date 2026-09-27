@@ -6,27 +6,56 @@ import {
   saveAnswerDraft,
   submitPractice,
 } from '@/api/practice';
-import type { CreatePracticePayload } from '@/types/practice';
+import type { CreatePracticePayload, PracticeQuestionItem } from '@/types/practice';
+
+/**
+ * Real backend response fixture (`PracticeDetailResponse`), authoritative contract.
+ *
+ * The list field is `items`, each entry nests `question_snapshot`; option bodies
+ * use the `{ key, content }` shape. See backend/app/schemas/practice.py.
+ */
+const rawPracticeDetail = {
+  practice_id: 'prac_001',
+  id: 'prac_001',
+  title: 'Network Practice',
+  material_id: 'mat_001',
+  status: 'in_progress',
+  total_count: 1,
+  items: [
+    {
+      attempt_item_id: 'att_001',
+      id: 'att_001',
+      question_id: 'q_001',
+      order_index: 1,
+      status: 'unanswered',
+      is_answered: false,
+      time_spent_seconds: 0,
+      max_score: 1,
+      question_snapshot: {
+        stem: 'TCP 建立连接需要几次握手？',
+        question_type: 'single_choice',
+        options: [
+          { key: 'A', content: '1次' },
+          { key: 'B', content: '2次' },
+          { key: 'C', content: '3次' },
+        ],
+        answer: 'C',
+        analysis: 'TCP通过三次握手建立连接',
+        difficulty: 3,
+      },
+    },
+  ],
+};
 
 describe('Practice API Module', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('should call createPractice with POST /api/v1/practices and payload', async () => {
-    const mockResponse = {
-      code: 0,
-      message: 'success',
-      data: {
-        id: 'prac_001',
-        title: 'Network Practice',
-        material_id: 'mat_001',
-        status: 'in_progress',
-        questions: [],
-        created_at: '2026-01-01T00:00:00Z',
-      },
-    };
-    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+  it('should call createPractice with POST /api/v1/practices and adapt items into questions', async () => {
+    const requestSpy = vi
+      .spyOn(requestModule, 'request')
+      .mockResolvedValue({ code: 0, message: 'success', data: rawPracticeDetail });
 
     const payload: CreatePracticePayload = {
       title: 'Network Practice',
@@ -42,22 +71,18 @@ describe('Practice API Module', () => {
       method: 'POST',
       data: payload,
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.id).toBe('prac_001');
+    expect(res.data.questions).toHaveLength(1);
+    const first = res.data.questions[0] as PracticeQuestionItem;
+    expect(first.question_type).toBe('single_choice');
+    expect(first.stem).toContain('几次握手');
+    expect(first.options?.[0]).toEqual({ key: 'A', text: '1次' });
   });
 
-  it('should call fetchPracticeSession with GET /api/v1/practices/:id', async () => {
-    const mockResponse = {
-      code: 0,
-      message: 'success',
-      data: {
-        id: 'prac_001',
-        title: 'Network Practice',
-        material_id: 'mat_001',
-        status: 'in_progress',
-        questions: [],
-      },
-    };
-    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+  it('should call fetchPracticeSession with GET /api/v1/practices/:id and adapt items', async () => {
+    const requestSpy = vi
+      .spyOn(requestModule, 'request')
+      .mockResolvedValue({ code: 0, message: 'success', data: rawPracticeDetail });
 
     const res = await fetchPracticeSession('prac_001');
 
@@ -66,7 +91,10 @@ describe('Practice API Module', () => {
       url: '/api/v1/practices/prac_001',
       method: 'GET',
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.questions).toHaveLength(1);
+    const first = res.data.questions[0] as PracticeQuestionItem;
+    expect(first.id).toBe('q_001');
+    expect(first.options?.[2].text).toBe('3次');
   });
 
   it('should call saveAnswerDraft with PUT /api/v1/practices/:id/answers and payload', async () => {

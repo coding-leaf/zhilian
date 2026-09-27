@@ -27,6 +27,8 @@ export interface PracticeDraftRecord {
   items: Record<string, PracticeDraftItem>;
   answers: Record<string, string | string[]>;
   updated_at: number;
+  /** Persisted submit idempotency key so retries reuse the same key. */
+  submit_key?: string;
 }
 
 /**

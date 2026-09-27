@@ -202,15 +202,29 @@ describe('Diagnosis API Module', () => {
   });
 
   it('should call continuePractice with POST /api/v1/practices configured for weakness mode', async () => {
+    // Real backend contract: PracticeDetailResponse.items[].question_snapshot
     const mockResponse = {
       code: 0,
       message: 'success',
       data: {
+        practice_id: 'prac_weak_001',
         id: 'prac_weak_001',
         title: '薄弱点强化练习',
         material_id: 'mat_001',
         status: 'in_progress',
-        questions: [],
+        items: [
+          {
+            attempt_item_id: 'att_weak_001',
+            question_id: 'q_weak_001',
+            order_index: 1,
+            question_snapshot: {
+              stem: '薄弱点强化题',
+              question_type: 'single_choice',
+              options: [{ key: 'A', content: '选项正文A' }],
+              answer: 'A',
+            },
+          },
+        ],
       },
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
@@ -237,19 +251,35 @@ describe('Diagnosis API Module', () => {
         question_count: 8,
       },
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.id).toBe('prac_weak_001');
+    expect(res.data.questions).toHaveLength(1);
+    expect(res.data.questions[0].options?.[0]).toEqual({ key: 'A', text: '选项正文A' });
   });
 
   it('should call continuePractice with idempotency_key in headers and custom mode', async () => {
+    // Real backend contract: PracticeDetailResponse.items[].question_snapshot
     const mockResponse = {
       code: 0,
       message: 'success',
       data: {
+        practice_id: 'prac_wr_002',
         id: 'prac_wr_002',
         title: '错题巩固练习',
         material_id: 'mat_002',
         status: 'in_progress',
-        questions: [],
+        items: [
+          {
+            attempt_item_id: 'att_wr_001',
+            question_id: 'q_wr_001',
+            order_index: 1,
+            question_snapshot: {
+              stem: '错题巩固题',
+              question_type: 'true_false',
+              options: [],
+              answer: 'T',
+            },
+          },
+        ],
       },
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
@@ -283,6 +313,8 @@ describe('Diagnosis API Module', () => {
         idempotency_key: 'idem-key-1234',
       },
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.id).toBe('prac_wr_002');
+    expect(res.data.questions).toHaveLength(1);
+    expect(res.data.questions[0].question_type).toBe('true_false');
   });
 });
