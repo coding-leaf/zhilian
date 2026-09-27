@@ -842,3 +842,148 @@ class TestWrongRecordCRUD:
         assert repo.mark_wrong_record_mastered(qid, user_id=user_b) is None
         assert repo.update_wrong_record_status(qid, user_id=user_b, is_mastered=True) is None
         assert repo.delete_wrong_record(rec.id, user_id=user_b) is False
+
+    def test_list_wrong_records_material_error_question_type_filters(
+        self,
+        session: Session,
+        helper_setup: dict[str, uuid.UUID],
+    ) -> None:
+        """Verify material_id/error_type/question_type SQL pushdown (DIAG-010/011/012)."""
+        repo = DiagnosisRepository(session)
+        user_id = helper_setup["user_id"]
+        point_id_1 = helper_setup["point_id_1"]
+        point_id_2 = helper_setup["point_id_2"]
+        material_id = helper_setup["material_id"]
+        practice_id = helper_setup["practice_id"]
+        item_id_1 = helper_setup["attempt_item_id_1"]
+        item_id_2 = helper_setup["attempt_item_id_2"]
+
+        # Second material with its own knowledge point to prove the join filter.
+        other_material_id = uuid.uuid4()
+        other_version_id = uuid.uuid4()
+        other_point_id = uuid.uuid4()
+        session.add(
+            Material(
+                id=other_material_id,
+                user_id=user_id,
+                title="其他教材.pdf",
+                file_format="pdf",
+                file_size=1024,
+            )
+        )
+        session.add(
+            MaterialVersion(
+                id=other_version_id,
+                material_id=other_material_id,
+                user_id=user_id,
+                version_number=1,
+                storage_key="raw/other.pdf",
+                content_hash="hash_other",
+            )
+        )
+        session.add(
+            KnowledgePoint(
+                id=other_point_id,
+                material_id=other_material_id,
+                version_id=other_version_id,
+                user_id=user_id,
+                name="其他知识点",
+                batch_id="batch_other",
+            )
+        )
+        session.commit()
+
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=uuid.uuid4(),
+            knowledge_point_id=point_id_1,
+            practice_id=practice_id,
+            attempt_item_id=item_id_1,
+            error_type="incomplete_expression",
+            question_snapshot={"stem": "题1", "question_type": "single_choice"},
+        )
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=uuid.uuid4(),
+            knowledge_point_id=point_id_2,
+            practice_id=practice_id,
+            attempt_item_id=item_id_2,
+            error_type="question_misreading",
+            question_snapshot={"stem": "题2", "question_type": "multiple_choice"},
+        )
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=uuid.uuid4(),
+            knowledge_point_id=other_point_id,
+            practice_id=practice_id,
+            attempt_item_id=item_id_1,
+            error_type="incomplete_expression",
+            question_snapshot={"stem": "题3", "question_type": "single_choice"},
+        )
+
+        # material_id filter joins KnowledgePoint
+        material_records = repo.list_wrong_records(user_id=user_id, material_id=material_id)
+        assert len(material_records) == 2
+        assert repo.count_wrong_records(user_id=user_id, material_id=material_id) == 2
+        assert repo.count_wrong_records(user_id=user_id, material_id=other_material_id) == 1
+
+        # error_type filter
+        incomplete = repo.list_wrong_records(user_id=user_id, error_type="incomplete_expression")
+        assert len(incomplete) == 2
+        assert repo.count_wrong_records(user_id=user_id, error_type="incomplete_expression") == 2
+        assert repo.count_wrong_records(user_id=user_id, error_type="mystery") == 0
+
+        # question_type filter on JSON snapshot
+        single = repo.list_wrong_records(user_id=user_id, question_type="single_choice")
+        assert len(single) == 2
+        assert repo.count_wrong_records(user_id=user_id, question_type="single_choice") == 2
+        assert repo.count_wrong_records(user_id=user_id, question_type="true_false") == 0
+
+        # combined filters
+        combined = repo.list_wrong_records(
+            user_id=user_id,
+            material_id=material_id,
+            question_type="multiple_choice",
+        )
+        assert len(combined) == 1
+
+    def test_count_and_page_wrong_records_no_1000_truncation(
+        self,
+        session: Session,
+        helper_setup: dict[str, uuid.UUID],
+    ) -> None:
+        """BUG-DIAG-012: material_id filtering must not truncate at 1000 rows."""
+        repo = DiagnosisRepository(session)
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        point_id = helper_setup["point_id_1"]
+        practice_id = helper_setup["practice_id"]
+        attempt_item_id = helper_setup["attempt_item_id_1"]
+
+        total_rows = 1005
+        session.add_all(
+            [
+                WrongRecord(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    question_id=None,
+                    knowledge_point_id=point_id,
+                    practice_id=practice_id,
+                    attempt_item_id=attempt_item_id,
+                    error_type="conceptual",
+                    question_snapshot={"stem": f"题{i}", "question_type": "single_choice"},
+                )
+                for i in range(total_rows)
+            ]
+        )
+        session.commit()
+
+        assert repo.count_wrong_records(user_id=user_id, material_id=material_id) == total_rows
+        first_page = repo.list_wrong_records(
+            user_id=user_id, material_id=material_id, limit=50, offset=0
+        )
+        assert len(first_page) == 50
+        last_page = repo.list_wrong_records(
+            user_id=user_id, material_id=material_id, limit=50, offset=1000
+        )
+        assert len(last_page) == 5

@@ -577,11 +577,38 @@ def test_list_wrong_records_success(
         status="active",
         is_mastered=False,
         knowledge_point_id=knowledge_point_id,
+        error_type=None,
+        question_type=None,
         page=1,
         page_size=15,
         limit=15,
         offset=0,
     )
+
+
+def test_list_wrong_records_question_type_and_error_type_forwarded(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试 question_type 与 error_type 查询参数完整透传至 Service 层 (DIAG-010/011)。"""
+    mock_diagnosis_service.list_wrong_records.return_value = ([], 0)
+
+    response = client.get(
+        "/wrong-records",
+        params={
+            "question_type": "single_choice",
+            "error_type": "incomplete_expression",
+            "page": 1,
+            "page_size": 20,
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["total"] == 0
+    called_kwargs = mock_diagnosis_service.list_wrong_records.call_args.kwargs
+    assert called_kwargs["question_type"] == "single_choice"
+    assert called_kwargs["error_type"] == "incomplete_expression"
 
 
 def test_list_wrong_records_real_total_from_tuple(
@@ -705,6 +732,8 @@ def test_delete_wrong_record_success(
     data = response.json()
     assert data["id"] == str(record_id)
     assert data["success"] is True
+    # BUG-DIAG-013: 响应必须同时下发 removed 字段供前端读取。
+    assert data["removed"] is True
     mock_diagnosis_service.remove_wrong_record.assert_called_once_with(
         user_id=mock_user.id,
         record_id=record_id,
@@ -871,7 +900,11 @@ def test_list_wrong_records_fallback_list_and_filter(
     client: TestClient,
     mock_diagnosis_service: MagicMock,
 ) -> None:
-    """测试 Service 返回普通列表时，路由层按 error_type 过滤并包装为 WrongRecordListResponse。"""
+    """测试 Service 返回普通列表时路由层不加后置过滤，仅包装为列表响应。
+
+    BUG-DIAG-010 修复后 error_type 过滤已全量下推 Service/仓储，路由层不再做
+    内存切片（否则会破坏真实总数与分页语义）。
+    """
     record_one = make_fake_wrong_record()
     record_one.error_type = "conceptual"
     record_two = make_fake_wrong_record()
@@ -886,8 +919,10 @@ def test_list_wrong_records_fallback_list_and_filter(
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert data["total"] == 1
-    assert data["items"][0]["error_type"] == "conceptual"
+    # 路由不再后置切片：过滤由 Service/仓储负责，此处仅保证 error_type 已被透传。
+    assert data["total"] == 2
+    assert len(data["items"]) == 2
+    assert mock_diagnosis_service.list_wrong_records.call_args.kwargs["error_type"] == "conceptual"
 
     # 覆盖 error_type 为 None 且带有 total 属性的分支
     class CustomWrongList(list[WrongRecordItemResponse]):
@@ -934,6 +969,7 @@ def test_delete_wrong_record_fallback_boolean(
     data = response.json()
     assert data["id"] == str(record_id)
     assert data["success"] is True
+    assert data["removed"] is True
 
 
 def test_get_mastery_overview_alias_endpoint(

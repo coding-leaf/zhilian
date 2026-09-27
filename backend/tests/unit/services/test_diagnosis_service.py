@@ -54,6 +54,7 @@ from app.services.diagnosis import (
     MasteryRecordList,
     ReportService,
     map_mastery_level_to_db,
+    normalize_error_type,
     resolve_channel_to_source,
 )
 
@@ -880,6 +881,9 @@ class TestWrongRecordsManagement:
             user_id=user_id,
             is_mastered=True,
             knowledge_point_id=None,
+            material_id=None,
+            error_type=None,
+            question_type=None,
             limit=50,
             offset=0,
         )
@@ -887,6 +891,9 @@ class TestWrongRecordsManagement:
             user_id=user_id,
             is_mastered=True,
             knowledge_point_id=None,
+            material_id=None,
+            error_type=None,
+            question_type=None,
         )
 
         # 2. status="active" maps to is_mastered=False
@@ -895,6 +902,9 @@ class TestWrongRecordsManagement:
             user_id=user_id,
             is_mastered=False,
             knowledge_point_id=None,
+            material_id=None,
+            error_type=None,
+            question_type=None,
             limit=50,
             offset=0,
         )
@@ -902,6 +912,9 @@ class TestWrongRecordsManagement:
             user_id=user_id,
             is_mastered=False,
             knowledge_point_id=None,
+            material_id=None,
+            error_type=None,
+            question_type=None,
         )
 
     def test_list_wrong_records_returns_real_total(
@@ -933,20 +946,15 @@ class TestWrongRecordsManagement:
         diagnosis_service: DiagnosisService,
         mock_repos: dict[str, MagicMock],
     ) -> None:
-        """Verify filtering by material_id delegates through knowledge point resolution."""
+        """Verify material_id filtering is pushed down to the repository (DIAG-012).
+
+        The service must no longer pull 1000 rows into memory and slice; it must
+        forward material_id/error_type/question_type and trust the repository's
+        SQL-level filtering plus its exact count.
+        """
         user_id = uuid.uuid4()
         material_id = uuid.uuid4()
         point_id_1 = uuid.uuid4()
-
-        mock_repos["knowledge_repo"].list_by_material_id.return_value = [
-            KnowledgePoint(
-                id=point_id_1,
-                user_id=user_id,
-                material_id=material_id,
-                version_id=uuid.uuid4(),
-                name="KP1",
-            )
-        ]
 
         rec_1 = WrongRecord(
             id=uuid.uuid4(),
@@ -955,26 +963,63 @@ class TestWrongRecordsManagement:
             practice_id=uuid.uuid4(),
             attempt_item_id=uuid.uuid4(),
             error_type="conceptual",
-            question_snapshot={},
+            question_snapshot={"question_type": "single_choice"},
         )
-        rec_2 = WrongRecord(
-            id=uuid.uuid4(),
-            user_id=user_id,
-            knowledge_point_id=uuid.uuid4(),  # Different point
-            practice_id=uuid.uuid4(),
-            attempt_item_id=uuid.uuid4(),
-            error_type="conceptual",
-            question_snapshot={},
-        )
-        mock_repos["diagnosis_repo"].list_wrong_records.return_value = [rec_1, rec_2]
+        mock_repos["diagnosis_repo"].list_wrong_records.return_value = [rec_1]
+        mock_repos["diagnosis_repo"].count_wrong_records.return_value = 1
 
         results, total = diagnosis_service.list_wrong_records(
             user_id=user_id,
             material_id=material_id,
+            error_type="incomplete",
+            question_type="single_choice",
         )
         assert total == 1
-        assert len(results) == 1
-        assert results[0].knowledge_point_id == point_id_1
+        assert results == [rec_1]
+        mock_repos["diagnosis_repo"].list_wrong_records.assert_called_once_with(
+            user_id=user_id,
+            is_mastered=None,
+            knowledge_point_id=None,
+            material_id=material_id,
+            error_type="incomplete_expression",
+            question_type="single_choice",
+            limit=50,
+            offset=0,
+        )
+        mock_repos["diagnosis_repo"].count_wrong_records.assert_called_once_with(
+            user_id=user_id,
+            is_mastered=None,
+            knowledge_point_id=None,
+            material_id=material_id,
+            error_type="incomplete_expression",
+            question_type="single_choice",
+        )
+        # No in-memory knowledge point resolution / row fetching anymore.
+        mock_repos["knowledge_repo"].list_by_material_id.assert_not_called()
+
+    def test_list_wrong_records_normalizes_legacy_error_type(
+        self,
+        diagnosis_service: DiagnosisService,
+        mock_repos: dict[str, MagicMock],
+    ) -> None:
+        """BUG-DIAG-010: legacy 'deviation' shorthand maps to the authoritative enum."""
+        user_id = uuid.uuid4()
+        mock_repos["diagnosis_repo"].list_wrong_records.return_value = []
+        mock_repos["diagnosis_repo"].count_wrong_records.return_value = 0
+
+        diagnosis_service.list_wrong_records(user_id=user_id, error_type="deviation")
+
+        called_kwargs = mock_repos["diagnosis_repo"].list_wrong_records.call_args.kwargs
+        assert called_kwargs["error_type"] == "question_misreading"
+
+    def test_normalize_error_type_passthrough_and_blank(self) -> None:
+        """Verify normalize_error_type handles None/blank/authoritative/unknown values."""
+        assert normalize_error_type(None) is None
+        assert normalize_error_type("  ") is None
+        assert normalize_error_type("incomplete") == "incomplete_expression"
+        assert normalize_error_type("deviation") == "question_misreading"
+        assert normalize_error_type("unanswered") == "unanswered"
+        assert normalize_error_type("mystery") == "mystery"
 
     def test_remove_wrong_record(
         self,

@@ -145,6 +145,32 @@ def resolve_channel_to_source(channel: str | None) -> GradingSourceType:
     return GradingSourceType.UNKNOWN
 
 
+def normalize_error_type(error_type: str | None) -> str | None:
+    """标准化错题错误类型入参，兼容前端历史简写枚举。
+
+    BUG-DIAG-010: 前端历史筛选项使用 `incomplete` / `deviation`，而后端
+    `ErrorType` 权威枚举为 `incomplete_expression` / `question_misreading`。
+    此处统一映射为权威枚举值；未识别值原样透传，由 SQL 等值条件自然返回空，
+    杜绝静默回退为「全量」。
+
+    Args:
+        error_type: 原始错误类型字符串。
+
+    Returns:
+        str | None: 标准化后的错误类型；空值返回 None。
+    """
+    if error_type is None:
+        return None
+    normalized = error_type.strip().lower()
+    if not normalized:
+        return None
+    legacy_aliases = {
+        "incomplete": ErrorType.INCOMPLETE_EXPRESSION.value,
+        "deviation": ErrorType.QUESTION_MISREADING.value,
+    }
+    return legacy_aliases.get(normalized, normalized)
+
+
 def map_mastery_level_to_db(level: Any) -> str:
     """将纯函数算法层四档掌握度等级映射至数据库模型字符串。
 
@@ -1098,6 +1124,8 @@ class DiagnosisService:
         status: str | None = None,
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
+        error_type: str | None = None,
+        question_type: str | None = None,
         page: int = 1,
         page_size: int = 50,
         limit: int | None = None,
@@ -1111,6 +1139,8 @@ class DiagnosisService:
             status: 可选的错题状态过滤 ("mastered" / "active" / "unmastered")。
             is_mastered: 可选的攻克掌握布尔状态过滤。
             knowledge_point_id: 可选的知识点主键过滤。
+            error_type: 可选的错误类型过滤 (兼容 incomplete/deviation 简写)。
+            question_type: 可选的题目快照题型过滤。
             page: 分页页码，默认 1。
             page_size: 每页条数，默认 50。
             limit: 可选的直接 limit。
@@ -1130,27 +1160,16 @@ class DiagnosisService:
             elif normalized_status in ("active", "unmastered", "false", "0"):
                 effective_is_mastered = False
 
-        if material_id is not None and knowledge_point_id is None:
-            material_points = self.knowledge_repo.list_by_material_id(
-                material_id=material_id,
-                user_id=user_id,
-            )
-            if not material_points:
-                return [], 0
-            material_point_id_set = {point.id for point in material_points}
-            all_records = self.diagnosis_repo.list_wrong_records(
-                user_id=user_id,
-                is_mastered=effective_is_mastered,
-                limit=1000,
-                offset=0,
-            )
-            filtered = [r for r in all_records if r.knowledge_point_id in material_point_id_set]
-            return filtered[effective_offset : effective_offset + effective_limit], len(filtered)
-
+        # BUG-DIAG-010/011/012: material_id / error_type / question_type 全量下推仓储，
+        # 由数据库统一完成过滤、分页与真实计数，彻底移除 limit=1000 内存截断。
+        normalized_error_type = normalize_error_type(error_type)
         records = self.diagnosis_repo.list_wrong_records(
             user_id=user_id,
             is_mastered=effective_is_mastered,
             knowledge_point_id=knowledge_point_id,
+            material_id=material_id,
+            error_type=normalized_error_type,
+            question_type=question_type,
             limit=effective_limit,
             offset=effective_offset,
         )
@@ -1159,6 +1178,9 @@ class DiagnosisService:
                 user_id=user_id,
                 is_mastered=effective_is_mastered,
                 knowledge_point_id=knowledge_point_id,
+                material_id=material_id,
+                error_type=normalized_error_type,
+                question_type=question_type,
             )
         )
         return records, total

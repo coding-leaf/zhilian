@@ -496,6 +496,9 @@ class DiagnosisRepository:
         user_id: uuid.UUID,
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
+        error_type: str | None = None,
+        question_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[WrongRecord]:
@@ -505,6 +508,9 @@ class DiagnosisRepository:
             user_id: 租户用户标识。
             is_mastered: 攻克掌握状态过滤 (None 表示不限)。
             knowledge_point_id: 指定知识点过滤 (None 表示不限)。
+            material_id: 指定学习资料过滤 (通过 KnowledgePoint 关联, None 表示不限)。
+            error_type: 错误类型精确过滤 (None 表示不限)。
+            question_type: 题目快照题型过滤 (None 表示不限)。
             limit: 最大返回记录数，默认 50。
             offset: 分页偏移量，默认 0。
 
@@ -512,10 +518,24 @@ class DiagnosisRepository:
             list[WrongRecord]: 错题实体列表。
         """
         statement = select(WrongRecord).where(WrongRecord.user_id == user_id)
+        if material_id is not None:
+            statement = statement.join(
+                KnowledgePoint,
+                WrongRecord.knowledge_point_id == KnowledgePoint.id,
+            ).where(
+                KnowledgePoint.material_id == material_id,
+                KnowledgePoint.user_id == user_id,
+            )
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
         if knowledge_point_id is not None:
             statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
+        if error_type is not None:
+            statement = statement.where(WrongRecord.error_type == error_type)
+        if question_type is not None:
+            statement = statement.where(
+                WrongRecord.question_snapshot["question_type"].as_string() == question_type
+            )
 
         statement = statement.order_by(WrongRecord.updated_at.desc()).offset(offset).limit(limit)
         return list(self.session.execute(statement).scalars().all())
@@ -525,6 +545,9 @@ class DiagnosisRepository:
         user_id: uuid.UUID,
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
+        error_type: str | None = None,
+        question_type: str | None = None,
     ) -> int:
         """统计符合过滤条件的租户用户错题总数 (与 list_wrong_records 同条件)。
 
@@ -532,6 +555,9 @@ class DiagnosisRepository:
             user_id: 租户用户标识。
             is_mastered: 攻克掌握状态过滤 (None 表示不限)。
             knowledge_point_id: 指定知识点过滤 (None 表示不限)。
+            material_id: 指定学习资料过滤 (通过 KnowledgePoint 关联, None 表示不限)。
+            error_type: 错误类型精确过滤 (None 表示不限)。
+            question_type: 题目快照题型过滤 (None 表示不限)。
 
         Returns:
             int: 符合过滤条件的错题总数。
@@ -539,10 +565,24 @@ class DiagnosisRepository:
         statement = (
             select(func.count()).select_from(WrongRecord).where(WrongRecord.user_id == user_id)
         )
+        if material_id is not None:
+            statement = statement.join(
+                KnowledgePoint,
+                WrongRecord.knowledge_point_id == KnowledgePoint.id,
+            ).where(
+                KnowledgePoint.material_id == material_id,
+                KnowledgePoint.user_id == user_id,
+            )
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
         if knowledge_point_id is not None:
             statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
+        if error_type is not None:
+            statement = statement.where(WrongRecord.error_type == error_type)
+        if question_type is not None:
+            statement = statement.where(
+                WrongRecord.question_snapshot["question_type"].as_string() == question_type
+            )
 
         return int(self.session.execute(statement).scalar_one())
 

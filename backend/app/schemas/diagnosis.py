@@ -331,6 +331,11 @@ class UserMasteryOverviewResponse(BaseModel):
                 data["proficient_count"] = data["mastered_count"]
             elif data.get("proficient_count") is not None and not data.get("mastered_count"):
                 data["mastered_count"] = data["proficient_count"]
+
+            if data.get("learning_count") is not None and not data.get("basic_count"):
+                data["basic_count"] = data["learning_count"]
+            elif data.get("basic_count") is not None and not data.get("learning_count"):
+                data["learning_count"] = data["basic_count"]
         return data
 
     @model_validator(mode="after")
@@ -349,6 +354,18 @@ class UserMasteryOverviewResponse(BaseModel):
             self.weak_knowledge_points = self.points
         elif self.weak_knowledge_points and not self.points:
             self.points = self.weak_knowledge_points
+
+        # BUG-DIAG-009: ORM/DTO 对象经 from_attributes 进入校验器时 before 分支
+        # (仅处理 dict) 会被跳过，导致档次统计不同步；在 after 分支补齐双向同步。
+        if self.mastered_count != 0 and self.proficient_count == 0:
+            self.proficient_count = self.mastered_count
+        elif self.proficient_count != 0 and self.mastered_count == 0:
+            self.mastered_count = self.proficient_count
+
+        if self.learning_count != 0 and self.basic_count == 0:
+            self.basic_count = self.learning_count
+        elif self.basic_count != 0 and self.learning_count == 0:
+            self.learning_count = self.basic_count
         return self
 
 
@@ -490,6 +507,7 @@ class DeleteWrongRecordResponse(BaseModel):
 
     id: uuid.UUID = Field(..., description="移除的错题记录主键 UUID")
     success: bool = Field(default=True, description="是否成功移除")
+    removed: bool = Field(default=True, description="是否成功移除 (契约对齐字段)")
     message: str = Field(default="错题记录已成功移除", description="操作结果文案")
 
 

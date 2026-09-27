@@ -273,6 +273,7 @@ async def list_wrong_records(
     material_id: Annotated[uuid.UUID | None, Query(description="学习资料主键 UUID")] = None,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="知识点主键 UUID")] = None,
     error_type: Annotated[str | None, Query(description="错误类型分类过滤")] = None,
+    question_type: Annotated[str | None, Query(description="题目类型过滤")] = None,
     is_mastered: Annotated[bool | None, Query(description="攻克掌握布尔状态过滤")] = None,
     status: Annotated[str | None, Query(description="错题状态过滤")] = None,
     page: Annotated[int, Query(ge=1, description="分页页码")] = 1,
@@ -288,6 +289,7 @@ async def list_wrong_records(
         material_id: 可选的学习资料标识过滤。
         knowledge_point_id: 可选的知识点主键过滤。
         error_type: 可选的错误类型分类过滤。
+        question_type: 可选的题目类型过滤。
         is_mastered: 可选的攻克掌握状态过滤。
         status: 可选的错题状态过滤。
         page: 当前分页页码。
@@ -307,6 +309,8 @@ async def list_wrong_records(
         status=status,
         is_mastered=is_mastered,
         knowledge_point_id=knowledge_point_id,
+        error_type=error_type,
+        question_type=question_type,
         page=page,
         page_size=page_size,
         limit=effective_limit,
@@ -325,9 +329,6 @@ async def list_wrong_records(
         legacy_records = cast("list[WrongRecord]", result)
         records = list(legacy_records)
         total_count = getattr(legacy_records, "total", None)
-
-    if error_type is not None:
-        records = [r for r in records if getattr(r, "error_type", None) == error_type]
 
     items = [
         r if isinstance(r, WrongRecordItemResponse) else WrongRecordItemResponse.model_validate(r)
@@ -423,6 +424,7 @@ async def delete_wrong_record(
     return DeleteWrongRecordResponse(
         id=id,
         success=True,
+        removed=True,
         message="错题记录已成功移除",
     )
 

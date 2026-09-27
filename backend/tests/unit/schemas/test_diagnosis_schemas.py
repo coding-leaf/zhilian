@@ -31,6 +31,7 @@ from app.schemas.diagnosis import (
     WrongRecordItemResponse,
     WrongRecordListResponse,
 )
+from app.services.diagnosis import UserMasteryOverviewDTO
 
 
 class TestDiagnosisSchemas:
@@ -204,6 +205,42 @@ class TestMasterySchemas:
         assert overview.total_knowledge_points == 10
         assert overview.overall_mastery_score == 0.62
 
+    def test_user_mastery_overview_response_syncs_counts_from_dto(self) -> None:
+        """BUG-DIAG-009: DTO/ORM 对象经 from_attributes 也必须回填档次统计。
+
+        before 校验器仅处理 dict，对象输入会绕过，故必须在 after 校验器补齐
+        mastered_count <-> proficient_count 与 learning_count <-> basic_count 同步。
+        """
+        overview = UserMasteryOverviewResponse.model_validate(
+            UserMasteryOverviewDTO(
+                material_id=None,
+                overall_mastery_score=0.5,
+                total_knowledge_points=10,
+                unlearned_count=4,
+                weak_count=1,
+                basic_count=2,
+                proficient_count=3,
+                weak_knowledge_points=[],
+            )
+        )
+
+        assert overview.mastered_count == 3
+        assert overview.learning_count == 2
+        assert overview.weak_count == 1
+        assert overview.unlearned_count == 4
+        assert overview.proficient_count == 3
+        assert overview.basic_count == 2
+
+    def test_user_mastery_overview_response_mastered_count_forward_sync(self) -> None:
+        """DIAG-009: 仅提供 mastered_count/learning_count 时反向回填 proficient/basic。"""
+        overview = UserMasteryOverviewResponse(
+            total_points=5,
+            mastered_count=3,
+            learning_count=2,
+        )
+        assert overview.proficient_count == 3
+        assert overview.basic_count == 2
+
 
 class TestWrongRecordSchemas:
     """错题本相关 DTO 测试集。"""
@@ -320,7 +357,7 @@ class TestWrongRecordSchemas:
         assert response.message == "错题已攻克"
 
     def test_delete_wrong_record_response(self) -> None:
-        """验证删除错题响应。"""
+        """验证删除错题响应 (BUG-DIAG-013: 同时包含 success 与 removed 字段)。"""
         record_id = uuid.uuid4()
         response = DeleteWrongRecordResponse(
             id=record_id,
@@ -329,6 +366,10 @@ class TestWrongRecordSchemas:
         assert response.id == record_id
         assert response.message == "错题已删除"
         assert response.success is True
+        assert response.removed is True
+        payload = response.model_dump()
+        assert payload["success"] is True
+        assert payload["removed"] is True
 
     def test_spec_compat_dtos(self) -> None:
         """验证 spec.md 特有辅助 DTOs。"""
