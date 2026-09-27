@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核分页总数与字段契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核计数查询与租户隔离"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端分页与禁用逻辑"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核 user_answer/source_type 跨层一致"}
