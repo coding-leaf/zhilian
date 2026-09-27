@@ -192,3 +192,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: C4 前端出题→答题闭环
+<!-- trellis-session: v=2 fp=abf8054c2891e28e -->
+
+**Date**: 2026-09-28
+**Task**: C4 前端出题→答题闭环
+**Branch**: `master`
+
+### Summary
+
+打通课程内出题→题目列表→开始答题→组卷→答题页闭环：课程详情「智能出题」（CourseGenerateDrawer，folder 范围 generateQuestions）；题目列表兼容 folder_id（与 material_id 并存零回归）+ 吸底「开始答题」→ createPractice({folder_id,...}) → initSession → 跳答题页（带 fail）；类型放开 material_id 可空 + folder_id。消除 createPractice 死代码。复核零缺陷，前端 67 files / 616 tests，四门禁全绿；规格沉淀闭环契约。真机 E2E（AC1-AC3）待人工确认。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `84cf0ed` | feat(course): 课程内出题→答题闭环（前端） |
+
+### Status
+
+[OK] **Completed**
