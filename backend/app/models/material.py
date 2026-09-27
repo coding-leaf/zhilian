@@ -35,6 +35,7 @@ class MaterialStatus(enum.StrEnum):
     PARSING = "parsing"  # 流水线解析中
     READY = "ready"  # 解析质检全部通过，可正常用于出题
     FAILED = "failed"  # 解析或质检失败
+    RETAKE_REQUIRED = "retake_required"  # OCR 质检门禁未达标，等待逐页重拍
 
 
 class ParseStatus(enum.StrEnum):

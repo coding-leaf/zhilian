@@ -302,8 +302,11 @@ class TestMaterialCreationAndLifecycle:
         )
 
         assert failed_ver.parse_status == ParseStatus.FAILED.value
+        assert failed_ver.failed_stage == "ocr_quality_gate"
         mat_refreshed = service.get_material(material_id=mat.id, user_id=user_id)
-        assert mat_refreshed.status == MaterialStatus.FAILED.value
+        # OCR 门禁失败语义为「待重拍」而非终态失败；资料仍不可用于出题 (非 READY)
+        assert mat_refreshed.status == MaterialStatus.RETAKE_REQUIRED.value
+        assert mat_refreshed.status != MaterialStatus.READY.value
 
         # OCR page recorded with unqualified status
         pages = service.repo.get_ocr_pages(ver.id, user_id)
@@ -548,7 +551,8 @@ class TestMaterialCreationAndLifecycle:
             file_content=content,
         )
         assert m2.id != m1.id
-        assert v2.storage_key == v1.storage_key
+        # MAT-001：同哈希内容必须各自持有独立物理对象，禁止跨资料复用 storage_key
+        assert v2.storage_key != v1.storage_key
 
         # Missing entities raise 40004
         with pytest.raises(MaterialNotFoundError):
@@ -774,11 +778,12 @@ class TestMaterialCreationAndLifecycle:
         )
         assert total_completed == 0
 
-        # retake_required 在资料主表无对应状态，须过滤为空而非放行全部
+        # retake_required 现已映射为真实资料状态，仅有 pending/parsing 资料时应过滤为空
         _items_retake, total_retake = service.list_materials(
             user_id=user_id, status="retake_required"
         )
         assert total_retake == 0
+        assert _items_retake == []
 
         versions = service.list_material_versions(user_id=user_id, material_id=mat1.id)
         assert len(versions) == 1
@@ -977,11 +982,234 @@ class TestMaterialCreationAndLifecycle:
         # Reshoot errors
         with pytest.raises(MaterialNotFoundError):
             service.reshoot_material_page(
-                user_id=user_id,
+                user_id=uuid.uuid4(),
                 material_id=uuid.uuid4(),
                 page_index=1,
                 file_content=png_bytes,
             )
+
+    def test_same_hash_uploads_own_independent_storage_object(
+        self,
+        service: MaterialService,
+        storage: MemoryStorageAdapter,
+    ) -> None:
+        """MAT-001 回归：同哈希资料必须各自持有独立物理对象，硬删源资料不损坏副本。"""
+        user_id = uuid.uuid4()
+        content = "秒传数据完整性回归：同哈希资料必须各自持有独立对象。".encode()
+
+        mat_a, ver_a = service.create_material(
+            user_id=user_id,
+            title="Source.txt",
+            file_format="txt",
+            file_size=len(content),
+            file_content=content,
+        )
+        service.parse_material_pipeline(material_id=mat_a.id, version_id=ver_a.id, user_id=user_id)
+        source_key = service.repo.get_version_by_id(ver_a.id, user_id).storage_key  # type: ignore[union-attr]
+
+        mat_b, ver_b = service.create_material(
+            user_id=user_id,
+            title="Copy.txt",
+            file_format="txt",
+            file_size=len(content),
+            file_content=content,
+        )
+        copy_key = service.repo.get_version_by_id(ver_b.id, user_id).storage_key  # type: ignore[union-attr]
+
+        assert mat_b.id != mat_a.id
+        assert copy_key != source_key
+        assert storage.object_exists("zhilian-materials", copy_key) is True
+
+        # 硬删源资料后，副本资料的对象必须仍然存在并可被流水线取用
+        assert service.hard_delete_material(material_id=mat_a.id, user_id=user_id) is True
+        assert storage.object_exists("zhilian-materials", source_key) is False
+        assert storage.object_exists("zhilian-materials", copy_key) is True
+
+        ready_ver = service.parse_material_pipeline(
+            material_id=mat_b.id,
+            version_id=ver_b.id,
+            user_id=user_id,
+        )
+        assert ready_ver.parse_status == ParseStatus.READY.value
+
+    def test_retry_ocr_pages_rebuilds_knowledge_tree(
+        self,
+        service: MaterialService,
+        ocr: FakeOCRAdapter,
+        session: Session,
+    ) -> None:
+        """MAT-003 回归：逐页重拍全达标后须重建知识树，而非仅重建切片。"""
+        from unittest.mock import MagicMock
+
+        from app.repositories.knowledge import KnowledgeRepository
+
+        user_id = uuid.uuid4()
+        bad_text = "%&*@#"
+        good_text = (
+            "重拍达标后必须重建知识树：线性空间与基变换是高等代数的核心结构。"
+            "当向量组线性无关且可张成整个空间时，该向量组即构成空间的一组基。"
+        )
+        bad_png = b"\x89PNG\r\n\x1a\nbad_rebuild_initial"
+        good_png = b"\x89PNG\r\n\x1a\ngood_rebuild_ok"
+        ocr.set_canned_result(
+            bad_png,
+            OCRResult(full_text=bad_text, blocks=(OCRTextBlock(text=bad_text, confidence=0.2),)),
+        )
+        ocr.set_canned_result(
+            good_png,
+            OCRResult(full_text=good_text, blocks=(OCRTextBlock(text=good_text, confidence=0.99),)),
+        )
+
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="RebuildTree.png",
+            file_format="png",
+            file_size=len(bad_png),
+            file_content=bad_png,
+        )
+        service.parse_material_pipeline(material_id=mat.id, version_id=ver.id, user_id=user_id)
+
+        knowledge_repo = KnowledgeRepository(session)
+        knowledge_service = MagicMock()
+
+        def _rebuild(
+            *, material_id: uuid.UUID, version_id: uuid.UUID, user_id: uuid.UUID
+        ) -> object:
+            knowledge_repo.create_knowledge_point(
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version_id,
+                name="重拍后重建知识点",
+                batch_id="rebuild-batch",
+            )
+            return knowledge_repo.get_knowledge_points_by_version(material_id, version_id, user_id)
+
+        knowledge_service.extract_and_build_knowledge_tree.side_effect = _rebuild
+        service.knowledge_service = knowledge_service
+
+        ready_ver = service.retry_ocr_pages(
+            material_id=mat.id,
+            version_id=ver.id,
+            user_id=user_id,
+            page_replaces={1: good_png},
+        )
+
+        assert ready_ver.parse_status == ParseStatus.READY.value
+        knowledge_service.extract_and_build_knowledge_tree.assert_called_once_with(
+            material_id=mat.id,
+            version_id=ver.id,
+            user_id=user_id,
+        )
+        points = knowledge_repo.get_knowledge_points_by_version(mat.id, ver.id, user_id)
+        assert len(points) >= 1
+
+    def test_ocr_gate_failure_sets_retake_required_and_filter_returns_entry(
+        self,
+        service: MaterialService,
+        ocr: FakeOCRAdapter,
+    ) -> None:
+        """MAT-004 回归：门禁失败置 retake_required；筛选返回条目；OCR 页可查；重拍未达标维持。"""
+        user_id = uuid.uuid4()
+        bad_text = "%&*@#"
+        png_content = b"\x89PNG\r\n\x1a\n" + b"retake_gate"
+        ocr.set_canned_result(
+            png_content,
+            OCRResult(full_text=bad_text, blocks=(OCRTextBlock(text=bad_text, confidence=0.2),)),
+        )
+
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="GateRetake.png",
+            file_format="png",
+            file_size=len(png_content),
+            file_content=png_content,
+        )
+        service.parse_material_pipeline(material_id=mat.id, version_id=ver.id, user_id=user_id)
+
+        refreshed = service.get_material(material_id=mat.id, user_id=user_id)
+        assert refreshed.status == MaterialStatus.RETAKE_REQUIRED.value
+
+        items, total = service.list_materials(user_id=user_id, status="retake_required")
+        assert total == 1
+        assert items[0].id == mat.id
+        assert getattr(items[0], "progress_percentage", None) == 0
+
+        returned_version_id, pages = service.list_ocr_pages(
+            material_id=mat.id,
+            user_id=user_id,
+            only_unqualified=True,
+        )
+        assert returned_version_id == ver.id
+        assert len(pages) == 1
+        assert pages[0].page_number == 1
+        assert pages[0].is_qualified is False
+        assert pages[0].unqualified_reason is not None
+
+        # 重拍后仍有不合格页：资料必须维持 retake_required
+        service.retry_ocr_pages(
+            material_id=mat.id,
+            version_id=ver.id,
+            user_id=user_id,
+            page_replaces={1: png_content},
+        )
+        still_retake = service.get_material(material_id=mat.id, user_id=user_id)
+        assert still_retake.status == MaterialStatus.RETAKE_REQUIRED.value
+
+    def test_reshoot_material_page_resolves_latest_when_no_current_version(
+        self,
+        service: MaterialService,
+        ocr: FakeOCRAdapter,
+    ) -> None:
+        """MAT-004 集成回归：门禁失败资料无激活版本时，重拍仍能定位版本并达标转 READY。"""
+        user_id = uuid.uuid4()
+        bad_text = "%&*@#"
+        good_text = (
+            "重拍达标文本：线性空间与基变换是高等代数的核心结构，"
+            "当向量组线性无关且可张成整个空间时，该向量组即构成空间的一组基。"
+        )
+        bad_png = b"\x89PNG\r\n\x1a\nreshoot_no_current_bad"
+        good_png = b"\x89PNG\r\n\x1a\nreshoot_no_current_good"
+        ocr.set_canned_result(
+            bad_png,
+            OCRResult(full_text=bad_text, blocks=(OCRTextBlock(text=bad_text, confidence=0.2),)),
+        )
+        ocr.set_canned_result(
+            good_png,
+            OCRResult(full_text=good_text, blocks=(OCRTextBlock(text=good_text, confidence=0.99),)),
+        )
+
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="ReshootNoCurrent.png",
+            file_format="png",
+            file_size=len(bad_png),
+            file_content=bad_png,
+        )
+        service.parse_material_pipeline(material_id=mat.id, version_id=ver.id, user_id=user_id)
+
+        gate_failed = service.get_material(material_id=mat.id, user_id=user_id)
+        assert gate_failed.status == MaterialStatus.RETAKE_REQUIRED.value
+        assert gate_failed.current_version_id is None
+
+        # 前端重拍不传 version_id：服务须回退最新版本，不得因 current_version_id 为空而拒绝
+        page = service.reshoot_material_page(
+            user_id=user_id,
+            material_id=mat.id,
+            page_index=1,
+            file_content=good_png,
+        )
+        assert page.is_qualified is True
+
+        refreshed = service.get_material(material_id=mat.id, user_id=user_id)
+        assert refreshed.status == MaterialStatus.READY.value
+        assert refreshed.current_version_id == ver.id
+
+        # READY 为干净终态：门禁失败残留的错误信息必须被清空
+        ready_ver = service.repo.get_version_by_id(ver.id, user_id)
+        assert ready_ver is not None
+        assert ready_ver.parse_status == ParseStatus.READY.value
+        assert ready_ver.failed_stage is None
+        assert ready_ver.error_message is None
 
 
 def test_extract_text_pdf_success_and_gate() -> None:
@@ -1104,7 +1332,7 @@ def test_parse_pipeline_knowledge_chaining(
     assert retried_ver.error_message is None
     assert retried_ver.failed_stage is None
 
-    # 4. 验证同哈希文件历史版本为 FAILED 时重新上传：复用 storage_key 并重新调度
+    # 4. 验证同哈希文件历史版本为 FAILED 时重新上传：各自持有独立对象并重新调度
     # 先将 ver2 重新标为 FAILED 模拟先前失败
     service.repo.update_version_status(
         version_id=ver2.id,
@@ -1123,6 +1351,7 @@ def test_parse_pipeline_knowledge_chaining(
         file_content=content,
     )
     assert mat3.id != mat2.id
-    assert ver3.storage_key == ver2.storage_key
+    # MAT-001：重新上传同哈希失败文件也不得复用其它资料的物理存储对象
+    assert ver3.storage_key != ver2.storage_key
     assert ver3.parse_status == ParseStatus.QUEUED.value
     assert mat3.status == MaterialStatus.PENDING.value

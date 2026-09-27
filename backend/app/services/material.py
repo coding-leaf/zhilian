@@ -375,7 +375,7 @@ class MaterialService:
         source_type: str = SourceType.LOCAL.value,
         idempotency_key: str | None = None,
     ) -> tuple[Material, MaterialVersion]:
-        """上传创建资料：魔数校验、查重秒传、MinIO隔离写入、创建版本并调度异步解析。
+        """上传创建资料：魔数校验、内容哈希记录、MinIO 独占隔离写入、创建版本并调度异步解析。
 
         Args:
             user_id: 所属用户标识。
@@ -450,23 +450,17 @@ class MaterialService:
                 status=MaterialStatus.PENDING.value,
             )
 
-            # 秒传查重检测：检查该用户是否已有完全相同内容哈希的激活版本或历史失败版本
-            existing_ver = self.repo.find_version_by_hash(user_id, content_hash)
-            if existing_ver is not None and (
-                existing_ver.parse_status == ParseStatus.READY.value
-                or existing_ver.parse_status == ParseStatus.FAILED.value
-            ):
-                storage_key = existing_ver.storage_key
-            else:
-                storage_key = build_material_storage_key(
-                    user_id, material.id, 1, content_hash, clean_format
-                )
-                self.storage.put_object(
-                    bucket=self.bucket,
-                    key=storage_key,
-                    data=file_content,
-                    content_type=f"application/{clean_format}",
-                )
+            # 内容哈希仅用于记录与去重语义，物理对象必须为本资料独占副本。
+            # 禁止复用其它资料的 storage_key：否则源资料硬删会连带 purge 本资料对象。
+            storage_key = build_material_storage_key(
+                user_id, material.id, 1, content_hash, clean_format
+            )
+            self.storage.put_object(
+                bucket=self.bucket,
+                key=storage_key,
+                data=file_content,
+                content_type=f"application/{clean_format}",
+            )
 
             version = self.repo.create_version(
                 material_id=material.id,
@@ -646,8 +640,9 @@ class MaterialService:
                         error_message=page_report.unqualified_reason,
                         failed_stage=current_stage,
                     )
+                    # 质检未达标并非终态失败，而是进入「待重拍」链路供逐页重拍修复
                     self.repo.update_material_status(
-                        material_id, user_id, MaterialStatus.FAILED.value
+                        material_id, user_id, MaterialStatus.RETAKE_REQUIRED.value
                     )
                     self.session.commit()
                     return version
@@ -946,18 +941,41 @@ class MaterialService:
             ]
             self.repo.create_snippets(new_snippets)
 
+            # 与阶段 D 对齐：全部达标后必须重建知识树（内部会先清理旧知识点），
+            # 否则版本虽置 READY，知识树仍为空或陈旧。
+            if self.knowledge_service is not None:
+                self.repo.update_version_status(
+                    version_id,
+                    user_id,
+                    ParseStatus.EXTRACTING_KNOWLEDGE.value,
+                )
+                self.knowledge_service.extract_and_build_knowledge_tree(
+                    material_id=material_id,
+                    version_id=version_id,
+                    user_id=user_id,
+                )
+
             self.repo.update_version_status(
                 version_id,
                 user_id,
                 ParseStatus.READY.value,
                 raw_text_storage_key=raw_text_key,
                 is_active=True,
+                # 重拍达标是干净终态：清空门禁失败阶段残留的 error_message/failed_stage
+                reset_errors=True,
             )
             self.repo.update_material_status(
                 material_id,
                 user_id,
                 MaterialStatus.READY.value,
                 current_version_id=version_id,
+            )
+        elif all_pages:
+            # 仍有不合格页：资料维持「待重拍」，等待用户继续逐页修复
+            self.repo.update_material_status(
+                material_id,
+                user_id,
+                MaterialStatus.RETAKE_REQUIRED.value,
             )
 
         self.session.commit()
@@ -992,7 +1010,7 @@ class MaterialService:
 
         - ``parsing``（解析中）聚合 ``pending`` 与 ``parsing`` 两个阶段；
         - ``ready`` / ``completed``（已完成）统一映射为 ``ready``；
-        - ``retake_required``（待重拍）在资料主表无对应状态，返回空集合以正确过滤为空；
+        - ``retake_required``（待重拍）映射为资料主表的真实待重拍状态；
         - 其余合法状态保持单值过滤。
 
         Args:
@@ -1011,7 +1029,7 @@ class MaterialService:
         if normalized in ("ready", "completed"):
             return [MaterialStatus.READY.value]
         if normalized == "retake_required":
-            return []
+            return [MaterialStatus.RETAKE_REQUIRED.value]
         return [normalized]
 
     @staticmethod
@@ -1039,6 +1057,8 @@ class MaterialService:
         if material_status == MaterialStatus.PENDING.value:
             return 0
         if material_status == MaterialStatus.FAILED.value:
+            return 0
+        if material_status == MaterialStatus.RETAKE_REQUIRED.value:
             return 0
         if material_status == MaterialStatus.PARSING.value:
             return 30
@@ -1193,6 +1213,45 @@ class MaterialService:
         if material is None:
             raise MaterialNotFoundError("请求的学习资料不存在")
         return self.repo.list_versions_by_material(material_id, user_id)
+
+    def list_ocr_pages(
+        self,
+        *,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+        only_unqualified: bool = False,
+    ) -> tuple[uuid.UUID | None, list[MaterialOCRPage]]:
+        """查询资料当前激活（或最新）版本的页级 OCR 质检记录。
+
+        用于「待重拍」链路：前端据此获取真实的不合格页面清单并驱动逐页重拍。
+
+        Args:
+            material_id: 资料标识。
+            user_id: 租户用户标识。
+            only_unqualified: 是否仅返回未达标页面。
+
+        Returns:
+            tuple[uuid.UUID | None, list[MaterialOCRPage]]: (版本标识, 页级记录列表)。
+
+        Raises:
+            MaterialNotFoundError: 资料不存在或已软删除。
+        """
+        material = self.repo.get_material_by_id(material_id, user_id, include_deleted=False)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
+
+        version: MaterialVersion | None = None
+        if material.current_version_id is not None:
+            version = self.repo.get_version_by_id(material.current_version_id, user_id)
+        if version is None:
+            version = self.repo.get_latest_version(material_id, user_id)
+        if version is None:
+            return None, []
+
+        pages = self.repo.get_ocr_pages(version.id, user_id)
+        if only_unqualified:
+            pages = [page for page in pages if not page.is_qualified]
+        return version.id, pages
 
     def switch_material_version(
         self,
@@ -1351,11 +1410,16 @@ class MaterialService:
             raise MaterialNotFoundError("请求的学习资料不存在")
 
         if version_id is not None:
-            target_ver_id = version_id
+            target_ver_id: uuid.UUID = version_id
         else:
-            if material.current_version_id is None:
-                raise MaterialNotFoundError("该资料未关联有效版本")
-            target_ver_id = material.current_version_id
+            resolved_version_id = material.current_version_id
+            if resolved_version_id is None:
+                # OCR 门禁失败时资料尚未激活任何版本，重拍须回退到最新版本
+                latest = self.repo.get_latest_version(material_id, user_id)
+                if latest is None:
+                    raise MaterialNotFoundError("该资料未关联有效版本")
+                resolved_version_id = latest.id
+            target_ver_id = resolved_version_id
 
         version = self.repo.get_version_by_id(target_ver_id, user_id)
         if version is None or version.material_id != material_id:
