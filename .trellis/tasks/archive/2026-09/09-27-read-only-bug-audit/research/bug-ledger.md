@@ -155,3 +155,15 @@
 - [x] P2 均满足客观边界，无主观 UX 混入。
 - [x] P0/关键断言已由主会话独立复核，标记误报已剔除（GRADE-015、login 乱码）。
 - [ ] **用户确认清单**（本文件）→ 通过后由父任务按批次派生修复子任务。
+
+---
+
+## 10. 修复关闭记录
+
+| ID | 关闭状态 | 修复任务 | 验证 |
+|---|---|---|---|
+| BUG-DIAG-001 | ✅ 已关闭 | `09-27-fix-diag-read-p1` | 前端适配层 `adaptDiagnosisReport` 归一 `weak_knowledge_points` → `weak_points`，适配单测转绿 |
+| BUG-DIAG-002 | ✅ 已关闭 | `09-27-fix-diag-read-p1` | `overall_score` ← `score_rate*100`、`mastery_rate` ← `mastery_after*100` 推导，适配单测转绿 |
+| BUG-DIAG-007 | ✅ 已关闭 | `09-27-fix-diag-read-p1` | `get_user_mastery_overview(material_id=None)` 聚合全量知识点（新增 `list_all_by_user_id`），带参路径零回归 |
+| BUG-DIAG-008 | ✅ 已关闭 | `09-27-fix-diag-read-p1` | `check_regression` 统一为 `score_delta = current - previous`（负数=退步），算法/服务测试全绿；前端 `formatScoreDelta` 未改 |
+
