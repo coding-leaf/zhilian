@@ -85,16 +85,16 @@
 
 ## Acceptance Criteria
 
-- [ ] **AC-AUTH-004**: 后端注册 `PUT /api/v1/users/me`；传入合法 `nickname` / `avatar_url` 成功更新用户并返回 200 与新资料；用户不存在返回 401；传入非法字段触发 422。前端 `updateUserProfile` 端到端调用不再 405。
-- [ ] **AC-AUTH-005**: 前端模拟 401 静默刷新触发并置换新 token 对后，Pinia `userStore.tokens` 与 `storage.getItem('auth_tokens')` 严格同步更新为新 token，`isAuthenticated` 保持 true。
-- [ ] **AC-AUTH-006**: 前端构造模拟连续 401 故障响应时，请求拦截在重试 1 次后主动中断刷新循环，抛出 20001 认证错误并触发登出清理，不再无界循环重发。
-- [ ] **AC-AUTH-007**: 存储包含大于 20480 字节（即便字符数 ≤ 20480，如 8000 个中文字符约 24KB）的多字节有效载荷时，`storage.setItem` 确切抛出 `AppError(10001, 'Storage key forbidden')`。
-- [ ] **AC-AUTH-008**: 登录页 `login.vue` 成功流程不再写入硬编码 `usr_current` 假画像，水合失败时不展示假数据，并给出错误提示与状态清理。
-- [ ] **AC-AUTH-009**: 当 service 返回 `False` 时，`POST /api/v1/auth/revoke` 与 `DELETE /api/v1/users/me` 响应体中的 `success` 为 `false` 且包含失败提示文案；service 返回 `True` 时保持 `success=true`。
-- [ ] **AC-AUTH-010**: 微信登录代码置换逻辑通过 `run_in_threadpool` 执行，不阻塞主事件循环异步处理其他请求。
-- [ ] **AC-AUTH-011**: `deps/auth.py` 与 `deps/user.py` 的 fallback 路径执行完毕后，内部创建的数据库 session 得到显式关闭，无连接悬挂与泄漏。
-- [ ] **AC-GATE-BE**: 后端门禁五项全绿：`uv run ruff format --check .`、`uv run ruff check .`、`uv run mypy app`、`uv run lint-imports`、`uv run pytest tests`。
-- [ ] **AC-GATE-FE**: 前端门禁三项全绿：`pnpm run lint`、`pnpm run type-check`、`pnpm run test:unit`。
+- [x] **AC-AUTH-004**: 后端注册 `PUT /api/v1/users/me`；传入合法 `nickname` / `avatar_url` 成功更新用户并返回 200 与新资料；用户不存在返回 401；传入非法字段触发 422。前端 `updateUserProfile` 端到端调用不再 405。
+- [x] **AC-AUTH-005**: 前端模拟 401 静默刷新触发并置换新 token 对后，Pinia `userStore.tokens` 与 `storage.getItem('auth_tokens')` 严格同步更新为新 token，`isAuthenticated` 保持 true。
+- [x] **AC-AUTH-006**: 前端构造模拟连续 401 故障响应时，请求拦截在重试 1 次后主动中断刷新循环，抛出 20001 认证错误并触发登出清理，不再无界循环重发。
+- [x] **AC-AUTH-007**: 存储包含大于 20480 字节（即便字符数 ≤ 20480，如 8000 个中文字符约 24KB）的多字节有效载荷时，`storage.setItem` 确切抛出 `AppError(10001, 'Storage key forbidden')`。
+- [x] **AC-AUTH-008**: 登录页 `login.vue` 成功流程不再写入硬编码 `usr_current` 假画像，水合失败时不展示假数据，并给出错误提示与状态清理。
+- [x] **AC-AUTH-009**: 当 service 返回 `False` 时，`POST /api/v1/auth/revoke` 与 `DELETE /api/v1/users/me` 响应体中的 `success` 为 `false` 且包含失败提示文案；service 返回 `True` 时保持 `success=true`。
+- [x] **AC-AUTH-010**: 微信登录代码置换逻辑通过 `run_in_threadpool` 执行，不阻塞主事件循环异步处理其他请求。
+- [x] **AC-AUTH-011**: `deps/auth.py` 与 `deps/user.py` 的 fallback 路径执行完毕后，内部创建的数据库 session 得到显式关闭，无连接悬挂与泄漏。
+- [x] **AC-GATE-BE**: 后端门禁五项全绿：`uv run ruff format --check .`、`uv run ruff check .`、`uv run mypy app`、`uv run lint-imports`、`uv run pytest tests`。
+- [x] **AC-GATE-FE**: 前端门禁三项全绿：`pnpm run lint`、`pnpm run type-check`、`pnpm run test:unit`。
 
 ---
 
