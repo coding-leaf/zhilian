@@ -16,10 +16,16 @@
 | BUG-DIAG-003, 004 | P1 | `09-27-fix-diag-wrongbook-p1` | 错题真实 total、攻克可切换（`is_mastered` 可选体） |
 | BUG-DIAG-005, 006 | P1 | `09-27-fix-diag-wrongbook-p1` | 错题 `user_answer` 下发、`source_type=wrong_record` + `material_id` 可选解析 |
 
+## 已关闭（P2）
+
+| Bug | 级别 | 子任务 | 关键改动 |
+|---|---|---|---|
+| BUG-AUTH-004~011 | P2 | `09-27-fix-auth-p2` | 画像更新端点、刷新同步 store、401 重试上限、UTF-8 字节阈值、登录真源水合、service 返回值透传、微信登录线程池、fallback 会话托管 |
+
 ## 待处理
 
 - **P1 剩余**：无（GRADE/DIAG 全部 P1 已关闭）。
-- **P2 待办**：GRADE 12 条、DIAG 14 条，以及 AUTH/MAT/QGEN/PRAC 切片 P2，共 67 条 → 后续 `fix-*-p2` 批次。
+- **P2 待办（剩余 59 条）**：`fix-mat-p2a`(7)、`fix-mat-p2b`(7)、`fix-qgen-p2`(6)、`fix-prac-p2a`(7)、`fix-prac-p2b`(6)、`fix-grade-p2a`(6)、`fix-grade-p2b`(6)、`fix-diag-p2a`(7)、`fix-diag-p2b`(7)。已关闭：AUTH 8 条。
 - **非功能性**：31 条（重复造轮子/死代码）→ 独立重构任务，不在本轮。
 
 ## 口径
