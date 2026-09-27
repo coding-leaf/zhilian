@@ -423,6 +423,7 @@ async def test_list_questions_with_filters(
     mock_question_service.list_questions.assert_called_once_with(
         user_id=mock_user.id,
         material_id=mat_id,
+        folder_id=None,
         knowledge_point_id=kp_id,
         question_type="single_choice",
         difficulty=3,

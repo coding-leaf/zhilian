@@ -54,6 +54,23 @@ def test_question_generate_request_requires_knowledge_point_target() -> None:
         QuestionGenerateRequest(material_id=uuid.uuid4(), count=3)
 
 
+def test_question_generate_request_requires_material_or_folder() -> None:
+    """Providing neither material_id nor folder_id is invalid."""
+    with pytest.raises(ValidationError):
+        QuestionGenerateRequest(knowledge_point_id=uuid.uuid4(), count=3)
+
+
+def test_question_generate_request_folder_scope_defaults_points() -> None:
+    """Folder scope may omit knowledge points (defaults to all folder points)."""
+    folder_id = uuid.uuid4()
+    request = QuestionGenerateRequest(folder_id=folder_id, count=4)
+
+    assert request.material_id is None
+    assert request.folder_id == folder_id
+    assert request.knowledge_point_ids == []
+    assert request.knowledge_point_id is None
+
+
 def test_question_generate_request_rejects_empty_question_types() -> None:
     """BUG-QGEN-008: explicit empty question_types must fail validation."""
     with pytest.raises(ValidationError):

@@ -18,7 +18,12 @@ from app.models.question import QuestionType
 class QuestionGenerateRequest(BaseModel):
     """触发出题生成请求入参模型。"""
 
-    material_id: uuid.UUID = Field(..., description="归属学习资料主键 UUIDv4")
+    material_id: uuid.UUID | None = Field(
+        default=None, description="归属学习资料主键 UUIDv4（与 folder_id 至少提供一个）"
+    )
+    folder_id: uuid.UUID | None = Field(
+        default=None, description="归属课程文件夹主键 UUIDv4（提供时走文件夹范围出题）"
+    )
     version_id: uuid.UUID | None = Field(
         default=None, description="归属资料版本主键 UUIDv4，若缺省或不匹配将智能对齐"
     )
@@ -39,9 +44,15 @@ class QuestionGenerateRequest(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _require_knowledge_point_target(self) -> "QuestionGenerateRequest":
-        """校验至少提供一个考点（列表优先，单考点字段兜底）。"""
-        if not self.knowledge_point_ids and self.knowledge_point_id is None:
+    def _require_generation_target(self) -> "QuestionGenerateRequest":
+        """校验提供 material_id 或 folder_id，且单资料范围必须显式提供考点。"""
+        if self.material_id is None and self.folder_id is None:
+            raise ValueError("material_id 与 folder_id 至少提供一个")
+        if (
+            self.folder_id is None
+            and not self.knowledge_point_ids
+            and self.knowledge_point_id is None
+        ):
             raise ValueError("knowledge_point_id 与 knowledge_point_ids 至少提供一个")
         return self
 
@@ -121,9 +132,15 @@ class QuestionGenerateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     batch_id: str = Field(..., description="出题生成批次号")
-    material_id: uuid.UUID = Field(..., description="归属学习资料主键")
-    version_id: uuid.UUID = Field(..., description="归属资料版本标识")
-    knowledge_point_id: uuid.UUID = Field(..., description="所属知识点标识")
+    material_id: uuid.UUID | None = Field(
+        default=None, description="归属学习资料主键（课程文件夹范围可为空）"
+    )
+    version_id: uuid.UUID | None = Field(
+        default=None, description="归属资料版本标识（课程文件夹范围可为空）"
+    )
+    knowledge_point_id: uuid.UUID | None = Field(
+        default=None, description="所属知识点标识（课程文件夹范围为首个考点）"
+    )
     knowledge_point_ids: list[uuid.UUID] = Field(
         default_factory=list,
         description="本次覆盖的全部知识点标识（多考点；单考点时等于 [knowledge_point_id]）",
@@ -147,6 +164,7 @@ class QuestionListQuery(BaseModel):
     """题目多条件分页筛选查询参数模型。"""
 
     material_id: uuid.UUID | None = Field(default=None, description="按学习资料标识过滤")
+    folder_id: uuid.UUID | None = Field(default=None, description="按课程文件夹标识过滤")
     knowledge_point_id: uuid.UUID | None = Field(default=None, description="按知识点标识过滤")
     question_type: str | None = Field(default=None, description="按题型过滤")
     difficulty: int | None = Field(default=None, ge=1, le=5, description="按难度过滤")

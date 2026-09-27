@@ -15,6 +15,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from app.models.knowledge import KnowledgePoint
+from app.models.material import Material, MaterialFolder, MaterialStatus
 from app.models.question import (
     Question,
     QuestionAuditLog,
@@ -182,6 +184,7 @@ class QuestionRepository:
         user_id: uuid.UUID,
         *,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
         version_id: uuid.UUID | None = None,
         knowledge_point_id: uuid.UUID | None = None,
         question_type: str | None = None,
@@ -196,6 +199,8 @@ class QuestionRepository:
         Args:
             user_id: 租户用户标识。
             material_id: 可选的资料标识过滤。
+            folder_id: 可选的课程文件夹标识过滤（按 materials.folder_id join，
+                仅纳入未归档课程资料）。
             version_id: 可选的版本标识过滤。
             knowledge_point_id: 可选的知识点标识过滤。
             question_type: 可选的题型过滤。
@@ -215,6 +220,8 @@ class QuestionRepository:
             count_stmt = count_stmt.where(Question.is_deleted.is_(False))
         if material_id is not None:
             count_stmt = count_stmt.where(Question.material_id == material_id)
+        if folder_id is not None:
+            count_stmt = self._apply_folder_filter(count_stmt, folder_id, user_id)
         if version_id is not None:
             count_stmt = count_stmt.where(Question.version_id == version_id)
         if knowledge_point_id is not None:
@@ -235,6 +242,8 @@ class QuestionRepository:
             stmt = stmt.where(Question.is_deleted.is_(False))
         if material_id is not None:
             stmt = stmt.where(Question.material_id == material_id)
+        if folder_id is not None:
+            stmt = self._apply_folder_filter(stmt, folder_id, user_id)
         if version_id is not None:
             stmt = stmt.where(Question.version_id == version_id)
         if knowledge_point_id is not None:
@@ -249,6 +258,96 @@ class QuestionRepository:
         stmt = stmt.order_by(Question.created_at.desc()).offset(offset).limit(limit)
         items = list(self.session.execute(stmt).scalars().all())
         return items, int(total)
+
+    @staticmethod
+    def _apply_folder_filter(
+        stmt: Any,
+        folder_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> Any:
+        """为题目查询追加课程文件夹归属过滤（排除已归档课程资料）。
+
+        Args:
+            stmt: 待追加过滤的 SQLAlchemy 查询语句。
+            folder_id: 课程文件夹主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            Any: 已追加 join 与 where 条件的新查询语句。
+        """
+        return (
+            stmt.join(Material, Question.material_id == Material.id)
+            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                Material.user_id == user_id,
+                Material.folder_id == folder_id,
+                MaterialFolder.archived_at.is_(None),
+            )
+        )
+
+    def list_knowledge_points_for_folder(
+        self,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """查询课程文件夹下全部 ready 未归档资料的知识点。
+
+        用于课程范围出题的缺省考点集；仅纳入未归档课程、未软删除且解析就绪
+        （``status == ready``）的资料。
+
+        Args:
+            user_id: 租户用户标识。
+            folder_id: 课程文件夹主键。
+
+        Returns:
+            list[KnowledgePoint]: 按层级与创建时间排序的知识点列表。
+        """
+        stmt = (
+            select(KnowledgePoint)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.folder_id == folder_id,
+                Material.is_deleted.is_(False),
+                Material.status == MaterialStatus.READY.value,
+                MaterialFolder.archived_at.is_(None),
+            )
+            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def list_material_ids_for_folder(
+        self,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+        *,
+        ready_only: bool = False,
+    ) -> list[uuid.UUID]:
+        """查询课程文件夹下未软删除且未归档的资料主键。
+
+        Args:
+            user_id: 租户用户标识。
+            folder_id: 课程文件夹主键。
+            ready_only: 是否仅纳入解析就绪（ready）资料，默认 False。
+
+        Returns:
+            list[uuid.UUID]: 归属该未归档课程的资料主键列表。
+        """
+        stmt = (
+            select(Material.id)
+            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                Material.user_id == user_id,
+                Material.folder_id == folder_id,
+                Material.is_deleted.is_(False),
+                MaterialFolder.archived_at.is_(None),
+            )
+        )
+        if ready_only:
+            stmt = stmt.where(Material.status == MaterialStatus.READY.value)
+        return [row[0] for row in self.session.execute(stmt).all()]
 
     def list_recent_for_deduplication(
         self,

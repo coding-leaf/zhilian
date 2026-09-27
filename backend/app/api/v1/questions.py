@@ -130,11 +130,28 @@ async def generate_questions(
     if not target_kp_ids and payload.knowledge_point_id is not None:
         target_kp_ids = [payload.knowledge_point_id]
 
+    # 课程文件夹范围：跨资料分组出题（考点缺省取文件夹全部）。
+    if payload.folder_id is not None:
+        folder_result = question_service.generate_questions_for_folder(
+            user_id=user.id,
+            folder_id=payload.folder_id,
+            knowledge_point_ids=target_kp_ids or None,
+            options=options,
+        )
+        return _build_generate_response(
+            result=folder_result,
+            knowledge_point_ids=list(folder_result.knowledge_point_ids),
+        )
+
     # 多考点：走均分编排；单考点：保持既有单考点链路（向后兼容）。
+    material_id = payload.material_id
+    if material_id is None:  # pragma: no cover - 校验器保证 folder_id 为空时 material_id 必填
+        raise ValueError("material_id 必须指定")
+
     if len(target_kp_ids) > 1:
         multi_result = question_service.generate_questions_for_knowledge_points(
             user_id=user.id,
-            material_id=payload.material_id,
+            material_id=material_id,
             version_id=payload.version_id,
             knowledge_point_ids=target_kp_ids,
             options=options,
@@ -146,7 +163,7 @@ async def generate_questions(
 
     result = question_service.generate_questions(
         user_id=user.id,
-        material_id=payload.material_id,
+        material_id=material_id,
         version_id=payload.version_id,
         knowledge_point_id=target_kp_ids[0],
         options=options,
@@ -198,6 +215,7 @@ async def list_questions(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
+    folder_id: Annotated[uuid.UUID | None, Query(description="按课程文件夹标识过滤")] = None,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="按知识点标识过滤")] = None,
     question_type: Annotated[str | None, Query(description="按题型过滤")] = None,
     difficulty: Annotated[int | None, Query(ge=1, le=5, description="按难度系数 1~5 过滤")] = None,
@@ -216,6 +234,7 @@ async def list_questions(
         user: 当前已认证登录租户用户对象。
         question_service: 题目领域编排服务。
         material_id: 可选的资料主键过滤。
+        folder_id: 可选的课程文件夹主键过滤。
         knowledge_point_id: 可选的知识点主键过滤。
         question_type: 可选的题型过滤。
         difficulty: 可选的难度过滤。
@@ -236,6 +255,7 @@ async def list_questions(
     items, total = question_service.list_questions(
         user_id=user.id,
         material_id=material_id,
+        folder_id=folder_id,
         knowledge_point_id=knowledge_point_id,
         question_type=question_type,
         difficulty=difficulty,

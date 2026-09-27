@@ -27,6 +27,7 @@ from app.core.algorithms.question_quality import (
     filter_qualified_questions,
 )
 from app.core.errors import (
+    FolderNotFoundError,
     KnowledgeNotFoundError,
     MaterialNotFoundError,
     MissingSourceSnippetError,
@@ -41,6 +42,7 @@ from app.integrations.llm.protocol import (
     LLMProtocol,
 )
 from app.integrations.search.protocol import SearchProtocol
+from app.models.knowledge import KnowledgePoint
 from app.models.question import (
     AuditAction,
     Question,
@@ -49,6 +51,7 @@ from app.models.question import (
     QuestionStatus,
     QuestionType,
 )
+from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
@@ -621,6 +624,7 @@ class QuestionService:
         self.question_repo = QuestionRepository(session)
         self.knowledge_repo = KnowledgeRepository(session)
         self.material_repo = MaterialRepository(session)
+        self.folder_repo = FolderRepository(session)
 
     def _retrieve_and_gate_snippets(
         self,
@@ -1063,6 +1067,7 @@ class QuestionService:
         version_id: uuid.UUID | None = None,
         knowledge_point_ids: Sequence[uuid.UUID],
         options: GenerateQuestionsOptions | None = None,
+        defer_commit: bool = False,
     ) -> MultiKnowledgePointGenerationResult:
         """多考点编排：按考点均分题量并逐个复用单考点流程后聚合结果。
 
@@ -1075,6 +1080,8 @@ class QuestionService:
             version_id: 可选的资料版本主键（若为空或不符将智能对齐）。
             knowledge_point_ids: 目标知识点主键序列（去重后保序）。
             options: 可选的生成控制选项，count 表示多考点总题量。
+            defer_commit: 为 True 时不在本层提交/回滚，仅由外层统一提交，
+                用于跨资料（课程文件夹）范围的单事务原子编排；默认 False 保持原行为。
 
         Returns:
             MultiKnowledgePointGenerationResult: 聚合后的多考点生成结果。
@@ -1130,9 +1137,11 @@ class QuestionService:
                 raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
 
             # 全部考点成功：单次提交，保证多考点批次原子落库。
-            self.session.commit()
+            if not defer_commit:
+                self.session.commit()
         except Exception:
-            self.session.rollback()
+            if not defer_commit:
+                self.session.rollback()
             raise
 
         logger.info(
@@ -1164,6 +1173,176 @@ class QuestionService:
             quality_checks=aggregated_checks,
             retry_count=total_retry,
         )
+
+    def generate_questions_for_folder(
+        self,
+        *,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+        knowledge_point_ids: Sequence[uuid.UUID] | None = None,
+        options: GenerateQuestionsOptions | None = None,
+    ) -> MultiKnowledgePointGenerationResult:
+        """课程文件夹范围出题：跨资料分组均分题量后单事务原子落库。
+
+        解析目标考点集（显式列表校验归属，缺省取文件夹全部 ready 资料考点），
+        按 ``(material_id, version_id)`` 保序分组；题量先按组均分，再在组内按考点
+        均分（均分 + 余数前置 + 每组至少 1 题）。全部资料组成功后仅提交一次，
+        任一环节失败整批回滚，零遗留部分题目。
+
+        Args:
+            user_id: 租户用户主键。
+            folder_id: 课程文件夹主键（必须归属当前用户且未归档）。
+            knowledge_point_ids: 可选的显式考点列表；缺省取文件夹全部考点。
+            options: 可选的生成控制选项，count 表示跨资料总题量。
+
+        Returns:
+            MultiKnowledgePointGenerationResult: 聚合后的跨资料生成结果。
+
+        Raises:
+            FolderNotFoundError: 课程文件夹不存在、已归档或越权。
+            KnowledgeNotFoundError: 显式考点不属于该文件夹，或文件夹无可用考点。
+            MaterialNotFoundError: 资料不存在或跨租户越权。
+            MissingSourceSnippetError: 任一考点检索不到匹配的有效切片。
+        """
+        folder = self.folder_repo.get_by_id(folder_id, user_id, include_archived=False)
+        if folder is None:
+            raise FolderNotFoundError()
+
+        resolved_points = self._resolve_folder_knowledge_points(
+            user_id=user_id,
+            folder_id=folder_id,
+            knowledge_point_ids=knowledge_point_ids,
+        )
+        if not resolved_points:
+            raise KnowledgeNotFoundError(
+                "课程文件夹下没有可用的知识点",
+                details={"folder_id": str(folder_id)},
+            )
+
+        effective_options = options if options is not None else GenerateQuestionsOptions()
+
+        # 按 (material_id, version_id) 保序分组
+        groups: dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]] = {}
+        for point in resolved_points:
+            groups.setdefault((point.material_id, point.version_id), []).append(point.id)
+
+        ordered_kp_ids = list(dict.fromkeys(point.id for point in resolved_points))
+        group_keys = list(groups.keys())
+        group_counts = distribute_count(effective_options.count, len(group_keys))
+
+        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+        aggregated_qualified: list[Question] = []
+        aggregated_pending: list[Question] = []
+        aggregated_checks: list[QuestionQualityCheck] = []
+        total_generated = 0
+        total_retry = 0
+
+        # 跨资料单事务原子编排：逐组仅 flush（defer_commit=True），
+        # 全部成功一次性提交；任一资料组失败则整批回滚。
+        try:
+            for key, group_count in zip(group_keys, group_counts, strict=True):
+                material_id, version_id = key
+                per_group_options = GenerateQuestionsOptions(
+                    question_types=effective_options.question_types,
+                    count=group_count,
+                    difficulty=effective_options.difficulty,
+                    max_retries=effective_options.max_retries,
+                )
+                result = self.generate_questions_for_knowledge_points(
+                    user_id=user_id,
+                    material_id=material_id,
+                    version_id=version_id,
+                    knowledge_point_ids=groups[key],
+                    options=per_group_options,
+                    defer_commit=True,
+                )
+                total_generated += result.total_generated
+                total_retry += result.retry_count
+                aggregated_qualified.extend(result.qualified_questions)
+                aggregated_pending.extend(result.pending_questions)
+                aggregated_checks.extend(result.quality_checks)
+
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+
+        first_material_id, first_version_id = group_keys[0]
+
+        logger.info(
+            "folder scope question generation completed",
+            extra={
+                "timestamp": datetime.now(UTC).isoformat(),
+                "level": "INFO",
+                "logger_name": __name__,
+                "request_id": batch_id,
+                "target_id": str(folder_id),
+                "material_group_count": len(group_keys),
+                "knowledge_point_count": len(ordered_kp_ids),
+                "requested_count": effective_options.count,
+                "actual_total": total_generated,
+                "retry_count": total_retry,
+                "error_code": 0,
+            },
+        )
+
+        return MultiKnowledgePointGenerationResult(
+            batch_id=batch_id,
+            material_id=first_material_id,
+            version_id=first_version_id,
+            knowledge_point_id=ordered_kp_ids[0],
+            knowledge_point_ids=tuple(ordered_kp_ids),
+            requested_count=effective_options.count,
+            total_generated=total_generated,
+            qualified_questions=aggregated_qualified,
+            pending_questions=aggregated_pending,
+            quality_checks=aggregated_checks,
+            retry_count=total_retry,
+        )
+
+    def _resolve_folder_knowledge_points(
+        self,
+        *,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+        knowledge_point_ids: Sequence[uuid.UUID] | None,
+    ) -> list[KnowledgePoint]:
+        """解析课程文件夹范围的目标考点集。
+
+        显式提供 ``knowledge_point_ids`` 时逐个校验其归属资料属于该文件夹下未归档
+        资料；缺省时取文件夹全部 ready 资料的全部知识点。
+
+        Args:
+            user_id: 租户用户主键。
+            folder_id: 课程文件夹主键。
+            knowledge_point_ids: 可选的显式考点列表。
+
+        Returns:
+            list[KnowledgePoint]: 去重后保序的目标知识点实体列表。
+
+        Raises:
+            KnowledgeNotFoundError: 显式考点不存在、越权或不属于该文件夹。
+        """
+        if not knowledge_point_ids:
+            return self.question_repo.list_knowledge_points_for_folder(user_id, folder_id)
+
+        allowed_material_ids = set(
+            self.question_repo.list_material_ids_for_folder(user_id, folder_id)
+        )
+        resolved: list[KnowledgePoint] = []
+        seen: set[uuid.UUID] = set()
+        for kp_id in knowledge_point_ids:
+            if kp_id in seen:
+                continue
+            seen.add(kp_id)
+            point = self.knowledge_repo.get_knowledge_point_by_id(kp_id, user_id)
+            if point is None or point.material_id not in allowed_material_ids:
+                raise KnowledgeNotFoundError(
+                    "请求的知识点不存在、越权或不属于该课程文件夹",
+                    details={"knowledge_point_id": str(kp_id)},
+                )
+            resolved.append(point)
+        return resolved
 
     def get_question(
         self,
@@ -1208,6 +1387,7 @@ class QuestionService:
         page_size: int = 20,
         *,
         status: str | None = None,
+        folder_id: uuid.UUID | None = None,
         limit: int | None = None,
         offset: int | None = None,
         include_deleted: bool = False,
@@ -1225,6 +1405,7 @@ class QuestionService:
             page: 当前页码，默认 1。
             page_size: 单页容量限制，默认 20。
             status: 兼容的状态过滤入参。
+            folder_id: 可选的课程文件夹标识过滤（仅未归档课程资料）。
             limit: 可选的单页数量限制（优先于 page_size）。
             offset: 可选的分页游标偏移量（优先于 page 计算）。
             include_deleted: 是否包含软删除记录，默认 False。
@@ -1246,6 +1427,7 @@ class QuestionService:
         return self.question_repo.list_questions(
             user_id=resolved_user_id,
             material_id=material_id or kwargs.get("material_id"),
+            folder_id=folder_id or kwargs.get("folder_id"),
             version_id=kwargs.get("version_id"),
             knowledge_point_id=knowledge_point_id or kwargs.get("knowledge_point_id"),
             question_type=question_type or kwargs.get("question_type"),
