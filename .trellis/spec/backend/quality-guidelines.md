@@ -663,3 +663,17 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 4. Tests Required
 - 首次提交 `is_idempotent_replay=False`、二次回放 `True`；`PAUSED/TIMEOUT/PARTIALLY_GRADED` 真实 service 拒绝作答且 `NOT_STARTED` 首次保存仍可；`PAUSED→IN_PROGRESS` 有效、`TIMEOUT` 不可逆；`mode="random"` 详情回读且 `completed_count` = 已答数；迁移 upgrade/downgrade 对称可执行。
+
+### Scenario: Submit Snapshot Fault-Tolerance, Elapsed Aggregation & Answer Serialization
+
+#### 1. Scope / Trigger
+- 交卷幂等快照写入失败、练习详情耗时、多选作答序列化。
+
+#### 2. Contracts
+- `set_result`（幂等快照）失败不得让已提交的交卷返回 5xx：捕获降级记录告警，并释放幂等锁，使同 key 重试可回放。
+- 若幂等缓存未命中但练习已是 COMPLETED 且 `submit_idempotency_key == 请求 key`，必须从 DB 重建回放结果，禁止返回 40011；不同 key 仍拒绝。
+- `PracticeDetailResponse.time_elapsed_seconds` 附加可选（默认 0），由 items 的 `duration_seconds` 聚合；历史无耗时为 0。
+- `save_answer` 对 list/dict 作答以 `json.dumps(..., ensure_ascii=False)` 落库；DTO 输出时把历史 Python repr（`"['A', 'B']"`）容错归一为 JSON，标量不得被改写。
+
+#### 3. Tests Required
+- `set_result` 抛错时交卷成功且同 key 可回放、不同 key 40011；耗时聚合（含 0）；多选落库可 `json.loads`、历史 repr 归一；标量不变。

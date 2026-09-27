@@ -418,3 +418,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - `clearSession(id)` 删除目标 draft 且保留兄弟 draft；`adaptStatus('timeout')==='submitted'`；旧结构（仅 `answers`）读取不抛错。
+
+### Scenario: Practice Session Teardown Flush, Subjective Fallback & Pause/Resume
+
+#### 1. Scope / Trigger
+- 练习会话卸载、题型渲染兜底、暂停/恢复。
+
+#### 2. Contracts
+- 会话卸载/清理前必须 flush 待同步草稿；flush 的完成回调必须以**身份令牌**判定是否仍为当前 pending 项，禁止用 questionId 判等（否则新作答会被旧同步的回调误标记已同步而丢失）。
+- 题型渲染必须为 `term_explanation`/`case_analysis` 及未知主观题型提供文本输入兜底；客观题分支不得受影响；标签映射补全。
+- 单题耗时必须取真实时间差（设上限），禁止常量；累计耗时读取后端 `time_elapsed_seconds` 起步。
+- `pausePractice`/`resumePractice` 契约与后端逐字一致（`POST /practices/{id}/pause|resume`）。
+
+#### 3. Tests Required
+- 卸载 flush 触发且有 pending 不丢（竞态用例：旧同步回调不得清掉新作答）；`term_explanation`/`case_analysis` 渲染输入框与标签；真实耗时非常量；pause/resume 发对应 POST。
