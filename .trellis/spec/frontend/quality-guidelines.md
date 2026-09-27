@@ -352,3 +352,27 @@ function onSuccess() {
 - 交卷成功路径的 `clearDraftFromStorage` 抛错时：不阻断跳转，仍判定成功。
 
 
+
+
+### Scenario: Auth Token Refresh State Sync & Bounded 401 Retry
+
+#### 1. Scope / Trigger
+- 前端 `utils/request.ts` 的 401 静默刷新与重放，以及本地存储写入的大小门禁。
+
+#### 2. Signatures
+```typescript
+// utils/request.ts
+export function setTokenRefreshListener(listener: (tokens: AuthTokens) => void): void;
+// types/common.ts
+interface RequestOptions { _retryCount?: number }
+// utils/storage.ts
+const MAX_STORAGE_BYTES = 20 * 1024;
+```
+
+#### 3. Contracts
+- 刷新成功后除写 `storage.auth_tokens` 外，必须经解耦订阅回调同步内存态（`userStore.tokens`）；`request.ts` 禁止直接 import store（避免循环依赖）。
+- 401 重放必须携带 `_retryCount`，超过上限（1 次）直接抛 `AppError(20001)` 并清理会话+重定向，禁止无界刷新循环导致 Promise 挂起。
+- storage 大小校验必须按 UTF-8 实际字节数（`TextEncoder`，缺失时手写回退），禁止用 `String.length`。
+
+#### 4. Tests Required
+- 刷新后 `userStore.tokens` 与 storage 严格同步；重放 1 次后仍 401 → 抛 20001 且不再刷新；8000 个中文字符（~24KB，`.length` 未超）必须触发 `AppError(10001)`。

@@ -596,3 +596,22 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 - DTO：ORM/dict 两路径 `last_wrong_answer → user_answer`；`None` 保持 `None`。
 - 继续练习：`wrong_record` + 无 `material_id` 创建成功（201）；旧 `normal`/`weakness` 零回归。
 
+
+
+### Scenario: User Profile Update Endpoint & Auth Service Result Propagation
+
+#### 1. Scope / Trigger
+- 画像更新端点、吊销/注销端点返回值语义、微信登录同步 IO、依赖 fallback 会话托管。
+
+#### 2. Signatures
+- `PUT /api/v1/users/me` -> `UserProfileResponse`；`UpdateUserProfileRequest{nickname?, avatar_url?}`（`extra="forbid"`）。
+- `AuthService.update_user_profile(user_id, *, nickname=None, avatar_url=None) -> UserProfileResponse`；用户不存在抛 `AuthenticationError`。
+
+#### 3. Contracts
+- 前端声明的画像更新契约必须在后端落地，禁止契约悬空（接入即 405）。
+- `revoke`/`delete` 端点必须透传 service 布尔结果到 `UserActionResponse.success`，失败不得报告成功。
+- async 路由中调用同步阻塞的第三方 HTTP（`httpx.get`）必须经 `run_in_threadpool` offload，禁止阻塞事件循环。
+- DI fallback 若用 `session_factory()` 新建 Session，必须以 `with container.get_session()`/生成器依赖托管关闭，禁止裸建不关闭造成连接泄漏。
+
+#### 4. Tests Required
+- PUT 合法/部分更新 200、用户不存在 401、非法字段 422；service 返回 False 时响应 `success=false`；fallback 路径 session 关闭断言。
