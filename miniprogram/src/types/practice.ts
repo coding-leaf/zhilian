@@ -157,3 +157,15 @@ export interface SaveAnswerPayload {
   user_answer: string | string[];
   time_spent_seconds?: number;
 }
+
+/**
+ * Practice pause/resume result contract.
+ *
+ * Authoritative counterpart: `backend/app/schemas/practice.py`
+ * -> `PracticeStatusResponse` (`practice_id`, `status`, `message`).
+ */
+export interface PracticeStatusChangeResult {
+  practice_id: string;
+  status: string;
+  message: string;
+}

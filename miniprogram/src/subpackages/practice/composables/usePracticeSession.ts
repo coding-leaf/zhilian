@@ -5,9 +5,14 @@
  * Adheres to AGENTS.md & docs/sdlc/ZL-134/spec.md: Zero-Emoji, lines <= 300.
  */
 
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { usePracticeStore } from '../../../stores/practiceStore';
-import { fetchPracticeSession, saveAnswerDraft } from '../../../api/practice';
+import {
+  fetchPracticeSession,
+  saveAnswerDraft,
+  pausePractice,
+  resumePractice,
+} from '../../../api/practice';
 import {
   createOrUpdateDraft,
   saveDraftToStorage,
@@ -15,6 +20,12 @@ import {
   markDraftSynced,
   extractPendingSyncItems,
 } from '../utils/draft';
+
+interface PendingDraftSync {
+  questionId: string;
+  value: string | string[];
+  elapsed: number;
+}
 
 export function usePracticeSession() {
   const practiceStore = usePracticeStore();
@@ -29,6 +40,24 @@ export function usePracticeSession() {
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let syncTimeout: ReturnType<typeof setTimeout> | null = null;
+  let questionStartTime = Date.now();
+  // Identity token of the latest unsynced answer. Compared by reference so a
+  // slow in-flight sync cannot finalize a newer pending change (PRAC-012).
+  let pendingSync: PendingDraftSync | null = null;
+
+  // Reset the per-question entry timestamp whenever the active question changes.
+  watch(
+    () => practiceStore.currentQuestion?.id,
+    () => {
+      questionStartTime = Date.now();
+    },
+  );
+
+  function takeQuestionElapsedSeconds(): number {
+    const elapsed = Math.max(1, Math.round((Date.now() - questionStartTime) / 1000));
+    questionStartTime = Date.now();
+    return elapsed;
+  }
 
   function startTimer(): void {
     stopTimer();
@@ -53,6 +82,7 @@ export function usePracticeSession() {
         practiceTitle.value = res.data.title || '练习作答';
         practiceStore.initSession(id, res.data.questions || []);
         elapsedSeconds.value = res.data.time_elapsed_seconds || 0;
+        questionStartTime = Date.now();
 
         // 从 Storage 恢复本地草稿
         const localDraft = loadDraftFromStorage(id);
@@ -77,34 +107,45 @@ export function usePracticeSession() {
     // 1. 同步更新 Store
     practiceStore.updateAnswer(qid, val);
 
-    // 2. 本地 Storage 毫秒级写入草稿
+    // 2. 本地 Storage 毫秒级写入草稿（记录真实停留耗时，消除硬编码 1 秒）
+    const elapsed = takeQuestionElapsedSeconds();
     const cur = loadDraftFromStorage(pid);
-    const updated = createOrUpdateDraft(cur, pid, qid, val, 1);
+    const updated = createOrUpdateDraft(cur, pid, qid, val, elapsed);
     saveDraftToStorage(pid, updated);
 
     // 3. 防抖异步同步到远端
+    const pending: PendingDraftSync = { questionId: qid, value: val, elapsed };
+    pendingSync = pending;
     if (syncTimeout) {
       clearTimeout(syncTimeout);
     }
     syncTimeout = setTimeout(() => {
-      void syncSingleDraft(qid, val);
+      syncTimeout = null;
+      void syncSingleDraft(pending);
     }, 600);
   }
 
-  async function syncSingleDraft(qid: string, val: string | string[]): Promise<void> {
+  async function syncSingleDraft(pending: PendingDraftSync): Promise<void> {
     const pid = practiceId.value;
     if (!pid) {
       return;
     }
     try {
       await saveAnswerDraft(pid, {
-        question_id: qid,
-        user_answer: val,
-        time_spent_seconds: 1,
+        question_id: pending.questionId,
+        user_answer: pending.value,
+        time_spent_seconds: pending.elapsed,
       });
+      // A newer answer may have superseded this one while the request was in
+      // flight; only the latest token may clear pending state and mark synced,
+      // otherwise the newer answer would be dropped (PRAC-012).
+      if (pendingSync !== pending) {
+        return;
+      }
+      pendingSync = null;
       const cur = loadDraftFromStorage(pid);
       if (cur) {
-        saveDraftToStorage(pid, markDraftSynced(cur, [qid]));
+        saveDraftToStorage(pid, markDraftSynced(cur, [pending.questionId]));
       }
     } catch {
       // 离线或同步失败，保留待同步状态
@@ -144,12 +185,63 @@ export function usePracticeSession() {
     }
   }
 
-  function cleanupSession(): void {
-    stopTimer();
+  /**
+   * Immediately flush any draft still held by the debounce timer.
+   *
+   * Called on session teardown so the last answer before leaving is pushed to
+   * the backend instead of being silently dropped with the cleared timer
+   * (BUG-PRAC-012). Network failure degrades to keeping the local draft.
+   */
+  function flushPendingDraft(): void {
     if (syncTimeout) {
       clearTimeout(syncTimeout);
       syncTimeout = null;
     }
+    if (pendingSync) {
+      // Keep the token in place so syncSingleDraft can compare identity and
+      // finalize (clear + mark synced) only when this exact change is synced.
+      void syncSingleDraft(pendingSync);
+      return;
+    }
+    void syncPendingDrafts();
+  }
+
+  /**
+   * Pause the practice: stop local timing and notify the backend.
+   *
+   * Restarts local timing if the backend call fails so client and server stay
+   * consistent (BUG-PRAC-017).
+   */
+  async function pauseSession(): Promise<void> {
+    const pid = practiceId.value;
+    if (!pid) {
+      return;
+    }
+    stopTimer();
+    try {
+      await pausePractice(pid);
+    } catch (error) {
+      startTimer();
+      throw error;
+    }
+  }
+
+  /**
+   * Resume the practice: notify the backend then restart local timing (BUG-PRAC-017).
+   */
+  async function resumeSession(): Promise<void> {
+    const pid = practiceId.value;
+    if (!pid) {
+      return;
+    }
+    await resumePractice(pid);
+    questionStartTime = Date.now();
+    startTimer();
+  }
+
+  function cleanupSession(): void {
+    stopTimer();
+    flushPendingDraft();
   }
 
   return {
@@ -163,7 +255,10 @@ export function usePracticeSession() {
     loadPractice,
     handleAnswerChange,
     syncPendingDrafts,
+    flushPendingDraft,
     handleNetworkChange,
+    pauseSession,
+    resumeSession,
     cleanupSession,
   };
 }

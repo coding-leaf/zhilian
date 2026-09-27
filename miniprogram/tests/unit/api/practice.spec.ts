@@ -5,6 +5,8 @@ import {
   fetchPracticeSession,
   saveAnswerDraft,
   submitPractice,
+  pausePractice,
+  resumePractice,
 } from '@/api/practice';
 import type { CreatePracticePayload, PracticeQuestionItem } from '@/types/practice';
 
@@ -147,5 +149,41 @@ describe('Practice API Module', () => {
       headers: { 'Idempotency-Key': 'idem_key_uuid_123' },
     });
     expect(res).toEqual(mockResponse);
+  });
+
+  it('should call pausePractice with POST /api/v1/practices/:id/pause (PRAC-017)', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: { practice_id: 'prac_001', status: 'paused', message: '练习已成功暂停' },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await pausePractice('prac_001');
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/practices/prac_001/pause',
+      method: 'POST',
+    });
+    expect(res.data.status).toBe('paused');
+  });
+
+  it('should call resumePractice with POST /api/v1/practices/:id/resume (PRAC-017)', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: { practice_id: 'prac_001', status: 'in_progress', message: '练习已成功恢复' },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await resumePractice('prac_001');
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/practices/prac_001/resume',
+      method: 'POST',
+    });
+    expect(res.data.status).toBe('in_progress');
   });
 });

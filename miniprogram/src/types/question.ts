@@ -4,7 +4,13 @@
  */
 
 export type QuestionType =
-  'single_choice' | 'multiple_choice' | 'true_false' | 'fill_in_blank' | 'short_answer';
+  | 'single_choice'
+  | 'multiple_choice'
+  | 'true_false'
+  | 'fill_in_blank'
+  | 'short_answer'
+  | 'term_explanation'
+  | 'case_analysis';
 
 export interface QuestionOption {
   key: string;

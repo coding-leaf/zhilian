@@ -13,6 +13,7 @@ import type {
   CreatePracticePayload,
   SaveAnswerPayload,
   RawPracticeSession,
+  PracticeStatusChangeResult,
 } from '../types/practice';
 
 /**
@@ -86,5 +87,35 @@ export function submitPractice(
     headers: {
       'Idempotency-Key': idempotencyKey,
     },
+  });
+}
+
+/**
+ * 暂停指定练习会话，服务端停止计时并可恢复。
+ *
+ * @param practiceId 练习主键 ID。
+ * @returns 统一响应包，包含变更后的练习状态与提示信息。
+ */
+export function pausePractice(
+  practiceId: string,
+): Promise<ApiResponse<PracticeStatusChangeResult>> {
+  return request<PracticeStatusChangeResult>({
+    url: `/api/v1/practices/${practiceId}/pause`,
+    method: 'POST',
+  });
+}
+
+/**
+ * 恢复已暂停的练习会话，服务端重新开始计时。
+ *
+ * @param practiceId 练习主键 ID。
+ * @returns 统一响应包，包含变更后的练习状态与提示信息。
+ */
+export function resumePractice(
+  practiceId: string,
+): Promise<ApiResponse<PracticeStatusChangeResult>> {
+  return request<PracticeStatusChangeResult>({
+    url: `/api/v1/practices/${practiceId}/resume`,
+    method: 'POST',
   });
 }

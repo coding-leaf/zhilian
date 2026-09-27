@@ -528,4 +528,84 @@ describe('Practice Session Integration (session/index.vue)', () => {
       expect(requestModule.request).toHaveBeenCalled();
     }
   });
+
+  it('flushes a pending debounced draft on session cleanup (PRAC-012)', async () => {
+    const store = usePracticeStore();
+    store.initSession('practice_999', mockQuestions);
+    const { handleAnswerChange, cleanupSession } = usePracticeSession();
+
+    handleAnswerChange('B');
+    // No 600ms debounce has elapsed yet; only the timer holds the pending change.
+    cleanupSession();
+    await vi.runAllTimersAsync();
+
+    const answerCall = vi
+      .mocked(requestModule.request)
+      .mock.calls.find((call) => call[0]?.url.endsWith('/answers'));
+    expect(answerCall).toBeDefined();
+    expect(answerCall?.[0]).toEqual({
+      url: '/api/v1/practices/practice_999/answers',
+      method: 'PUT',
+      data: { question_id: 'q_001', user_answer: 'B', time_spent_seconds: 1 },
+    });
+  });
+
+  it('records real elapsed seconds per question instead of a hardcoded 1 (PRAC-015)', async () => {
+    const store = usePracticeStore();
+    store.initSession('practice_999', mockQuestions);
+    const { handleAnswerChange, cleanupSession } = usePracticeSession();
+
+    handleAnswerChange('A');
+    vi.advanceTimersByTime(600);
+
+    // Stay on the same question for 5 more seconds, then answer again.
+    vi.advanceTimersByTime(5000);
+    handleAnswerChange('B');
+    vi.advanceTimersByTime(600);
+    await vi.runAllTimersAsync();
+
+    const answerCalls = vi
+      .mocked(requestModule.request)
+      .mock.calls.filter((call) => call[0]?.url.endsWith('/answers'));
+    expect(answerCalls.length).toBeGreaterThanOrEqual(2);
+
+    const lastCallData = answerCalls[answerCalls.length - 1][0].data as {
+      time_spent_seconds?: number;
+    };
+    expect(lastCallData.time_spent_seconds).toBeGreaterThanOrEqual(5);
+
+    cleanupSession();
+  });
+
+  it('pauseSession stops local timing and resumeSession restarts it (PRAC-017)', async () => {
+    const store = usePracticeStore();
+    store.initSession('practice_999', mockQuestions);
+    const { loadPractice, pauseSession, resumeSession, elapsedSeconds, cleanupSession } =
+      usePracticeSession();
+
+    await loadPractice('practice_999');
+    expect(elapsedSeconds.value).toBe(10);
+
+    vi.advanceTimersByTime(1000);
+    expect(elapsedSeconds.value).toBe(11);
+
+    await pauseSession();
+    vi.advanceTimersByTime(3000);
+    expect(elapsedSeconds.value).toBe(11);
+
+    await resumeSession();
+    vi.advanceTimersByTime(1000);
+    expect(elapsedSeconds.value).toBe(12);
+
+    const pauseCall = vi
+      .mocked(requestModule.request)
+      .mock.calls.find((call) => call[0]?.url.endsWith('/pause'));
+    const resumeCall = vi
+      .mocked(requestModule.request)
+      .mock.calls.find((call) => call[0]?.url.endsWith('/resume'));
+    expect(pauseCall).toBeDefined();
+    expect(resumeCall).toBeDefined();
+
+    cleanupSession();
+  });
 });

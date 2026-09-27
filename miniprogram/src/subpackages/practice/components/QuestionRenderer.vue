@@ -61,12 +61,12 @@
       />
     </view>
 
-    <!-- 5. 简答题渲染 -->
-    <view v-else-if="question.question_type === 'short_answer'" class="short-answer-wrapper">
+    <!-- 5. 主观题渲染：简答题 / 名词解释 / 案例分析 / 未知题型兜底 -->
+    <view v-else class="short-answer-wrapper">
       <textarea
         class="short-answer-textarea"
         :value="typeof modelValue === 'string' ? modelValue : ''"
-        placeholder="请输入你的简要分析或回答（最多500字）"
+        :placeholder="subjectivePlaceholder"
         :maxlength="500"
         @input="handleTextareaInput"
       />
@@ -78,8 +78,9 @@
 <script setup lang="ts">
 /**
  * QuestionRenderer.vue
- * Core dispatcher component for 5 practice question types.
- * Reference: docs/sdlc/ZL-134/spec.md
+ * Core dispatcher component for practice question types.
+ * Covers objective types plus subjective fallbacks (short_answer, term_explanation,
+ * case_analysis, and unknown types). Reference: docs/sdlc/ZL-134/spec.md
  * Zero-Emoji Policy enforced.
  */
 
@@ -117,8 +118,19 @@ const questionTypeLabel = computed<string>(() => {
     true_false: '判断题',
     fill_in_blank: '填空题',
     short_answer: '简答题',
+    term_explanation: '名词解释',
+    case_analysis: '案例分析',
   };
   return map[props.question.question_type] || '练习题';
+});
+
+const subjectivePlaceholder = computed<string>(() => {
+  const map: Record<string, string> = {
+    short_answer: '请输入你的简要分析或回答（最多500字）',
+    term_explanation: '请输入名词解释（最多500字）',
+    case_analysis: '请输入案例分析（最多500字）',
+  };
+  return map[props.question.question_type] || '请输入你的作答（最多500字）';
 });
 
 const formattedOptions = computed(() => {

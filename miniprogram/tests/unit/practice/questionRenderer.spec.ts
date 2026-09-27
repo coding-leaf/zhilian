@@ -122,6 +122,18 @@ describe('QuestionRenderer.vue', () => {
     question_type: 'short_answer',
   };
 
+  const termExplanationQ: RendererQuestion = {
+    id: 'q_te_1',
+    stem: '请解释名词：进程。',
+    question_type: 'term_explanation',
+  };
+
+  const caseAnalysisQ: RendererQuestion = {
+    id: 'q_ca_1',
+    stem: '结合案例说明死锁的预防策略。',
+    question_type: 'case_analysis',
+  };
+
   it('renders single choice question and handles single option selection', async () => {
     const wrapper = mount(QuestionRenderer, {
       props: {
@@ -231,6 +243,55 @@ describe('QuestionRenderer.vue', () => {
     await textarea.trigger('input', { detail: { value: '新答案分析' } });
     expect(wrapper.emitted('update:modelValue')).toBeTruthy();
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['新答案分析']);
+  });
+
+  it('renders term explanation as a long text input with the correct label (PRAC-014)', async () => {
+    const wrapper = mount(QuestionRenderer, {
+      props: {
+        question: termExplanationQ,
+        modelValue: '',
+        orderIndex: 6,
+      },
+    });
+
+    expect(wrapper.text()).toContain('名词解释');
+    const textarea = wrapper.find('.short-answer-textarea');
+    expect(textarea.exists()).toBe(true);
+
+    await textarea.trigger('input', { detail: { value: '进程是程序的一次执行过程' } });
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['进程是程序的一次执行过程']);
+  });
+
+  it('renders case analysis as a long text input with the correct label (PRAC-014)', async () => {
+    const wrapper = mount(QuestionRenderer, {
+      props: {
+        question: caseAnalysisQ,
+        modelValue: '',
+        orderIndex: 7,
+      },
+    });
+
+    expect(wrapper.text()).toContain('案例分析');
+    const textarea = wrapper.find('.short-answer-textarea');
+    expect(textarea.exists()).toBe(true);
+
+    await textarea.trigger('input', { detail: { value: '采用资源有序分配法打破循环等待' } });
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['采用资源有序分配法打破循环等待']);
+  });
+
+  it('falls back to a subjective text area for unknown question types (PRAC-014)', () => {
+    const wrapper = mount(QuestionRenderer, {
+      props: {
+        question: {
+          id: 'q_unknown_1',
+          stem: '未知主观题型题干',
+          question_type: 'some_future_type',
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain('练习题');
+    expect(wrapper.find('.short-answer-textarea').exists()).toBe(true);
   });
 
   it('strictly adheres to zero-emoji policy and natural copywriting', () => {
