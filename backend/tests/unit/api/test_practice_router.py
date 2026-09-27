@@ -214,6 +214,74 @@ async def test_create_practice_wrong_record_without_material(
 
 
 @pytest.mark.asyncio
+async def test_create_practice_forwards_idempotency_key_header(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """BUG-DIAG-018: 创建练习需接收标准 Idempotency-Key 请求头并透传 Service。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    knowledge_point_id = uuid.uuid4()
+    practice = make_fake_practice(user_id=mock_user.id, title="继续练习")
+    mock_practice_service.create_practice.return_value = practice
+
+    payload = {
+        "title": "继续练习",
+        "knowledge_point_ids": [str(knowledge_point_id)],
+        "question_count": 5,
+        "source_type": "weakness",
+        "mode": "weak_points",
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/practices",
+            json=payload,
+            headers={"Idempotency-Key": "idem-create-key-1"},
+        )
+
+    assert response.status_code == 201
+    called_kwargs = mock_practice_service.create_practice.call_args.kwargs
+    assert called_kwargs["options"].idempotency_key == "idem-create-key-1"
+
+
+@pytest.mark.asyncio
+async def test_create_practice_accepts_body_idempotency_key(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """BUG-DIAG-018: 请求体 idempotency_key 字段作为兜底生效。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    practice = make_fake_practice(user_id=mock_user.id, title="体字段幂等")
+    mock_practice_service.create_practice.return_value = practice
+
+    payload = {
+        "title": "体字段幂等",
+        "knowledge_point_ids": [str(uuid.uuid4())],
+        "question_count": 5,
+        "idempotency_key": "body-idem-key-9",
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/api/v1/practices", json=payload)
+
+    assert response.status_code == 201
+    called_kwargs = mock_practice_service.create_practice.call_args.kwargs
+    assert called_kwargs["options"].idempotency_key == "body-idem-key-9"
+
+
+@pytest.mark.asyncio
 async def test_create_practice_empty_questions_error(
     mock_user: User,
     mock_practice_service: MagicMock,

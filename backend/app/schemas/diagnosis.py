@@ -303,11 +303,21 @@ class UserMasteryOverviewResponse(BaseModel):
     weak_knowledge_points: list[KnowledgeMasterySummaryResponse] = Field(
         default_factory=list, description="薄弱知识点列表"
     )
+    weak_points: list[KnowledgeMasterySummaryResponse] = Field(
+        default_factory=list,
+        description="薄弱知识点列表别名 (与 weak_knowledge_points 双向同步，对齐前端契约)",
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _sync_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            # 薄弱点列表别名同步 (weak_points <-> weak_knowledge_points)
+            if data.get("weak_knowledge_points") is not None and not data.get("weak_points"):
+                data["weak_points"] = data["weak_knowledge_points"]
+            elif data.get("weak_points") is not None and not data.get("weak_knowledge_points"):
+                data["weak_knowledge_points"] = data["weak_points"]
+
             # 分数同步
             if data.get("overall_score") is not None and not data.get("overall_mastery_score"):
                 data["overall_mastery_score"] = data["overall_score"]
@@ -354,6 +364,12 @@ class UserMasteryOverviewResponse(BaseModel):
             self.weak_knowledge_points = self.points
         elif self.weak_knowledge_points and not self.points:
             self.points = self.weak_knowledge_points
+
+        # 薄弱点别名同步 (ORM/DTO from_attributes 路径会跳过 before 校验器)
+        if self.weak_knowledge_points and not self.weak_points:
+            self.weak_points = self.weak_knowledge_points
+        elif self.weak_points and not self.weak_knowledge_points:
+            self.weak_knowledge_points = self.weak_points
 
         # BUG-DIAG-009: ORM/DTO 对象经 from_attributes 进入校验器时 before 分支
         # (仅处理 dict) 会被跳过，导致档次统计不同步；在 after 分支补齐双向同步。

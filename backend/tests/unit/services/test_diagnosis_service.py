@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.core.algorithms.mastery import GradingSourceType
 from app.core.errors import (
@@ -567,6 +568,71 @@ class TestGenerateDiagnosisReport:
 
         assert report.is_structure_degraded is True
 
+    def test_generate_report_integrity_error_replays_existing_report(
+        self,
+        diagnosis_service: DiagnosisService,
+        mock_repos: dict[str, MagicMock],
+        mock_session: MagicMock,
+    ) -> None:
+        """BUG-DIAG-019: 并发唯一约束冲突时回滚并幂等回放既有报告，不抛 500。"""
+        user_id = uuid.uuid4()
+        practice_id = uuid.uuid4()
+        point_id = uuid.uuid4()
+
+        practice = Practice(
+            id=practice_id,
+            user_id=user_id,
+            material_id=uuid.uuid4(),
+            title="并发报告生成",
+            status=PracticeStatus.COMPLETED.value,
+            knowledge_point_ids=[str(point_id)],
+        )
+        mock_repos["practice_repo"].get_practice_by_id.return_value = practice
+
+        existing_report = DiagnosisReport(
+            id=uuid.uuid4(),
+            practice_id=practice_id,
+            user_id=user_id,
+            score_rate=0.75,
+            wrong_count=1,
+            total_questions=2,
+        )
+        # 第一次为幂等前置查询未命中；第二次为并发冲突后的回查命中
+        mock_repos["diagnosis_repo"].get_diagnosis_report_by_practice_id.side_effect = [
+            None,
+            existing_report,
+        ]
+
+        item = AttemptItem(
+            id=uuid.uuid4(),
+            practice_id=practice_id,
+            user_id=user_id,
+            order_index=1,
+            question_snapshot={"stem": "题干", "answer": "A", "knowledge_point_id": str(point_id)},
+            user_answer="A",
+            is_answered=True,
+            score=1.0,
+            max_score=1.0,
+        )
+        mock_repos["practice_repo"].list_attempt_items.return_value = [item]
+        mock_repos["grading_repo"].list_final_records_by_practice.return_value = []
+        mock_repos["diagnosis_repo"].get_attempt_history_for_knowledge_point.return_value = []
+        mock_repos["diagnosis_repo"].list_mastery_records_by_knowledge_point_ids.return_value = []
+        mock_repos["knowledge_repo"].get_by_id.return_value = None
+
+        mock_repos["diagnosis_repo"].create_diagnosis_report.side_effect = IntegrityError(
+            "stmt", {}, Exception("uq_diagnosis_reports_practice_id")
+        )
+
+        report = diagnosis_service.generate_diagnosis_report(
+            user_id=user_id,
+            practice_id=practice_id,
+        )
+
+        assert report is existing_report
+        mock_session.rollback.assert_called()
+        assert mock_repos["diagnosis_repo"].get_diagnosis_report_by_practice_id.call_count == 2
+
 
 class TestWrongRecordSyncDetails:
     """Tests for wrong record synchronization nuances."""
@@ -858,6 +924,68 @@ class TestUserMasteryOverview:
         mock_repos["diagnosis_repo"].list_mastery_records_by_user.assert_called_once_with(
             user_id=user_id
         )
+
+    def test_get_user_mastery_overview_weak_points_sorted_ascending(
+        self,
+        diagnosis_service: DiagnosisService,
+        mock_repos: dict[str, MagicMock],
+    ) -> None:
+        """BUG-DIAG-020: 薄弱点必须按掌握度升序（最弱优先）稳定排序。"""
+        user_id = uuid.uuid4()
+        material_id = uuid.uuid4()
+
+        kp_high = KnowledgePoint(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=uuid.uuid4(),
+            name="知识点-较高薄弱",
+        )
+        kp_low = KnowledgePoint(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=uuid.uuid4(),
+            name="知识点-最薄弱",
+        )
+        kp_mid = KnowledgePoint(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=uuid.uuid4(),
+            name="知识点-中等薄弱",
+        )
+
+        mock_repos["knowledge_repo"].list_by_material_id.return_value = [kp_high, kp_low, kp_mid]
+        mock_repos["diagnosis_repo"].list_mastery_records_by_material.return_value = [
+            MasteryRecord(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                knowledge_point_id=kp_high.id,
+                mastery_score=0.35,
+                level=MasteryLevel.WEAK.value,
+            ),
+            MasteryRecord(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                knowledge_point_id=kp_low.id,
+                mastery_score=0.15,
+                level=MasteryLevel.WEAK.value,
+            ),
+            MasteryRecord(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                knowledge_point_id=kp_mid.id,
+                mastery_score=0.25,
+                level=MasteryLevel.WEAK.value,
+            ),
+        ]
+
+        overview = diagnosis_service.get_user_mastery_overview(user_id, material_id)
+
+        scores = [item.mastery_score for item in overview.weak_knowledge_points]
+        assert scores == [0.15, 0.25, 0.35]
+        assert overview.weak_knowledge_points[0].knowledge_point_id == kp_low.id
 
 
 class TestWrongRecordsManagement:

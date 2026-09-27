@@ -394,6 +394,85 @@ class TestPracticeServiceCreationAndAssembly:
         # Must return the identical instance without creating a duplicate
         assert p1.id == p2.id
 
+    def test_create_practice_idempotency_key_replays(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """BUG-DIAG-018: 相同幂等键重复创建须回放既有练习而非重复建卷。"""
+        idempotency = MemoryIdempotencyAdapter()
+        service = PracticeService(session, idempotency=idempotency)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        options = CreatePracticeOptions(
+            title="幂等建卷",
+            material_id=material_id,
+            knowledge_point_ids=[kp1_id],
+            question_count=2,
+            idempotency_key="create-idem-key-1",
+        )
+
+        p1 = service.create_practice(user_id, options)
+        p2 = service.create_practice(user_id, options)
+
+        assert p1.id == p2.id
+        assert len(p2.items) == 2
+
+    def test_create_practice_idempotency_key_blocks_concurrent_duplicate(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """BUG-DIAG-018: 同键并发抢占中的请求须抛 IdempotencyConflictError (409)。"""
+        idempotency = MemoryIdempotencyAdapter()
+        service = PracticeService(session, idempotency=idempotency)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        options = CreatePracticeOptions(
+            title="并发幂等建卷",
+            material_id=material_id,
+            knowledge_point_ids=[kp1_id],
+            question_count=2,
+            idempotency_key="create-concurrent-key-1",
+        )
+
+        # 模拟首请求正持有处理中锁
+        idempotency.acquire_lock("create-concurrent-key-1", str(user_id))
+
+        with pytest.raises(IdempotencyConflictError):
+            service.create_practice(user_id, options)
+
+    def test_create_practice_snapshot_write_degrades_without_failure(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """BUG-DIAG-018: 快照写入失败不得让已提交练习返回 5xx，且须释放处理中锁。"""
+        idempotency = MemoryIdempotencyAdapter()
+        service = PracticeService(session, idempotency=idempotency)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        options = CreatePracticeOptions(
+            title="快照降级建卷",
+            material_id=material_id,
+            knowledge_point_ids=[kp1_id],
+            question_count=1,
+            idempotency_key="create-degraded-key-1",
+        )
+
+        idempotency.set_fault_injection("set_result", RuntimeError("redis snapshot write failed"))
+
+        # 快照写入降级，但主流程仍返回成功的练习实体。
+        practice = service.create_practice(user_id, options)
+        assert practice is not None
+        assert practice.id is not None
+
+        # 处理中锁已被释放：同键重试不再撞并发冲突，可重新进入。
+        idempotency.set_fault_injection("set_result", None)
+        retried = service.create_practice(user_id, options)
+        assert retried is not None
+        assert retried.id is not None
+
 
 class TestPracticeServiceStateMachine:
     """Test suite for practice state machine transitions and answer saving."""

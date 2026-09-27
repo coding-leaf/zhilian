@@ -104,6 +104,7 @@ class CreatePracticeOptions:
     mode: PracticeAssemblyMode = PracticeAssemblyMode.SEQUENTIAL
     source_type: str = PracticeSourceType.NORMAL.value
     source_report_id: uuid.UUID | None = None
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,10 @@ class PracticeService:
     ) -> Practice:
         """创建练习会话并执行组卷与题目打散。
 
+        当携带 ``idempotency_key`` 时启用幂等保护：命中已完成快照则直接回放既有
+        练习；否则抢占处理中锁，拦截并发重复连击创建重复练习，并在成功后写入
+        结果快照供后续重试回放。
+
         Args:
             user_id: 租户用户标识。
             options: 组卷配置选项。
@@ -259,10 +264,90 @@ class PracticeService:
 
         Raises:
             PracticeEmptyQuestionsError: 可用题目不足以满足题量要求。
+            IdempotencyConflictError: 相同幂等键请求正在并发处理中。
+            IdempotencyKeyInvalidError: 幂等键格式非法。
             AppError: 快照校验失败或系统异常。
         """
         start_time = time.perf_counter()
 
+        clean_key: str | None = None
+        if options.idempotency_key:
+            clean_key = validate_idempotency_key(options.idempotency_key)
+            cached_result = self.idempotency.get_result(clean_key, str(user_id))
+            if cached_result is not None:
+                replayed = self._replay_idempotent_practice(cached_result, user_id)
+                if replayed is not None:
+                    return replayed
+            self.idempotency.acquire_lock(clean_key, str(user_id))
+
+        try:
+            practice = self._assemble_and_persist_practice(
+                user_id=user_id,
+                options=options,
+                request_id=request_id,
+                start_time=start_time,
+            )
+        except Exception:
+            if clean_key is not None:
+                self._release_lock_quietly(clean_key, user_id)
+            raise
+
+        if clean_key is not None:
+            # 快照写入容错隔离（与 submit_practice 一致）：练习已提交成功，快照
+            # 写入失败不得让请求返回 5xx；释放处理中锁以便同键重试可重新进入。
+            try:
+                self.idempotency.set_result(
+                    clean_key,
+                    str(user_id),
+                    {"practice_id": str(practice.id)},
+                )
+            except Exception:
+                logger.warning(
+                    "Idempotency snapshot persist degraded for create_practice; "
+                    "user_ref=%s target_id=%s",
+                    user_id,
+                    practice.id,
+                )
+                self._release_lock_quietly(clean_key, user_id)
+        return practice
+
+    def _replay_idempotent_practice(
+        self,
+        cached_result: dict[str, Any],
+        user_id: uuid.UUID,
+    ) -> Practice | None:
+        """从幂等响应快照回放既有练习实体，快照非法或实体缺失时返回 None。"""
+        raw_practice_id = cached_result.get("practice_id")
+        if not isinstance(raw_practice_id, str):
+            return None
+        try:
+            practice_id = uuid.UUID(raw_practice_id)
+        except (ValueError, TypeError):
+            return None
+        return self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=True,
+        )
+
+    def _assemble_and_persist_practice(
+        self,
+        user_id: uuid.UUID,
+        options: CreatePracticeOptions,
+        request_id: str,
+        start_time: float,
+    ) -> Practice:
+        """执行组卷、快照校验与原子落库 (由 create_practice 幂等外壳调用)。
+
+        Args:
+            user_id: 租户用户标识。
+            options: 组卷配置选项。
+            request_id: 请求跟踪标识。
+            start_time: 进入 create_practice 时的高精度计时起点。
+
+        Returns:
+            Practice: 已创建的练习实体。
+        """
         # Step 1: 检查防重：若来源为诊断报告且存在 NOT_STARTED 练习则直接复用 (FR-58)
         if options.source_report_id is not None:
             existing = self.practice_repo.find_active_by_source_report(

@@ -55,6 +55,7 @@ async def create_practice(
     request: PracticeCreateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PracticeDetailResponse:
     """创建练习会话并执行智能组卷与同知识点打散。
 
@@ -62,12 +63,16 @@ async def create_practice(
         request: 组卷出题配置请求体模型。
         current_user: 当前已认证登录租户用户对象。
         practice_service: 练习会话与组卷编排服务。
+        idempotency_key: 可选的客户端幂等键 (标准 ``Idempotency-Key`` 请求头)，
+            用于拦截快速重复连击创建重复练习；请求体同名字段作为兜底。
 
     Returns:
         PracticeDetailResponse: 已创建的练习详情与卷面题目快照列表。
 
     Raises:
         PracticeEmptyQuestionsError: 题库可用题目不足阻断 (400 / 40012)。
+        IdempotencyConflictError: 相同幂等键请求正在并发处理中 (409 / 30017)。
+        IdempotencyKeyInvalidError: 幂等键格式非法 (400 / 10001)。
     """
     try:
         mode_enum = PracticeAssemblyMode(request.mode)
@@ -81,6 +86,7 @@ async def create_practice(
             mode=mode_enum,
             source_type=request.source_type,
             source_report_id=request.source_report_id,
+            idempotency_key=idempotency_key or request.idempotency_key,
         )
         practice = practice_service.create_practice(
             user_id=current_user.id,

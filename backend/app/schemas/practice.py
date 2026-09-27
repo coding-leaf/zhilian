@@ -90,6 +90,11 @@ class PracticeCreateRequest(BaseModel):
         default=None,
         description="来源诊断报告主键标识 (用于继续练习防重合并)",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=128,
+        description="客户端幂等键 (用于防止快速重复连击创建重复练习，缺省时不启用)",
+    )
 
     @field_validator("mode")
     @classmethod

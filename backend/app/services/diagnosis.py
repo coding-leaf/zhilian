@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, SupportsIndex, overload
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.diagnosis import (
@@ -773,8 +774,31 @@ class DiagnosisService:
             is_structure_degraded=is_structure_degraded,
         )
 
-        created_report = self.diagnosis_repo.create_diagnosis_report(report, user_id=user_id)
-        self.session.commit()
+        try:
+            created_report = self.diagnosis_repo.create_diagnosis_report(report, user_id=user_id)
+            self.session.commit()
+        except IntegrityError:
+            # 并发落库竞争：``diagnosis_reports.practice_id`` 唯一约束被另一并发请求
+            # 抢先命中，回滚后回查既有报告并幂等返回，避免向上抛出未处理 500
+            # (BUG-DIAG-019)。
+            self.session.rollback()
+            existing_report = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
+                practice_id=practice_id,
+                user_id=user_id,
+            )
+            if existing_report is not None:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                self._log_metric(
+                    action="GENERATE_DIAGNOSIS_REPORT_IDEMPOTENT",
+                    request_id=request_id,
+                    user_id=user_id,
+                    target_id=practice_id,
+                    duration_ms=duration_ms,
+                    error_code=0,
+                    extra={"report_id": str(existing_report.id)},
+                )
+                return existing_report
+            raise
 
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         self._log_metric(
@@ -1016,6 +1040,12 @@ class DiagnosisService:
 
         overall_score = (
             round(total_score_sum / len(knowledge_points), 4) if knowledge_points else 0.0
+        )
+
+        # 薄弱点最弱优先：与算法层约定一致，按掌握度升序排列（得分最低排在最前），
+        # 次级以知识点主键稳定排序 (BUG-DIAG-020)。
+        weak_points_summary.sort(
+            key=lambda item: (item.mastery_score, str(item.knowledge_point_id))
         )
 
         overview_dto = UserMasteryOverviewDTO(

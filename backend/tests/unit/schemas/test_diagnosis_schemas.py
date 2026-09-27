@@ -31,7 +31,7 @@ from app.schemas.diagnosis import (
     WrongRecordItemResponse,
     WrongRecordListResponse,
 )
-from app.services.diagnosis import UserMasteryOverviewDTO
+from app.services.diagnosis import KnowledgeMasterySummaryDTO, UserMasteryOverviewDTO
 
 
 class TestDiagnosisSchemas:
@@ -240,6 +240,56 @@ class TestMasterySchemas:
         )
         assert overview.proficient_count == 3
         assert overview.basic_count == 2
+
+    def test_user_mastery_overview_response_exposes_weak_points_alias(self) -> None:
+        """BUG-DIAG-021: weak_points 别名必须与 weak_knowledge_points 双向对齐。"""
+        item = KnowledgeMasterySummaryResponse(
+            knowledge_point_id=uuid.uuid4(),
+            knowledge_name="进程调度",
+            mastery_score=0.30,
+            level="weak",
+            practice_count=3,
+            correct_count=1,
+        )
+        overview = UserMasteryOverviewResponse(
+            total_points=3,
+            mastered_count=1,
+            learning_count=1,
+            weak_count=1,
+            weak_knowledge_points=[item],
+        )
+        assert len(overview.weak_points) == 1
+        assert overview.weak_points[0].knowledge_point_id == item.knowledge_point_id
+        assert "weak_points" in overview.model_dump()
+
+    def test_user_mastery_overview_response_weak_points_from_dto(self) -> None:
+        """BUG-DIAG-021: from_attributes(DTO) 路径也必须回填 weak_points 别名。"""
+        point_id = uuid.uuid4()
+        dto = UserMasteryOverviewDTO(
+            material_id=None,
+            overall_mastery_score=0.5,
+            total_knowledge_points=2,
+            unlearned_count=0,
+            weak_count=1,
+            basic_count=1,
+            proficient_count=0,
+            weak_knowledge_points=[
+                KnowledgeMasterySummaryDTO(
+                    knowledge_point_id=point_id,
+                    knowledge_name="虚拟内存",
+                    mastery_score=0.2,
+                    level="weak",
+                    practice_count=2,
+                    correct_count=0,
+                    last_practiced_at=None,
+                )
+            ],
+        )
+
+        overview = UserMasteryOverviewResponse.model_validate(dto)
+        assert len(overview.weak_points) == 1
+        assert overview.weak_points[0].knowledge_point_id == point_id
+        assert overview.weak_knowledge_points[0].knowledge_point_id == point_id
 
 
 class TestWrongRecordSchemas:
