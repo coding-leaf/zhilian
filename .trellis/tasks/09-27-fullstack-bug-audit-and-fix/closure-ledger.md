@@ -28,11 +28,12 @@
 | BUG-PRAC-012~017 | P2 | `09-27-fix-prac-p2b` | 卸载 flush（身份令牌防竞态）、快照失败容错+DB 回放、主观题型兜底、耗时聚合与真实计时、多选 JSON 序列化、pause/resume API |
 | BUG-GRADE-003~008 | P2 | `09-27-fix-grade-p2a` | 要点/原文契约透传（生效记录+批量切片）、移除报告死分支、首屏单加载、主观题集合对齐、未作答禁重判 |
 | BUG-GRADE-009~013,016 | P2 | `09-27-fix-grade-p2b` | 确定性 half-up 0.5 舍入、LLM/重批粒度统一、`is_correct` 透传、细则结构化渲染、理由上限 500、判题记录顺序与异常降级 |
+| BUG-DIAG-009~015 | P2 | `09-27-fix-diag-p2a` | 掌握度计数同步、error_type/question_type/material_id 过滤下推（去掉 1000 截断）、删除 `removed` 字段、报告页单加载、重置单触发（014 与 GRADE-006 重叠已修） |
 
 ## 待处理
 
 - **P1 剩余**：无（GRADE/DIAG 全部 P1 已关闭）。
-- **P2 待办（剩余 14 条）**：`fix-diag-p2a`(7)、`fix-diag-p2b`(7)。已关闭：AUTH 8、MAT-A 7（含 1 非缺陷）、MAT-B 7、QGEN 6、PRAC-A 7、PRAC-B 6、GRADE-A 6、GRADE-B 6。
+- **P2 待办（剩余 7 条）**：`fix-diag-p2b`(016-022)。已关闭：AUTH 8、MAT-A 7（含 1 非缺陷）、MAT-B 7、QGEN 6、PRAC-A 7、PRAC-B 6、GRADE-A 6、GRADE-B 6、DIAG-A 7。
 - **非功能性**：31 条（重复造轮子/死代码）→ 独立重构任务，不在本轮。
 
 ## 口径
