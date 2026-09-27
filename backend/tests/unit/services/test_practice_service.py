@@ -45,6 +45,7 @@ from app.models.practice import (
     WrongRecord,
 )
 from app.models.question import Question, QuestionStatus, QuestionType
+from app.schemas.practice import PracticeDetailResponse
 from app.services.practice import (
     CreatePracticeOptions,
     PracticeAssemblyMode,
@@ -221,6 +222,41 @@ class TestPracticeServiceCreationAndAssembly:
         practice = service.create_practice(user_id, options)
         assert practice.question_count == 3
         assert len(practice.items) == 3
+
+    def test_create_practice_persists_mode_and_detail_completed_count(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Verify mode persistence and detail completed_count tracking (BUG-PRAC-011)."""
+        service = PracticeService(session)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="随机模式落库测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=2,
+                mode=PracticeAssemblyMode.RANDOM,
+            ),
+        )
+        assert practice.mode == "random"
+
+        detail = PracticeDetailResponse.model_validate(practice)
+        assert detail.mode == "random"
+        assert detail.completed_count == 0
+
+        q0 = practice.items[0].question_id
+        assert q0 is not None
+        service.save_answer(
+            user_id,
+            SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="A"),
+        )
+        refreshed = service.get_practice(user_id, practice.id)
+        detail_after = PracticeDetailResponse.model_validate(refreshed)
+        assert detail_after.completed_count == 1
 
     def test_create_practice_resolves_material_from_questions(
         self, session: Session, test_setup: dict[str, Any]
@@ -454,6 +490,59 @@ class TestPracticeServiceStateMachine:
         with pytest.raises(PracticeNotFoundError):
             service.timeout_practice(user_id, fake_id)
 
+    def test_save_answer_rejects_non_answerable_states(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Verify real service blocks saving on PAUSED/TIMEOUT/PARTIALLY_GRADED (BUG-PRAC-007)."""
+        service = PracticeService(session)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="非作答态拦截测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+            ),
+        )
+        q0 = practice.items[0].question_id
+        assert q0 is not None
+        service.save_answer(
+            user_id,
+            SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="A"),
+        )
+
+        # PAUSED rejects further answers
+        service.pause_practice(user_id, practice.id)
+        with pytest.raises(PracticeStatusError):
+            service.save_answer(
+                user_id,
+                SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="B"),
+            )
+
+        # TIMEOUT rejects further answers
+        service.resume_practice(user_id, practice.id)
+        service.timeout_practice(user_id, practice.id)
+        with pytest.raises(PracticeStatusError):
+            service.save_answer(
+                user_id,
+                SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="C"),
+            )
+
+        # PARTIALLY_GRADED rejects further answers
+        paused_model = session.get(Practice, practice.id)
+        assert paused_model is not None
+        paused_model.status = PracticeStatus.PARTIALLY_GRADED.value
+        session.commit()
+        with pytest.raises(PracticeStatusError):
+            service.save_answer(
+                user_id,
+                SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="D"),
+            )
+
     def test_save_answer_completed_and_listing(
         self, session: Session, test_setup: dict[str, Any]
     ) -> None:
@@ -608,6 +697,9 @@ class TestPracticeServiceSubmissionAndIdempotency:
         # Second submission must replay the exact same result
         assert res1.task_id == res2.task_id
         assert res1.submitted_at == res2.submitted_at
+        # First submission is not a replay; cached replay is flagged (BUG-PRAC-005)
+        assert res1.is_idempotent_replay is False
+        assert res2.is_idempotent_replay is True
         # Queue should only contain 1 dispatched job
         assert len(queue._queue) == 1
 

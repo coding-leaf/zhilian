@@ -106,6 +106,7 @@ class PracticeSubmissionResult:
     submitted_at: datetime
     answered_questions: int = 0
     uncompleted_count: int = 0
+    is_idempotent_replay: bool = False
 
 
 class PracticeService:
@@ -335,6 +336,7 @@ class PracticeService:
                 ordered_question_ids=[str(q.id) for q in scattered_questions],
                 status=PracticeStatus.NOT_STARTED.value,
                 source_type=options.source_type,
+                mode=options.mode.value,
                 source_report_id=options.source_report_id,
             )
             created_practice = self.practice_repo.create_practice(practice, user_id)
@@ -471,9 +473,12 @@ class PracticeService:
                 details={"practice_id": str(dto.practice_id)},
             )
 
-        if practice.status == PracticeStatus.COMPLETED.value:
+        if practice.status not in (
+            PracticeStatus.NOT_STARTED.value,
+            PracticeStatus.IN_PROGRESS.value,
+        ):
             raise PracticeStatusError(
-                "练习已完成，禁止修改作答",
+                "当前练习状态不允许修改作答",
                 details={"status": practice.status},
             )
 
@@ -527,7 +532,9 @@ class PracticeService:
             )
 
         try:
-            self.practice_repo.update_practice_status(practice_id, user_id, "paused")
+            self.practice_repo.update_practice_status(
+                practice_id, user_id, PracticeStatus.PAUSED.value
+            )
             self.session.commit()
             refreshed = self.practice_repo.get_practice_by_id(
                 practice_id, user_id, include_items=False
@@ -554,7 +561,7 @@ class PracticeService:
                 "请求的练习不存在或无权访问",
                 details={"practice_id": str(practice_id)},
             )
-        if practice.status != "paused":
+        if practice.status != PracticeStatus.PAUSED.value:
             raise PracticeStatusError(
                 "当前状态不允许恢复",
                 details={"status": practice.status},
@@ -597,7 +604,9 @@ class PracticeService:
             )
 
         try:
-            self.practice_repo.update_practice_status(practice_id, user_id, "timeout")
+            self.practice_repo.update_practice_status(
+                practice_id, user_id, PracticeStatus.TIMEOUT.value
+            )
             self.session.commit()
             refreshed = self.practice_repo.get_practice_by_id(
                 practice_id, user_id, include_items=False
@@ -678,6 +687,7 @@ class PracticeService:
                     "uncompleted_count",
                     cached_result["unanswered_count"],
                 ),
+                is_idempotent_replay=True,
             )
 
         # 2. 抢占幂等分布式锁
@@ -704,7 +714,7 @@ class PracticeService:
             if practice.status not in (
                 PracticeStatus.IN_PROGRESS.value,
                 PracticeStatus.NOT_STARTED.value,
-                "paused",
+                PracticeStatus.PAUSED.value,
             ):
                 raise PracticeStatusError(
                     "当前练习状态不允许交卷",

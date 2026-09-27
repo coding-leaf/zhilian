@@ -40,12 +40,16 @@ class PracticeStatus(enum.StrEnum):
     遵循技术决策 1 两阶段状态机模型：
     NOT_STARTED: 已创建，尚未打开或作答
     IN_PROGRESS: 作答进行中
+    PAUSED: 用户主动暂停作答 (可恢复至 IN_PROGRESS)
+    TIMEOUT: 作答超时归档 (不可逆冻结态)
     PARTIALLY_GRADED: 部分判分/未决态 (存在 pending_regrade 主观题，阻断掌握度与报告)
     COMPLETED: 全卷终态判完 (已生成掌握度快照与正式诊断报告)
     """
 
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
+    PAUSED = "paused"
+    TIMEOUT = "timeout"
     PARTIALLY_GRADED = "partially_graded"
     COMPLETED = "completed"
 
@@ -168,7 +172,7 @@ def validate_practice_transition(
     依据技术决策 1：
     1. 答卷存在待重新判题 (pending_regrade) 时跃迁为 PARTIALLY_GRADED；
     2. 全卷所有题目判分完成且无待重判时，跃迁为 COMPLETED；
-    3. COMPLETED 状态不可逆。
+    3. COMPLETED 与 TIMEOUT 状态不可逆；PAUSED 仅可恢复至 IN_PROGRESS。
 
     Args:
         current_status: 当前练习状态
@@ -192,6 +196,13 @@ def validate_practice_transition(
         if all_items_graded:
             return True, None, PracticeStatus.COMPLETED
         return True, None, PracticeStatus.IN_PROGRESS
+
+    if status_str == PracticeStatus.PAUSED.value:
+        # 暂停态只能恢复作答，不可直接结卷
+        return True, None, PracticeStatus.IN_PROGRESS
+
+    if status_str == PracticeStatus.TIMEOUT.value:
+        return False, "Practice already timed out and is immutable", None
 
     if status_str == PracticeStatus.PARTIALLY_GRADED.value:
         if has_pending_regrade:
@@ -274,6 +285,12 @@ class Practice(Base, TimestampMixin, TenantModelMixin):
         nullable=False,
         default=PracticeSourceType.NORMAL.value,
         comment="练习来源类型 (PracticeSourceType: normal/weakness)",
+    )
+    mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="sequential",
+        comment="组卷抽题模式 (PracticeAssemblyMode: sequential/random/weak_points)",
     )
     source_report_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

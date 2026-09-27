@@ -307,6 +307,9 @@ class PracticeDetailResponse(BaseModel):
             if data.get("source_type") is None:
                 data["source_type"] = "normal"
 
+            if data.get("mode") is None:
+                data["mode"] = "sequential"
+
             if "practice_id" not in data and "id" in data:
                 data["practice_id"] = data["id"]
             elif "id" not in data and "practice_id" in data:
@@ -316,6 +319,18 @@ class PracticeDetailResponse(BaseModel):
                 data["total_count"] = data["question_count"]
             elif "question_count" not in data and "total_count" in data:
                 data["question_count"] = data["total_count"]
+
+            # 自动统计已作答题目数：未显式提供非零 completed_count 时由 items 派生 (BUG-PRAC-011)
+            if not data.get("completed_count"):
+                items = data.get("items") or []
+                computed_completed = 0
+                for item in items:
+                    if isinstance(item, dict):
+                        if item.get("is_answered"):
+                            computed_completed += 1
+                    elif getattr(item, "is_answered", False):
+                        computed_completed += 1
+                data["completed_count"] = computed_completed
         return data
 
 

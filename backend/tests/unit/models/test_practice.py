@@ -309,6 +309,32 @@ class TestPracticePureFunctions:
         assert ok is False
         assert "Unknown practice status" in str(reason)
 
+    def test_validate_practice_transition_paused_and_timeout(self) -> None:
+        """Verify PAUSED/TIMEOUT are canonical states with correct transitions (BUG-PRAC-006)."""
+        # Enum exposes the two runtime-persisted states
+        assert PracticeStatus.PAUSED.value == "paused"
+        assert PracticeStatus.TIMEOUT.value == "timeout"
+
+        # PAUSED can resume back to IN_PROGRESS
+        ok, reason, target = validate_practice_transition(PracticeStatus.PAUSED, False, False)
+        assert ok is True
+        assert reason is None
+        assert target == PracticeStatus.IN_PROGRESS
+
+        ok, reason, target = validate_practice_transition("paused", False, True)
+        assert ok is True
+        assert target == PracticeStatus.IN_PROGRESS
+
+        # TIMEOUT is an immutable terminal state
+        ok, reason, target = validate_practice_transition(PracticeStatus.TIMEOUT, False, True)
+        assert ok is False
+        assert target is None
+        assert "immutable" in str(reason).lower() or "timeout" in str(reason).lower()
+
+        ok, reason, target = validate_practice_transition("timeout", True, False)
+        assert ok is False
+        assert target is None
+
 
 class TestPracticeModelConstraints:
     """Test suite for Practice model creation and constraints."""

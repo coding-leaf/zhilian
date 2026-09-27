@@ -399,6 +399,68 @@ def test_practice_detail_response_and_summary() -> None:
     assert PracticeListItemResponse is PracticeSummaryResponse
 
 
+def test_practice_detail_response_derives_completed_count() -> None:
+    """测试详情响应根据 items 的 is_answered 自动统计已答题目数 (BUG-PRAC-011)."""
+    practice_id = uuid.uuid4()
+    material_id = uuid.uuid4()
+    snapshot = {"stem": "题干", "question_type": "single_choice", "answer": "A"}
+
+    detail = PracticeDetailResponse.model_validate(
+        {
+            "id": practice_id,
+            "title": "已答统计测试",
+            "material_id": material_id,
+            "mode": "random",
+            "status": "in_progress",
+            "total_count": 3,
+            "items": [
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 1,
+                    "is_answered": True,
+                    "question_snapshot": snapshot,
+                },
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 2,
+                    "is_answered": True,
+                    "question_snapshot": snapshot,
+                },
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 3,
+                    "is_answered": False,
+                    "question_snapshot": snapshot,
+                },
+            ],
+        }
+    )
+
+    assert detail.mode == "random"
+    assert detail.completed_count == 2
+
+    # An explicit non-zero completed_count is preserved (backward compatible)
+    explicit = PracticeDetailResponse.model_validate(
+        {
+            "id": practice_id,
+            "title": "显式统计",
+            "material_id": material_id,
+            "status": "in_progress",
+            "total_count": 1,
+            "completed_count": 3,
+            "items": [
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 1,
+                    "is_answered": False,
+                    "question_snapshot": snapshot,
+                }
+            ],
+        }
+    )
+    assert explicit.completed_count == 3
+
+
 def test_practice_create_response() -> None:
     """测试创建练习响应模型。"""
     practice_id = uuid.uuid4()
