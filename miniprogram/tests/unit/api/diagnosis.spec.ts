@@ -39,7 +39,12 @@ describe('Diagnosis API Module', () => {
       url: '/api/v1/practices/prac_001/diagnosis',
       method: 'GET',
     });
-    expect(res).toEqual(mockResponse);
+    // Contract adapter is idempotent: frontend-provided fields are preserved.
+    expect(res.code).toBe(0);
+    expect(res.data.id).toBe('rep_001');
+    expect(res.data.overall_score).toBe(85);
+    expect(res.data.mastery_rate).toBe(0.85);
+    expect(res.data.weak_points).toEqual([]);
   });
 
   it('should call fetchMasteryOverview with GET /api/v1/mastery/overview and optional materialId', async () => {

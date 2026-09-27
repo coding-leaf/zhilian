@@ -7,6 +7,8 @@
 
 import { request } from '../utils/request';
 import { adaptPracticeResponse } from './adapters/practice';
+import { adaptDiagnosisReportResponse } from './adapters/diagnosis';
+import type { RawDiagnosisReport } from './adapters/diagnosis';
 import type { ApiResponse, PageResult } from '../types/common';
 import type { PracticeSession, RawPracticeSession } from '../types/practice';
 import type {
@@ -25,11 +27,14 @@ import type {
  * @param practiceId 练习主键 ID。
  * @returns 统一响应包，包含总体得分、掌握率及薄弱知识点诊断。
  */
-export function fetchDiagnosisReport(practiceId: string): Promise<ApiResponse<DiagnosisReport>> {
-  return request<DiagnosisReport>({
+export async function fetchDiagnosisReport(
+  practiceId: string,
+): Promise<ApiResponse<DiagnosisReport>> {
+  const res = await request<RawDiagnosisReport>({
     url: `/api/v1/practices/${practiceId}/diagnosis`,
     method: 'GET',
   });
+  return adaptDiagnosisReportResponse(res);
 }
 
 /**
