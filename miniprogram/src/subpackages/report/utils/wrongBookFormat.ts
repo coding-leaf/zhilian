@@ -16,11 +16,16 @@ import type {
 /**
  * Map error type code to visual style tokens.
  *
- * @param errorType Error type code (conceptual, incomplete, deviation, unanswered).
+ * Supports both the authoritative backend enum values
+ * (`incomplete_expression`, `question_misreading`) and the legacy shorthand
+ * codes (`incomplete`, `deviation`) for backward-compatible badge rendering.
+ *
+ * @param errorType Error type code.
  * @returns ErrorTypeInfo metadata.
  */
 export function getErrorTypeInfo(errorType?: string): ErrorTypeInfo {
   switch (errorType) {
+    case 'incomplete_expression':
     case 'incomplete':
       return {
         type: 'incomplete',
@@ -29,6 +34,7 @@ export function getErrorTypeInfo(errorType?: string): ErrorTypeInfo {
         bgColor: '#FFFBEB',
         borderColor: '#FDE68A',
       };
+    case 'question_misreading':
     case 'deviation':
       return {
         type: 'deviation',

@@ -45,6 +45,20 @@ describe('wrongBookFormat pure utility functions', () => {
       expect(meta.borderColor).toBe('#BFDBFE');
     });
 
+    it('supports authoritative enum values with legacy compatibility (DIAG-010)', () => {
+      const incompleteStandard = getErrorTypeInfo('incomplete_expression');
+      expect(incompleteStandard.label).toBe('表述不全');
+      expect(incompleteStandard.color).toBe('#F59E0B');
+
+      const misreadingStandard = getErrorTypeInfo('question_misreading');
+      expect(misreadingStandard.label).toBe('审题偏差');
+      expect(misreadingStandard.color).toBe('#3B82F6');
+
+      // Legacy shorthand must render identical labels/colors.
+      expect(getErrorTypeInfo('incomplete').label).toBe(incompleteStandard.label);
+      expect(getErrorTypeInfo('deviation').label).toBe(misreadingStandard.label);
+    });
+
     it('returns unanswered error metadata', () => {
       const meta = getErrorTypeInfo('unanswered');
       expect(meta.type).toBe('unanswered');

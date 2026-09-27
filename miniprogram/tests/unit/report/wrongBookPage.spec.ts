@@ -185,6 +185,39 @@ describe('WrongBookPage (subpackages/report/pages/wrong-book/index.vue)', () => 
     );
   });
 
+  it('triggers exactly one request when filter bar reset is tapped (DIAG-015)', async () => {
+    const fetchSpy = vi.spyOn(diagnosisApi, 'fetchWrongBook').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        items: getMockWrongRecords(),
+        total: 2,
+        limit: 20,
+        offset: 0,
+      },
+    });
+
+    const wrapper = mount(WrongBookPage, {
+      global: { plugins: [pinia] },
+      props: { materialId: 'mat_001' },
+    });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.records-list').exists()).toBe(true);
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const filterBar = wrapper.findComponent({ name: 'WrongRecordFilterBar' });
+    const tabs = filterBar.findAll('.status-tab-item');
+    // Select '待攻克' -> one additional request.
+    await tabs[1].trigger('tap');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // Reset: must trigger exactly ONE additional request (no double emit).
+    await filterBar.find('.reset-btn').trigger('tap');
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it('handles multi-selection, select-all, and clear-selection flow', async () => {
     vi.spyOn(diagnosisApi, 'fetchWrongBook').mockResolvedValue({
       code: 0,

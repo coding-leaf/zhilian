@@ -370,6 +370,37 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('loads report and practice exactly once on first screen (DIAG-014)', async () => {
+    const reportSpy = vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: mockReport,
+    });
+    const practiceSpy = setupPracticeMock();
+
+    const wrapper = mount(ReportDetailPage, {
+      global: { plugins: [pinia] },
+      props: { practiceId: 'prac_1001' },
+    });
+
+    const onLoadHandler = vi
+      .mocked(onLoad)
+      .mock.calls.map((call) => call[0])
+      .find((arg): arg is (query?: Record<string, string>) => void => typeof arg === 'function');
+    expect(onLoadHandler).toBeTypeOf('function');
+
+    // Simulate the WeChat lifecycle: onMounted already fired and onLoad now
+    // passes the same practice_id while the first-screen load is in flight.
+    onLoadHandler?.({ practice_id: 'prac_1001' });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.report-content').exists()).toBe(true);
+    });
+
+    expect(reportSpy).toHaveBeenCalledTimes(1);
+    expect(practiceSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('shows items error with retry when practice session fails (BUG-GRADE-005)', async () => {
     vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
       code: 0,

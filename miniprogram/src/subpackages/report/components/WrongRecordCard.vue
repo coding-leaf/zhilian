@@ -166,6 +166,7 @@ function formatQuestionType(type: string): string {
       return '多选题';
     case 'true_false':
       return '判断题';
+    case 'fill_in_blank':
     case 'fill_in_the_blank':
     case 'fill_blank':
       return '填空题';

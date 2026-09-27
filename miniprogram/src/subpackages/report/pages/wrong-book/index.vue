@@ -6,7 +6,6 @@
       :knowledge-points="knowledgePoints"
       :material-id="materialId"
       @filter-change="handleFilterChange"
-      @reset="handleResetFilters"
     />
 
     <!-- 批量多选快捷控制栏 -->

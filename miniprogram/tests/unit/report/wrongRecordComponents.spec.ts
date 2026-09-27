@@ -66,7 +66,7 @@ describe('WrongRecordFilterBar Component', () => {
       question_type: 'single_choice',
     });
 
-    // Find deviation error type
+    // Find deviation error type (standard enum value)
     const deviationCapsule = capsules.find((c) => c.text().includes('审题偏差'));
     expect(deviationCapsule).toBeDefined();
     await deviationCapsule!.trigger('tap');
@@ -74,7 +74,7 @@ describe('WrongRecordFilterBar Component', () => {
     const lastEmitted = wrapper.emitted('filter-change')!;
     expect(lastEmitted[lastEmitted.length - 1][0]).toMatchObject({
       question_type: 'single_choice',
-      error_type: 'deviation',
+      error_type: 'question_misreading',
     });
   });
 
@@ -102,7 +102,7 @@ describe('WrongRecordFilterBar Component', () => {
     });
   });
 
-  it('handles reset and emits reset event', async () => {
+  it('handles reset and emits a single filter-change (DIAG-015)', async () => {
     const wrapper = mount(WrongRecordFilterBar, filterBarMountOptions);
 
     // Click '已攻克'
@@ -112,7 +112,9 @@ describe('WrongRecordFilterBar Component', () => {
     expect(wrapper.find('.reset-btn').exists()).toBe(true);
     await wrapper.find('.reset-btn').trigger('tap');
 
-    expect(wrapper.emitted('reset')).toBeTruthy();
+    // BUG-DIAG-015: reset must only emit filter-change (single channel), no
+    // duplicate reset event that would trigger a second parent list request.
+    expect(wrapper.emitted('reset')).toBeFalsy();
     const emitted = wrapper.emitted('filter-change')!;
     expect(emitted[emitted.length - 1][0]).toEqual({
       material_id: undefined,
@@ -161,6 +163,20 @@ describe('WrongRecordCard Component', () => {
     expect(wrapper.text()).toContain('关于平衡二叉树的描述，哪项是正确的？');
     expect(wrapper.text()).toContain('A.');
     expect(wrapper.text()).toContain('任意节点左右子树高度差绝对值不超过1');
+  });
+
+  it('renders authoritative fill_in_blank question type (DIAG-011 enum alignment)', () => {
+    const wrapper = mount(WrongRecordCard, {
+      props: {
+        record: {
+          ...mockRecord,
+          question_type: 'fill_in_blank',
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain('填空题');
+    expect(wrapper.text()).not.toContain('试题');
   });
 
   it('toggles expansion of answers and analysis', async () => {

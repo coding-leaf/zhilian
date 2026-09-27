@@ -109,7 +109,6 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   (e: 'update:modelValue', value: WrongRecordQueryParams): void;
   (e: 'filter-change', value: WrongRecordQueryParams): void;
-  (e: 'reset'): void;
 }>();
 
 const statusTabs = [
@@ -123,15 +122,15 @@ const questionTypeOptions = [
   { label: '单选', value: 'single_choice' },
   { label: '多选', value: 'multiple_choice' },
   { label: '判断', value: 'true_false' },
-  { label: '填空', value: 'fill_in_the_blank' },
+  { label: '填空', value: 'fill_in_blank' },
   { label: '简答', value: 'short_answer' },
 ];
 
 const errorTypeOptions = [
   { label: '全部错误', value: '' },
   { label: '概念性错误', value: 'conceptual' },
-  { label: '表述不全', value: 'incomplete' },
-  { label: '审题偏差', value: 'deviation' },
+  { label: '表述不全', value: 'incomplete_expression' },
+  { label: '审题偏差', value: 'question_misreading' },
   { label: '未作答', value: 'unanswered' },
 ];
 
@@ -215,7 +214,8 @@ function handleReset(): void {
   currentKnowledgePointId.value = '';
   currentQuestionType.value = '';
   currentErrorType.value = '';
-  emit('reset');
+  // BUG-DIAG-015: 仅通过 filter-change 单通道通知父组件，避免 reset 与
+  // filter-change 双通道导致父组件重复发起列表请求。
   emitChange();
 }
 </script>

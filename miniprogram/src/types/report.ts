@@ -133,7 +133,13 @@ export interface KnowledgeMasterySummary {
   last_practiced_at?: string;
 }
 
-export type WrongErrorType = 'conceptual' | 'incomplete' | 'deviation' | 'unanswered';
+export type WrongErrorType =
+  | 'conceptual'
+  | 'incomplete_expression'
+  | 'question_misreading'
+  | 'unanswered'
+  | 'incomplete'
+  | 'deviation';
 export type ErrorType = WrongErrorType;
 
 export interface ErrorTypeInfo {
@@ -211,6 +217,13 @@ export interface SelfGradePayload {
 export interface RegradePayload {
   attempt_item_id: string;
   reason?: string;
+}
+
+export interface DeleteWrongRecordResult {
+  id: string;
+  removed: boolean;
+  success?: boolean;
+  message: string;
 }
 
 export interface ContinuePracticePayload {

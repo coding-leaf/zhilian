@@ -19,6 +19,7 @@ import type {
   SelfGradePayload,
   RegradePayload,
   ContinuePracticePayload,
+  DeleteWrongRecordResult,
 } from '../types/report';
 
 /**
@@ -116,10 +117,8 @@ export function toggleWrongRecordResolved(
  * @param id 错题记录主键 UUID。
  * @returns 统一响应包，包含删除确认结果。
  */
-export function deleteWrongRecord(
-  id: string,
-): Promise<ApiResponse<{ id: string; removed: boolean; message: string }>> {
-  return request<{ id: string; removed: boolean; message: string }>({
+export function deleteWrongRecord(id: string): Promise<ApiResponse<DeleteWrongRecordResult>> {
+  return request<DeleteWrongRecordResult>({
     url: `/api/v1/wrong-records/${id}`,
     method: 'DELETE',
   });
