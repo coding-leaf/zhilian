@@ -23,6 +23,9 @@ let pendingQueue: PendingRequest[] = [];
 /** Maximum number of silent-refresh replays before aborting to avoid an unbounded loop. */
 const MAX_AUTH_RETRY_COUNT = 1;
 
+/** Explicit timeout (ms) for the silent token refresh so it cannot stall the replay queue. */
+const TOKEN_REFRESH_TIMEOUT_MS = 15000;
+
 export type TokenRefreshListener = (tokens: TokenPairResponse) => void;
 
 let tokenRefreshListener: TokenRefreshListener | null = null;
@@ -125,6 +128,8 @@ async function executeRefreshToken(refreshToken: string): Promise<TokenPairRespo
     method: 'POST',
     data: { refresh_token: refreshToken },
     header: { 'Content-Type': 'application/json' },
+    // 显式超时：避免刷新请求永久挂起，进而拖住整条待重放请求队列。
+    timeout: TOKEN_REFRESH_TIMEOUT_MS,
   });
 
   if (response.statusCode < 200 || response.statusCode >= 300) {

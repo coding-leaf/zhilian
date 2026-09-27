@@ -31,6 +31,8 @@ export interface QuestionItem {
   question_type: QuestionType;
   status?: 'available' | 'pending_review' | string;
   is_deleted?: boolean;
+  /** Generation batch id shared by all questions produced in one request. */
+  batch_id?: string | null;
   stem: string;
   options?: QuestionOption[];
   answer?: string;
@@ -155,6 +157,8 @@ export interface QuestionListQueryParams {
   difficulty?: number;
   review_status?: string;
   status?: string;
+  /** Filter by generation batch id. */
+  batch_id?: string;
   page?: number;
   page_size?: number;
   limit?: number;
@@ -184,6 +188,7 @@ export interface RawQuestionItem {
   question_type?: string;
   status?: string;
   is_deleted?: boolean;
+  batch_id?: string | null;
   stem?: string;
   options?: RawQuestionOption[];
   answer?: string;

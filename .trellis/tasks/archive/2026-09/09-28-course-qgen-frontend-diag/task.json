@@ -1,0 +1,28 @@
+{
+  "id": "course-qgen-frontend-diag",
+  "name": "course-qgen-frontend-diag",
+  "title": "课程创建与生题流程前端问题排查修复",
+  "description": "排查修复小程序中课程创建、文件夹409冲突、资料知识点树卡加载、课程内选题生题、生题批次分类、课程消失等7项前端问题",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-28",
+  "completedAt": "2026-09-28",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-28-kptree-load-perf"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

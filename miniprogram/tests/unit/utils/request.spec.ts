@@ -348,6 +348,42 @@ describe('Unified Network Request Client', () => {
     expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/auth/login' });
   });
 
+  it('sends the silent refresh request with an explicit timeout (B3)', async () => {
+    storage.setItem('auth_tokens', {
+      access_token: 'timeout_old_access',
+      refresh_token: 'timeout_refresh',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    });
+
+    const requestMock = vi.fn().mockImplementation((opts: UniApp.RequestOptions) => {
+      if (opts.url === '/api/v1/auth/refresh') {
+        return Promise.resolve({
+          statusCode: 200,
+          data: {
+            code: 0,
+            data: {
+              access_token: 'timeout_new_access',
+              refresh_token: 'timeout_refresh_2',
+              token_type: 'Bearer',
+              expires_in: 7200,
+            },
+          },
+        });
+      }
+      return Promise.resolve({ statusCode: 401, data: { code: 20001, message: 'Unauthorized' } });
+    });
+    uni.request = requestMock;
+
+    await expect(request({ url: '/api/v1/timeout' })).rejects.toThrow(AppError);
+
+    const refreshCall = requestMock.mock.calls.find(
+      (call) => (call[0] as UniApp.RequestOptions).url === '/api/v1/auth/refresh',
+    );
+    expect(refreshCall).toBeDefined();
+    expect((refreshCall?.[0] as UniApp.RequestOptions).timeout).toBe(15000);
+  });
+
   it('should queue concurrent requests during refresh and replay all upon success', async () => {
     const initialTokens: TokenPairResponse = {
       access_token: 'old_token',

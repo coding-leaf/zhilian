@@ -116,6 +116,9 @@ async function loadDashboardData(showSkeleton = true): Promise<void> {
 
   if (foldersRes.status === 'fulfilled' && foldersRes.value?.data?.items) {
     folderStore.setFolderList(foldersRes.value.data.items);
+  } else if (foldersRes.status === 'rejected') {
+    // 严禁静默清空已有课程列表：保留上一份数据并显式提示可重试。
+    uni.showToast({ title: '课程列表加载失败，请下拉刷新', icon: 'none' });
   }
 
   if (materialsRes.status === 'fulfilled' && materialsRes.value?.data?.items) {

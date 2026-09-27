@@ -27,6 +27,7 @@ from app.core.errors import (
     FolderNotFoundError,
     MaterialNotFoundError,
 )
+from app.models.knowledge import KnowledgePoint
 from app.models.material import (
     Material,
     MaterialFolder,
@@ -388,4 +389,83 @@ async def test_move_material_folder_bad_target(
             f"/api/v1/materials/{uuid.uuid4()}/folder",
             json={"folder_id": None},
         )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_folder_knowledge_points_groups_by_material(
+    mock_user: User,
+    mock_folder_service: MagicMock,
+) -> None:
+    """GET /folders/{id}/knowledge-points groups knowledge points by source material."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_folder_service] = lambda: mock_folder_service
+
+    folder_id = uuid.uuid4()
+    material_a = uuid.uuid4()
+    material_b = uuid.uuid4()
+    point_a1 = KnowledgePoint(
+        id=uuid.uuid4(),
+        user_id=mock_user.id,
+        material_id=material_a,
+        version_id=uuid.uuid4(),
+        name="导数",
+        level=1,
+        batch_id="batch-kp",
+    )
+    point_a2 = KnowledgePoint(
+        id=uuid.uuid4(),
+        user_id=mock_user.id,
+        material_id=material_a,
+        version_id=point_a1.version_id,
+        name="定积分",
+        level=2,
+        parent_id=point_a1.id,
+        batch_id="batch-kp",
+    )
+    point_b1 = KnowledgePoint(
+        id=uuid.uuid4(),
+        user_id=mock_user.id,
+        material_id=material_b,
+        version_id=uuid.uuid4(),
+        name="概率",
+        level=1,
+        batch_id="batch-kp",
+    )
+    mock_folder_service.list_folder_knowledge_points.return_value = [
+        (point_a1, material_a, "高数笔记"),
+        (point_a2, material_a, "高数笔记"),
+        (point_b1, material_b, "概率论讲义"),
+    ]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/folders/{folder_id}/knowledge-points")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["folder_id"] == str(folder_id)
+    assert payload["total"] == 3
+    assert [group["material_title"] for group in payload["groups"]] == ["高数笔记", "概率论讲义"]
+    assert len(payload["groups"][0]["knowledge_points"]) == 2
+    assert payload["groups"][1]["knowledge_points"][0]["name"] == "概率"
+    mock_folder_service.list_folder_knowledge_points.assert_called_once_with(
+        user_id=mock_user.id, folder_id=folder_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_folder_knowledge_points_archived_maps_404(
+    mock_user: User,
+    mock_folder_service: MagicMock,
+) -> None:
+    """GET /folders/{id}/knowledge-points maps archived/unknown folder to 404."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_folder_service] = lambda: mock_folder_service
+    mock_folder_service.list_folder_knowledge_points.side_effect = FolderNotFoundError()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/folders/{uuid.uuid4()}/knowledge-points")
+
     assert response.status_code == 404

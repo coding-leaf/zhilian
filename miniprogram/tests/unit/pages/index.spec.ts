@@ -309,6 +309,20 @@ describe('Index Dashboard Page', () => {
     expect(materialStore.materialsList[0].title).toBe('容灾资料');
   });
 
+  it('preserves the existing course list when the refresh fails (B7)', async () => {
+    const folderStore = useFolderStore();
+    folderStore.setFolderList([buildFolder({ id: 'keep_1', name: '保留课程' })]);
+    vi.spyOn(folderApi, 'fetchFolderList').mockRejectedValue(new Error('offline'));
+
+    const wrapper = mount(IndexPage, mountOptions);
+    const vm = wrapper.vm as unknown as {
+      loadDashboardData: (showSkeleton?: boolean) => Promise<void>;
+    };
+    await vm.loadDashboardData(false);
+
+    expect(folderStore.folders.map((f) => f.id)).toEqual(['keep_1']);
+  });
+
   it('calls uni.stopPullDownRefresh during pull down refresh', async () => {
     const stopRefreshSpy = vi.spyOn(uni, 'stopPullDownRefresh');
     const wrapper = mount(IndexPage, mountOptions);

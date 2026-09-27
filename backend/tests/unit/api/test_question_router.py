@@ -428,6 +428,7 @@ async def test_list_questions_with_filters(
         question_type="single_choice",
         difficulty=3,
         review_status="available",
+        batch_id=None,
         page=2,
         page_size=10,
         limit=10,

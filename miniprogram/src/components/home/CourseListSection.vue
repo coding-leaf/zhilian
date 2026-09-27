@@ -47,7 +47,11 @@
       />
     </view>
 
-    <CourseCreateDialog v-model:visible="createVisible" @confirm="handleCreateConfirm" />
+    <CourseCreateDialog
+      v-model:visible="createVisible"
+      :submitting="creating"
+      @confirm="handleCreateConfirm"
+    />
     <CourseRenameDialog
       v-model:visible="renameVisible"
       :initial-name="renameTarget ? renameTarget.name : ''"
@@ -59,6 +63,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { createFolder, renameFolder, archiveFolder, restoreFolder } from '@/api/folder';
+import { useFolderStore } from '@/stores/folderStore';
+import { isFolderNameConflictError } from '@/utils/error';
 import CourseCard from '@/components/course/CourseCard.vue';
 import ArchivedCourseItem from '@/components/course/ArchivedCourseItem.vue';
 import CourseCreateDialog from '@/components/course/CourseCreateDialog.vue';
@@ -87,7 +93,10 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<Emits>();
 
+const folderStore = useFolderStore();
+
 const createVisible = ref(false);
+const creating = ref(false);
 const renameVisible = ref(false);
 const renameTarget = ref<FolderItem | null>(null);
 
@@ -103,13 +112,26 @@ function handleRename(folder: FolderItem): void {
 }
 
 async function handleCreateConfirm(name: string): Promise<void> {
+  if (creating.value) {
+    return;
+  }
+  creating.value = true;
   try {
-    await createFolder({ name });
+    const res = await createFolder({ name });
+    if (res?.data) {
+      folderStore.upsertFolder(res.data);
+    }
     createVisible.value = false;
     uni.showToast({ title: '课程已创建', icon: 'success' });
     emit('changed');
-  } catch {
-    uni.showToast({ title: '创建失败，请重试', icon: 'none' });
+  } catch (err) {
+    if (isFolderNameConflictError(err)) {
+      uni.showToast({ title: '课程名称已存在，请更换名称', icon: 'none' });
+    } else {
+      uni.showToast({ title: '创建失败，请重试', icon: 'none' });
+    }
+  } finally {
+    creating.value = false;
   }
 }
 

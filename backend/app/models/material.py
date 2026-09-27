@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -242,7 +243,15 @@ class MaterialFolder(Base, TimestampMixin, TenantModelMixin):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_material_folders_user_name"),
+        # 仅活跃课程之间保持名称唯一；归档课程（7 天反悔期）不占用名称，允许复用。
+        Index(
+            "uq_material_folders_user_name_active",
+            "user_id",
+            "name",
+            unique=True,
+            sqlite_where=text("archived_at IS NULL"),
+            postgresql_where=text("archived_at IS NULL"),
+        ),
         Index("ix_material_folders_user_archived", "user_id", "archived_at"),
     )
 

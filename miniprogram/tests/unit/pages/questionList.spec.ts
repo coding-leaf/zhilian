@@ -300,4 +300,31 @@ describe('QuestionsPage (questions/index.vue)', () => {
     await wrapper.vm.handleStartPractice();
     expect(createSpy).not.toHaveBeenCalled();
   });
+
+  it('groups questions by generation batch and filters by batch on tap (B5)', async () => {
+    const batched: QuestionItem[] = [
+      { ...sampleQuestions[0], id: 'q_a1', batch_id: 'batch_aaa' },
+      { ...sampleQuestions[1], id: 'q_a2', batch_id: 'batch_aaa' },
+      { ...sampleQuestions[0], id: 'q_b1', batch_id: 'batch_bbb' },
+    ];
+    const fetchSpy = mockList(batched);
+
+    const wrapper = mount(QuestionsPage, { props: { materialId: 'mat_001' } });
+    await wrapper.vm.$nextTick();
+    await flush();
+
+    expect(wrapper.findAll('.batch-group')).toHaveLength(2);
+    expect(wrapper.text()).toContain('批次 aaa');
+    expect(wrapper.text()).toContain('批次 bbb');
+
+    await wrapper.vm.handleToggleBatchFilter('batch_bbb');
+    await flush();
+
+    expect(fetchSpy).toHaveBeenLastCalledWith({
+      material_id: 'mat_001',
+      batch_id: 'batch_bbb',
+      page: 1,
+      page_size: 20,
+    });
+  });
 });

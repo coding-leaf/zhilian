@@ -749,6 +749,7 @@ class QuestionService:
         knowledge_point_id: uuid.UUID,
         options: GenerateQuestionsOptions | None = None,
         defer_commit: bool = False,
+        batch_id: str | None = None,
     ) -> QuestionGenerationResult:
         """全流程编排：大模型结构化出题、向量化、门禁质检重抽与原子落库。
 
@@ -760,6 +761,8 @@ class QuestionService:
             options: 可选的生成控制选项。
             defer_commit: 为 True 时仅 flush 不提交，由外层调用方统一提交/回滚，
                 用于多考点单事务原子编排；默认 False 保持单考点原行为。
+            batch_id: 可选的显式批次标识；缺省时内部生成。上层编排传入同一
+                batch_id 可让同一次生成的所有题目共享该批次。
 
         Returns:
             QuestionGenerationResult: 包含合格题、待处理题及质检记录的结果对象。
@@ -772,7 +775,7 @@ class QuestionService:
         start_time = time.perf_counter()
         user_ref = generate_user_ref(user_id)
         effective_options = options if options is not None else GenerateQuestionsOptions()
-        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+        effective_batch_id = batch_id or f"batch_{uuid.uuid4().hex[:12]}"
 
         # 1. 知识点与版本归属及多租户校验
         material = self.material_repo.get_material_by_id(material_id, user_id)
@@ -906,7 +909,7 @@ class QuestionService:
                         QuestionQualityCheck(
                             user_id=user_id,
                             question_id=uuid.UUID(res.question_id),
-                            batch_id=batch_id,
+                            batch_id=effective_batch_id,
                             check_type=check_item.check_type.value,
                             is_passed=check_item.is_passed,
                             reason=check_item.reason,
@@ -965,6 +968,7 @@ class QuestionService:
                 question_type=cand.question_type,
                 status=QuestionStatus.AVAILABLE.value,
                 is_deleted=False,
+                batch_id=effective_batch_id,
                 stem=cand.stem,
                 options=list(cand.options),
                 answer=cand.answer,
@@ -999,6 +1003,7 @@ class QuestionService:
                 question_type=cand.question_type,
                 status=QuestionStatus.PENDING_REVIEW.value,
                 is_deleted=False,
+                batch_id=effective_batch_id,
                 stem=cand.stem,
                 options=list(cand.options),
                 answer=cand.answer,
@@ -1034,7 +1039,7 @@ class QuestionService:
                 "timestamp": datetime.now(UTC).isoformat(),
                 "level": "INFO",
                 "logger_name": __name__,
-                "request_id": batch_id,
+                "request_id": effective_batch_id,
                 "user_ref": user_ref,
                 "target_id": str(knowledge_point_id),
                 "duration_ms": duration_ms,
@@ -1048,7 +1053,7 @@ class QuestionService:
         )
 
         return QuestionGenerationResult(
-            batch_id=batch_id,
+            batch_id=effective_batch_id,
             material_id=material_id,
             version_id=effective_version_id,
             knowledge_point_id=knowledge_point_id,
@@ -1068,6 +1073,7 @@ class QuestionService:
         knowledge_point_ids: Sequence[uuid.UUID],
         options: GenerateQuestionsOptions | None = None,
         defer_commit: bool = False,
+        batch_id: str | None = None,
     ) -> MultiKnowledgePointGenerationResult:
         """多考点编排：按考点均分题量并逐个复用单考点流程后聚合结果。
 
@@ -1082,6 +1088,8 @@ class QuestionService:
             options: 可选的生成控制选项，count 表示多考点总题量。
             defer_commit: 为 True 时不在本层提交/回滚，仅由外层统一提交，
                 用于跨资料（课程文件夹）范围的单事务原子编排；默认 False 保持原行为。
+            batch_id: 可选的显式批次标识；缺省时内部生成，并透传给每个考点，
+                使多考点生成的题目共享同一批次。
 
         Returns:
             MultiKnowledgePointGenerationResult: 聚合后的多考点生成结果。
@@ -1098,7 +1106,7 @@ class QuestionService:
 
         effective_options = options if options is not None else GenerateQuestionsOptions()
         counts = distribute_count(effective_options.count, len(ordered_kp_ids))
-        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+        effective_batch_id = batch_id or f"batch_{uuid.uuid4().hex[:12]}"
 
         aggregated_qualified: list[Question] = []
         aggregated_pending: list[Question] = []
@@ -1124,6 +1132,7 @@ class QuestionService:
                     knowledge_point_id=kp_id,
                     options=per_kp_options,
                     defer_commit=True,
+                    batch_id=effective_batch_id,
                 )
                 if aligned_version_id is None:
                     aligned_version_id = result.version_id
@@ -1150,7 +1159,7 @@ class QuestionService:
                 "timestamp": datetime.now(UTC).isoformat(),
                 "level": "INFO",
                 "logger_name": __name__,
-                "request_id": batch_id,
+                "request_id": effective_batch_id,
                 "target_id": ",".join(str(kp) for kp in ordered_kp_ids),
                 "knowledge_point_count": len(ordered_kp_ids),
                 "requested_count": effective_options.count,
@@ -1161,7 +1170,7 @@ class QuestionService:
         )
 
         return MultiKnowledgePointGenerationResult(
-            batch_id=batch_id,
+            batch_id=effective_batch_id,
             material_id=material_id,
             version_id=aligned_version_id,
             knowledge_point_id=ordered_kp_ids[0],
@@ -1255,6 +1264,7 @@ class QuestionService:
                     knowledge_point_ids=groups[key],
                     options=per_group_options,
                     defer_commit=True,
+                    batch_id=batch_id,
                 )
                 total_generated += result.total_generated
                 total_retry += result.retry_count
@@ -1388,6 +1398,7 @@ class QuestionService:
         *,
         status: str | None = None,
         folder_id: uuid.UUID | None = None,
+        batch_id: str | None = None,
         limit: int | None = None,
         offset: int | None = None,
         include_deleted: bool = False,
@@ -1406,6 +1417,7 @@ class QuestionService:
             page_size: 单页容量限制，默认 20。
             status: 兼容的状态过滤入参。
             folder_id: 可选的课程文件夹标识过滤（仅未归档课程资料）。
+            batch_id: 可选的出题生成批次标识过滤。
             limit: 可选的单页数量限制（优先于 page_size）。
             offset: 可选的分页游标偏移量（优先于 page 计算）。
             include_deleted: 是否包含软删除记录，默认 False。
@@ -1433,6 +1445,7 @@ class QuestionService:
             question_type=question_type or kwargs.get("question_type"),
             difficulty=difficulty or kwargs.get("difficulty"),
             status=effective_status,
+            batch_id=batch_id or kwargs.get("batch_id"),
             include_deleted=include_deleted or bool(kwargs.get("include_deleted", False)),
             limit=calc_limit,
             offset=calc_offset,

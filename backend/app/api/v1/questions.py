@@ -223,6 +223,7 @@ async def list_questions(
         str | None, Query(description="按审核状态过滤 (available / pending_review)")
     ] = None,
     status_filter: Annotated[str | None, Query(alias="status", description="题目状态过滤")] = None,
+    batch_id: Annotated[str | None, Query(description="按出题生成批次标识过滤")] = None,
     page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页记录数")] = 20,
     limit: Annotated[int | None, Query(ge=1, le=100, description="单页限制 (兼容)")] = None,
@@ -240,6 +241,7 @@ async def list_questions(
         difficulty: 可选的难度过滤。
         review_status: 可选的审核/可用状态过滤。
         status_filter: 别名状态过滤。
+        batch_id: 可选的出题生成批次标识过滤。
         page: 页码。
         page_size: 每页记录数。
         limit: 单页记录数限制。
@@ -260,6 +262,7 @@ async def list_questions(
         question_type=question_type,
         difficulty=difficulty,
         review_status=effective_status,
+        batch_id=batch_id,
         page=page,
         page_size=effective_limit,
         limit=effective_limit,

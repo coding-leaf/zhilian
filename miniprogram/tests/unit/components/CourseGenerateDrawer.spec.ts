@@ -1,7 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import CourseGenerateDrawer from '@/components/course/CourseGenerateDrawer.vue';
+import CourseKnowledgePointPicker from '@/components/course/CourseKnowledgePointPicker.vue';
 import * as questionApi from '@/api/question';
+import * as folderApi from '@/api/folder';
 import { AppError } from '@/utils/error';
 import type { ApiResponse } from '@/types/common';
 import type { QuestionGenerateResponse } from '@/types/question';
@@ -53,6 +55,11 @@ function mountDrawer(props: Record<string, unknown> = {}) {
 describe('CourseGenerateDrawer.vue', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(folderApi, 'fetchFolderKnowledgePoints').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { folder_id: 'f1', groups: [], total: 0 },
+    });
   });
 
   it('renders defaults: 10 questions, four types and adaptive difficulty', () => {
@@ -138,7 +145,7 @@ describe('CourseGenerateDrawer.vue', () => {
     await flushPromises();
 
     expect(toastSpy).toHaveBeenCalledWith({
-      title: '本次未产出合格题目，可调整题量后重试',
+      title: '本次未产出合格题目，可调整题量或考点后重试',
       icon: 'none',
     });
     expect(wrapper.emitted('success')).toBeUndefined();
@@ -184,5 +191,39 @@ describe('CourseGenerateDrawer.vue', () => {
 
     expect(generateSpy).not.toHaveBeenCalled();
     expect(toastSpy).toHaveBeenCalledWith({ title: '缺少课程信息', icon: 'none' });
+  });
+
+  it('passes selected knowledge point ids to the generation request (B4)', async () => {
+    const generateSpy = vi.spyOn(questionApi, 'generateQuestions').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockGenerateResponse,
+    });
+
+    const wrapper = mountDrawer();
+    const picker = wrapper.findComponent(CourseKnowledgePointPicker);
+    picker.vm.$emit('update:selectedIds', ['kp_1', 'kp_2']);
+    await wrapper.vm.$nextTick();
+
+    await wrapper.find('.submit-btn').trigger('tap');
+    await flushPromises();
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ folder_id: 'f1', knowledge_point_ids: ['kp_1', 'kp_2'] }),
+    );
+  });
+
+  it('allows closing the drawer while generation is in flight (B2)', async () => {
+    const deferred = createDeferred<ApiResponse<QuestionGenerateResponse>>();
+    vi.spyOn(questionApi, 'generateQuestions').mockReturnValue(deferred.promise);
+
+    const wrapper = mountDrawer();
+    await wrapper.find('.submit-btn').trigger('tap');
+
+    wrapper.vm.handleClose();
+    expect(wrapper.emitted('update:visible')?.[0]?.[0]).toBe(false);
+
+    deferred.resolve({ code: 200, message: 'success', data: mockGenerateResponse });
+    await flushPromises();
   });
 });

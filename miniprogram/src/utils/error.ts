@@ -91,3 +91,18 @@ export class AppError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/** 课程文件夹名称冲突的后端错误码（FolderNameConflictError, HTTP 409）。 */
+export const FOLDER_NAME_CONFLICT_CODE = 40021;
+
+/**
+ * 判定错误是否为「课程名称已存在」冲突（40021 / HTTP 409）。
+ *
+ * @param err 待判定的未知错误。
+ * @returns 命中名称冲突返回 true。
+ */
+export function isFolderNameConflictError(err: unknown): boolean {
+  return (
+    err instanceof AppError && (err.code === FOLDER_NAME_CONFLICT_CODE || err.status_code === 409)
+  );
+}

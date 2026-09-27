@@ -43,6 +43,11 @@
         <wd-loading size="40rpx" />
         <text class="state-text">正在加载知识点树...</text>
       </view>
+      <view v-else-if="loadError" class="empty-state">
+        <wd-icon name="info" size="64rpx" color="var(--color-gray-5)" />
+        <text class="state-text">知识点树加载失败</text>
+        <button class="tool-btn" @tap="handleRetryLoad">重新加载</button>
+      </view>
       <view v-else-if="rootNodes.length === 0" class="empty-state">
         <wd-icon name="info" size="64rpx" color="var(--color-gray-5)" />
         <text class="state-text">暂无知识点数据</text>
@@ -55,6 +60,7 @@
           :level="row.depth"
           :selected-ids="materialStore.selectedKnowledgeIds"
           :collapsed-map="materialStore.knowledgeTreeCollapsedMap"
+          :check-status-map="checkStatusMap"
           @toggle-select="handleToggleSelect"
           @toggle-collapse="handleToggleCollapse"
         />
@@ -98,6 +104,7 @@ import { onLoad } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
 import { fetchKnowledgeTree, fetchMaterialDetail } from '@/api/material';
 import {
+  buildCheckStatusMap,
   flattenKnowledgeTree,
   flattenVisibleTree,
   calculateKnowledgeCoverage,
@@ -116,11 +123,19 @@ const targetMaterialId = ref<string>('');
 const currentVersionId = ref<string>('');
 const materialTitle = ref<string>('学习资料考点大纲');
 const loading = ref<boolean>(false);
+const loadError = ref<boolean>(false);
 const isConfigDrawerOpen = ref<boolean>(false);
 
 const rootNodes = computed(() => materialStore.currentKnowledgeTree);
 const visibleRows = computed(() =>
   flattenVisibleTree(materialStore.currentKnowledgeTree, materialStore.knowledgeTreeCollapsedMap),
+);
+// 单次 O(N) 遍历预计算勾选状态，避免逐行重走子树（修复大树卡顿）。
+const checkStatusMap = computed(() =>
+  buildCheckStatusMap(
+    materialStore.currentKnowledgeTree,
+    new Set(materialStore.selectedKnowledgeIds),
+  ),
 );
 const allFlatNodes = computed(() => flattenKnowledgeTree(materialStore.currentKnowledgeTree));
 const totalNodesCount = computed<number>(() => allFlatNodes.value.length);
@@ -142,11 +157,17 @@ async function loadKnowledgeTree(id: string): Promise<void> {
       currentVersionId.value = res.data.version_id;
     }
     if (res.data?.nodes) materialStore.setKnowledgeTree(res.data.nodes);
+    loadError.value = false;
   } catch {
+    loadError.value = true;
     uni.showToast({ title: '加载知识点树失败', icon: 'none' });
   } finally {
     loading.value = false;
   }
+}
+
+function handleRetryLoad(): void {
+  void loadKnowledgeTree(targetMaterialId.value);
 }
 
 async function loadMaterialInfo(id: string): Promise<void> {

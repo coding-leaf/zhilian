@@ -87,6 +87,30 @@ describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
     expect(emojiRegex.test(text)).toBe(false);
   });
 
+  it('renders a retryable error state when the tree request fails (B3)', async () => {
+    vi.spyOn(materialApi, 'fetchKnowledgeTree').mockRejectedValue(new Error('offline'));
+    vi.spyOn(materialApi, 'fetchMaterialDetail').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        id: 'mat_001',
+        title: '资料',
+        file_format: 'pdf',
+        file_size: 1,
+        source_type: 'upload',
+        status: 'ready',
+        created_at: '2026-09-01T00:00:00Z',
+      },
+    });
+
+    const wrapper = mount(KnowledgeTreePage, { props: { materialId: 'mat_001' } });
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(wrapper.text()).toContain('知识点树加载失败');
+    expect(wrapper.find('.tool-btn').exists()).toBe(true);
+  });
+
   it('renders low confidence degradation warning banner when node has is_low_confidence=true', async () => {
     vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
       code: 200,

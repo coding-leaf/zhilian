@@ -249,6 +249,8 @@ export function flattenVisibleTree(
 - uni-app mp-weixin 通过单一 `u-p`/`uP` 字符串 + 模块级 `propsCaches` 透传 props（`common/vendor.js` 的 `renderProps` / `findComponentPropsData`）；递归自引用组件会使该链路丢失 props，子组件 `props.node` 变为 `undefined`，计算属性首抛 `reading 'children'`。
 - **深层树渲染路径**：数据仍是嵌套树 → 用纯函数 `flattenVisibleTree` 前序展开为「可见行（`node` + `depth`），折叠节点的子孙被裁剪」→ 页面**单层** `v-for` 渲染行组件，`level` 传渲染 `depth`。
 - 折叠/级联语义：行组件持有完整 `node`（含 `children`），级联勾选继续用 `collectNodeAndDescendantIds` + `toggleKnowledgeSubtree`；「全选/覆盖率」基于全量 `flattenKnowledgeTree`，与折叠状态无关。
+- **勾选态 O(N) 预算**：页面必须用 `buildCheckStatusMap(nodes, selectedSet)`（单次自下而上遍历，O(N)）预计算 `nodeId -> checked/indeterminate/unchecked` 并作为 prop 下传，行组件只读映射；**禁止**逐行调用 `getNodeCheckStatus` 重走整棵子树并新建 Set（近似 O(N²)，大树/全选时卡顿）。`getNodeCheckStatus` 保留为单节点兜底（直接挂载行组件的场景）。
+- **加载三态**：树页区分 loading / empty / error（错误态提供「重新加载」）；`loadKnowledgeTree` 失败置 `error=true`，成功复位。
 
 #### 4. Validation & Error Matrix
 - `nodes` 非数组 / `null` -> `flattenVisibleTree` 返回 `[]`，不抛错。
@@ -372,6 +374,7 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 3. Contracts
 - 刷新成功后除写 `storage.auth_tokens` 外，必须经解耦订阅回调同步内存态（`userStore.tokens`）；`request.ts` 禁止直接 import store（避免循环依赖）。
 - 401 重放必须携带 `_retryCount`，超过上限（1 次）直接抛 `AppError(20001)` 并清理会话+重定向，禁止无界刷新循环导致 Promise 挂起。
+- `executeRefreshToken` 的刷新请求必须携带显式 `timeout`（15s），避免刷新永久挂起拖住整条待重放请求队列。
 - storage 大小校验必须按 UTF-8 实际字节数（`TextEncoder`，缺失时手写回退），禁止用 `String.length`。
 
 #### 4. Tests Required
@@ -564,7 +567,8 @@ interface PracticeSession {
 #### 3. Contracts
 - **范围二选一**：`material_id` 与 `folder_id` 至少提供其一；课程范围传 `folder_id` 且 `material_id` 可省。空值一律清洗（`undefined`/`null`）为「不过滤」，禁止落成恒假条件。
 - **可空字段容错**：后端 `QuestionGenerateResponse` 的 `material_id`/`version_id`/`knowledge_point_id` 与 `PracticeSession.material_id` 放开为可空，前端类型同步可选，消费处用 `?? ''`/`?? null` 兜底，禁止渲染 `undefined`。
-- **课程出题**：`CourseGenerateDrawer` 提交 `generateQuestions({ folder_id, count: 1~20, difficulty, question_types })`，不传 `knowledge_point_ids`（交后端用课程缺省范围）；空结果保留抽屉可重试；成功 `emit('success', folderId)` 由课程页跳题目列表（`folder_id`）。
+- **课程出题（考点可选）**：`CourseGenerateDrawer` 通过 `CourseKnowledgePointPicker`（`GET /folders/{id}/knowledge-points`，按资料分组）选择本次必出考点；选中时提交 `knowledge_point_ids`，未选时缺省取课程全部考点。生成中允许关闭抽屉（不锁死用户，禁止以 toast 阻塞 `handleClose`）；空结果/失败保留抽屉可重试；成功 `emit('success', folderId)` 由课程页跳题目列表（`folder_id`）。单资料 `QuestionConfigDrawer` 同样允许生成中关闭。
+- **批次分类**：题目列表按 `batch_id` 分组（`utils/questionBatch.ts` 的 `groupQuestionsByBatch`），点击分组头经 `GET /questions?batch_id=` 按批次过滤；无 `batch_id` 的历史题目归入「历史题目」组。
 - **开始答题**：题目列表课程范围且有题时展示吸底 `PracticeStartBar`，点击 `createPractice({ title, folder_id, question_count: Math.min(total, 20), question_types, mode: 'sequential' })` -> `practiceStore.initSession(id, questions || [], { title, folder_id })` -> `uni.navigateTo('/subpackages/practice/pages/session/index?id=<id>')`（带 `fail`）。`total === 0` 时隐藏/禁用。
 - **零回归**：未传 `folder_id` 时保持既有 `material_id` 出题/组卷/列表行为；`QuestionConfigDrawer` 知识树出题逻辑不改。
 - **导航契约**：课程范围跳转统一 `folder_id`，资料范围统一 `material_id`；接收页（questions）兼容 `material_id`/`materialId`/`id` 与 `folder_id`/`folderId`；所有 `uni.navigateTo` 带 `fail` 兜底。

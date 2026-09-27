@@ -42,3 +42,25 @@ export interface FolderDeleteResult {
   purge_after?: string | null;
   message: string;
 }
+
+/** 课程内单个考点条目（与后端 `FolderKnowledgePointItem` 逐字一致）。 */
+export interface FolderKnowledgePointItem {
+  id: string;
+  name: string;
+  level: number;
+  parent_id?: string | null;
+}
+
+/** 课程内按来源资料分组的考点集合（与后端 `FolderKnowledgePointGroup` 逐字一致）。 */
+export interface FolderKnowledgePointGroup {
+  material_id: string;
+  material_title: string;
+  knowledge_points: FolderKnowledgePointItem[];
+}
+
+/** 课程考点列表响应（与后端 `FolderKnowledgePointsResponse` 逐字一致）。 */
+export interface FolderKnowledgePointsResult {
+  folder_id: string;
+  groups: FolderKnowledgePointGroup[];
+  total: number;
+}

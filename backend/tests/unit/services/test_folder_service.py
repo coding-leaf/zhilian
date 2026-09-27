@@ -127,6 +127,17 @@ class TestFolderServiceCRUD:
         renamed = folder_service.rename_folder(user_id, aggregate.folder.id, "课程甲")
         assert renamed.folder.name == "课程甲"
 
+    def test_create_folder_reuses_archived_name(self, folder_service: FolderService) -> None:
+        """Verify an archived folder's name is reusable by an active course (B1/B6)."""
+        user_id = uuid.uuid4()
+        first = folder_service.create_folder(user_id, "可复用课程")
+        folder_service.archive_folder(user_id, first.folder.id)
+
+        reused = folder_service.create_folder(user_id, "可复用课程")
+        assert reused.folder.name == "可复用课程"
+        assert reused.folder.id != first.folder.id
+        assert reused.folder.archived_at is None
+
 
 class TestFolderServiceArchive:
     """Test suite for archive/restore and lazy purge."""
@@ -159,6 +170,17 @@ class TestFolderServiceArchive:
         items, total = folder_service.list_folders(user_id)
         assert total == 1
         assert items[0].folder.id == aggregate.folder.id
+
+    def test_restore_conflicts_with_active_same_name(self, folder_service: FolderService) -> None:
+        """Verify restoring an archived folder whose name is now active raises 409."""
+        user_id = uuid.uuid4()
+        first = folder_service.create_folder(user_id, "同名课程")
+        folder_service.archive_folder(user_id, first.folder.id)
+        folder_service.create_folder(user_id, "同名课程")
+
+        with pytest.raises(FolderNameConflictError) as exc_info:
+            folder_service.restore_folder(user_id, first.folder.id)
+        assert exc_info.value.error_code == 40021
 
     def test_lazy_purge_physically_deletes_folder_and_materials(
         self, session: Session, folder_service: FolderService

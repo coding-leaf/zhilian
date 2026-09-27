@@ -183,3 +183,24 @@
     pointer-events: none;
   }
 }
+
+.progress-panel {
+  margin-top: $spacing-lg;
+  padding: $spacing-md;
+  background-color: $--wot-color-theme-light;
+  border-radius: $radius-md;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.progress-stage {
+  font-size: $font-size-card;
+  font-weight: $font-weight-medium;
+  color: $--wot-color-theme;
+}
+
+.progress-timer {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+}

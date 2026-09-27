@@ -103,3 +103,45 @@
   height: $action-bar-height;
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+.batch-group {
+  margin-bottom: $spacing-lg;
+}
+
+.batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-sm 0;
+}
+
+.batch-label {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.batch-count {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-6;
+}
+
+.batch-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-sm $spacing-md;
+  margin-bottom: $spacing-md;
+  background-color: $--wot-color-theme-light;
+  border-radius: $radius-md;
+}
+
+.batch-filter-text {
+  font-size: $font-size-caption;
+  color: $--wot-color-theme;
+}
+
+.batch-filter-clear {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+}

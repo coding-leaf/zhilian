@@ -50,19 +50,26 @@ import { computed } from 'vue';
 import { getActivePinia } from 'pinia';
 import { useMaterialStore } from '@/stores/materialStore';
 import type { KnowledgeTreeNode as KnowledgeNodeType } from '@/types/material';
-import { collectNodeAndDescendantIds, getNodeCheckStatus } from '../utils/tree';
+import {
+  collectNodeAndDescendantIds,
+  getNodeCheckStatus,
+  type KnowledgeNodeCheckStatus,
+} from '../utils/tree';
 
 interface Props {
   node: KnowledgeNodeType;
   level?: number;
   selectedIds?: string[];
   collapsedMap?: Record<string, boolean>;
+  /** 页面级预算的节点勾选状态映射；提供时行组件不再自行遍历子树。 */
+  checkStatusMap?: Record<string, KnowledgeNodeCheckStatus>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   level: 1,
   selectedIds: () => [],
   collapsedMap: () => ({}),
+  checkStatusMap: () => ({}),
 });
 
 const emit = defineEmits<{
@@ -78,7 +85,14 @@ const hasChildren = computed<boolean>(() => {
   return Array.isArray(props.node.children) && props.node.children.length > 0;
 });
 
-const checkStatus = computed(() => getNodeCheckStatus(props.node, new Set(props.selectedIds)));
+const checkStatus = computed<KnowledgeNodeCheckStatus>(() => {
+  const mapped = props.node.id ? props.checkStatusMap[props.node.id] : undefined;
+  if (mapped) {
+    return mapped;
+  }
+  // 未提供页面级映射时回退到单节点子树推导（兼容直接挂载该组件的场景）。
+  return getNodeCheckStatus(props.node, new Set(props.selectedIds));
+});
 
 const isChecked = computed<boolean>(() => checkStatus.value === 'checked');
 const isIndeterminate = computed<boolean>(() => checkStatus.value === 'indeterminate');

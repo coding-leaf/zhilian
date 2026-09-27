@@ -754,6 +754,7 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 - **惰性清理副作用**：`list_folders` / `get_folder` 入口先把 `archived_at < now - 7d` 的课程物理级联清理（复用 `MaterialService.hard_delete_material` 逐个硬删其下资料，再删课程行），**必须显式 commit**；单课程清理失败仅 `rollback()` 并告警，不得阻断本次只读查询返回。无需常驻调度器。
 - **ON DELETE SET NULL vs purge**：归档不触发 FK 级联；只有显式 `purge` / 惰性清理才逐个硬删资料（FK 的 SET NULL 只兜底课程行被删而资料保留的场景）。
 - **多租户隔离**：所有仓储方法强制 `user_id` 过滤；越权访问课程返回 `FolderNotFoundError`（404）。同用户重名 `FolderNameConflictError`（409）。
+- **归档同名可复用**：`name_exists` 与唯一约束均排除归档行（部分唯一索引 `uq_material_folders_user_name_active`，`archived_at IS NULL`）；归档课程不占用名称，可新建同名活跃课程。恢复（restore）时若已有同名活跃课程，返回 `FolderNameConflictError`（409），不得违反唯一约束。
 - **移动校验**：目标课程须归属当前用户且未归档，否则 404；`folder_id=null` 移回未分类。
 - **聚合计数 N+1 防护**：列表聚合计数必须走批量分组查询（`_by_folder_ids`），禁止逐课程循环查询。
 
@@ -804,6 +805,7 @@ for f in self.repo.list_expired(user_id, before=datetime.now(UTC) - timedelta(da
 - **`defer_commit` 契约**：`generate_questions_for_knowledge_points(..., defer_commit=False)` 默认仍自提交（单资料/单批零回归）；`True` 时仅 `flush`，不 `commit`/`rollback`，交由外层。
 - **folder 组卷落库**：提供 `folder_id` 时 `material_id` 可为空且落库为空；`folder_id` 落库；`knowledge_point_ids` 存展开后的实际考点集；题量不足仍抛 `PracticeEmptyQuestionsError`（40012）。
 - **课程聚合计数口径**：`FolderRepository.last_practice_at_by_folder_ids` 必须同时覆盖「资料范围练习」（`Practice.material_id` 经 `Material.folder_id` 归属）与「课程范围练习」（`Practice.folder_id` 直接指向课程、`material_id` 为空），取两者最大 `created_at`；仅按 `material_id` join 会漏算课程范围练习（`material_id IS NULL`）。
+- **批次落库**：`questions.batch_id`（可空、索引）持久化本次生成批次号；单考点 / 多考点 / 课程范围三链路的题目必须共享**同一** `batch_id`——由最外层编排生成并逐层透传（`generate_questions(..., batch_id=)`），禁止各层各自 `uuid4` 新建。`QuestionQualityCheck.batch_id` 与题目行一致。`GET /questions` 支持 `batch_id` 过滤，历史无 `batch_id` 行为视为不过滤且不报错。
 
 #### 4. Wrong vs Correct
 ##### Wrong

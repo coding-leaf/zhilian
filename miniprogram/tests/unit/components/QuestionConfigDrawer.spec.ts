@@ -226,10 +226,9 @@ describe('QuestionConfigDrawer.vue', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('blocks closing while generation is in progress', async () => {
+  it('allows closing while generation is in progress (B2)', async () => {
     const deferred = createDeferred<ApiResponse<QuestionGenerateResponse>>();
     vi.spyOn(questionApi, 'generateQuestions').mockReturnValue(deferred.promise);
-    const toastSpy = vi.spyOn(uni, 'showToast');
 
     const wrapper = mount(QuestionConfigDrawer, {
       props: {
@@ -242,12 +241,7 @@ describe('QuestionConfigDrawer.vue', () => {
     await wrapper.find('.submit-btn').trigger('tap');
     await wrapper.find('.close-btn').trigger('tap');
 
-    expect(toastSpy).toHaveBeenCalledWith({
-      title: '正在生成题目，请稍候',
-      icon: 'none',
-    });
-    expect(wrapper.emitted('close')).toBeUndefined();
-    expect(wrapper.find('.drawer-mask').exists()).toBe(true);
+    expect(wrapper.emitted('close')).toBeTruthy();
 
     deferred.resolve({ code: 200, message: 'success', data: mockGenerateResponse });
     await flushPromises();

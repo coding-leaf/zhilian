@@ -19,14 +19,25 @@
     </view>
 
     <view v-else class="questions-container">
-      <QuestionCard
-        v-for="item in listData"
-        :key="item.id"
-        :question="item"
-        @edit="handleOpenEdit"
-        @audit="handleOpenAudit"
-        @delete="handleDeleteQuestion"
-      />
+      <view v-if="activeBatchId" class="batch-filter-bar">
+        <text class="batch-filter-text">仅看 {{ activeBatchLabel }}</text>
+        <text class="batch-filter-clear" @tap="handleClearBatchFilter">显示全部批次</text>
+      </view>
+
+      <view v-for="group in groupedListData" :key="group.batchId || 'unknown'" class="batch-group">
+        <view class="batch-head" @tap="handleToggleBatchFilter(group.batchId)">
+          <text class="batch-label">{{ group.label }}</text>
+          <text class="batch-count">{{ group.items.length }} 题</text>
+        </view>
+        <QuestionCard
+          v-for="item in group.items"
+          :key="item.id"
+          :question="item"
+          @edit="handleOpenEdit"
+          @audit="handleOpenAudit"
+          @delete="handleDeleteQuestion"
+        />
+      </view>
 
       <view class="load-more">
         <text v-if="loading" class="load-more-text">正在加载更多...</text>
@@ -72,6 +83,7 @@ import QuestionEditDrawer from '../../components/QuestionEditDrawer.vue';
 import QuestionAuditDrawer from '../../components/QuestionAuditDrawer.vue';
 import PracticeStartBar from '@/components/course/PracticeStartBar.vue';
 import { resolveQuestionListEmptyCopy } from '../../utils/questionGeneration';
+import { formatBatchLabel, groupQuestionsByBatch } from '../../utils/questionBatch';
 
 interface QuestionPageQuery {
   material_id?: string;
@@ -110,10 +122,13 @@ const isEditDrawerOpen = ref<boolean>(false);
 const isAuditDrawerOpen = ref<boolean>(false);
 const editingQuestion = ref<QuestionItem | null>(null);
 const auditingQuestionId = ref<string>('');
+const activeBatchId = ref<string>('');
 
 const hasMore = computed<boolean>(() => listData.value.length < total.value);
 const isFolderScope = computed<boolean>(() => !!targetFolderId.value);
 const emptyCopy = computed(() => resolveQuestionListEmptyCopy(isFolderScope.value));
+const groupedListData = computed(() => groupQuestionsByBatch(listData.value));
+const activeBatchLabel = computed(() => formatBatchLabel(activeBatchId.value));
 
 async function loadQuestions(reset = false): Promise<void> {
   if ((!targetMaterialId.value && !targetFolderId.value) || loading.value) return;
@@ -125,6 +140,9 @@ async function loadQuestions(reset = false): Promise<void> {
       params.folder_id = targetFolderId.value;
     } else {
       params.material_id = targetMaterialId.value;
+    }
+    if (activeBatchId.value) {
+      params.batch_id = activeBatchId.value;
     }
     const res = await fetchQuestionList(params);
     const items: QuestionItem[] = res?.data?.items || [];
@@ -244,6 +262,18 @@ function handleEmptyAction(): void {
   handleGoKnowledgeTree();
 }
 
+function handleToggleBatchFilter(batchId: string | null): void {
+  if (!batchId) return;
+  activeBatchId.value = activeBatchId.value === batchId ? '' : batchId;
+  void loadQuestions(true);
+}
+
+function handleClearBatchFilter(): void {
+  if (!activeBatchId.value) return;
+  activeBatchId.value = '';
+  void loadQuestions(true);
+}
+
 let hasEntered = false;
 
 function initPage(query?: QuestionPageQuery): void {
@@ -280,8 +310,12 @@ defineExpose({
   starting,
   total,
   hasMore,
+  groupedListData,
+  activeBatchId,
   loadQuestions,
   handleLoadMore,
+  handleToggleBatchFilter,
+  handleClearBatchFilter,
   handleStartPractice,
   handleOpenEdit,
   handleOpenAudit,

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对同名 409 与归档复用、迁移对称"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对课程页三态与既有导航/列表契约零回归"}

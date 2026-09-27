@@ -137,6 +137,46 @@ export function getNodeCheckStatus(
 }
 
 /**
+ * 依据当前选中集合一次性推导整棵树的勾选状态映射。
+ *
+ * 与逐节点调用 {@link getNodeCheckStatus}（每个节点重走整棵子树、新建 Set，
+ * 近似 O(N^2)）不同，本函数对整棵树做单次自下而上遍历，时间复杂度 O(N)，
+ * 用于修复大规模节点/全选时的渲染卡顿。
+ *
+ * @param nodes 知识点树根节点数组。
+ * @param selectedIdSet 已选中的知识点主键集合。
+ * @returns 节点 ID 到勾选状态的映射。
+ */
+export function buildCheckStatusMap(
+  nodes: KnowledgeTreeNode[],
+  selectedIdSet: ReadonlySet<string> = new Set<string>(),
+): Record<string, KnowledgeNodeCheckStatus> {
+  const statusMap: Record<string, KnowledgeNodeCheckStatus> = {};
+
+  function visit(list: KnowledgeTreeNode[]): { total: number; selected: number } {
+    let total = 0;
+    let selected = 0;
+    if (!Array.isArray(list)) {
+      return { total, selected };
+    }
+    for (const node of list) {
+      if (!node || !node.id) continue;
+      const child = visit(Array.isArray(node.children) ? node.children : []);
+      const nodeTotal = child.total + 1;
+      const nodeSelected = child.selected + (selectedIdSet.has(node.id) ? 1 : 0);
+      statusMap[node.id] =
+        nodeSelected === 0 ? 'unchecked' : nodeSelected === nodeTotal ? 'checked' : 'indeterminate';
+      total += nodeTotal;
+      selected += nodeSelected;
+    }
+    return { total, selected };
+  }
+
+  visit(nodes);
+  return statusMap;
+}
+
+/**
  * 根据知识点主键列表筛选匹配的节点。
  *
  * @param nodes 知识点树或平铺节点列表。

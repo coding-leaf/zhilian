@@ -71,6 +71,7 @@ def _build_service(
         knowledge_point_id: uuid.UUID,
         options: GenerateQuestionsOptions | None = None,
         defer_commit: bool = False,
+        batch_id: str | None = None,
     ) -> QuestionGenerationResult:
         effective_options = options if options is not None else GenerateQuestionsOptions()
         captured.append((knowledge_point_id, effective_options.count, defer_commit))
@@ -89,7 +90,7 @@ def _build_service(
             for idx in range(effective_options.count)
         ]
         return QuestionGenerationResult(
-            batch_id=f"batch_{knowledge_point_id.hex[:8]}",
+            batch_id=batch_id or f"batch_{knowledge_point_id.hex[:8]}",
             material_id=material_id,
             version_id=aligned_version_id,
             knowledge_point_id=knowledge_point_id,
@@ -266,6 +267,7 @@ class TestMultiKnowledgePointAtomicity:
             knowledge_point_id: uuid.UUID,
             options: GenerateQuestionsOptions | None = None,
             defer_commit: bool = False,
+            batch_id: str | None = None,
         ) -> QuestionGenerationResult:
             if fail_on is not None and knowledge_point_id == fail_on:
                 raise MissingSourceSnippetError("检索不到与知识点匹配的有效资料片段，拒绝出题")
@@ -283,7 +285,7 @@ class TestMultiKnowledgePointAtomicity:
             ]
             saved = service.question_repo.batch_create_questions(questions, user_id)
             return QuestionGenerationResult(
-                batch_id=f"batch_{knowledge_point_id.hex[:8]}",
+                batch_id=batch_id or f"batch_{knowledge_point_id.hex[:8]}",
                 material_id=material_id,
                 version_id=aligned_version_id,
                 knowledge_point_id=knowledge_point_id,

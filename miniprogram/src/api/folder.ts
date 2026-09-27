@@ -12,6 +12,7 @@ import type {
   FolderListQuery,
   FolderListResult,
   FolderDeleteResult,
+  FolderKnowledgePointsResult,
 } from '../types/folder';
 
 /**
@@ -45,6 +46,21 @@ export function fetchFolderList(params?: FolderListQuery): Promise<ApiResponse<F
 export function fetchFolderDetail(folderId: string): Promise<ApiResponse<FolderItem>> {
   return request<FolderItem>({
     url: `/api/v1/folders/${folderId}`,
+    method: 'GET',
+  });
+}
+
+/**
+ * 获取指定课程内解析就绪资料的知识点（按来源资料分组）。
+ *
+ * @param folderId 目标课程主键 UUID。
+ * @returns 统一响应包，包含按资料分组的考点集合与总数。
+ */
+export function fetchFolderKnowledgePoints(
+  folderId: string,
+): Promise<ApiResponse<FolderKnowledgePointsResult>> {
+  return request<FolderKnowledgePointsResult>({
+    url: `/api/v1/folders/${folderId}/knowledge-points`,
     method: 'GET',
   });
 }

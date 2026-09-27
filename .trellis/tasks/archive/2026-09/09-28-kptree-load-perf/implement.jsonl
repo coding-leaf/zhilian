@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "树扁平渲染契约、Material File Validation/Tree Check-State/List Loading Contracts"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Auth Token Refresh State Sync & Bounded 401 Retry（刷新超时）"}

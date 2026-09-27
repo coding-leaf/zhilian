@@ -86,6 +86,14 @@ describe('CourseDetailPage (course/index.vue)', () => {
     wrapper.vm.targetFolderId = 'f1';
     await wrapper.vm.loadMaterials();
     await wrapper.vm.$nextTick();
+    expect(wrapper.vm.listData).toHaveLength(1);
+
+    // 移动成功后课程页会以服务端结果刷新；此处模拟该资料已离开本课程。
+    vi.mocked(materialApi.fetchMaterialList).mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: [], total: 0, limit: 50, offset: 0 },
+    });
 
     wrapper.vm.handleOpenMove(material);
     expect(wrapper.vm.moveVisible).toBe(true);
@@ -144,6 +152,40 @@ describe('CourseDetailPage (course/index.vue)', () => {
     const upload = wrapper.findComponent(MaterialUpload);
     expect(upload.exists()).toBe(true);
     expect(upload.props('folderId')).toBe('f1');
+  });
+
+  it('shows a retryable error state when material loading fails (B7)', async () => {
+    vi.mocked(materialApi.fetchMaterialList).mockRejectedValue(new Error('network'));
+
+    const wrapper = mount(CourseDetailPage);
+    await flush();
+    wrapper.vm.targetFolderId = 'f1';
+    await wrapper.vm.loadMaterials();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.listError).toBe(true);
+    expect(wrapper.text()).toContain('资料加载失败');
+    expect(wrapper.text()).not.toContain('课程暂无资料');
+  });
+
+  it('reloads materials from the server after moving a material (B7)', async () => {
+    const fetchSpy = vi.spyOn(materialApi, 'fetchMaterialList');
+    vi.spyOn(materialApi, 'moveMaterialFolder').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { ...material, folder_id: 'f2' },
+    });
+
+    const wrapper = mount(CourseDetailPage);
+    await flush();
+    wrapper.vm.targetFolderId = 'f1';
+    await wrapper.vm.loadMaterials();
+    const callsBefore = fetchSpy.mock.calls.length;
+
+    wrapper.vm.handleOpenMove(material);
+    await wrapper.vm.handleMoveSelect('f2');
+
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
   it('strictly contains zero Unicode emoji characters across rendered text', async () => {

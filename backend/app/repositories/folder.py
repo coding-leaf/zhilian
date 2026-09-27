@@ -234,6 +234,8 @@ class FolderRepository:
         stmt = select(func.count(MaterialFolder.id)).where(
             MaterialFolder.user_id == user_id,
             MaterialFolder.name == name,
+            # 仅活跃课程占用名称；归档课程（7 天反悔期）不阻止复用同名。
+            MaterialFolder.archived_at.is_(None),
         )
         if exclude_id is not None:
             stmt = stmt.where(MaterialFolder.id != exclude_id)

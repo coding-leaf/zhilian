@@ -8,6 +8,7 @@ import {
   computeFieldDiffs,
   collectNodeAndDescendantIds,
   getNodeCheckStatus,
+  buildCheckStatusMap,
 } from '@/subpackages/material/utils/tree';
 import type { KnowledgeTreeNode } from '@/types/material';
 
@@ -264,6 +265,37 @@ describe('materialTreeUtils', () => {
     it('should return empty list when no field changed', () => {
       const data = { stem: 'Same', difficulty: 3 };
       expect(computeFieldDiffs(data, { ...data })).toEqual([]);
+    });
+  });
+
+  describe('buildCheckStatusMap', () => {
+    it('marks fully selected subtrees as checked and partial parents as indeterminate', () => {
+      const map = buildCheckStatusMap(sampleTree, new Set(['kp-1-1', 'kp-1-1-1', 'kp-1-2']));
+      expect(map['kp-1-1-1']).toBe('checked');
+      expect(map['kp-1-1']).toBe('checked');
+      expect(map['kp-1-2']).toBe('checked');
+      expect(map['kp-1']).toBe('indeterminate');
+      expect(map['kp-2']).toBe('unchecked');
+    });
+
+    it('marks every node checked when the whole tree is selected', () => {
+      const allIds = flattenKnowledgeTree(sampleTree).map((node) => node.id);
+      const map = buildCheckStatusMap(sampleTree, new Set(allIds));
+      expect(Object.values(map).every((status) => status === 'checked')).toBe(true);
+    });
+
+    it('returns unchecked statuses for an empty selection and malformed input', () => {
+      const map = buildCheckStatusMap(sampleTree, new Set());
+      expect(Object.values(map).every((status) => status === 'unchecked')).toBe(true);
+      expect(buildCheckStatusMap([], new Set())).toEqual({});
+    });
+
+    it('agrees with the single-node status derivation', () => {
+      const selected = new Set(['kp-1-1-1']);
+      const map = buildCheckStatusMap(sampleTree, selected);
+      for (const node of flattenKnowledgeTree(sampleTree)) {
+        expect(map[node.id]).toBe(getNodeCheckStatus(node, selected));
+      }
     });
   });
 });

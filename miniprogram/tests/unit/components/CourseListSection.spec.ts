@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
+import { setActivePinia, createPinia } from 'pinia';
 import CourseListSection from '@/components/home/CourseListSection.vue';
 import CourseCreateDialog from '@/components/course/CourseCreateDialog.vue';
 import * as folderApi from '@/api/folder';
+import { AppError } from '@/utils/error';
+import { useFolderStore } from '@/stores/folderStore';
 import type { FolderItem } from '@/types/folder';
 
 function makeFolder(id: string, overrides: Partial<FolderItem> = {}): FolderItem {
@@ -21,6 +24,7 @@ function makeFolder(id: string, overrides: Partial<FolderItem> = {}): FolderItem
 
 describe('CourseListSection.vue', () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     vi.clearAllMocks();
   });
 
@@ -42,6 +46,52 @@ describe('CourseListSection.vue', () => {
 
     expect(createSpy).toHaveBeenCalledWith({ name: '新课程' });
     expect(wrapper.emitted('changed')).toBeTruthy();
+  });
+
+  it('de-duplicates rapid create taps into a single request (B1)', async () => {
+    const createSpy = vi
+      .spyOn(folderApi, 'createFolder')
+      .mockResolvedValue({ code: 200, message: 'success', data: makeFolder('f1') });
+
+    const wrapper = mount(CourseListSection);
+    const dialog = wrapper.findComponent(CourseCreateDialog);
+    dialog.vm.$emit('confirm', '连点课程');
+    dialog.vm.$emit('confirm', '连点课程');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a duplicate-name conflict instead of a generic failure (B6)', async () => {
+    vi.spyOn(folderApi, 'createFolder').mockRejectedValue(
+      new AppError(40021, "课程名称 'X' 已存在", { status_code: 409 }),
+    );
+    const toastSpy = vi.spyOn(uni, 'showToast');
+
+    const wrapper = mount(CourseListSection);
+    const dialog = wrapper.findComponent(CourseCreateDialog);
+    dialog.vm.$emit('confirm', '重复课程');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '课程名称已存在，请更换名称' }),
+    );
+  });
+
+  it('optimistically inserts the created course into the store (B1)', async () => {
+    vi.spyOn(folderApi, 'createFolder').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: makeFolder('f-new'),
+    });
+    const store = useFolderStore();
+
+    const wrapper = mount(CourseListSection);
+    const dialog = wrapper.findComponent(CourseCreateDialog);
+    dialog.vm.$emit('confirm', '乐观插入');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(store.folders.map((item) => item.id)).toContain('f-new');
   });
 
   it('archives a course after the confirm modal resolves', async () => {

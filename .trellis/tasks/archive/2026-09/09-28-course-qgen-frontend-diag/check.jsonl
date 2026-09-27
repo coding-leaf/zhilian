@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对迁移对称、批次原子性、folder 范围零回归"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对前端质量门禁与既有契约零回归"}

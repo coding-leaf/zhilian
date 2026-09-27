@@ -97,6 +97,7 @@ def _install_persisting_generate(
         knowledge_point_id: uuid.UUID,
         options: GenerateQuestionsOptions | None = None,
         defer_commit: bool = False,
+        batch_id: str | None = None,
     ) -> QuestionGenerationResult:
         effective = options if options is not None else GenerateQuestionsOptions()
         captured.append((material_id, knowledge_point_id, effective.count, defer_commit))
@@ -115,12 +116,13 @@ def _install_persisting_generate(
                 options=[{"key": "A", "content": "选项A"}],
                 answer="A",
                 difficulty=3,
+                batch_id=batch_id,
             )
             for idx in range(effective.count)
         ]
         saved = service.question_repo.batch_create_questions(questions, user_id)
         return QuestionGenerationResult(
-            batch_id=f"batch_{knowledge_point_id.hex[:8]}",
+            batch_id=batch_id or f"batch_{knowledge_point_id.hex[:8]}",
             material_id=material_id,
             version_id=aligned_version_id,
             knowledge_point_id=knowledge_point_id,
@@ -414,3 +416,42 @@ class TestMultiKnowledgePointDeferCommitRegression:
 
         assert result.total_generated == 2
         assert commit_spy.call_count == 1
+
+
+class TestFolderGenerationBatchPersistence:
+    """Suite: a single generation shares one batch_id across materials and KPs."""
+
+    def test_all_questions_share_single_batch_id(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every question from one folder generation carries the same batch_id."""
+        user_id = uuid.uuid4()
+        folder = FolderRepository(session).create(user_id=user_id, name="批次课程")
+        session.commit()
+        _seed_material_with_points(session, user_id, folder_id=folder.id, point_names=["甲", "乙"])
+        _seed_material_with_points(session, user_id, folder_id=folder.id, point_names=["丙"])
+
+        service = QuestionService(session=session, llm=MagicMock(), embedding=MagicMock())
+        captured: list[tuple[uuid.UUID, uuid.UUID, int, bool]] = []
+        _install_persisting_generate(service, monkeypatch, captured)
+
+        result = service.generate_questions_for_folder(
+            user_id=user_id,
+            folder_id=folder.id,
+            knowledge_point_ids=None,
+            options=GenerateQuestionsOptions(count=3),
+        )
+
+        assert {q.batch_id for q in result.qualified_questions} == {result.batch_id}
+        assert result.batch_id.startswith("batch_")
+
+        items, total = service.question_repo.list_questions(
+            user_id, folder_id=folder.id, batch_id=result.batch_id
+        )
+        assert total == 3
+        assert {q.batch_id for q in items} == {result.batch_id}
+
+        _, other_total = service.question_repo.list_questions(
+            user_id, folder_id=folder.id, batch_id="batch_not_exists"
+        )
+        assert other_total == 0

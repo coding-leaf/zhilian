@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Multi-KP 生成原子性、batch_id 语义、Course Scope Generation 契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Course-Scope Generate -> Question List -> Start Practice Loop 契约"}

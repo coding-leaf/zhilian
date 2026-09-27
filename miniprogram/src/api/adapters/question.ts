@@ -64,6 +64,7 @@ export function adaptQuestionItem(raw: RawQuestionItem): QuestionItem {
     question_type: (raw.question_type ?? 'short_answer') as QuestionItem['question_type'],
     status: raw.status,
     is_deleted: raw.is_deleted,
+    batch_id: raw.batch_id ?? null,
     stem: raw.stem ?? '',
     options: adaptOptions(raw.options),
     answer: raw.answer,

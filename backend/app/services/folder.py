@@ -20,8 +20,10 @@ from app.core.errors import (
     MaterialNotFoundError,
 )
 from app.core.security import generate_user_ref
+from app.models.knowledge import KnowledgePoint
 from app.models.material import Material, MaterialFolder
 from app.repositories.folder import FolderRepository
+from app.repositories.question import QuestionRepository
 from app.services.material import MaterialService
 
 logger = logging.getLogger(__name__)
@@ -217,10 +219,17 @@ class FolderService:
 
         Raises:
             FolderNotFoundError: 课程不存在或无权访问。
+            FolderNameConflictError: 恢复后将与某个活跃课程重名。
         """
         folder = self.repo.get_by_id(folder_id, user_id, include_archived=True)
         if folder is None:
             raise FolderNotFoundError()
+        # 归档期内可能已有同名活跃课程被创建；恢复前须校验，避免违唯一约束。
+        if self.repo.name_exists(user_id, folder.name, exclude_id=folder_id):
+            raise FolderNameConflictError(
+                f"课程名称 '{folder.name}' 已被其他活跃课程占用，无法恢复",
+                details={"name": folder.name},
+            )
         restored = self.repo.restore(folder_id, user_id)
         if restored is None:
             raise FolderNotFoundError()
@@ -316,10 +325,35 @@ class FolderService:
         self.session.commit()
         return moved
 
+    def list_folder_knowledge_points(
+        self,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+    ) -> list[tuple[KnowledgePoint, uuid.UUID, str]]:
+        """列出课程内 ready 资料的考点及来源资料 (主键与标题)。
+
+        用于课程范围出题时按资料分组选择必出考点。口径与课程范围出题的缺省考点集
+        一致：仅未归档课程、未软删除且解析就绪的资料。
+
+        Args:
+            user_id: 租户用户标识。
+            folder_id: 课程文件夹主键（必须归属当前用户且未归档）。
+
+        Returns:
+            list[tuple[KnowledgePoint, uuid.UUID, str]]: (考点, 资料主键, 资料标题)。
+
+        Raises:
+            FolderNotFoundError: 课程不存在、已归档或越权。
+        """
+        folder = self.repo.get_by_id(folder_id, user_id, include_archived=False)
+        if folder is None:
+            raise FolderNotFoundError()
+        question_repo = QuestionRepository(self.session)
+        return question_repo.list_folder_knowledge_points_with_material(user_id, folder_id)
+
     # ==========================================
     # 聚合装配
     # ==========================================
-
     def _build_aggregates(self, folders: list[MaterialFolder]) -> list[FolderAggregate]:
         """批量装配课程聚合计数（单组分组查询，杜绝逐课程 N+1）。"""
         if not folders:

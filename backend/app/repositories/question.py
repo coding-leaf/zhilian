@@ -190,6 +190,7 @@ class QuestionRepository:
         question_type: str | None = None,
         difficulty: int | None = None,
         status: str | None = None,
+        batch_id: str | None = None,
         include_deleted: bool = False,
         limit: int = 20,
         offset: int = 0,
@@ -206,6 +207,7 @@ class QuestionRepository:
             question_type: 可选的题型过滤。
             difficulty: 可选的难度过滤。
             status: 可选的状态过滤。
+            batch_id: 可选的出题生成批次标识过滤。
             include_deleted: 是否包含已软删除题目，默认 False。
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
@@ -232,6 +234,8 @@ class QuestionRepository:
             count_stmt = count_stmt.where(Question.difficulty == difficulty)
         if status is not None:
             count_stmt = count_stmt.where(Question.status == status)
+        if batch_id is not None:
+            count_stmt = count_stmt.where(Question.batch_id == batch_id)
 
         total = self.session.execute(count_stmt).scalar_one()
 
@@ -254,6 +258,8 @@ class QuestionRepository:
             stmt = stmt.where(Question.difficulty == difficulty)
         if status is not None:
             stmt = stmt.where(Question.status == status)
+        if batch_id is not None:
+            stmt = stmt.where(Question.batch_id == batch_id)
 
         stmt = stmt.order_by(Question.created_at.desc()).offset(offset).limit(limit)
         items = list(self.session.execute(stmt).scalars().all())
@@ -317,6 +323,44 @@ class QuestionRepository:
             .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    def list_folder_knowledge_points_with_material(
+        self,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID,
+    ) -> list[tuple[KnowledgePoint, uuid.UUID, str]]:
+        """查询课程文件夹下 ready 资料的考点及其来源资料标识与标题。
+
+        用于课程范围出题的「按资料分组考点选择」接口；口径与
+        ``list_knowledge_points_for_folder`` 完全一致（仅未归档课程、未软删除、
+        解析就绪资料），并附带资料标题以便前端分组展示。
+
+        Args:
+            user_id: 租户用户标识。
+            folder_id: 课程文件夹主键。
+
+        Returns:
+            list[tuple[KnowledgePoint, uuid.UUID, str]]: (考点, 资料主键, 资料标题)。
+        """
+        stmt = (
+            select(KnowledgePoint, Material.id, Material.title)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.folder_id == folder_id,
+                Material.is_deleted.is_(False),
+                Material.status == MaterialStatus.READY.value,
+                MaterialFolder.archived_at.is_(None),
+            )
+            .order_by(
+                Material.created_at.asc(),
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in self.session.execute(stmt).all()]
 
     def list_material_ids_for_folder(
         self,

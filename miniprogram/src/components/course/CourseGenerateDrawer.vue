@@ -73,6 +73,20 @@
             </view>
           </view>
         </view>
+
+        <!-- 考点范围（可选，按资料分组） -->
+        <view class="config-section">
+          <CourseKnowledgePointPicker
+            :folder-id="folderId"
+            :selected-ids="selectedKnowledgeIds"
+            @update:selected-ids="handleUpdateKnowledgeIds"
+          />
+        </view>
+      </view>
+
+      <view v-if="submitting" class="progress-panel">
+        <text class="progress-stage">{{ currentStage }}</text>
+        <text class="progress-timer">已等待 {{ elapsedSeconds }} 秒，流程示意仅供参考</text>
       </view>
 
       <view class="drawer-footer">
@@ -100,7 +114,9 @@
 
 import { ref, computed } from 'vue';
 import { generateQuestions } from '@/api/question';
+import { useGenerationProgress } from '@/subpackages/material/composables/useGenerationProgress';
 import { AppError } from '@/utils/error';
+import CourseKnowledgePointPicker from './CourseKnowledgePointPicker.vue';
 import type { QuestionType } from '@/types/question';
 
 interface Props {
@@ -148,6 +164,14 @@ const selectedTypes = ref<QuestionType[]>([
   'short_answer',
 ]);
 const submitting = ref<boolean>(false);
+const selectedKnowledgeIds = ref<string[]>([]);
+
+const {
+  currentStage,
+  elapsedSeconds,
+  start: startProgress,
+  stop: stopProgress,
+} = useGenerationProgress();
 
 const GENERATE_FAIL_MESSAGE = '生成题目失败，请稍后重试';
 const NETWORK_FAIL_MESSAGE = '网络异常，请重试';
@@ -199,6 +223,10 @@ function handleSelectDifficulty(val: number): void {
   selectedDifficulty.value = val;
 }
 
+function handleUpdateKnowledgeIds(ids: string[]): void {
+  selectedKnowledgeIds.value = ids;
+}
+
 function emitClose(): void {
   emit('update:visible', false);
   emit('update:modelValue', false);
@@ -206,10 +234,7 @@ function emitClose(): void {
 }
 
 function handleClose(): void {
-  if (submitting.value) {
-    uni.showToast({ title: '正在生成题目，请稍候', icon: 'none' });
-    return;
-  }
+  // 允许在生成过程中离开，不锁死用户；请求完成后仍会以页面提示与跳转反馈。
   emitClose();
 }
 
@@ -234,17 +259,20 @@ async function handleSubmit(): Promise<void> {
   }
 
   submitting.value = true;
+  startProgress();
   try {
     const res = await generateQuestions({
       folder_id: props.folderId,
       count: questionCount.value,
       difficulty: selectedDifficulty.value,
       question_types: selectedTypes.value,
+      knowledge_point_ids:
+        selectedKnowledgeIds.value.length > 0 ? [...selectedKnowledgeIds.value] : undefined,
     });
 
     const questions = res.data?.qualified_questions || [];
     if (questions.length === 0) {
-      uni.showToast({ title: '本次未产出合格题目，可调整题量后重试', icon: 'none' });
+      uni.showToast({ title: '本次未产出合格题目，可调整题量或考点后重试', icon: 'none' });
       return;
     }
 
@@ -254,6 +282,7 @@ async function handleSubmit(): Promise<void> {
   } catch (err: unknown) {
     uni.showToast({ title: resolveErrorMessage(err), icon: 'none' });
   } finally {
+    stopProgress();
     submitting.value = false;
   }
 }
@@ -263,12 +292,16 @@ defineExpose({
   questionCount,
   selectedTypes,
   selectedDifficulty,
+  selectedKnowledgeIds,
   submitting,
+  currentStage,
+  elapsedSeconds,
   handleStepMinus,
   handleStepPlus,
   handleCountInput,
   handleToggleType,
   handleSelectDifficulty,
+  handleUpdateKnowledgeIds,
   handleSubmit,
   handleClose,
 });

@@ -247,10 +247,7 @@ function emitClose(): void {
 }
 
 function handleClose(): void {
-  if (submitting.value) {
-    uni.showToast({ title: '正在生成题目，请稍候', icon: 'none' });
-    return;
-  }
+  // 允许在生成过程中离开，不锁死用户；请求完成后仍会以页面提示与跳转反馈。
   emitClose();
 }
 

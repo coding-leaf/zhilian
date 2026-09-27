@@ -176,6 +176,12 @@ class Question(Base, TimestampMixin, TenantModelMixin):
         index=True,
         comment="软删除标记 (True表示已删除，与已有答卷解耦)",
     )
+    batch_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="出题生成批次标识 (同一次生成共享，用于按批次分类；历史数据可空)",
+    )
 
     # 题目 6 要素与扩展数据
     stem: Mapped[str] = mapped_column(

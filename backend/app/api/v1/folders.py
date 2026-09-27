@@ -20,6 +20,9 @@ from app.schemas.folder import (
     FolderCreateRequest,
     FolderDeleteResponse,
     FolderDetailResponse,
+    FolderKnowledgePointGroup,
+    FolderKnowledgePointItem,
+    FolderKnowledgePointsResponse,
     FolderListResponse,
     FolderUpdateRequest,
 )
@@ -108,6 +111,55 @@ async def list_folders(
     return FolderListResponse(
         items=[_to_detail_response(aggregate) for aggregate in aggregates],
         total=total,
+    )
+
+
+@router.get(
+    "/{folder_id}/knowledge-points",
+    response_model=FolderKnowledgePointsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="获取课程内按资料分组的考点列表",
+)
+async def list_folder_knowledge_points(
+    folder_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    folder_service: Annotated[FolderService, Depends(get_folder_service)],
+) -> FolderKnowledgePointsResponse:
+    """获取课程内解析就绪资料的考点，按来源资料分组，供课程范围出题选择必出考点。
+
+    Args:
+        folder_id: 目标课程主键。
+        user: 当前登录租户用户对象。
+        folder_service: 课程文件夹领域编排服务。
+
+    Returns:
+        FolderKnowledgePointsResponse: 按资料分组的考点集合与总数。
+    """
+    rows = folder_service.list_folder_knowledge_points(user_id=user.id, folder_id=folder_id)
+    groups: dict[uuid.UUID, FolderKnowledgePointGroup] = {}
+    order: list[uuid.UUID] = []
+    for point, material_id, material_title in rows:
+        group = groups.get(material_id)
+        if group is None:
+            group = FolderKnowledgePointGroup(
+                material_id=material_id,
+                material_title=material_title,
+                knowledge_points=[],
+            )
+            groups[material_id] = group
+            order.append(material_id)
+        group.knowledge_points.append(
+            FolderKnowledgePointItem(
+                id=point.id,
+                name=point.name,
+                level=point.level,
+                parent_id=point.parent_id,
+            )
+        )
+    return FolderKnowledgePointsResponse(
+        folder_id=folder_id,
+        groups=[groups[material_id] for material_id in order],
+        total=len(rows),
     )
 
 
@@ -256,6 +308,7 @@ __all__ = [
     "archive_folder",
     "create_folder",
     "get_folder",
+    "list_folder_knowledge_points",
     "list_folders",
     "purge_folder",
     "rename_folder",

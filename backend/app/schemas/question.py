@@ -97,6 +97,9 @@ class QuestionDetailResponse(BaseModel):
     question_type: str = Field(..., description="题型 (如 single_choice, multiple_choice 等)")
     status: str = Field(..., description="题目可用状态 (available / pending_review)")
     is_deleted: bool = Field(default=False, description="软删除标记")
+    batch_id: str | None = Field(
+        default=None, description="出题生成批次标识 (同一次生成共享；历史数据可空)"
+    )
     stem: str = Field(..., description="题干全文")
     options: list[dict[str, Any]] = Field(default_factory=list, description="客观题选项列表")
     answer: str = Field(..., description="参考答案或标准答案")

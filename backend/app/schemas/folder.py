@@ -80,3 +80,34 @@ class FolderDeleteResponse(BaseModel):
     archived_at: datetime | None = Field(default=None, description="归档时间")
     purge_after: datetime | None = Field(default=None, description="物理清理时间")
     message: str = Field(..., description="操作结果说明")
+
+
+class FolderKnowledgePointItem(BaseModel):
+    """课程内单个考点条目响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(..., description="知识点主键 UUIDv4")
+    name: str = Field(..., description="知识点名称")
+    level: int = Field(default=1, ge=1, description="知识点层级深度 (根节点为 1)")
+    parent_id: uuid.UUID | None = Field(default=None, description="父知识点主键 (根节点为空)")
+
+
+class FolderKnowledgePointGroup(BaseModel):
+    """按来源资料分组的课程考点集合响应模型。"""
+
+    material_id: uuid.UUID = Field(..., description="来源资料主键 UUIDv4")
+    material_title: str = Field(..., description="来源资料标题")
+    knowledge_points: list[FolderKnowledgePointItem] = Field(
+        default_factory=list, description="该资料下的考点列表 (按层级排序)"
+    )
+
+
+class FolderKnowledgePointsResponse(BaseModel):
+    """课程考点列表响应模型 (按资料分组，用于课程范围出题选考点)。"""
+
+    folder_id: uuid.UUID = Field(..., description="课程文件夹主键 UUIDv4")
+    groups: list[FolderKnowledgePointGroup] = Field(
+        default_factory=list, description="按来源资料分组的考点集合"
+    )
+    total: int = Field(default=0, ge=0, description="考点总数")

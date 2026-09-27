@@ -23,7 +23,14 @@
       </view>
 
       <!-- 课程内资料列表 -->
-      <view v-if="listData.length === 0" class="empty-state">
+      <view v-if="listError" class="empty-state">
+        <view class="empty-badge">!</view>
+        <text class="empty-title">资料加载失败</text>
+        <text class="empty-desc">网络异常或服务繁忙，请重试</text>
+        <button class="empty-import-btn" @tap="handleRetry">重新加载</button>
+      </view>
+
+      <view v-else-if="listData.length === 0" class="empty-state">
         <view class="empty-badge">空</view>
         <text class="empty-title">课程暂无资料</text>
         <text class="empty-desc">上传课件、讲义或真题，开始智能练习</text>
@@ -95,6 +102,7 @@ const targetFolderId = ref('');
 const folder = ref<FolderItem | null>(null);
 const listData = ref<MaterialItem[]>([]);
 const loading = ref(false);
+const listError = ref(false);
 const uploadVisible = ref(false);
 const moveVisible = ref(false);
 const generateVisible = ref(false);
@@ -130,11 +138,17 @@ async function loadMaterials(): Promise<void> {
         materialStore.addMaterial(item);
       }
     }
+    listError.value = false;
   } catch {
+    listError.value = true;
     uni.showToast({ title: '加载资料失败', icon: 'none' });
   } finally {
     loading.value = false;
   }
+}
+
+async function handleRetry(): Promise<void> {
+  await refreshAll();
 }
 
 async function loadMoveTargets(): Promise<void> {
@@ -212,7 +226,7 @@ async function handleMoveSelect(folderId: string | null): Promise<void> {
     listData.value = listData.value.filter((item) => item.id !== target.id);
     materialStore.updateMaterialFolder(target.id, folderId);
     uni.showToast({ title: '已移动资料', icon: 'success' });
-    await loadFolder();
+    await refreshAll();
   } catch {
     uni.showToast({ title: '移动失败，请重试', icon: 'none' });
   } finally {
@@ -273,12 +287,14 @@ defineExpose({
   folder,
   listData,
   loading,
+  listError,
   uploadVisible,
   moveVisible,
   generateVisible,
   courseName,
   loadFolder,
   loadMaterials,
+  handleRetry,
   handleOpenUpload,
   handleUploadSuccess,
   handleOpenGenerate,

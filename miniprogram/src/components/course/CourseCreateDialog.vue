@@ -12,7 +12,9 @@
       <text v-if="errorText" class="dialog-error">{{ errorText }}</text>
       <view class="dialog-actions">
         <button class="btn-cancel" @tap="handleCancel">取消</button>
-        <button class="btn-confirm" :disabled="!isValid" @tap="handleConfirm">创建</button>
+        <button class="btn-confirm" :disabled="!isValid || submitting" @tap="handleConfirm">
+          {{ submitting ? '创建中...' : '创建' }}
+        </button>
       </view>
     </view>
   </view>
@@ -23,6 +25,8 @@ import { ref, computed, watch } from 'vue';
 
 interface Props {
   visible?: boolean;
+  /** 创建请求进行中：禁用提交与取消，防止重复提交与中途关闭。 */
+  submitting?: boolean;
 }
 
 interface Emits {
@@ -31,7 +35,7 @@ interface Emits {
   (e: 'cancel'): void;
 }
 
-const props = withDefaults(defineProps<Props>(), { visible: false });
+const props = withDefaults(defineProps<Props>(), { visible: false, submitting: false });
 const emit = defineEmits<Emits>();
 
 const name = ref('');
@@ -55,6 +59,9 @@ function handleInput(): void {
 }
 
 function handleConfirm(): void {
+  if (props.submitting) {
+    return;
+  }
   if (!isValid.value) {
     errorText.value = '课程名称不能为空且不超过 100 字';
     return;
@@ -63,6 +70,9 @@ function handleConfirm(): void {
 }
 
 function handleCancel(): void {
+  if (props.submitting) {
+    return;
+  }
   emit('update:visible', false);
   emit('cancel');
 }
