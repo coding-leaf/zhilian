@@ -126,3 +126,25 @@
 
 
 
+
+
+## Session 1: C1 后端课程文件夹实体、归档与资料归属（迁移 0005）
+<!-- trellis-session: v=2 fp=3cce3187772f3798 -->
+
+**Date**: 2026-09-28
+**Task**: C1 后端课程文件夹实体、归档与资料归属（迁移 0005）
+**Branch**: `master`
+
+### Summary
+
+新增 material_folders 实体（含 archived_at）与 materials.folder_id（可空=未分类）；提供 /folders CRUD、归档/恢复/7 天惰性清理、资料按课程过滤与 PATCH /materials/{id}/folder 移动。规划父任务 09-27-course-folder-practice-loop 并拆 C1-C4；C1 实现+复核通过（修复: switch/retry 响应 folder_id 字段漂移、purge_after 重复逻辑），后端 1276 passed / 覆盖率 91.83%，全工具链绿。规格沉淀归档过滤与惰性清理契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3b35ef` | feat(folder): 课程文件夹实体、归档与资料归属（迁移 0005） |
+
+### Status
+
+[OK] **Completed**
