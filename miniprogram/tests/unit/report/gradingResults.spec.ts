@@ -82,6 +82,7 @@ describe('Grading Results & Original Snippet Components', () => {
           status: 'pending_regrade',
           score: null,
           max_score: 5.0,
+          is_answered: true,
           user_answer: '采用递归回溯求解',
           question_snapshot: {
             stem: '请阐述快速排序的递归基设计思想。',
@@ -133,6 +134,130 @@ describe('Grading Results & Original Snippet Components', () => {
       await cards[1].find('.regrade-btn').trigger('tap');
       expect(wrapper.emitted('regrade')).toBeTruthy();
       expect(wrapper.emitted('regrade')?.[0]).toEqual([mockItems[1]]);
+    });
+
+    it('renders keyword capsules from top-level fields (BUG-GRADE-003)', () => {
+      const items: AttemptGradingItem[] = [
+        {
+          attempt_item_id: 'att_top',
+          order_index: 1,
+          status: 'graded',
+          score: 3,
+          max_score: 5,
+          is_answered: true,
+          user_answer: '作答内容',
+          hit_keywords: ['命中要点A'],
+          missing_keywords: ['遗漏要点B'],
+          question_snapshot: {
+            stem: '题干',
+            question_type: 'short_answer',
+            answer: '参考答案',
+          },
+        },
+      ];
+
+      const wrapper = mount(GradingResultList, { props: { items } });
+
+      expect(wrapper.text()).toContain('已命中：命中要点A');
+      expect(wrapper.text()).toContain('遗漏：遗漏要点B');
+    });
+
+    it('renders snippet entrance from top-level source_snippet (BUG-GRADE-004)', () => {
+      const items: AttemptGradingItem[] = [
+        {
+          attempt_item_id: 'att_snip',
+          order_index: 1,
+          status: 'graded',
+          score: 1,
+          max_score: 1,
+          is_answered: true,
+          user_answer: 'A',
+          source_snippet: {
+            chapter_title: '第 5 章 树形数据结构',
+            page_index: 108,
+            snippet_content: 'AVL 树是一棵自平衡二叉搜索树。',
+          },
+          question_snapshot: {
+            stem: '题干',
+            question_type: 'single_choice',
+            answer: 'A',
+          },
+        },
+      ];
+
+      const wrapper = mount(GradingResultList, { props: { items } });
+      expect(wrapper.find('.snippet-btn').exists()).toBe(true);
+    });
+
+    it('supports term_explanation and case_analysis subjective entries (BUG-GRADE-007)', () => {
+      const items: AttemptGradingItem[] = [
+        {
+          attempt_item_id: 'att_term',
+          order_index: 1,
+          status: 'graded',
+          score: 2,
+          max_score: 5,
+          grading_status: 'graded',
+          is_answered: true,
+          user_answer: '名词解释作答',
+          question_snapshot: {
+            stem: '名词解释：二叉搜索树',
+            question_type: 'term_explanation',
+            answer: '参考答案',
+          },
+        },
+        {
+          attempt_item_id: 'att_case',
+          order_index: 2,
+          status: 'graded',
+          score: 3,
+          max_score: 5,
+          grading_status: 'graded',
+          is_answered: true,
+          user_answer: '案例分析作答',
+          question_snapshot: {
+            stem: '案例分析：缓存击穿',
+            question_type: 'case_analysis',
+            answer: '参考答案',
+          },
+        },
+      ];
+
+      const wrapper = mount(GradingResultList, { props: { items } });
+      const cards = wrapper.findAll('.result-card');
+
+      expect(cards[0].text()).toContain('名词解释');
+      expect(cards[0].find('.self-grade-btn').exists()).toBe(true);
+      expect(cards[0].find('.regrade-btn').exists()).toBe(true);
+
+      expect(cards[1].text()).toContain('案例分析');
+      expect(cards[1].find('.self-grade-btn').exists()).toBe(true);
+      expect(cards[1].find('.regrade-btn').exists()).toBe(true);
+    });
+
+    it('hides regrade entry for unanswered subjective items (BUG-GRADE-008)', () => {
+      const items: AttemptGradingItem[] = [
+        {
+          attempt_item_id: 'att_unanswered',
+          order_index: 1,
+          status: 'unanswered',
+          grading_status: 'unanswered',
+          score: 0,
+          max_score: 5,
+          is_answered: false,
+          user_answer: null,
+          question_snapshot: {
+            stem: '未作答的简答题',
+            question_type: 'short_answer',
+            answer: '参考答案',
+          },
+        },
+      ];
+
+      const wrapper = mount(GradingResultList, { props: { items } });
+
+      expect(wrapper.find('.self-grade-btn').exists()).toBe(true);
+      expect(wrapper.find('.regrade-btn').exists()).toBe(false);
     });
   });
 });

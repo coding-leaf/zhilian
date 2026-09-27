@@ -59,14 +59,14 @@
       <!-- 关键词微胶囊 (命中与遗漏) -->
       <view v-if="hasKeywords(item)" class="keywords-wrapper">
         <text
-          v-for="(kw, idx) in item.question_snapshot.hit_keywords || []"
+          v-for="(kw, idx) in getHitKeywords(item)"
           :key="`hit-${idx}`"
           class="keyword-capsule hit"
         >
           已命中：{{ kw }}
         </text>
         <text
-          v-for="(kw, idx) in item.question_snapshot.missing_keywords || []"
+          v-for="(kw, idx) in getMissingKeywords(item)"
           :key="`miss-${idx}`"
           class="keyword-capsule missing"
         >
@@ -90,7 +90,7 @@
         >
           <text>手动自评</text>
         </view>
-        <view v-if="canSelfGrade(item)" class="action-btn regrade-btn" @tap="emit('regrade', item)">
+        <view v-if="canRegrade(item)" class="action-btn regrade-btn" @tap="emit('regrade', item)">
           <text>申请重判</text>
         </view>
       </view>
@@ -106,7 +106,7 @@
  * Zero-Emoji Policy: No emoji allowed.
  */
 
-import type { AttemptGradingItem, GradingStatusInfo } from '@/types/report';
+import type { AttemptGradingItem, GradingStatusInfo, OriginalSnippet } from '@/types/report';
 import { getGradingStatusInfo } from '../utils/reportFormat';
 
 interface Props {
@@ -127,7 +127,15 @@ const questionTypeMap: Record<string, string> = {
   true_false: '判断题',
   fill_in_blank: '填空题',
   short_answer: '简答题',
+  term_explanation: '名词解释',
+  case_analysis: '案例分析',
 };
+
+/**
+ * Subjective question types aligned with backend
+ * `app/core/algorithms/grading.py -> SUBJECTIVE_QUESTION_TYPES`.
+ */
+const SUBJECTIVE_QUESTION_TYPES = new Set(['short_answer', 'term_explanation', 'case_analysis']);
 
 function getQuestionTypeLabel(type?: string): string {
   if (!type) return '试题';
@@ -163,25 +171,51 @@ function formatAnswer(userAnswer?: unknown): string {
   return String(userAnswer);
 }
 
+function getHitKeywords(item: AttemptGradingItem): string[] {
+  return item.hit_keywords || item.question_snapshot?.hit_keywords || [];
+}
+
+function getMissingKeywords(item: AttemptGradingItem): string[] {
+  return item.missing_keywords || item.question_snapshot?.missing_keywords || [];
+}
+
 function hasKeywords(item: AttemptGradingItem): boolean {
-  const hit = item.question_snapshot?.hit_keywords;
-  const miss = item.question_snapshot?.missing_keywords;
-  return Boolean((hit && hit.length > 0) || (miss && miss.length > 0));
+  return getHitKeywords(item).length > 0 || getMissingKeywords(item).length > 0;
+}
+
+function getSnippet(item: AttemptGradingItem): OriginalSnippet | null {
+  return item.source_snippet || item.question_snapshot?.source_snippet || null;
 }
 
 function hasSnippet(item: AttemptGradingItem): boolean {
-  return Boolean(
-    item.question_snapshot?.source_snippet || item.question_snapshot?.source_snippet_id,
-  );
+  return Boolean(getSnippet(item) || item.question_snapshot?.source_snippet_id);
+}
+
+function isSubjectiveType(item: AttemptGradingItem): boolean {
+  const questionType = item.question_snapshot?.question_type;
+  return Boolean(questionType && SUBJECTIVE_QUESTION_TYPES.has(questionType));
 }
 
 function canSelfGrade(item: AttemptGradingItem): boolean {
-  const isSubjective = item.question_snapshot?.question_type === 'short_answer';
   const isPending =
     item.grading_status === 'pending_regrade' ||
     item.status === 'pending_regrade' ||
     item.score === null;
-  return isSubjective || isPending;
+  return isSubjectiveType(item) || isPending;
+}
+
+/**
+ * Regrade requires an actual answer. Unanswered subjective items must never
+ * expose the entry, otherwise the backend rejects the request with 403
+ * (BUG-GRADE-008).
+ */
+function canRegrade(item: AttemptGradingItem): boolean {
+  if (!canSelfGrade(item)) {
+    return false;
+  }
+  const hasAnswer =
+    item.user_answer !== null && item.user_answer !== undefined && item.user_answer !== '';
+  return Boolean(item.is_answered && hasAnswer);
 }
 </script>
 

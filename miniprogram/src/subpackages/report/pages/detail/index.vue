@@ -33,7 +33,14 @@
       />
 
       <!-- 逐题判题结果列表 -->
+      <view v-if="itemsError" class="items-error-state">
+        <text class="items-error-text">{{ itemsError }}</text>
+        <view class="items-retry-btn" @tap="handleRetry">
+          <text>重新加载</text>
+        </view>
+      </view>
       <GradingResultList
+        v-else
         :items="items"
         @view-snippet="handleViewSnippet"
         @self-grade="handleOpenSelfGrade"
@@ -125,10 +132,15 @@ const reportStore = useReportStore();
 
 const loading = ref(true);
 const error = ref<string | null>(null);
+const itemsError = ref<string | null>(null);
 const currentPracticeId = ref(props.practiceId || '');
 const durationSeconds = ref(0);
 const materialId = ref('');
 const items = ref<AttemptGradingItem[]>([]);
+
+// First-screen load de-duplication guard (onLoad + onMounted must fire once)
+let isInitialLoading = false;
+let lastLoadedPracticeId = '';
 
 // Snippet drawer state
 const snippetDrawerVisible = ref(false);
@@ -155,8 +167,13 @@ function formatUserAnswer(ans?: unknown): string {
 
 async function loadReportData(pid: string): Promise<void> {
   if (!pid) return;
+  // 首屏防重：同一 practice 尚在加载中时直接短路，避免 onLoad + onMounted 双请求
+  if (isInitialLoading && lastLoadedPracticeId === pid) return;
+  isInitialLoading = true;
+  lastLoadedPracticeId = pid;
   loading.value = true;
   error.value = null;
+  itemsError.value = null;
   try {
     const [reportRes, practiceRes] = await Promise.all([
       fetchDiagnosisReport(pid),
@@ -170,7 +187,6 @@ async function loadReportData(pid: string): Promise<void> {
       return;
     }
 
-    const repData = reportRes.data as unknown as { items?: AttemptGradingItem[] };
     const pracData = practiceRes?.data as unknown as
       | {
           items?: AttemptGradingItem[];
@@ -179,10 +195,12 @@ async function loadReportData(pid: string): Promise<void> {
         }
       | undefined;
 
-    if (Array.isArray(repData.items) && repData.items.length > 0) {
-      items.value = repData.items;
-    } else if (Array.isArray(pracData?.items)) {
+    // 逐题作答项唯一数据源为 practiceRes；报告响应不含 items (BUG-GRADE-005)
+    if (practiceRes && practiceRes.code === 0 && Array.isArray(pracData?.items)) {
       items.value = pracData.items;
+    } else {
+      items.value = [];
+      itemsError.value = '作答明细加载失败，请重试';
     }
 
     if (pracData?.material_id) {
@@ -194,6 +212,7 @@ async function loadReportData(pid: string): Promise<void> {
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : '网络请求异常';
   } finally {
+    isInitialLoading = false;
     loading.value = false;
   }
 }
@@ -205,10 +224,10 @@ function handleRetry(): void {
 }
 
 function handleViewSnippet(item: AttemptGradingItem): void {
-  activeSnippet.value = item.question_snapshot?.source_snippet || null;
+  activeSnippet.value = item.source_snippet || item.question_snapshot?.source_snippet || null;
   snippetKeywords.value = [
-    ...(item.question_snapshot?.hit_keywords || []),
-    ...(item.question_snapshot?.missing_keywords || []),
+    ...(item.hit_keywords || item.question_snapshot?.hit_keywords || []),
+    ...(item.missing_keywords || item.question_snapshot?.missing_keywords || []),
   ];
   snippetDrawerVisible.value = true;
 }
@@ -269,12 +288,16 @@ function onRegradeSuccess(payload: {
 
 onMounted(() => {
   const pid = props.practiceId || currentPracticeId.value;
-  if (pid) {
-    currentPracticeId.value = pid;
-    loadReportData(pid);
-  } else {
+  if (!pid) {
     loading.value = false;
+    return;
   }
+  currentPracticeId.value = pid;
+  // onLoad 已触发同一 practice 的首屏加载时，跳过 onMounted 的重复触发 (BUG-GRADE-006)
+  if (lastLoadedPracticeId === pid) {
+    return;
+  }
+  loadReportData(pid);
 });
 
 onLoad((query?: Record<string, string>) => {

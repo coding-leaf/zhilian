@@ -94,6 +94,9 @@ export interface AttemptGradingItem {
   score?: number | null;
   max_score?: number;
   is_answered?: boolean;
+  hit_keywords?: string[];
+  missing_keywords?: string[];
+  source_snippet?: OriginalSnippet | null;
   question_snapshot: {
     id?: string;
     stem: string;

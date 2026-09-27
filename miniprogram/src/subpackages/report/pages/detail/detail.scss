@@ -83,6 +83,37 @@
     flex-direction: column;
   }
 
+  .items-error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-xl;
+    text-align: center;
+    background: #ffffff;
+    border: 1px solid $--wot-color-gray-4;
+    border-radius: $radius-lg;
+
+    .items-error-text {
+      font-size: $font-size-card;
+      color: $--wot-color-gray-7;
+      margin-bottom: $spacing-md;
+    }
+
+    .items-retry-btn {
+      min-width: 200rpx;
+      min-height: 72rpx;
+      border-radius: $radius-pill;
+      background: $--wot-color-theme;
+      color: #ffffff;
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
+
   .bottom-action-bar {
     position: fixed;
     bottom: 0;

@@ -56,8 +56,22 @@ export interface RawPracticeQuestionSnapshot {
   analysis?: string | null;
   source_snippet_id?: string | null;
   source_snippet_ids?: unknown[];
+  source_snippet?: RawSourceSnippet | null;
+  hit_keywords?: string[];
+  missing_keywords?: string[];
   difficulty?: number;
   grading_rubric?: Record<string, unknown>;
+}
+
+/**
+ * Raw source snippet summary. Authoritative source:
+ * `backend/app/schemas/practice.py` -> `SourceSnippetDTO`.
+ */
+export interface RawSourceSnippet {
+  id?: string | null;
+  chapter_title?: string;
+  page_index?: number;
+  snippet_content?: string;
 }
 
 /**
@@ -77,6 +91,9 @@ export interface RawPracticeItem {
   is_answered?: boolean;
   score?: number | null;
   max_score?: number;
+  hit_keywords?: string[];
+  missing_keywords?: string[];
+  source_snippet?: RawSourceSnippet | null;
   question_snapshot?: RawPracticeQuestionSnapshot;
 }
 

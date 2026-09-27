@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import { onLoad } from '@dcloudio/uni-app';
 import ReportDetailPage from '@/subpackages/report/pages/detail/index.vue';
 import * as diagnosisApi from '@/api/diagnosis';
 import * as practiceApi from '@/api/practice';
@@ -43,6 +44,7 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
       status: 'correct',
       score: 1.0,
       max_score: 1.0,
+      is_answered: true,
       user_answer: 'A',
       question_snapshot: {
         stem: '在平衡二叉树（AVL树）中，任意节点的左右子树高度差绝对值不超过？',
@@ -63,6 +65,7 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
       status: 'pending_regrade',
       score: null,
       max_score: 5.0,
+      is_answered: true,
       user_answer: '二叉树中序遍历先访问左子树，后访问根节点，再访问右子树。',
       question_snapshot: {
         stem: '请详细阐述二叉树中序遍历的遍历序列特征与递归定义。',
@@ -335,5 +338,138 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     expect(navigateSpy).toHaveBeenCalledWith({
       url: '/subpackages/practice/pages/session/index?id=prac_new_2002',
     });
+  });
+
+  it('loads first screen only once despite onLoad and onMounted (BUG-GRADE-006)', async () => {
+    const fetchSpy = vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: mockReport,
+    });
+    setupPracticeMock();
+
+    const wrapper = mount(ReportDetailPage, {
+      global: { plugins: [pinia] },
+      props: { practiceId: 'prac_1001' },
+    });
+
+    const onLoadHandler = vi
+      .mocked(onLoad)
+      .mock.calls.map((call) => call[0])
+      .find((arg): arg is (query?: Record<string, string>) => void => typeof arg === 'function');
+    expect(onLoadHandler).toBeTypeOf('function');
+
+    // Simulate the WeChat lifecycle: onLoad receives the same practice_id while
+    // onMounted's first-screen load is still in flight.
+    onLoadHandler?.({ practice_id: 'prac_1001' });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.report-content').exists()).toBe(true);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows items error with retry when practice session fails (BUG-GRADE-005)', async () => {
+    vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: mockReport,
+    });
+    const practiceSpy = vi
+      .spyOn(practiceApi, 'fetchPracticeSession')
+      .mockRejectedValueOnce(new Error('practice request failed'))
+      .mockResolvedValueOnce({
+        code: 0,
+        message: 'success',
+        data: {
+          id: 'prac_1001',
+          title: '树结构专项练习',
+          material_id: 'mat_001',
+          status: 'graded',
+          questions: [],
+          items: mockPracticeItems,
+          time_elapsed_seconds: 125,
+        } as unknown as PracticeSession,
+      });
+
+    const wrapper = mount(ReportDetailPage, {
+      global: { plugins: [pinia] },
+      props: { practiceId: 'prac_1001' },
+    });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.items-error-state').exists()).toBe(true);
+    });
+    expect(wrapper.text()).toContain('作答明细加载失败，请重试');
+    // Report body still renders (degraded, not blank)
+    expect(wrapper.find('.report-content').exists()).toBe(true);
+
+    await wrapper.find('.items-retry-btn').trigger('tap');
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('.result-card').length).toBeGreaterThan(0);
+    });
+
+    expect(wrapper.find('.items-error-state').exists()).toBe(false);
+    expect(wrapper.text()).toContain('第 1 题');
+    expect(practiceSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens snippet drawer from top-level source_snippet fallback (BUG-GRADE-004)', async () => {
+    vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: mockReport,
+    });
+    vi.spyOn(practiceApi, 'fetchPracticeSession').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'prac_1001',
+        title: '图论专项练习',
+        material_id: 'mat_001',
+        status: 'graded',
+        questions: [],
+        items: [
+          {
+            attempt_item_id: 'att_top',
+            order_index: 1,
+            status: 'graded',
+            score: 1,
+            max_score: 1,
+            is_answered: true,
+            user_answer: 'A',
+            source_snippet: {
+              chapter_title: '第 9 章 图论',
+              page_index: 77,
+              snippet_content: '图的深度优先遍历借助栈递归实现。',
+            },
+            question_snapshot: {
+              stem: '图的遍历方式有哪些？',
+              question_type: 'single_choice',
+              answer: 'A',
+            },
+          },
+        ] as unknown as AttemptGradingItem[],
+        time_elapsed_seconds: 10,
+      } as unknown as PracticeSession,
+    });
+
+    const wrapper = mount(ReportDetailPage, {
+      global: { plugins: [pinia] },
+      props: { practiceId: 'prac_1001' },
+    });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.report-content').exists()).toBe(true);
+    });
+
+    await wrapper.find('.snippet-btn').trigger('tap');
+
+    const drawer = wrapper.findComponent({ name: 'OriginalSnippetDrawer' });
+    expect(drawer.props('visible')).toBe(true);
+    expect(drawer.props('chapterTitle')).toBe('第 9 章 图论');
+    expect(drawer.props('pageIndex')).toBe(77);
+    expect(drawer.props('snippetContent')).toContain('图的深度优先遍历');
   });
 });
