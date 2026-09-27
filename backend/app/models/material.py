@@ -6,10 +6,12 @@
 
 import enum
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -137,6 +139,14 @@ class Material(Base, TimestampMixin, TenantModelMixin):
         index=True,
         comment="资料生命周期主状态 (MaterialStatus)",
     )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("material_folders.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="所属课程文件夹 (NULL=未分类)",
+    )
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -158,10 +168,16 @@ class Material(Base, TimestampMixin, TenantModelMixin):
         foreign_keys=[current_version_id],
         post_update=True,
     )
+    folder: Mapped["MaterialFolder | None"] = relationship(
+        "MaterialFolder",
+        back_populates="materials",
+        foreign_keys=[folder_id],
+    )
 
     __table_args__ = (
         Index("ix_materials_user_is_deleted", "user_id", "is_deleted"),
         Index("ix_materials_user_status", "user_id", "status"),
+        Index("ix_materials_user_folder_deleted", "user_id", "folder_id", "is_deleted"),
     )
 
     @property
@@ -174,6 +190,67 @@ class Material(Base, TimestampMixin, TenantModelMixin):
         return (
             f"<Material id={self.id} user_id={self.user_id} "
             f"title={self.title[:20]} status={self.status}>"
+        )
+
+
+class MaterialFolder(Base, TimestampMixin, TenantModelMixin):
+    """课程文件夹实体 (单层分类容器)。
+
+    承载用户对学习资料的课程化归类；归档为软删除，凭 ``archived_at`` 在查询层隐藏，
+    逾期 (7 天) 由惰性清理物理级联删除。
+    """
+
+    __tablename__ = "material_folders"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="课程文件夹主键 UUIDv4",
+    )
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="课程文件夹名称",
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("material_folders.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
+        comment="父文件夹主键 (预留嵌套能力，本期恒为 NULL)",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="课程列表排序权重",
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="归档时间 (NULL=活跃；第 7 天逾期惰性清理基准)",
+    )
+
+    # 关系映射：不设 delete-orphan，归档/删除课程不误删其下资料
+    materials: Mapped[list["Material"]] = relationship(
+        "Material",
+        back_populates="folder",
+        foreign_keys="Material.folder_id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_material_folders_user_name"),
+        Index("ix_material_folders_user_archived", "user_id", "archived_at"),
+    )
+
+    def __repr__(self) -> str:
+        """安全脱敏日志展示，严禁泄漏完整资料内容。"""
+        return (
+            f"<MaterialFolder id={self.id} user_id={self.user_id} "
+            f"name={self.name[:20]} archived={self.archived_at is not None}>"
         )
 
 

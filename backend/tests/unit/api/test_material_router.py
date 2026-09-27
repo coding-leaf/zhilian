@@ -139,6 +139,7 @@ async def test_upload_material_success(mock_user: User, mock_material_service: M
         title="高等数学讲义.pdf",
         source_type="local",
         idempotency_key="idem-key-12345678",
+        folder_id=None,
     )
 
 
@@ -192,6 +193,7 @@ async def test_upload_material_default_title(
         title=None,
         source_type="local",
         idempotency_key=None,
+        folder_id=None,
     )
 
 
@@ -416,6 +418,8 @@ async def test_list_materials_success(mock_user: User, mock_material_service: Ma
         page_size=2,
         limit=2,
         offset=2,
+        folder_id=None,
+        unclassified=False,
     )
 
 
@@ -448,6 +452,8 @@ async def test_list_materials_default_params(
         page_size=20,
         limit=20,
         offset=0,
+        folder_id=None,
+        unclassified=False,
     )
 
 
@@ -596,6 +602,8 @@ async def test_list_materials_status_filter_normalization(
             page_size=20,
             limit=20,
             offset=0,
+            folder_id=None,
+            unclassified=False,
         )
 
 
@@ -624,6 +632,8 @@ async def test_list_materials_status_filter_passthrough_known_aliases(
             page_size=20,
             limit=20,
             offset=0,
+            folder_id=None,
+            unclassified=False,
         )
 
 
@@ -653,6 +663,8 @@ async def test_list_materials_with_limit_offset(
         page_size=5,
         limit=5,
         offset=10,
+        folder_id=None,
+        unclassified=False,
     )
 
 
@@ -864,6 +876,7 @@ async def test_switch_material_version_success(
 
     material_id = uuid.uuid4()
     version_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
     now = datetime.now(UTC)
 
     updated_material = Material(
@@ -875,6 +888,7 @@ async def test_switch_material_version_success(
         source_type=SourceType.LOCAL.value,
         status=MaterialStatus.READY.value,
         current_version_id=version_id,
+        folder_id=folder_id,
     )
     updated_material.created_at = now
     updated_material.updated_at = now
@@ -892,6 +906,7 @@ async def test_switch_material_version_success(
     assert data["id"] == str(material_id)
     assert data["current_version_id"] == str(version_id)
     assert data["status"] == "ready"
+    assert data["folder_id"] == str(folder_id)
 
     mock_material_service.switch_material_version.assert_called_once_with(
         user_id=mock_user.id,
@@ -1329,6 +1344,7 @@ async def test_retry_material_success(mock_user: User, mock_material_service: Ma
 
     material_id = uuid.uuid4()
     version_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
     now = datetime.now(UTC)
 
     fake_material = Material(
@@ -1339,6 +1355,7 @@ async def test_retry_material_success(mock_user: User, mock_material_service: Ma
         file_size=2048,
         source_type=SourceType.LOCAL.value,
         status=MaterialStatus.PENDING.value,
+        folder_id=folder_id,
     )
     fake_material.created_at = now
     fake_material.updated_at = now
@@ -1364,6 +1381,7 @@ async def test_retry_material_success(mock_user: User, mock_material_service: Ma
     assert data["id"] == str(material_id)
     assert data["status"] == MaterialStatus.PENDING.value
     assert data["current_version_id"] == str(version_id)
+    assert data["folder_id"] == str(folder_id)
     mock_material_service.retry_material_pipeline.assert_called_once_with(
         material_id=material_id,
         user_id=mock_user.id,

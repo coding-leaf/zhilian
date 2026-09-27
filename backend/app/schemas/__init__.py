@@ -23,6 +23,13 @@ from app.schemas.diagnosis import (
     WrongRecordItemResponse,
     WrongRecordListResponse,
 )
+from app.schemas.folder import (
+    FolderCreateRequest,
+    FolderDeleteResponse,
+    FolderDetailResponse,
+    FolderListResponse,
+    FolderUpdateRequest,
+)
 from app.schemas.grading import (
     AttemptGradingDetailResponse,
     GradingRecordDTO,
@@ -50,6 +57,7 @@ from app.schemas.knowledge import (
 from app.schemas.material import (
     MaterialDeleteResponse,
     MaterialDetailResponse,
+    MaterialFolderMoveRequest,
     MaterialListItem,
     MaterialListResponse,
     MaterialParseRequest,
@@ -112,6 +120,11 @@ __all__ = [
     "DiagnosisReportResponse",
     "ExtractKnowledgeRequest",
     "ExtractKnowledgeResponse",
+    "FolderCreateRequest",
+    "FolderDeleteResponse",
+    "FolderDetailResponse",
+    "FolderListResponse",
+    "FolderUpdateRequest",
     "GradingRecordDTO",
     "GradingRecordResponse",
     "KnowledgeEvaluationItemDTO",
@@ -126,6 +139,7 @@ __all__ = [
     "MarkWrongRecordMasteredResponse",
     "MaterialDeleteResponse",
     "MaterialDetailResponse",
+    "MaterialFolderMoveRequest",
     "MaterialListItem",
     "MaterialListResponse",
     "MaterialParseRequest",

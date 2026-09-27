@@ -28,6 +28,7 @@ from fastapi import (
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.container import get_container
+from app.api.deps.folder import get_folder_service
 from app.api.deps.material import get_material_service
 from app.container import AppContainer
 from app.core.errors import MaterialInvalidError
@@ -37,6 +38,7 @@ from app.models.user import User
 from app.schemas.material import (
     MaterialDeleteResponse,
     MaterialDetailResponse,
+    MaterialFolderMoveRequest,
     MaterialListItem,
     MaterialListResponse,
     MaterialOCRPageItem,
@@ -48,6 +50,7 @@ from app.schemas.material import (
     MaterialVersionItem,
     MaterialVersionListResponse,
 )
+from app.services.folder import FolderService
 from app.services.material import MAX_FILE_SIZES, MaterialService
 
 logger = logging.getLogger(__name__)
@@ -107,6 +110,37 @@ async def _read_upload_content_guarded(file: UploadFile, request: Request) -> by
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _parse_folder_filter(folder_id: str | None) -> tuple[uuid.UUID | None, bool]:
+    """解析课程过滤查询参数为 (课程主键, 是否未分类) 二元组。
+
+    ``__none__`` 表示仅返回未分类资料；合法的 UUID 字符串表示按课程过滤；
+    缺省或空串表示不按课程限定；非法格式抛出参数校验异常。
+
+    Args:
+        folder_id: 原始课程过滤查询参数。
+
+    Returns:
+        tuple[uuid.UUID | None, bool]: (课程主键, 是否未分类)。
+
+    Raises:
+        MaterialInvalidError: 课程过滤参数格式非法 (HTTP 400)。
+    """
+    if folder_id is None:
+        return None, False
+    trimmed = folder_id.strip()
+    if not trimmed:
+        return None, False
+    if trimmed == "__none__":
+        return None, True
+    try:
+        return uuid.UUID(trimmed), False
+    except ValueError as exc:
+        raise MaterialInvalidError(
+            "课程过滤参数格式非法",
+            details={"folder_id": trimmed},
+        ) from exc
 
 
 def run_material_pipeline_background(
@@ -172,6 +206,9 @@ async def upload_material(
     background_tasks: BackgroundTasks,
     title: Annotated[str | None, Form(description="资料展示标题 (为空时使用文件名)")] = None,
     source_type: Annotated[str, Form(description="资料来源渠道 (local/wechat)")] = "local",
+    folder_id: Annotated[uuid.UUID | None, Form(description="归属课程文件夹标识 (缺省=未分类)")] = (
+        None
+    ),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     container: Annotated[AppContainer | None, Depends(get_container)] = None,
 ) -> MaterialUploadResponse:
@@ -185,6 +222,7 @@ async def upload_material(
         file: 客户端上传的文件流对象。
         title: 可选的资料展示标题。
         source_type: 导入来源渠道 (local/wechat)。
+        folder_id: 可选的归属课程文件夹标识。
         idempotency_key: 可选的请求防重幂等键。
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
@@ -202,6 +240,7 @@ async def upload_material(
         title=title,
         source_type=source_type,
         idempotency_key=idempotency_key,
+        folder_id=folder_id,
     )
     if container is not None:
         background_tasks.add_task(
@@ -241,6 +280,10 @@ async def list_materials(
     offset: Annotated[int | None, Query(ge=0, description="游标偏移量 (兼容游标分页)")] = None,
     keyword: Annotated[str | None, Query(max_length=100, description="标题模糊检索词")] = None,
     status_filter: Annotated[str | None, Query(alias="status", description="状态筛选")] = None,
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程过滤：课程 UUID 或未分类占位符 __none__"),
+    ] = None,
 ) -> MaterialListResponse:
     """分页检索当前租户用户的学习资料列表，支持标题模糊检索与状态筛选。
 
@@ -253,6 +296,7 @@ async def list_materials(
         offset: 可选的分页游标偏移量（兼容游标分页）。
         keyword: 可选标题模糊检索关键词。
         status_filter: 可选资料生命周期状态。
+        folder_id: 可选课程过滤器（UUID 或 __none__ 未分类）。
 
     Returns:
         MaterialListResponse: 包含资料列表与分页总数的分页响应。
@@ -270,6 +314,8 @@ async def list_materials(
         if trimmed in valid_statuses:
             cleaned_status = trimmed
 
+    resolved_folder_id, unclassified = _parse_folder_filter(folder_id)
+
     items, total = material_service.list_materials(
         user_id=user.id,
         keyword=keyword,
@@ -278,6 +324,8 @@ async def list_materials(
         page_size=calc_limit,
         limit=calc_limit,
         offset=calc_offset,
+        folder_id=resolved_folder_id,
+        unclassified=unclassified,
     )
     return MaterialListResponse(
         items=[
@@ -289,6 +337,7 @@ async def list_materials(
                 source_type=item.source_type,
                 status=item.status,
                 current_version_id=item.current_version_id,
+                folder_id=item.folder_id,
                 parse_status=getattr(item, "parse_status", None),
                 progress_percentage=getattr(item, "progress_percentage", None),
                 key_points_count=getattr(item, "key_points_count", None),
@@ -344,6 +393,7 @@ async def get_material_detail(
         source_type=material.source_type,
         status=material.status,
         current_version_id=material.current_version_id,
+        folder_id=material.folder_id,
         parse_status=getattr(material, "parse_status", None),
         progress_percentage=getattr(material, "progress_percentage", None),
         versions_count=versions_count,
@@ -522,6 +572,7 @@ async def switch_material_version(
         source_type=material.source_type,
         status=material.status,
         current_version_id=material.current_version_id,
+        folder_id=material.folder_id,
         versions_count=versions_count,
         created_at=material.created_at,
         updated_at=material.updated_at,
@@ -636,7 +687,64 @@ async def retry_material_pipeline(
         source_type=material.source_type,
         status=material.status,
         current_version_id=material.current_version_id or version.id,
+        folder_id=material.folder_id,
         versions_count=versions_count,
+        created_at=material.created_at,
+        updated_at=material.updated_at,
+    )
+
+
+@router.patch(
+    "/{material_id}/folder",
+    response_model=MaterialDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="移动资料归属课程",
+)
+async def move_material_folder(
+    material_id: uuid.UUID,
+    payload: MaterialFolderMoveRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    material_service: Annotated[MaterialService, Depends(get_material_service)],
+    folder_service: Annotated[FolderService, Depends(get_folder_service)],
+) -> MaterialDetailResponse:
+    """移动指定资料的归属课程（folder_id 为 null 表示移回未分类）。
+
+    目标课程必须归属当前用户且未归档，否则返回 4xx。
+
+    Args:
+        material_id: 资料主键。
+        payload: 移动请求体（目标课程标识，null 表示未分类）。
+        user: 当前登录租户用户对象。
+        material_service: 资料领域编排服务。
+        folder_service: 课程文件夹领域编排服务。
+
+    Returns:
+        MaterialDetailResponse: 移动后的资料详情。
+    """
+    folder_service.move_material(
+        user_id=user.id,
+        material_id=material_id,
+        folder_id=payload.folder_id,
+    )
+    material = material_service.get_material_detail(material_id=material_id, user_id=user.id)
+    versions_count = getattr(material, "versions_count", None)
+    if versions_count is None:
+        versions_count = len(getattr(material, "versions", []))
+
+    return MaterialDetailResponse(
+        id=material.id,
+        title=material.title,
+        file_format=material.file_format,
+        file_size=material.file_size,
+        source_type=material.source_type,
+        status=material.status,
+        current_version_id=material.current_version_id,
+        folder_id=material.folder_id,
+        parse_status=getattr(material, "parse_status", None),
+        progress_percentage=getattr(material, "progress_percentage", None),
+        versions_count=versions_count,
+        key_points_count=getattr(material, "key_points_count", None),
+        page_count=getattr(material, "page_count", None),
         created_at=material.created_at,
         updated_at=material.updated_at,
     )
@@ -716,6 +824,7 @@ __all__ = [
     "list_material_ocr_pages",
     "list_material_versions",
     "list_materials",
+    "move_material_folder",
     "reshoot_material_page",
     "retry_material_pipeline",
     "router",

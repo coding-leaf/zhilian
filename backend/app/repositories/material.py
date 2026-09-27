@@ -11,13 +11,14 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.knowledge import KnowledgePoint
 from app.models.material import (
     Material,
+    MaterialFolder,
     MaterialOCRPage,
     MaterialSnippet,
     MaterialStatus,
@@ -50,6 +51,7 @@ class MaterialRepository:
         file_size: int,
         source_type: str = SourceType.LOCAL.value,
         status: str = MaterialStatus.PENDING.value,
+        folder_id: uuid.UUID | None = None,
     ) -> Material:
         """创建资料主表记录。
 
@@ -60,6 +62,7 @@ class MaterialRepository:
             file_size: 文件大小（字节）。
             source_type: 导入渠道来源，默认为 local。
             status: 初始状态，默认为 pending。
+            folder_id: 归属课程文件夹标识（None=未分类）。
 
         Returns:
             Material: 已加入会话并刷新主键的资料实体。
@@ -71,6 +74,7 @@ class MaterialRepository:
             file_size=file_size,
             source_type=source_type,
             status=status,
+            folder_id=folder_id,
             is_deleted=False,
         )
         self.session.add(material)
@@ -83,6 +87,7 @@ class MaterialRepository:
         user_id: uuid.UUID,
         *,
         include_deleted: bool = False,
+        exclude_archived_folder: bool = False,
     ) -> Material | None:
         """根据主键和所属用户查询资料详情。
 
@@ -90,6 +95,7 @@ class MaterialRepository:
             material_id: 资料主键。
             user_id: 租户用户标识（强制隔离）。
             include_deleted: 是否包含软删除记录，默认 False。
+            exclude_archived_folder: 是否排除归属已归档课程的资料，默认 False。
 
         Returns:
             Material | None: 资料实体，不存在或越权时返回 None。
@@ -100,6 +106,10 @@ class MaterialRepository:
         )
         if not include_deleted:
             stmt = stmt.where(Material.is_deleted.is_(False))
+        if exclude_archived_folder:
+            stmt = stmt.outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id).where(
+                self._visible_folder_condition()
+            )
         return self.session.execute(stmt).scalar_one_or_none()
 
     def list_materials(
@@ -112,6 +122,8 @@ class MaterialRepository:
         keyword: str | None = None,
         status: str | None = None,
         statuses: list[str] | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> list[Material]:
         """分页获取用户所属资料列表。
 
@@ -123,6 +135,8 @@ class MaterialRepository:
             keyword: 可选标题模糊搜索词。
             status: 可选资料生命周期状态过滤（单值）。
             statuses: 可选资料生命周期状态集合过滤（优先于 status，支持多状态聚合）。
+            folder_id: 可选课程文件夹过滤（归属该课程的资料）。
+            unclassified: 是否仅返回未分类资料（folder_id IS NULL）。
 
         Returns:
             list[Material]: 资料实体列表，版本集合已通过 selectinload 预加载。
@@ -141,6 +155,7 @@ class MaterialRepository:
             stmt = stmt.where(Material.status.in_(statuses))
         elif status:
             stmt = stmt.where(Material.status == status)
+        stmt = self._apply_folder_filter(stmt, folder_id=folder_id, unclassified=unclassified)
 
         stmt = (
             stmt.options(selectinload(Material.versions).selectinload(MaterialVersion.ocr_pages))
@@ -149,6 +164,41 @@ class MaterialRepository:
             .offset(offset)
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    @staticmethod
+    def _visible_folder_condition() -> Any:
+        """构造「资料未归属归档课程」的可见性过滤条件。
+
+        未分类资料（folder_id IS NULL）恒可见；归属课程的资料仅当课程未归档时可见。
+        """
+        return or_(Material.folder_id.is_(None), MaterialFolder.archived_at.is_(None))
+
+    @classmethod
+    def _apply_folder_filter(
+        cls,
+        stmt: Any,
+        *,
+        folder_id: uuid.UUID | None,
+        unclassified: bool,
+    ) -> Any:
+        """为查询语句附加课程可见性与归属过滤。
+
+        Args:
+            stmt: 待附加的 SQLAlchemy select 语句。
+            folder_id: 目标课程主键，None 表示不按课程限定。
+            unclassified: 是否仅返回未分类资料。
+
+        Returns:
+            Any: 附加过滤后的 select 语句。
+        """
+        stmt = stmt.outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id).where(
+            cls._visible_folder_condition()
+        )
+        if unclassified:
+            return stmt.where(Material.folder_id.is_(None))
+        if folder_id is not None:
+            return stmt.where(Material.folder_id == folder_id)
+        return stmt
 
     def count_knowledge_points_by_version_ids(
         self,
@@ -187,6 +237,8 @@ class MaterialRepository:
         keyword: str | None = None,
         status: str | None = None,
         statuses: list[str] | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> tuple[list[Material], int]:
         """分页获取用户所属资料列表及符合条件的总记录数。
 
@@ -198,6 +250,8 @@ class MaterialRepository:
             keyword: 可选标题模糊搜索词。
             status: 可选资料生命周期状态过滤（单值）。
             statuses: 可选资料生命周期状态集合过滤（优先于 status，支持多状态聚合）。
+            folder_id: 可选课程文件夹过滤（归属该课程的资料）。
+            unclassified: 是否仅返回未分类资料（folder_id IS NULL）。
 
         Returns:
             tuple[list[Material], int]: (资料实体列表, 总记录数)。
@@ -212,6 +266,9 @@ class MaterialRepository:
             count_stmt = count_stmt.where(Material.status.in_(statuses))
         elif status:
             count_stmt = count_stmt.where(Material.status == status)
+        count_stmt = self._apply_folder_filter(
+            count_stmt, folder_id=folder_id, unclassified=unclassified
+        )
 
         total = self.session.execute(count_stmt).scalar_one()
 
@@ -223,8 +280,33 @@ class MaterialRepository:
             keyword=keyword,
             status=status,
             statuses=statuses,
+            folder_id=folder_id,
+            unclassified=unclassified,
         )
         return items, int(total)
+
+    def move_folder(
+        self,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+        folder_id: uuid.UUID | None,
+    ) -> Material | None:
+        """移动资料归属课程（None 表示移回未分类）。
+
+        Args:
+            material_id: 资料主键。
+            user_id: 租户用户标识。
+            folder_id: 目标课程主键，None 表示未分类。
+
+        Returns:
+            Material | None: 更新后的资料实体，不存在或越权返回 None。
+        """
+        material = self.get_material_by_id(material_id, user_id, include_deleted=False)
+        if material is None:
+            return None
+        material.folder_id = folder_id
+        self.session.flush()
+        return material
 
     def update_material_status(
         self,

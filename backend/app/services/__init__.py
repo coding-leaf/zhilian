@@ -7,6 +7,7 @@ from app.services.diagnosis import (
     ReportService,
     UserMasteryOverviewDTO,
 )
+from app.services.folder import FolderAggregate, FolderService
 from app.services.grading import (
     GradingService,
     LLMGradingOutput,
@@ -31,6 +32,8 @@ __all__ = [
     "AuthService",
     "CreatePracticeOptions",
     "DiagnosisService",
+    "FolderAggregate",
+    "FolderService",
     "GradingService",
     "KnowledgeMasterySummaryDTO",
     "KnowledgeService",

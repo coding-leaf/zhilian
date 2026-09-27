@@ -29,6 +29,7 @@ from app.core.algorithms.ocr_quality import (
     verify_ocr_quality,
 )
 from app.core.errors import (
+    FolderNotFoundError,
     MaterialInvalidError,
     MaterialNotFoundError,
     ReshootLimitExceededError,
@@ -51,6 +52,7 @@ from app.models.material import (
     ParseStatus,
     SourceType,
 )
+from app.repositories.folder import FolderRepository
 from app.repositories.material import MaterialRepository
 
 logger = logging.getLogger(__name__)
@@ -353,6 +355,7 @@ class MaterialService:
         idempotency_adapter: IdempotencyProtocol | None = None,
         material_repo: MaterialRepository | None = None,
         knowledge_service: "KnowledgeService | None" = None,
+        folder_repo: FolderRepository | None = None,
         bucket: str = DEFAULT_MATERIAL_BUCKET,
     ) -> None:
         self.session = session
@@ -362,6 +365,7 @@ class MaterialService:
         self.queue = queue_adapter
         self.idempotency = idempotency_adapter
         self.repo = material_repo or MaterialRepository(session)
+        self.folder_repo = folder_repo or FolderRepository(session)
         self.knowledge_service = knowledge_service
         self.bucket = bucket
 
@@ -375,6 +379,7 @@ class MaterialService:
         file_content: bytes,
         source_type: str = SourceType.LOCAL.value,
         idempotency_key: str | None = None,
+        folder_id: uuid.UUID | None = None,
     ) -> tuple[Material, MaterialVersion]:
         """上传创建资料：魔数校验、内容哈希记录、MinIO 独占隔离写入、创建版本并调度异步解析。
 
@@ -386,16 +391,23 @@ class MaterialService:
             file_content: 原文件二进制字节流。
             source_type: 导入渠道来源。
             idempotency_key: 可选的幂等键。
+            folder_id: 可选归属课程文件夹标识（None=未分类）。
 
         Returns:
             tuple[Material, MaterialVersion]: 创建（或复用）的资料与版本实体元组。
 
         Raises:
             MaterialInvalidError: 文件内容为空、大小超限、魔数校验失败。
+            FolderNotFoundError: 指定课程文件夹不存在、已归档或越权。
             IdempotencyConflictError: 幂等并发重复提交。
         """
         user_ref = generate_user_ref(user_id)
         clean_format = file_format.lower().lstrip(".")
+
+        if folder_id is not None:
+            folder = self.folder_repo.get_by_id(folder_id, user_id, include_archived=False)
+            if folder is None:
+                raise FolderNotFoundError("目标课程文件夹不存在或无权访问")
 
         # 1. 幂等拦截检查与回放
         if idempotency_key is not None and self.idempotency is not None:
@@ -449,6 +461,7 @@ class MaterialService:
                 file_size=len(file_content),
                 source_type=source_type,
                 status=MaterialStatus.PENDING.value,
+                folder_id=folder_id,
             )
 
             # 内容哈希仅用于记录与去重语义，物理对象必须为本资料独占副本。
@@ -522,6 +535,7 @@ class MaterialService:
         title: str | None = None,
         source_type: str = SourceType.LOCAL.value,
         idempotency_key: str | None = None,
+        folder_id: uuid.UUID | None = None,
     ) -> tuple[Material, MaterialVersion]:
         """上传导入资料文件高阶入口。
 
@@ -534,6 +548,7 @@ class MaterialService:
             title: 用户显式传入的自定义标题（可选）。
             source_type: 导入渠道来源（local/wechat）。
             idempotency_key: 幂等键（可选）。
+            folder_id: 可选归属课程文件夹标识（None=未分类）。
 
         Returns:
             tuple[Material, MaterialVersion]: 创建（或复用）的资料与版本实体。
@@ -556,6 +571,7 @@ class MaterialService:
             file_content=file_content,
             source_type=source_type,
             idempotency_key=idempotency_key,
+            folder_id=folder_id,
         )
 
     def parse_material_pipeline(
@@ -1026,7 +1042,9 @@ class MaterialService:
         Raises:
             MaterialNotFoundError: 资料不存在或已软删除。
         """
-        material = self.repo.get_material_by_id(material_id, user_id, include_deleted=False)
+        material = self.repo.get_material_by_id(
+            material_id, user_id, include_deleted=False, exclude_archived_folder=True
+        )
         if material is None:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
         return material
@@ -1201,6 +1219,8 @@ class MaterialService:
         limit: int | None = None,
         offset: int | None = None,
         is_deleted: bool = False,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         **kwargs: Any,
     ) -> tuple[list[Material], int]:
         """分页获取用户所属资料列表及符合条件总记录数，并装配解析进度信息。
@@ -1214,6 +1234,8 @@ class MaterialService:
             limit: 可选的单页数量限制（优先于 page_size）。
             offset: 可选的分页游标偏移量（优先于 page 计算）。
             is_deleted: 软删除状态过滤。
+            folder_id: 可选课程文件夹过滤（归属该课程的资料）。
+            unclassified: 是否仅返回未分类资料。
             kwargs: 兼容其他调用传参。
 
         Returns:
@@ -1235,6 +1257,8 @@ class MaterialService:
             keyword=keyword,
             status=None,
             statuses=resolved_statuses,
+            folder_id=folder_id,
+            unclassified=unclassified,
         )
         for item in items:
             version = self._pick_loaded_version(item)

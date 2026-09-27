@@ -77,6 +77,9 @@ class MaterialDetailResponse(BaseModel):
     current_version_id: uuid.UUID | None = Field(
         default=None, description="当前激活版本标识 UUIDv4"
     )
+    folder_id: uuid.UUID | None = Field(
+        default=None, description="所属课程文件夹标识 (NULL=未分类)"
+    )
     parse_status: str | None = Field(default=None, description="细粒度解析流水线状态")
     progress_percentage: int | None = Field(
         default=None, ge=0, le=100, description="解析进度百分比 (0-100)"
@@ -101,6 +104,9 @@ class MaterialListItem(BaseModel):
     status: str = Field(..., description="资料生命周期主状态")
     current_version_id: uuid.UUID | None = Field(
         default=None, description="当前激活版本标识 UUIDv4"
+    )
+    folder_id: uuid.UUID | None = Field(
+        default=None, description="所属课程文件夹标识 (NULL=未分类)"
     )
     parse_status: str | None = Field(default=None, description="细粒度解析流水线状态")
     progress_percentage: int | None = Field(
@@ -209,3 +215,11 @@ class MaterialDeleteResponse(BaseModel):
     is_deleted: bool = Field(..., description="是否已删除标记")
     permanent: bool = Field(..., description="是否为物理级联硬删除")
     message: str = Field(..., description="操作结果说明")
+
+
+class MaterialFolderMoveRequest(BaseModel):
+    """资料归属课程移动请求模型 (folder_id 为 null 表示移回未分类)。"""
+
+    folder_id: uuid.UUID | None = Field(
+        default=None, description="目标课程文件夹标识 (NULL=未分类)"
+    )

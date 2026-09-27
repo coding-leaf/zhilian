@@ -20,6 +20,7 @@ from app.core.config import AppSettings, get_settings
 from app.integrations.container import ProviderRegistry
 from app.services.auth import AuthService
 from app.services.diagnosis import DiagnosisService
+from app.services.folder import FolderService
 from app.services.grading import GradingService
 from app.services.knowledge import KnowledgeService
 from app.services.material import MaterialService
@@ -200,6 +201,13 @@ class AppContainer:
             embedding=self.providers.embedding,
         )
 
+    def create_folder_service(self, session: Session) -> FolderService:
+        """纯工厂方法：构建绑定独立 Session 的 FolderService。"""
+        return FolderService(
+            session=session,
+            material_service=self.create_material_service(session=session),
+        )
+
     def create_question_service(self, session: Session) -> QuestionService:
         """纯工厂方法：构建绑定独立 Session 的 QuestionService。"""
         return QuestionService(
@@ -247,6 +255,10 @@ class AppContainer:
     def get_knowledge_service(self, session: Session) -> KnowledgeService:
         """兼容接口：委托给 create_knowledge_service。"""
         return self.create_knowledge_service(session=session)
+
+    def get_folder_service(self, session: Session) -> FolderService:
+        """兼容接口：委托给 create_folder_service。"""
+        return self.create_folder_service(session=session)
 
     def get_question_service(self, session: Session) -> QuestionService:
         """兼容接口：委托给 create_question_service。"""

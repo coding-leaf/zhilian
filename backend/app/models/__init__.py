@@ -5,6 +5,7 @@ from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import (
     Material,
     MaterialDocType,
+    MaterialFolder,
     MaterialOCRPage,
     MaterialSnippet,
     MaterialStatus,
@@ -56,6 +57,7 @@ __all__ = [
     "MasteryRecord",
     "Material",
     "MaterialDocType",
+    "MaterialFolder",
     "MaterialOCRPage",
     "MaterialSnippet",
     "MaterialStatus",

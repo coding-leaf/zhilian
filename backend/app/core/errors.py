@@ -1213,6 +1213,58 @@ class WrongRecordNotFoundError(AppError):
         )
 
 
+class FolderNotFoundError(AppError):
+    """课程文件夹不存在或无权访问异常 (错误码 40020, HTTP 404)。
+
+    当查询/操作的目标课程文件夹不存在、已归档或不属于当前租户时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "请求的课程文件夹不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40020,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
+class FolderNameConflictError(AppError):
+    """课程文件夹名称冲突异常 (错误码 40021, HTTP 409)。
+
+    当同一租户下创建或重命名课程文件夹时名称重复时抛出。
+    """
+
+    def __init__(
+        self,
+        message: str = "同名课程文件夹已存在",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40021,
+        status_code: int = 409,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AttemptItemNotFoundError",
@@ -1221,6 +1273,8 @@ __all__ = [
     "EmbeddingAuthError",
     "EmbeddingError",
     "EmbeddingTimeoutError",
+    "FolderNameConflictError",
+    "FolderNotFoundError",
     "GradingExecutionError",
     "GradingNotAllowedError",
     "IdempotencyConflictError",
