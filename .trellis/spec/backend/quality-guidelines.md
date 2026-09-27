@@ -328,3 +328,105 @@ const items = res.data.items.map(adaptItem);            // items -> 内部模型
 <text>{{ option.content }}</text>                       // 与后端 content 对齐（或归一为 text 后统一消费）
 ```
 
+---
+
+### Scenario: Content-Hash Dedup Must Not Share Physical Storage Objects
+
+#### 1. Scope / Trigger
+- 任何按内容哈希做上传「秒传」/去重的资料路径（`MaterialService.create_material`）与硬删除清理（`hard_delete_material`）。
+
+#### 2. Contracts
+- **哈希只用于逻辑去重，不作为跨资料共享物理对象键**：命中同用户同哈希的历史版本时，新资料仍必须 `put_object` 到**本资料自有** `storage_key`（`build_material_storage_key(user_id, material.id, ...)`），不得复用 `existing_ver.storage_key`。
+- 理由：`hard_delete_material` 按本资料 versions 收集 `storage_key` 并无条件 `delete_object`；若键被跨资料共享，删除源资料会连带使引用方指向已删对象，后续 `storage.get_object` 抛 `StorageNotFoundError`。
+- 现有实现命中后**仍入队完整解析**，故复用的唯一收益是省一次 `put_object`；以少量存储换数据完整性是正确的取舍。
+
+#### 3. Validation & Error Matrix
+- 同哈希两份资料：两者 `storage_key` 必须不同。
+- 硬删源资料后：引用方对象仍存在且可解析。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误：跨资料复用物理键，源资料硬删后引用方指向已删对象
+existing_ver = self.repo.find_version_by_hash(user_id, content_hash)
+storage_key = existing_ver.storage_key if existing_ver else build_key(...)   # 共享！
+```
+##### Correct
+```python
+# 正确：始终写本资料自有键；content_hash 仅落库表达逻辑去重
+storage_key = build_material_storage_key(user_id, material.id, 1, content_hash, fmt)
+self.storage.put_object(self.bucket, storage_key, file_content, content_type)
+```
+
+#### 5. Tests Required
+- 断言同哈希两资料 `storage_key` 不同。
+- 断言硬删源资料后，另一资料对象仍可取用。
+
+---
+
+### Scenario: OCR Retake State Machine & Knowledge-Tree Rebuild
+
+#### 1. Scope / Trigger
+- 图片资料 OCR 质检未达标后的「待重拍 → 逐页重拍 → 达标」闭环，及重拍完成后的知识树重建。
+
+#### 2. Signatures
+```python
+# MaterialStatus 新增
+class MaterialStatus(enum.StrEnum):
+    ...
+    RETAKE_REQUIRED = "retake_required"
+
+# GET /api/v1/materials/{material_id}/ocr-pages?only_unqualified=false
+# -> MaterialOCRPagesResponse{ material_id, version_id, items[ page_number, is_qualified, reshoot_count, unqualified_reason ] }
+# POST /api/v1/materials/{material_id}/reshoot   (multipart: page_index=Form, file=File, version_id=Form 可选)
+```
+
+#### 3. Contracts
+- **门禁失败语义**：OCR 质检不达标时，版本 `parse_status=FAILED` 且 `failed_stage='ocr_quality_gate'`，**资料主状态置 `RETAKE_REQUIRED`**（可恢复，非终态 FAILED）。
+- **状态筛选**：`_resolve_status_filter('retake_required')` 返回 `[retake_required]`（禁止返回 `[]` 造成「筛选恒空」）；列表/详情/`statusTag` 大小写归一一致。
+- **重拍解析版本**：`reshoot_material_page` 在 `material.current_version_id` 为空（门禁失败时常见）必须回退 `get_latest_version`，否则重拍主路径直接失败。
+- **重拍达标后续（关键）**：全页达标重建 slices 时，必须**同步重建知识树**——`update_version_status(EXTRACTING_KNOWLEDGE)` → `knowledge_service.extract_and_build_knowledge_tree(...)`（内部含 `delete_knowledge_points_by_version`）→ 置 READY。置 READY 时须 `reset_errors=True` 清除 `failed_stage`/`error_message`，避免 READY 与失败阶段并存的矛盾终态。
+- **重拍未达标**：资料维持/置 `RETAKE_REQUIRED`；`reshoot_count >= 3` 仍未达标 → 熔断置 `FAILED`（终态）。
+- **前端**：待重拍页列表必须由 `/ocr-pages` 接口填充（禁止硬编码假页面）；轮询期间状态转入 `retake_required` 时须拉取真实不合格页。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：门禁失败置终态 FAILED，重拍入口不可达
+self.repo.update_material_status(material_id, user_id, MaterialStatus.FAILED.value)
+
+# 错误2：重拍达标只重建 slices，不重建知识树 → READY 资料知识树空/陈旧
+self.repo.delete_snippets_by_version(version_id, user_id)
+self.repo.create_snippets(new_snippets)
+self.repo.update_version_status(version_id, user_id, ParseStatus.READY.value)
+
+# 错误3：重拍只看 current_version_id，门禁失败时其为 None → 重拍必然报错
+version = self.repo.get_version_by_id(material.current_version_id, user_id)
+```
+##### Correct
+```python
+# 正确1：门禁失败置可恢复的 RETAKE_REQUIRED
+self.repo.update_material_status(material_id, user_id, MaterialStatus.RETAKE_REQUIRED.value)
+
+# 正确2：达标重建 slices 后串联知识树重建再置 READY
+self.repo.delete_snippets_by_version(version_id, user_id)
+self.repo.create_snippets(new_snippets)
+if self.knowledge_service is not None:
+    self.repo.update_version_status(version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+    self.knowledge_service.extract_and_build_knowledge_tree(
+        material_id=material_id, version_id=version_id, user_id=user_id,
+    )
+self.repo.update_version_status(version_id, user_id, ParseStatus.READY.value, reset_errors=True)
+
+# 正确3：无激活版本时回退最新版本
+version = self.repo.get_version_by_id(material.current_version_id, user_id) or \
+    self.repo.get_latest_version(material_id, user_id)
+```
+
+#### 5. Tests Required
+- 门禁失败 → 资料状态 `retake_required`；`retake_required` 筛选返回真实条目。
+- `/ocr-pages` 返回不合格页；仅校验租户归属。
+- 重拍达标 → 调用知识树重建入口 + 知识点非空 + `failed_stage`/`error_message` 清空。
+- 无 `current_version_id` 时重拍回退最新版本成功。
+- 前端详情由接口（非硬编码）填充待重拍列表；轮询转入 `retake_required` 拉取页面。
+
