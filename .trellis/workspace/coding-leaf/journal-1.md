@@ -170,3 +170,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: C3 前端课程信息架构、未分类与归档
+<!-- trellis-session: v=2 fp=26a226939ce39ef5 -->
+
+**Date**: 2026-09-28
+**Task**: C3 前端课程信息架构、未分类与归档
+**Branch**: `master`
+
+### Summary
+
+控制台首屏改为课程列表入口并移除总学习分卡（MasteryDashboardBar），新增未分类与已归档入口；新增课程详情页与文件夹 CRUD/归档/恢复 UI（含 7 天反悔剩余时间纯函数）；资料上传归属课程、未分类资料移动到课程；新增 api/folder.ts、types/folder.ts、folderStore，MaterialUpload/QuickUploadBar 支持 folderId。复核修复：拆分 >300 行文件（api/material.ts → materialUpload.ts、list/index.vue 抽 composable）、补 navigateTo fail 兜底。前端 66 files / 603 tests，lint/type-check/test:unit/build:mp-weixin 全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7f8185` | feat(course): 课程信息架构、未分类与归档（前端） |
+
+### Status
+
+[OK] **Completed**
