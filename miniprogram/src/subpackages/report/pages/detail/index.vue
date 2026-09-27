@@ -240,10 +240,21 @@ function onSelfGradeSuccess(payload: { attempt_item_id: string; score: number })
   }
 }
 
-function onRegradeSuccess(payload: { attempt_item_id: string }): void {
+function onRegradeSuccess(payload: {
+  attempt_item_id: string;
+  status?: string;
+  score?: number | null;
+}): void {
   const target = items.value.find((it) => it.attempt_item_id === payload.attempt_item_id);
   if (target) {
-    target.status = 'pending_regrade';
+    if (payload.status === 'success' && typeof payload.score === 'number') {
+      target.score = payload.score;
+      target.status = 'graded';
+      target.grading_status = 'graded';
+    } else {
+      target.status = 'pending_regrade';
+      target.grading_status = 'pending_regrade';
+    }
   }
   if (currentPracticeId.value) {
     fetchDiagnosisReport(currentPracticeId.value)

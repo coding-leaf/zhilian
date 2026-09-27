@@ -128,6 +128,66 @@ describe('reportFormat pure utility functions', () => {
       const wrongCustom = getGradingStatusInfo({ score: 2.5, max_score: 5.0 });
       expect(wrongCustom.status).toBe('wrong');
     });
+
+    it('prioritizes explicit grading_status over legacy status and score', () => {
+      // pending_regrade wins even with score = 0.0 (avoid being shown as wrong)
+      const pending = getGradingStatusInfo({
+        grading_status: 'pending_regrade',
+        status: 'graded',
+        score: 0.0,
+      });
+      expect(pending.status).toBe('pending_regrade');
+      expect(pending.label).toBe('待重新判题');
+
+      // unanswered wins even with a numeric score
+      const unanswered = getGradingStatusInfo({
+        grading_status: 'unanswered',
+        status: 'answered',
+        score: 0.9,
+      });
+      expect(unanswered.status).toBe('unanswered');
+      expect(unanswered.label).toBe('未作答');
+
+      // graded falls back to score threshold
+      const gradedCorrect = getGradingStatusInfo({
+        grading_status: 'graded',
+        status: 'graded',
+        score: 0.9,
+        max_score: 1.0,
+      });
+      expect(gradedCorrect.status).toBe('correct');
+
+      const gradedWrong = getGradingStatusInfo({
+        grading_status: 'graded',
+        status: 'graded',
+        score: 0.1,
+        max_score: 1.0,
+      });
+      expect(gradedWrong.status).toBe('wrong');
+
+      // graded must win over a stale legacy status='unanswered'
+      const gradedWithStaleStatus = getGradingStatusInfo({
+        grading_status: 'graded',
+        status: 'unanswered',
+        score: 0.8,
+        max_score: 1.0,
+      });
+      expect(gradedWithStaleStatus.status).toBe('correct');
+    });
+
+    it('falls back to legacy status when grading_status is absent', () => {
+      const legacyPending = getGradingStatusInfo({
+        status: 'pending_regrade',
+        score: 0.0,
+      });
+      expect(legacyPending.status).toBe('pending_regrade');
+
+      const legacyUnanswered = getGradingStatusInfo({
+        status: 'unanswered',
+        score: 0.0,
+      });
+      expect(legacyUnanswered.status).toBe('unanswered');
+    });
   });
 
   describe('splitSnippetHighlights / highlightSnippetKeywords', () => {

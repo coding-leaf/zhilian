@@ -182,10 +182,11 @@ describe('Diagnosis API Module', () => {
   });
 
   it('should call requestRegrade with POST /api/v1/grading/regrade and payload', async () => {
+    // Sync regrade contract: success terminal state plus the newly returned score
     const mockResponse = {
       code: 0,
       message: 'success',
-      data: { attempt_item_id: 'att_001', status: 'pending_regrade' },
+      data: { attempt_item_id: 'att_001', status: 'success', score: 4.2 },
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
 
@@ -199,6 +200,8 @@ describe('Diagnosis API Module', () => {
       data: payload,
     });
     expect(res).toEqual(mockResponse);
+    expect(res.data?.status).toBe('success');
+    expect(res.data?.score).toBe(4.2);
   });
 
   it('should call continuePractice with POST /api/v1/practices configured for weakness mode', async () => {

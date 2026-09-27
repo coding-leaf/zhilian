@@ -136,6 +136,7 @@ function getQuestionTypeLabel(type?: string): string {
 
 function getStatus(item: AttemptGradingItem): GradingStatusInfo {
   return getGradingStatusInfo({
+    grading_status: item.grading_status,
     status: item.status,
     score: item.score,
     max_score: item.max_score,
@@ -176,7 +177,10 @@ function hasSnippet(item: AttemptGradingItem): boolean {
 
 function canSelfGrade(item: AttemptGradingItem): boolean {
   const isSubjective = item.question_snapshot?.question_type === 'short_answer';
-  const isPending = item.status === 'pending_regrade' || item.score === null;
+  const isPending =
+    item.grading_status === 'pending_regrade' ||
+    item.status === 'pending_regrade' ||
+    item.score === null;
   return isSubjective || isPending;
 }
 </script>

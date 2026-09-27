@@ -108,6 +108,7 @@ export function getMasteryTierInfo(scoreOrRate?: number | null): MasteryTierInfo
  * @returns Item grading status metadata.
  */
 export function getGradingStatusInfo(item?: {
+  grading_status?: string | null;
   status?: string;
   score?: number | null;
   max_score?: number;
@@ -123,8 +124,8 @@ export function getGradingStatusInfo(item?: {
     };
   }
 
-  // 1. Explicitly marked as pending regrade
-  if (item.status === 'pending_regrade') {
+  // 1. Authoritative grading_status from backend (takes precedence over legacy status/score)
+  if (item.grading_status === 'pending_regrade') {
     return {
       status: 'pending_regrade',
       label: '待重新判题',
@@ -135,8 +136,7 @@ export function getGradingStatusInfo(item?: {
     };
   }
 
-  // 2. Unanswered items
-  if (item.status === 'unanswered') {
+  if (item.grading_status === 'unanswered') {
     return {
       status: 'unanswered',
       label: '未作答',
@@ -147,7 +147,35 @@ export function getGradingStatusInfo(item?: {
     };
   }
 
-  // 3. Submitted but missing score
+  // 2. Legacy fallback is only allowed when grading_status is absent entirely.
+  //    When grading_status === 'graded', the legacy `status` field is stale for real
+  //    ORM items (always "unanswered"/"answered") and must not override the verdict.
+  const hasExplicitStatus = item.grading_status !== null && item.grading_status !== undefined;
+
+  if (!hasExplicitStatus && item.status === 'pending_regrade') {
+    return {
+      status: 'pending_regrade',
+      label: '待重新判题',
+      color: '#F59E0B',
+      bgColor: '#FFFBEB',
+      borderColor: '#FDE68A',
+      textColor: '#92400E',
+    };
+  }
+
+  // 3. Unanswered items (legacy fallback only)
+  if (!hasExplicitStatus && item.status === 'unanswered') {
+    return {
+      status: 'unanswered',
+      label: '未作答',
+      color: '#94A3B8',
+      bgColor: '#F1F5F9',
+      borderColor: '#CBD5E1',
+      textColor: '#64748B',
+    };
+  }
+
+  // 4. Submitted but missing score
   if (item.score === null || item.score === undefined) {
     return {
       status: 'pending_regrade',
@@ -159,7 +187,7 @@ export function getGradingStatusInfo(item?: {
     };
   }
 
-  // 4. Number score evaluated
+  // 5. Number score evaluated
   const maxScore = typeof item.max_score === 'number' && item.max_score > 0 ? item.max_score : 1.0;
   if (item.score >= maxScore * 0.6) {
     return {

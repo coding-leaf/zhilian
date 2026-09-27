@@ -144,8 +144,8 @@ export function selfGradeQuestion(
  */
 export function requestRegrade(
   payload: RegradePayload,
-): Promise<ApiResponse<{ attempt_item_id: string; status: string }>> {
-  return request<{ attempt_item_id: string; status: string }>({
+): Promise<ApiResponse<{ attempt_item_id: string; status: string; score?: number | null }>> {
+  return request<{ attempt_item_id: string; status: string; score?: number | null }>({
     url: '/api/v1/grading/regrade',
     method: 'POST',
     data: payload,

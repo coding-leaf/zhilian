@@ -251,7 +251,7 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('opens regrade modal and updates status on regrade success', async () => {
+  it('opens regrade modal and updates score on synchronous regrade success', async () => {
     const fetchSpy = vi.spyOn(diagnosisApi, 'fetchDiagnosisReport').mockResolvedValue({
       code: 0,
       message: 'success',
@@ -277,8 +277,14 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     await regradeModal.vm.$emit('success', {
       attempt_item_id: 'att_02',
       reason: '核心关键点未识别',
+      status: 'success',
+      score: 4.2,
     });
 
+    // 重判同步完成：就地更新新分数与判级，不再停留在“待重新判题”
+    const q2Score = wrapper.findAll('.score-info')[1];
+    expect(q2Score.text()).toBe('4.2 / 5 分');
+    expect(wrapper.text()).not.toContain('待判定');
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 

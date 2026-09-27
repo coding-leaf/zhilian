@@ -70,6 +70,7 @@ export interface RawPracticeItem {
   question_id?: string;
   order_index?: number;
   status?: string;
+  grading_status?: string | null;
   user_answer?: unknown;
   time_spent_seconds?: number;
   duration_seconds?: number;

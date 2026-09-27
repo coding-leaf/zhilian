@@ -89,7 +89,10 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   (e: 'update:visible', visible: boolean): void;
   (e: 'submit', payload: { attempt_item_id: string; reason: string }): void;
-  (e: 'success', payload: { attempt_item_id: string; reason: string }): void;
+  (
+    e: 'success',
+    payload: { attempt_item_id: string; reason: string; status?: string; score?: number | null },
+  ): void;
 }>();
 
 const localReason = ref('');
@@ -132,8 +135,12 @@ async function handleSubmit(): Promise<void> {
   try {
     const res = await requestRegrade(payload);
     if (res && (res.code === 0 || res.data)) {
-      uni.showToast({ title: '重判申请已提交', icon: 'success' });
-      emit('success', payload);
+      uni.showToast({ title: '重新判题已完成', icon: 'success' });
+      emit('success', {
+        ...payload,
+        status: res.data?.status,
+        score: res.data?.score,
+      });
       emit('update:visible', false);
     } else {
       uni.showToast({ title: res?.message || '提交失败', icon: 'none' });

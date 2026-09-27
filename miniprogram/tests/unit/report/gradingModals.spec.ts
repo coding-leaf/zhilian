@@ -220,7 +220,7 @@ describe('Grading Modals (SelfGradeModal & RegradeModal)', () => {
       const regradeSpy = vi.spyOn(diagnosisApi, 'requestRegrade').mockResolvedValue({
         code: 0,
         message: 'success',
-        data: { attempt_item_id: 'att_002', status: 'pending_regrade' },
+        data: { attempt_item_id: 'att_002', status: 'success', score: 4.2 },
       });
 
       const wrapper = mount(RegradeModal, {
@@ -248,10 +248,13 @@ describe('Grading Modals (SelfGradeModal & RegradeModal)', () => {
           reason: '模型未识别到核心公式证明过程',
         },
       ]);
+      // success 事件必须携带重判真实终态与回传新分数，供上层就地更新
       expect(wrapper.emitted('success')?.[0]).toEqual([
         {
           attempt_item_id: 'att_002',
           reason: '模型未识别到核心公式证明过程',
+          status: 'success',
+          score: 4.2,
         },
       ]);
       expect(wrapper.emitted('update:visible')?.[0]).toEqual([false]);
