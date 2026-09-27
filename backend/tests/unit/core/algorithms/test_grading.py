@@ -35,6 +35,7 @@ from app.core.algorithms.grading import (
     ObjectiveGradingRule,
     QuestionType,
     TransitionReason,
+    _build_subjective_offline_result,
     arbitrate_llm_transition,
     calculate_cosine_similarity,
     calculate_text_lexical_similarity,
@@ -47,6 +48,7 @@ from app.core.algorithms.grading import (
     normalize_boolean_answer,
     normalize_fill_blank_text,
     normalize_objective_token,
+    round_half_up,
 )
 
 
@@ -531,6 +533,43 @@ class TestSubjectiveThresholdBoundaries:
         )
         # 验证得分舍入为 0.5 的倍数
         assert result.score % 0.5 == 0.0
+
+
+class TestHalfUpScoreRounding:
+    """GRADE-009: 0.5 粒度 half-up 舍入回归测试套件。"""
+
+    def test_round_half_up_even_boundary_rounds_up(self) -> None:
+        """偶数倍 .5 边界必须向上舍入（银行家舍入会错误向下）。"""
+        # round(9.25 / 0.5) = round(18.5) 银行家舍入得 18 -> 9.0，half-up 应为 19 -> 9.5
+        assert round_half_up(9.25, 0.5) == 9.5
+        assert round_half_up(7.25, 0.5) == 7.5
+        assert round_half_up(5.25, 0.5) == 5.5
+
+    def test_round_half_up_odd_boundary_and_general(self) -> None:
+        """奇数倍边界与普通数值舍入。"""
+        assert round_half_up(8.75, 0.5) == 9.0
+        assert round_half_up(8.25, 0.5) == 8.5
+        assert round_half_up(8.2, 0.5) == 8.0
+        assert round_half_up(7.3, 0.5) == 7.5
+        assert round_half_up(8.24, 0.5) == 8.0
+        assert round_half_up(0.0, 0.5) == 0.0
+
+    def test_round_half_up_non_positive_unit_returns_value(self) -> None:
+        """非正粒度单位不改变原值。"""
+        assert round_half_up(7.3, 0.0) == 7.3
+
+    def test_offline_subjective_builder_uses_half_up(self) -> None:
+        """离线主观题路径 raw=9.25 在 0.5 粒度下必须得 9.5 而非银行家舍入的 9.0。"""
+        result = _build_subjective_offline_result(
+            match_score=0.925,
+            max_score=10.0,
+            config=GradingConfig(),
+            hit_keywords=(),
+            missing_keywords=(),
+            details={},
+        )
+        assert result.score == 9.5
+        assert result.is_correct is True
 
 
 class TestNegationInversionPair:

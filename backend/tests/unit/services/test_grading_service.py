@@ -486,7 +486,7 @@ class TestGradingService:
         service.grade_practice(user_id=user_id, practice_id=practice.id)
         assert practice.status == PracticeStatus.PARTIALLY_GRADED.value
 
-        # Clear fault and set success canned output
+        # 清空故障并设置成功预设 (4.8 按 0.5 粒度 half-up 收敛为 5.0，见 GRADE-010)
         fake_llm.reset()
         fake_llm.set_canned_structured_response(
             LLMGradingOutput,
@@ -498,9 +498,9 @@ class TestGradingService:
 
         assert record.channel == GradingChannel.AI.value
         assert record.status == GradingStatus.SUCCESS.value
-        assert record.score == 4.8
+        assert record.score == 5.0
         assert record.is_final is True
-        assert item_sub.score == 4.8
+        assert item_sub.score == 5.0
         assert practice.status == PracticeStatus.COMPLETED.value
 
         # Check alias
@@ -672,3 +672,174 @@ class TestGradingService:
         assert detail.latest_grading is not None
         assert detail.latest_grading.score == 4.0
         assert len(detail.records) >= 1
+
+    # --------------------------------------------------------------------------
+    # GRADE-010: LLM 判分/重判 0.5 粒度收敛
+    # --------------------------------------------------------------------------
+
+    def test_llm_grading_rounds_score_to_half_unit(
+        self,
+        session: Session,
+        setup_practice_env: dict[str, Any],
+        fake_llm: FakeLLMAdapter,
+    ) -> None:
+        """GRADE-010: LLM 首次判分分值必须收敛到 0.5 粒度 (7.3 -> 7.5)。"""
+        user_id = setup_practice_env["user_id"]
+        practice = setup_practice_env["practice"]
+        item_sub = setup_practice_env["item_sub"]
+        item_sub.max_score = 10.0
+        session.flush()
+
+        fake_llm.set_canned_structured_response(
+            LLMGradingOutput,
+            LLMGradingOutput(score=7.3, confidence=0.9, feedback="AI判分"),
+        )
+        service = GradingService(session=session, llm_adapter=fake_llm)
+        summary = service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        sub_record = next(r for r in summary.records if r.attempt_item_id == item_sub.id)
+        assert sub_record.score == 7.5
+        assert item_sub.score == 7.5
+
+    def test_llm_grading_rounds_down_below_half_unit(
+        self,
+        session: Session,
+        setup_practice_env: dict[str, Any],
+        fake_llm: FakeLLMAdapter,
+    ) -> None:
+        """GRADE-010: 8.24 分按 0.5 粒度 half-up 收敛为 8.0。"""
+        user_id = setup_practice_env["user_id"]
+        practice = setup_practice_env["practice"]
+        item_sub = setup_practice_env["item_sub"]
+        item_sub.max_score = 10.0
+        session.flush()
+
+        fake_llm.set_canned_structured_response(
+            LLMGradingOutput,
+            LLMGradingOutput(score=8.24, confidence=0.9, feedback="AI判分"),
+        )
+        service = GradingService(session=session, llm_adapter=fake_llm)
+        summary = service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        sub_record = next(r for r in summary.records if r.attempt_item_id == item_sub.id)
+        assert sub_record.score == 8.0
+        assert item_sub.score == 8.0
+
+    def test_regrade_rounds_score_to_half_unit(
+        self,
+        session: Session,
+        setup_practice_env: dict[str, Any],
+        fake_llm: FakeLLMAdapter,
+    ) -> None:
+        """GRADE-010: 重判分路径同样收敛到 0.5 粒度 (7.3 -> 7.5)。"""
+        user_id = setup_practice_env["user_id"]
+        practice = setup_practice_env["practice"]
+        item_sub = setup_practice_env["item_sub"]
+        item_sub.max_score = 10.0
+        session.flush()
+
+        fake_llm.set_canned_structured_response(
+            LLMGradingOutput,
+            LLMGradingOutput(score=4.0, confidence=0.9, feedback="初始判分"),
+        )
+        service = GradingService(session=session, llm_adapter=fake_llm)
+        service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        fake_llm.set_canned_structured_response(
+            LLMGradingOutput,
+            LLMGradingOutput(score=7.3, confidence=0.95, feedback="重判得分"),
+        )
+        record = service.regrade_attempt(
+            user_id=user_id, dto=RegradeAttemptDTO(attempt_item_id=item_sub.id)
+        )
+
+        assert record.score == 7.5
+        assert item_sub.score == 7.5
+
+    # --------------------------------------------------------------------------
+    # GRADE-011: 自评 is_correct 显式覆盖与缺省回退
+    # --------------------------------------------------------------------------
+
+    def test_self_evaluate_explicit_is_correct_override(
+        self, session: Session, setup_practice_env: dict[str, Any]
+    ) -> None:
+        """GRADE-011: 显式 is_correct 必须优先于 score > 0 推导。"""
+        user_id = setup_practice_env["user_id"]
+        item_sub = setup_practice_env["item_sub"]
+        service = GradingService(session=session)
+
+        # score=5.0 但显式判错
+        record_false = service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=5.0, is_correct=False),
+        )
+        assert record_false.grading_metadata["is_correct"] is False
+
+        # score=0.0 但显式判对
+        record_true = service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=0.0, is_correct=True),
+        )
+        assert record_true.grading_metadata["is_correct"] is True
+
+    def test_self_evaluate_defaults_to_score_derivation(
+        self, session: Session, setup_practice_env: dict[str, Any]
+    ) -> None:
+        """GRADE-011: 未显式传 is_correct 时回退 score > 0 判定（零回归）。"""
+        user_id = setup_practice_env["user_id"]
+        item_sub = setup_practice_env["item_sub"]
+        service = GradingService(session=session)
+
+        record_pos = service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=3.0),
+        )
+        assert record_pos.grading_metadata["is_correct"] is True
+
+        record_zero = service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=0.0),
+        )
+        assert record_zero.grading_metadata["is_correct"] is False
+
+    # --------------------------------------------------------------------------
+    # GRADE-016: 判题事务安全与生效记录保护
+    # --------------------------------------------------------------------------
+
+    def test_grade_attempt_algorithm_exception_degrades_safely(
+        self,
+        session: Session,
+        setup_practice_env: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GRADE-016: 算法异常不得先失效旧记录，须安全降级且不丢原记录、不崩溃整卷。"""
+        user_id = setup_practice_env["user_id"]
+        practice = setup_practice_env["practice"]
+        item_sub = setup_practice_env["item_sub"]
+        service = GradingService(session=session)
+
+        # 先建立一条既有生效记录
+        original = service.self_evaluate_attempt(
+            user_id=user_id,
+            dto=SelfEvaluateDTO(attempt_item_id=item_sub.id, score=4.0, feedback="原始自评"),
+        )
+        assert original.is_final is True
+
+        def _raise(*args: Any, **kwargs: Any) -> None:
+            raise ValueError("脏题目快照导致算法异常")
+
+        monkeypatch.setattr("app.services.grading.match_and_grade_answer", _raise)
+
+        # 整卷判题不得因单题脏快照崩溃
+        summary = service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        degraded = next(r for r in summary.records if r.attempt_item_id == item_sub.id)
+        assert degraded.status == GradingStatus.PENDING_REGRADE.value
+        assert degraded.is_final is True
+
+        all_records = service.grading_repo.list_records_by_attempt_item(
+            item_sub.id, user_id=user_id
+        )
+        # 原生效记录未丢失，且始终只有唯一一条生效记录
+        assert len(all_records) >= 2
+        assert sum(1 for r in all_records if r.is_final) == 1

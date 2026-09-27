@@ -23,8 +23,10 @@ from sqlalchemy.orm import Session
 
 from app.core.algorithms.grading import (
     OBJECTIVE_QUESTION_TYPES,
+    SCORE_ROUNDING_UNIT,
     GradingRubricItem,
     match_and_grade_answer,
+    round_half_up,
 )
 from app.core.errors import (
     AttemptItemNotFoundError,
@@ -64,6 +66,7 @@ class SelfEvaluateDTO:
     attempt_item_id: uuid.UUID
     score: float
     feedback: str | None = None
+    is_correct: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -311,12 +314,12 @@ class GradingService:
     ) -> tuple[GradingRecord, bool]:
         """单题判题处理内部函数。
 
+        判题事务安全 (GRADE-016)：先完成算法计算，仅在即将持久化新生效记录前
+        才将旧记录置为非最终；算法异常时安全降级为待重判记录，绝不中断整卷判题。
+
         Returns:
             tuple[GradingRecord, bool]: (生效的判题记录, 是否触发待重判)
         """
-        # 将该题已有最终记录置为失效
-        self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
-
         user_ans = item.user_answer
         is_actually_answered = bool(item.is_answered and user_ans and user_ans.strip())
 
@@ -325,6 +328,7 @@ class GradingService:
             item.score = 0.0
             item.is_answered = False
 
+            self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
             record = GradingRecord(
                 id=uuid.uuid4(),
                 practice_id=practice.id,
@@ -344,44 +348,57 @@ class GradingService:
             self.grading_repo.create_record(record, user_id=user_id)
             return record, False
 
-        # 2. 提取题目快照参数并调用算法核
+        # 2. 提取题目快照参数并调用算法核（防御性兜底，脏快照不拖垮整卷）
         snapshot = item.question_snapshot or {}
-        q_type = snapshot.get("question_type", "")
-        ref_answer = snapshot.get("answer", "")
-        options = snapshot.get("options", [])
-        rubric_data = snapshot.get("grading_rubric")
-        parsed_rubric: list[GradingRubricItem] = []
-        if isinstance(rubric_data, dict):
-            pts = rubric_data.get("points") or rubric_data.get("dimensions") or []
-            if isinstance(pts, list):
-                for p in pts:
-                    if isinstance(p, dict):
-                        raw_weight = (
-                            p.get("weight") if p.get("weight") is not None else p.get("score", 1.0)
-                        )
-                        parsed_rubric.append(
-                            GradingRubricItem(
-                                point_id=str(p.get("point_id", "")),
-                                description=str(p.get("description", "")),
-                                weight=float(raw_weight) if raw_weight is not None else 1.0,
-                                keywords=tuple(p.get("keywords", ())),
-                                negation_words=tuple(p.get("negation_words", ())),
+        try:
+            q_type = snapshot.get("question_type", "")
+            ref_answer = snapshot.get("answer", "")
+            options = snapshot.get("options", [])
+            rubric_data = snapshot.get("grading_rubric")
+            parsed_rubric: list[GradingRubricItem] = []
+            if isinstance(rubric_data, dict):
+                pts = rubric_data.get("points") or rubric_data.get("dimensions") or []
+                if isinstance(pts, list):
+                    for p in pts:
+                        if isinstance(p, dict):
+                            raw_weight = (
+                                p.get("weight")
+                                if p.get("weight") is not None
+                                else p.get("score", 1.0)
                             )
-                        )
+                            parsed_rubric.append(
+                                GradingRubricItem(
+                                    point_id=str(p.get("point_id", "")),
+                                    description=str(p.get("description", "")),
+                                    weight=float(raw_weight) if raw_weight is not None else 1.0,
+                                    keywords=tuple(p.get("keywords", ())),
+                                    negation_words=tuple(p.get("negation_words", ())),
+                                )
+                            )
 
-        result = match_and_grade_answer(
-            question_type=q_type,
-            user_answer=user_ans or "",
-            reference_answer=ref_answer,
-            max_score=item.max_score,
-            options=options,
-            grading_rubric=parsed_rubric,
-        )
+            result = match_and_grade_answer(
+                question_type=q_type,
+                user_answer=user_ans or "",
+                reference_answer=ref_answer,
+                max_score=item.max_score,
+                options=options,
+                grading_rubric=parsed_rubric,
+            )
+        except Exception as exc:
+            # 快照格式或未知题型导致算法异常：安全降级为待重判，不中断整卷且不丢原记录
+            logger.warning("单题判分算法异常，安全降级为待重判: %s", str(exc)[:200])
+            return self._build_pending_regrade_record(
+                item=item,
+                practice_id=practice.id,
+                user_id=user_id,
+                error_msg=str(exc)[:200],
+            )
 
         # 3. 离线判分分支 (客观题或主观题高置信度离线判分)
         if not result.requires_llm:
             item.score = result.score
 
+            self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
             record = GradingRecord(
                 id=uuid.uuid4(),
                 practice_id=practice.id,
@@ -458,11 +475,13 @@ class GradingService:
                 options=options,
             )
 
-            final_score = min(item.max_score, max(0.0, float(output.score)))
+            clamped_score = min(item.max_score, max(0.0, float(output.score)))
+            final_score = round_half_up(clamped_score, SCORE_ROUNDING_UNIT)
             is_correct = bool(final_score >= item.max_score * 0.6)
 
             item.score = final_score
 
+            self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
             record = GradingRecord(
                 id=uuid.uuid4(),
                 practice_id=practice_id,
@@ -508,6 +527,8 @@ class GradingService:
         # 待重判时作答项得分为“未定分”(None)，与真实 0 分区分，供前端判定为待重新判题
         item.score = None
 
+        # 仅在即将生成新生效记录前失效旧记录，保证任何异常前旧生效记录仍完整
+        self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
         record = GradingRecord(
             id=uuid.uuid4(),
             practice_id=practice_id,
@@ -601,7 +622,8 @@ class GradingService:
             resolved_score = float(dto.score)
             resolved_feedback = dto.feedback
             if resolved_is_correct is None:
-                resolved_is_correct = bool(resolved_score > 0)
+                # 优先采纳用户显式指定的对错；为空时留待 score > 0 回退判定
+                resolved_is_correct = dto.is_correct
 
         if resolved_user_id is None or resolved_item_id is None or resolved_score is None:
             raise GradingNotAllowedError("自评必须提供 user_id, attempt_item_id 及 score 参数")
@@ -821,7 +843,8 @@ class GradingService:
                 details={"attempt_item_id": str(resolved_item_id)},
             ) from exc
 
-        final_score = min(item.max_score, max(0.0, float(output.score)))
+        clamped_score = min(item.max_score, max(0.0, float(output.score)))
+        final_score = round_half_up(clamped_score, SCORE_ROUNDING_UNIT)
         is_correct = bool(final_score >= item.max_score * 0.6)
 
         # 4. 原记录置为失效

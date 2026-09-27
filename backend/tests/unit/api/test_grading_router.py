@@ -162,6 +162,42 @@ async def test_self_evaluate_success(
 
 
 @pytest.mark.asyncio
+async def test_self_evaluate_passes_is_correct_flag(
+    mock_user: User,
+    mock_grading_service: MagicMock,
+) -> None:
+    """GRADE-011: 自评请求体中的 is_correct 必须逐层透传到 DTO，不得静默丢弃。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_grading_service] = lambda: mock_grading_service
+
+    attempt_item_id = uuid.uuid4()
+    mock_record = make_fake_grading_record(
+        user_id=mock_user.id,
+        attempt_item_id=attempt_item_id,
+        score=5.0,
+    )
+    mock_grading_service.self_evaluate_attempt.return_value = mock_record
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/v1/grading/self-evaluate",
+            json={
+                "attempt_item_id": str(attempt_item_id),
+                "score": 5.0,
+                "is_correct": False,
+            },
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_grading_service.self_evaluate_attempt.call_args.kwargs
+    assert call_kwargs["dto"].is_correct is False
+
+
+@pytest.mark.asyncio
 async def test_self_evaluate_objective_not_allowed(
     mock_user: User,
     mock_grading_service: MagicMock,

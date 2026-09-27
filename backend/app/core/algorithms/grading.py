@@ -11,6 +11,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 # ==============================================================================
@@ -779,6 +780,28 @@ def _calculate_semantic_similarity(
     return calculate_text_lexical_similarity(user_text, reference_text)
 
 
+def round_half_up(value: float, unit: float = SCORE_ROUNDING_UNIT) -> float:
+    """确定性 half-up（四舍五入）分粒度舍入纯函数。
+
+    基于 ``decimal.Decimal`` 与 ``ROUND_HALF_UP``，避免 Python 内置 ``round``
+    的银行家舍入（round-half-to-even）在 ``k.5`` 偶数边界处向下舍入导致少给分。
+    例如 ``round_half_up(9.25, 0.5) == 9.5``，而 ``round(9.25 / 0.5) * 0.5 == 9.0``。
+
+    Args:
+        value: 待舍入的原始分值。
+        unit: 舍入粒度（默认 0.5 分，必须为正）。
+
+    Returns:
+        float: 舍入到 unit 整数倍的分值；unit <= 0 时原样返回 value。
+    """
+    if unit <= 0:
+        return value
+    value_decimal = Decimal(str(value))
+    unit_decimal = Decimal(str(unit))
+    rounded_units = (value_decimal / unit_decimal).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return float(rounded_units * unit_decimal)
+
+
 def _build_subjective_offline_result(
     match_score: float,
     max_score: float,
@@ -791,8 +814,7 @@ def _build_subjective_offline_result(
     if match_score >= config.upper_similarity_threshold:
         raw_score = max_score * match_score
         unit = config.score_rounding_unit
-        rounded_score = round(raw_score / unit) * unit if unit > 0 else raw_score
-        final_score = min(max_score, max(0.0, round(rounded_score, 4)))
+        final_score = min(max_score, max(0.0, round(round_half_up(raw_score, unit), 4)))
         return GradingResult(
             score=final_score,
             max_score=max_score,

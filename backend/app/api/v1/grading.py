@@ -67,6 +67,7 @@ async def self_evaluate(
             attempt_item_id=request.attempt_item_id,
             score=request.score,
             feedback=request.feedback,
+            is_correct=request.is_correct,
         )
         record = grading_service.self_evaluate_attempt(
             user_id=current_user.id,
