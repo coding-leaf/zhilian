@@ -1,5 +1,10 @@
 # Quality Guidelines
 
+> **事实源**：`miniprogram/src/**`、`miniprogram/tests/**`、`miniprogram/vite.config.ts`、`miniprogram/.eslintrc.cjs`
+> **最后核对**：2026-09-28 @ ca062a1
+> **核对方式**：`rg "useMaterialPolling|usePracticeSession|setReport|MAX_FILE_SIZES" miniprogram/src miniprogram/tests`
+> 本文档 16 个 scenario 已于上述提交逐条对照代码核对，审计台账见 `.trellis/tasks/09-28-refresh-trellis-spec/audit-frontend.md`。
+
 > Code quality standards and verification baseline for frontend development.
 
 ---
@@ -61,16 +66,24 @@ pnpm run test:unit     # Vitest unit test suite
 
 #### 2. Signatures
 ```typescript
+// miniprogram/src/subpackages/material/composables/useMaterialPolling.ts
+export function useMaterialPolling(
+  materialId: Ref<string> | string,
+  options?: UseMaterialPollingOptions,
+): { status; materialData; material; isPolling; error; startPolling; stopPolling };
+
 interface UseMaterialPollingOptions {
-  materialId?: MaybeRef<string>;
-  initialInterval?: number; // 默认 1500ms
-  maxInterval?: number;     // 默认 8000ms
-  backoffFactor?: number;   // 默认 1.5
-  maxTimeoutMs?: number;    // 默认 180,000ms (3分钟熔断保护)
+  interval?: number;         // 默认 1500ms
+  backoffFactor?: number;    // 默认 1.5
+  maxInterval?: number;      // 默认 8000ms
+  maxTimeout?: number;       // 默认 180000ms (3分钟熔断保护)
+  immediate?: boolean;       // 默认 true
+  onStatusChange?: (status: MaterialStatus) => void;
+  onComplete?: (data: MaterialItem) => void;
+  onError?: (err: unknown) => void;
   onTimeout?: () => void;
-  onSuccess?: (material: MaterialItem) => void;
-  onError?: (error: unknown) => void;
 }
+// 列表版：useMaterialListPolling({ items, isPageVisible, onItemUpdated })
 ```
 
 #### 3. Contracts
@@ -102,6 +115,14 @@ const scheduleNext = (currentInterval: number) => {
   }, currentInterval);
 };
 ```
+
+#### 代码锚点
+- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::useMaterialPolling`
+- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::scheduleNext`
+- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::isTerminalStatus`
+- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::handleTimeout`
+- `miniprogram/src/subpackages/material/composables/useMaterialListPolling.ts::useMaterialListPolling`
+- `miniprogram/tests/unit/composables/useMaterialPolling.spec.ts`
 
 ---
 
@@ -146,6 +167,15 @@ function loadData(items: MaterialItem[]) {
 }
 ```
 
+#### 代码锚点
+- `miniprogram/src/App.vue::onLaunch`
+- `miniprogram/src/App.vue::onShow`
+- `miniprogram/src/stores/userStore.ts::initFromStorage`
+- `miniprogram/src/stores/userStore.ts::hydrateProfile`
+- `miniprogram/src/stores/userStore.ts::logout`
+- `miniprogram/src/stores/materialStore.ts::addMaterial`
+- `miniprogram/src/subpackages/material/pages/list/index.vue::listData`
+
 ---
 
 ### Scenario: Material Status Filter & Parse Progress Contract
@@ -169,7 +199,7 @@ interface MaterialItem {
 - **状态语义映射（后端 Service 统一解析）**：
   - `parsing` → `[pending, parsing]`（多状态聚合）
   - `ready` / `completed` → `[ready]`
-  - `retake_required` → `[]`（资料主表无该状态，诚实返回空列表，禁止回退为“全部”）
+  - `retake_required` → `[retake_required]`（资料主表**存在**该状态 `MaterialStatus.RETAKE_REQUIRED`，后端按单值过滤；API 层 `valid_statuses` 接纳 `retake_required` / `completed` 两个前端别名）
   - 其余合法状态 → 单值过滤
 - **解析进度装配禁止 N+1**：列表装配 `parse_status`/`progress_percentage` 时，必须通过 `selectinload(Material.versions)` 等批量方式预加载版本，查询数须为常数级（与 page_size 无关），严禁在 item 循环内逐条查版本表。
 - **版本选择语义**：优先 `current_version_id` 命中；否则取 `version_number` 最大者（`Material.versions` 已按 `version_number desc` 排序，`versions[0]` 即最新）。
@@ -189,6 +219,17 @@ stmt = stmt.options(selectinload(Material.versions))
 # ...
 version = self._pick_loaded_version(item)  # versions[0] 即最新，或命中 current_version_id
 ```
+
+#### 代码锚点
+- `miniprogram/src/api/material.ts::fetchMaterialList`（空参数清洗）
+- `miniprogram/src/utils/request.ts::request`（GET data 清洗 `undefined/null/''`）
+- `miniprogram/src/types/material.ts::MaterialItem`（`parse_status` / `progress_percentage`）
+- `miniprogram/src/subpackages/material/pages/list/index.vue::currentStatus`
+- `miniprogram/src/subpackages/material/components/MaterialCard.vue::PARSE_STEP_LABELS`
+- `backend/app/services/material.py::MaterialService._resolve_status_filter`
+- `backend/app/api/v1/materials.py`（`cleaned_status` / `valid_statuses`）
+- `backend/app/repositories/material.py`（`selectinload(Material.versions)`）
+- `backend/app/services/material.py::MaterialService._pick_loaded_version`
 
 ---
 
@@ -223,6 +264,14 @@ uni.navigateTo({
 #### 4. Tests Required
 - 页面单测覆盖参数解析：`material_id` / `materialId` / `id` 三种入参均能正确加载。
 
+#### 代码锚点
+- `miniprogram/src/subpackages/material/utils/questionGeneration.ts::QUESTION_PAGE_PATH`
+- `miniprogram/src/subpackages/material/utils/questionGeneration.ts::navigateToQuestionPage`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::initPage`
+- `miniprogram/src/subpackages/material/composables/useMaterialCardActions.ts::handleCardClick`
+- `miniprogram/src/subpackages/material/pages/list/index.vue::listData`
+- `miniprogram/tests/unit/pages/questionList.spec.ts`
+
 ---
 
 ### Scenario: WeChat Mini-Program 禁止递归组件，深层树用扁平化渲染
@@ -250,7 +299,7 @@ export function flattenVisibleTree(
 - **深层树渲染路径**：数据仍是嵌套树 → 用纯函数 `flattenVisibleTree` 前序展开为「可见行（`node` + `depth`），折叠节点的子孙被裁剪」→ 页面**单层** `v-for` 渲染行组件，`level` 传渲染 `depth`。
 - 折叠/级联语义：行组件持有完整 `node`（含 `children`），级联勾选继续用 `collectNodeAndDescendantIds` + `toggleKnowledgeSubtree`；「全选/覆盖率」基于全量 `flattenKnowledgeTree`，与折叠状态无关。
 - **勾选态 O(N) 预算**：页面必须用 `buildCheckStatusMap(nodes, selectedSet)`（单次自下而上遍历，O(N)）预计算 `nodeId -> checked/indeterminate/unchecked` 并作为 prop 下传，行组件只读映射；**禁止**逐行调用 `getNodeCheckStatus` 重走整棵子树并新建 Set（近似 O(N²)，大树/全选时卡顿）。`getNodeCheckStatus` 保留为单节点兜底（直接挂载行组件的场景）。
-- **加载三态**：树页区分 loading / empty / error（错误态提供「重新加载」）；`loadKnowledgeTree` 失败置 `error=true`，成功复位。
+- **加载三态**：树页区分 loading / empty / error（错误态提供「重新加载」）；`loadKnowledgeTree` 失败置 `loadError=true`，成功复位。
 
 #### 4. Validation & Error Matrix
 - `nodes` 非数组 / `null` -> `flattenVisibleTree` 返回 `[]`，不抛错。
@@ -292,6 +341,18 @@ const visibleRows = computed(() =>
 - 纯函数单测：默认全展开的 `id`/`depth` 序列、折叠根节点仅保留自身、折叠中间节点仅裁剪其子树、空/`null`/畸形输入不抛错。
 - 页面单测断言：折叠后子孙文本消失且节点自身保留；折叠态下「全选」仍覆盖整棵树。
 - 编译产物断言：组件 `.json` 的 `usingComponents` 不含自引用键；组件 `.js` 不含自引用模块加载器。
+
+#### 代码锚点
+- `miniprogram/src/subpackages/material/utils/tree.ts::flattenVisibleTree`
+- `miniprogram/src/subpackages/material/utils/tree.ts::KnowledgeTreeRow`
+- `miniprogram/src/subpackages/material/utils/tree.ts::collectNodeAndDescendantIds`
+- `miniprogram/src/subpackages/material/utils/tree.ts::buildCheckStatusMap`
+- `miniprogram/src/subpackages/material/utils/tree.ts::getNodeCheckStatus`
+- `miniprogram/src/stores/materialStore.ts::toggleKnowledgeSubtree`
+- `miniprogram/src/subpackages/material/components/KnowledgeTreeNode.vue::handleToggleSelect`
+- `miniprogram/src/subpackages/material/pages/knowledge-tree/index.vue::loadKnowledgeTree`
+- `miniprogram/tests/unit/materialTreeUtils.spec.ts`
+- `miniprogram/tests/unit/pages/knowledgeTreePage.spec.ts`
 
 ---
 
@@ -353,6 +414,16 @@ function onSuccess() {
 - `storage.setItem` 抛 `AppError(10001)` 时：不抛出、store 作答保留、`saveAnswerDraft` 仍被调度（spy 断言）。
 - 交卷成功路径的 `clearDraftFromStorage` 抛错时：不阻断跳转，仍判定成功。
 
+#### 代码锚点
+- `miniprogram/src/subpackages/practice/utils/submitKey.ts::getOrCreateSubmitKey`
+- `miniprogram/src/subpackages/practice/utils/submitKey.ts::clearSubmitKey`
+- `miniprogram/src/utils/storage.ts::validateStoragePayload`（超限抛 `AppError(10001)`）
+- `miniprogram/src/subpackages/practice/utils/draft.ts::saveDraftToStorage`（try/catch 降级）
+- `miniprogram/src/subpackages/practice/utils/draft.ts::clearDraftFromStorage`（try/catch 降级）
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::syncSingleDraft`（身份令牌）
+- `miniprogram/src/subpackages/practice/pages/session/index.vue::handleConfirmSubmit`
+- `miniprogram/tests/unit/practice/submitKey.spec.ts`
+
 
 
 
@@ -380,6 +451,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 4. Tests Required
 - 刷新后 `userStore.tokens` 与 storage 严格同步；重放 1 次后仍 401 → 抛 20001 且不再刷新；8000 个中文字符（~24KB，`.length` 未超）必须触发 `AppError(10001)`。
 
+#### 代码锚点
+- `miniprogram/src/utils/request.ts::setTokenRefreshListener`
+- `miniprogram/src/utils/request.ts::handle401Error`
+- `miniprogram/src/utils/request.ts::executeRefreshToken`（`TOKEN_REFRESH_TIMEOUT_MS`）
+- `miniprogram/src/utils/request.ts::MAX_AUTH_RETRY_COUNT`
+- `miniprogram/src/types/common.ts::RequestOptions`（`_retryCount`）
+- `miniprogram/src/utils/storage.ts::calculateUtf8Bytes`（`TextEncoder`）
+- `miniprogram/src/stores/userStore.ts::setTokenRefreshListener`
+- `miniprogram/tests/unit/utils/request.spec.ts`
+- `miniprogram/tests/unit/utils/storage.spec.ts`
+
 ### Scenario: Material File Validation, Tree Check-State & List Loading Contracts
 
 #### 1. Scope / Trigger
@@ -395,6 +477,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 3. Tests Required
 - 15MB jpg 被拒 / 15MB pdf 通过；pptx/txt/md 被拒（收窄断言）；`getNodeCheckStatus` 叶子/混合/空输入；切换资料后选中与折叠归零；分页偏移重复数据去重；首屏仅发 1 次列表请求。
 
+#### 代码锚点
+- `miniprogram/src/utils/file.ts::MAX_FILE_SIZES`
+- `miniprogram/src/utils/file.ts::validateMaterialFile`
+- `miniprogram/src/types/material.ts::MaterialReshootResponse`
+- `miniprogram/src/api/materialUpload.ts::retakeMaterialPage`
+- `miniprogram/src/subpackages/material/utils/tree.ts::getNodeCheckStatus`
+- `miniprogram/src/stores/materialStore.ts::clearKnowledgeState`
+- `miniprogram/src/subpackages/material/pages/list/index.vue::loadData`（按 id 去重）
+- `miniprogram/src/subpackages/material/pages/list/index.vue::onMounted`（首屏单次触发）
+- `backend/app/services/material.py::MAX_FILE_SIZES`
+
 ### Scenario: Question Config Bound, Deletion Reason Query & Quality-Check Type Alignment
 
 #### 1. Scope / Trigger
@@ -409,6 +502,14 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 3. Tests Required
 - 21/50 被拒、1 与 20 通过；25/99 clamp 到 20；删除 URL 含 `?reason=` 且无 body；删除后重新请求 page=1。
 
+#### 代码锚点
+- `miniprogram/src/subpackages/material/utils/tree.ts::validateQuestionConfig`
+- `miniprogram/src/subpackages/material/components/QuestionConfigDrawer.vue::clampCount`
+- `miniprogram/src/api/question.ts::deleteQuestion`
+- `miniprogram/src/types/question.ts::QuestionQualityCheck`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleDeleteQuestion`
+- `backend/app/schemas/question.py::QuestionQualityCheckResponse`
+
 ### Scenario: Practice Draft Lifecycle & Status Mapping
 
 #### 1. Scope / Trigger
@@ -421,6 +522,15 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - `clearSession(id)` 删除目标 draft 且保留兄弟 draft；`adaptStatus('timeout')==='submitted'`；旧结构（仅 `answers`）读取不抛错。
+
+#### 代码锚点
+- `miniprogram/src/types/storage.ts::StorageDataMap`
+- `miniprogram/src/stores/practiceStore.ts::clearSession`
+- `miniprogram/src/stores/practiceStore.ts::removeDraft`
+- `miniprogram/src/api/adapters/practice.ts::adaptStatus`
+- `miniprogram/src/subpackages/practice/types/draft.ts::PracticeDraftRecord`
+- `miniprogram/src/utils/recentLearning.ts::extractLatestDraftPractice`
+- `miniprogram/tests/unit/practice/draftUtils.spec.ts`
 
 ### Scenario: Practice Session Teardown Flush, Subjective Fallback & Pause/Resume
 
@@ -435,6 +545,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 卸载 flush 触发且有 pending 不丢（竞态用例：旧同步回调不得清掉新作答）；`term_explanation`/`case_analysis` 渲染输入框与标签；真实耗时非常量；pause/resume 发对应 POST。
+
+#### 代码锚点
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::flushPendingDraft`
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::takeQuestionElapsedSeconds`
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pendingSync`
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pauseSession`
+- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::resumeSession`
+- `miniprogram/src/subpackages/practice/components/QuestionRenderer.vue::subjectivePlaceholder`
+- `miniprogram/src/api/practice.ts::pausePractice`
+- `miniprogram/src/api/practice.ts::resumePractice`
+- `miniprogram/tests/unit/practice/practiceSessionFlushRace.spec.ts`
 
 ### Scenario: Report Detail Loading Guard, Subjective Regrade & Snippet/Keyword Reading
 
@@ -451,6 +572,16 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 3. Tests Required
 - 首屏单次加载与切换 pid 重载；主观题入口覆盖三类、客观题不显示；未作答题隐藏重判；要点双层来源；切片空态。
 
+#### 代码锚点
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::loadReportData`（并发锁 + `lastLoadedPracticeId`）
+- `miniprogram/src/subpackages/report/components/GradingResultList.vue::canSelfGrade`
+- `miniprogram/src/subpackages/report/components/GradingResultList.vue::canRegrade`
+- `miniprogram/src/subpackages/report/components/GradingResultList.vue::SUBJECTIVE_QUESTION_TYPES`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::handleViewSnippet`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::empty-state`
+- `backend/app/core/algorithms/grading.py::SUBJECTIVE_QUESTION_TYPES`
+- `miniprogram/tests/unit/report/reportDetailPage.spec.ts`
+
 ### Scenario: Wrong-Book Filter Enum Alignment & Reset Single-Trigger
 
 #### 1. Scope / Trigger
@@ -465,6 +596,16 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 #### 3. Tests Required
 - 标准+旧枚举均可识别；`fill_in_blank` 渲染「填空题」；点击重置父组件仅 1 次 `loadData`；删除响应解构 `removed === true`。
 
+#### 代码锚点
+- `miniprogram/src/subpackages/report/utils/wrongBookFormat.ts::getErrorTypeInfo`
+- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::errorTypeOptions`
+- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::questionTypeOptions`
+- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::handleReset`
+- `miniprogram/src/types/question.ts::QuestionType`
+- `miniprogram/src/api/diagnosis.ts::deleteWrongRecord`
+- `miniprogram/src/types/report.ts::DeleteWrongRecordResult`（`removed: boolean`）
+- `miniprogram/tests/unit/report/wrongBookPage.spec.ts`
+
 ### Scenario: Report Reset, Draft Metadata & Continue-Practice Idempotency Header
 
 #### 1. Scope / Trigger
@@ -478,6 +619,15 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 空/无 `weak_points` 报告切换后无残留；草稿含 `total_count`/`title`/`material_id` 并被展示；`continuePractice` 头为 `Idempotency-Key`；无 pid/空报告渲染 `.empty-state` 且不发起请求。
+
+#### 代码锚点
+- `miniprogram/src/stores/reportStore.ts::setReport`
+- `miniprogram/src/stores/practiceStore.ts::initSession`
+- `miniprogram/src/api/diagnosis.ts::continuePractice`
+- `miniprogram/src/utils/recentLearning.ts::extractLatestDraftPractice`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue`（`.empty-state` / `empty-actions`）
+- `miniprogram/tests/unit/stores/report.spec.ts`
+- `miniprogram/tests/unit/report/continuePracticeBar.spec.ts`
 
 ### Scenario: Course IA Navigation, Unclassified & Archive Contracts
 
@@ -532,6 +682,19 @@ uni.navigateTo({
 - `formatPurgeRemaining` 边界（已过期/剩余天/剩余小时/剩余分钟/非法）。
 - `folderStore` 增删改、归档拆分、`reset`；`materialStore.removeMaterial`/`updateMaterialFolder`/`unclassifiedMaterials`。
 - 控制台断言**不再渲染** `MasteryDashboardBar`、课程列表入口与未分类门禁；课程详情页 `folder_id` 解析与移动；列表页 `folder_id=__none__` 过滤与移动剔除。
+
+#### 代码锚点
+- `miniprogram/src/types/folder.ts::UNCLASSIFIED_FOLDER_ID`
+- `miniprogram/src/types/folder.ts::FolderItem`
+- `miniprogram/src/api/folder.ts::fetchFolderList`
+- `miniprogram/src/api/folder.ts::archiveFolder`
+- `miniprogram/src/api/material.ts::moveMaterialFolder`
+- `miniprogram/src/stores/folderStore.ts::setFolderList`
+- `miniprogram/src/utils/purgeTime.ts::formatPurgeRemaining`
+- `miniprogram/src/components/home/CourseListSection.vue::hasUnclassified`
+- `miniprogram/src/pages/index/index.vue::handleViewUnclassified`
+- `miniprogram/src/api/diagnosis.ts::fetchMasteryOverview`（能力保留，控制台不再引用）
+- `miniprogram/tests/unit/pages/index.spec.ts`（断言不渲染 `MasteryDashboardBar`）
 
 ---
 
@@ -600,3 +763,17 @@ uni.navigateTo({
 - `CourseGenerateDrawer`：默认值（题量/题型/难度）、提交 payload 含 `folder_id`、成功 `success` emit、空结果/网络/业务错误保留可重试、提交禁用防重。
 - `questions/index`：`folder_id` 解析与 `material_id` 兜底、空态范围引导（去出题/去知识树）、`createPractice` 接线（payload + 跳转 `id`）、`total===0` 禁用。
 - 单资料路径零回归（既有 `material_id` 列表/出题断言保持）。
+
+#### 代码锚点
+- `miniprogram/src/types/question.ts::QuestionGenerateRequest`（`material_id?` / `folder_id?`）
+- `miniprogram/src/types/question.ts::QuestionGenerateResponse`
+- `miniprogram/src/types/practice.ts::CreatePracticePayload`
+- `miniprogram/src/types/practice.ts::PracticeSession`
+- `miniprogram/src/subpackages/material/utils/questionBatch.ts::groupQuestionsByBatch`
+- `miniprogram/src/components/course/CourseGenerateDrawer.vue::handleSubmit`
+- `miniprogram/src/components/course/CourseKnowledgePointPicker.vue::loadPoints`
+- `miniprogram/src/components/course/PracticeStartBar.vue::isDisabled`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleStartPractice`
+- `miniprogram/src/subpackages/material/pages/course/index.vue::handleGenerateSuccess`
+- `miniprogram/tests/unit/components/CourseGenerateDrawer.spec.ts`
+- `miniprogram/tests/unit/pages/questionList.spec.ts`

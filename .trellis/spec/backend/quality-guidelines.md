@@ -1,5 +1,9 @@
 # Quality Guidelines
 
+> **事实源**：`backend/app/services/`、`backend/app/api/v1/`、`backend/app/repositories/`、`backend/app/models/`、`backend/app/core/`、`backend/app/integrations/`、`backend/app/cli/`、`backend/pyproject.toml`、`Taskfile.yml`
+> **最后核对**：2026-09-28 @ ca062a1
+> **核对方式**：`rg -n "^### Scenario:|^#### 代码锚点" .trellis/spec/backend/quality-guidelines.md`，再按各 scenario 锚点 `rg` 复核
+
 > Code quality standards and verification baseline for backend development.
 
 ---
@@ -69,7 +73,7 @@ uv run pytest tests             # Full unit & integration test suite
 
 #### 2. Signatures
 - API: `POST /api/v1/materials/{id}/retry` -> `MaterialDetailResponse` (HTTP 200)
-- Service: `MaterialService.retry_material_pipeline(material_id: uuid.UUID, user_id: uuid.UUID) -> MaterialVersion`
+- Service: `MaterialService.retry_material_pipeline(*, material_id: uuid.UUID, user_id: uuid.UUID) -> tuple[Material, MaterialVersion]`（关键字参数、返回资料与版本二元组）
 
 #### 3. Contracts
 - 校验租户归属（必须匹配 `user_id`，杜绝越权）。
@@ -86,12 +90,21 @@ material.status = MaterialStatus.PENDING.value
 ```
 ##### Correct
 ```python
-# 正确做法：彻底清理错误信息与失败阶段，重置为排队解析
-version.parse_status = ParseStatus.QUEUED.value
-version.error_message = None
-version.failed_stage = None
-material.status = MaterialStatus.PENDING.value
+# 正确做法：统一经仓储重置状态并清空错误信息与失败阶段（reset_errors 内部置 None），重置为排队解析
+repo.update_version_status(
+    version_id=version.id, user_id=user_id,
+    status=ParseStatus.QUEUED.value, reset_errors=True,
+)
+repo.update_material_status(
+    material_id=material_id, user_id=user_id,
+    status=MaterialStatus.PENDING.value, current_version_id=version.id,
+)
 ```
+
+#### 代码锚点
+- `backend/app/api/v1/materials.py::retry_material_pipeline`
+- `backend/app/services/material.py::MaterialService.retry_material_pipeline`
+- `backend/app/repositories/material.py::MaterialRepository.update_version_status`
 
 ---
 
@@ -105,6 +118,9 @@ material.status = MaterialStatus.PENDING.value
 - 若传入 `dev_` 或 `mock_` 前缀，强制解析为 `wx_dev_{code}`。
 - 前端在授权失败时，严禁向本地 Store 写入任意未验证或伪造的 Token（如 `mock_access_token_*`），避免 401 拦截器死锁。
 
+#### 代码锚点
+- `backend/app/services/auth.py::AuthService._resolve_wechat_openid`
+
 ---
 
 ### Scenario: LangGraph Schema-as-Tool Calling Pipeline
@@ -115,6 +131,12 @@ material.status = MaterialStatus.PENDING.value
 #### 2. Contracts
 - 模型选项通过 `LLMOptions(tools=[...], tool_choice={"type": "function", ...})` 透传。
 - 状态图节点 `validate_output_node` 优先从 `raw_response.tool_calls` 提取入参反序列化，仅在未命中工具调用时才作为纯文本降级处理。
+
+#### 代码锚点
+- `backend/app/integrations/llm/agent_graph.py::pydantic_to_tool_schema`
+- `backend/app/integrations/llm/agent_graph.py::call_model_node`
+- `backend/app/integrations/llm/agent_graph.py::validate_output_node`
+- `backend/app/integrations/llm/agent_graph.py::run_structured_agent_workflow`
 
 ---
 
@@ -144,6 +166,14 @@ python -m app.cli smoke [--file <path>] [--image <path>] [--json]
 - 离线单测（SQLite + fake Provider，`--allow-fake`，零联网）：断言退出码契约与「配置缺口时不执行任何业务」。
 - 至少一次真实运行的 `smoke` 退出码 0 作为交付证据。
 
+#### 代码锚点
+- `backend/app/cli/main.py::main`
+- `backend/app/cli/errors.py::CliError`
+- `backend/app/cli/commands/doctor.py::handle`
+- `backend/app/cli/smoke.py::register`
+- `backend/app/cli/context.py::CliContext.assert_real_providers`
+- `backend/app/cli/report.py::redact_url`
+
 ---
 
 ### Scenario: Retrieval Score Semantics (RRF vs Cosine) at Relevance Gates
@@ -170,6 +200,12 @@ SnippetCandidate(score=item.vector_score)  # 0–1，可与 0.35 比较
 #### 4. Tests Required
 - 单测必须预置**贴近真实的分数**（`vector_score` 高、`final_score` 低），否则 mock 的假高分（`final_score=0.91`）会掩盖真实缺陷。
 - 断言：高 `vector_score` + 低 `final_score` 的候选能通过门禁（守回归）。
+
+#### 代码锚点
+- `backend/app/integrations/search/protocol.py::SearchSnippetCandidate`
+- `backend/app/services/question.py::QuestionService._retrieve_and_gate_snippets`
+- `backend/app/core/algorithms/search.py::compute_bm25_score`
+- `backend/app/integrations/search/pgvector.py`（`final_score` 由 RRF 融合产生）
 
 ---
 
@@ -204,6 +240,11 @@ LLMOptions(temperature=0.3)   # tool schema 无 strict=true → 模型输出 opt
 - 失败归因入口：`python -m app.cli smoke --json` → 读 `failed_stage` + `error` 精确定位环节。
 - 区分「模型能力」与「代码缺陷」：若 prompt/schema 明确正确而模型仍违约 → 模型不遵从（换模型/开 strict）；若 prompt/schema 有误 → 改代码。
 - 中转站可用模型查询：`GET {ZHILIAN_LLM__BASE_URL}/models`（Bearer 鉴权，勿回显密钥）。
+
+#### 代码锚点
+- `backend/app/integrations/llm/agent_graph.py::pydantic_to_tool_schema`（仅强制调用，未输出 `strict`）
+- `backend/app/integrations/llm/protocol.py::LLMOptions.tool_choice`
+- `backend/app/core/errors.py::LLMResponseFormatError`
 
 ---
 
@@ -264,6 +305,12 @@ except Exception:
 - **单考点零回归**：`generate_questions` 默认 `defer_commit=False` 行为不变（内部自行提交）。
 - API：多考点请求返回 `knowledge_point_ids` 与聚合题目；**旧单考点请求零回归**。
 
+#### 代码锚点
+- `backend/app/services/question.py::distribute_count`
+- `backend/app/services/question.py::MultiKnowledgePointGenerationResult`
+- `backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`
+- `backend/app/api/v1/questions.py`（多考点请求分支）
+
 ---
 
 ### Scenario: Secret Resolution Must Go Through Strongly-Typed Settings
@@ -306,6 +353,12 @@ def get_secret_key(*, secret_key: str | None = None) -> str:
 - 生产 + 默认密钥 → 启动期 fail-fast 断言。
 - 显式 `secret_key` 入参优先级高于 Settings。
 
+#### 代码锚点
+- `backend/app/core/security.py::get_secret_key`
+- `backend/app/core/config.py::AppSettings.secret_key`
+- `backend/app/core/config.py::DEVELOPMENT_SECRET_KEY`
+- `backend/app/core/config.py::validate_secret_key`
+
 ---
 
 ### Scenario: Backend↔Frontend Response Field-Name Contract Pinning
@@ -316,10 +369,10 @@ def get_secret_key(*, secret_key: str | None = None) -> str:
 #### 2. Contracts
 - 响应字段名是**跨层契约**，后端 schema 字段名即为契约真名；前端类型与绑定必须逐字段对齐，**不得**在两侧各用一套命名。
 - 需要别名/兼容时，必须在**同一处**显式声明（后端 `alias`/`serialization_alias`，或前端统一归一化层），并在响应模型上以注释标注。
-- 已知高风险命名族（历史缺陷）：
+- 已知高风险命名族（历史缺陷；2026-09-28 裁决 corrected：后端现已在 schema 层双向同步别名）：
   - 题目选项：后端 `{key, content}` vs 前端 `{key, text}` → 客观题选项渲染为空。
   - 练习详情/创建题目列表：后端 `items[]`（元素 `question_snapshot`）vs 前端 `questions` → 会话题目恒空。
-  - 诊断薄弱知识点：后端 `weak_knowledge_points` vs 前端 `weak_points` → 卡片不渲染。
+  - 诊断薄弱知识点：后端 `weak_knowledge_points` 现已同时下发别名 `weak_points`（`KnowledgeMasterySummaryResponse` 双向同步），前端优先读 `weak_points`；仍禁止两侧各造一套命名。
 
 #### 3. Validation & Error Matrix
 - 前端读取到未定义字段 → `undefined`，绑定静默渲染为空（不报错、不抛异常）——**最隐蔽**，测试夹具若两侧各用一套命名亦无法发现。
@@ -342,6 +395,12 @@ practiceStore.initSession(id, res.data.questions);      // 后端是 items
 const items = res.data.items.map(adaptItem);            // items -> 内部模型
 <text>{{ option.content }}</text>                       // 与后端 content 对齐（或归一为 text 后统一消费）
 ```
+
+#### 代码锚点
+- `backend/app/schemas/practice.py::QuestionSnapshotDTO.options`
+- `backend/app/schemas/practice.py::PracticeDetailResponse.items`
+- `backend/app/schemas/diagnosis.py::KnowledgeMasterySummaryResponse`（`weak_points` ↔ `weak_knowledge_points` 双向同步）
+- `miniprogram/src/api/adapters/diagnosis.ts::adaptDiagnosisReport`
 
 ---
 
@@ -376,6 +435,11 @@ self.storage.put_object(self.bucket, storage_key, file_content, content_type)
 #### 5. Tests Required
 - 断言同哈希两资料 `storage_key` 不同。
 - 断言硬删源资料后，另一资料对象仍可取用。
+
+#### 代码锚点
+- `backend/app/services/material.py::build_material_storage_key`
+- `backend/app/services/material.py::MaterialService.hard_delete_material`
+- `backend/app/repositories/material.py::MaterialRepository.find_version_by_hash`
 
 ---
 
@@ -445,6 +509,13 @@ version = self.repo.get_version_by_id(material.current_version_id, user_id) or \
 - 无 `current_version_id` 时重拍回退最新版本成功。
 - 前端详情由接口（非硬编码）填充待重拍列表；轮询转入 `retake_required` 拉取页面。
 
+#### 代码锚点
+- `backend/app/services/material.py::MaterialService.reshoot_material_page`
+- `backend/app/services/material.py::MaterialService.list_ocr_pages`
+- `backend/app/services/material.py::MaterialService._resolve_status_filter`
+- `backend/app/models/material.py::MaterialStatus.RETAKE_REQUIRED`
+- `backend/app/api/v1/materials.py`（`/{material_id}/ocr-pages`、`/{material_id}/reshoot`）
+
 ---
 
 ### Scenario: Practice Item Grading Status & Degraded-Score Semantics
@@ -500,6 +571,12 @@ return item.score >= max * 0.6 ? CORRECT : WRONG;
 - 前端：`grading_status` 优先级、`graded` 覆盖遗留 `status='unanswered'`、重批成功就地更新分数文本。
 - 夹具字段名逐字取自后端；双侧夹具同源，禁各自漂移。
 
+#### 代码锚点
+- `backend/app/schemas/practice.py::PracticeItemDetailResponse.grading_status`
+- `backend/app/services/grading.py::GradingService.regrade_attempt`
+- `backend/app/services/grading.py::GradingService._build_pending_regrade_record`
+- `backend/app/core/algorithms/grading.py::SCORE_ROUNDING_UNIT`
+
 ---
 
 ### Scenario: Diagnosis Report Adaptation, Mastery Aggregation & Regression Sign
@@ -544,6 +621,12 @@ is_regressed = score_delta <= -threshold
 - 服务：`material_id=None` 聚合全部知识点且租户隔离（真实 SQLite）；带 `material_id` 零回归。
 - 算法：退步 `score_delta` 为负且 `is_regressed` 为真；提升为正且为假；排序最弱/降幅最大在前。
 - 前端 `formatScoreDelta` 保持负数=退步，退步徽章渲染正确。
+
+#### 代码锚点
+- `backend/app/services/diagnosis.py::DiagnosisService.get_user_mastery_overview`
+- `backend/app/core/algorithms/diagnosis.py::check_regression`
+- `backend/app/repositories/knowledge.py::KnowledgeRepository.list_all_by_user_id`
+- `miniprogram/src/api/adapters/diagnosis.ts::adaptDiagnosisReport`
 
 ---
 
@@ -598,6 +681,13 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 
 
+#### 代码锚点
+- `backend/app/repositories/diagnosis.py::DiagnosisRepository.count_wrong_records`
+- `backend/app/services/diagnosis.py::DiagnosisService.list_wrong_records`
+- `backend/app/api/v1/diagnosis.py::mark_wrong_record_mastered`
+- `backend/app/schemas/diagnosis.py::WrongRecordItemResponse`
+- `backend/app/schemas/practice.py::PracticeCreateRequest.material_id`
+
 ### Scenario: User Profile Update Endpoint & Auth Service Result Propagation
 
 #### 1. Scope / Trigger
@@ -616,6 +706,13 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 #### 4. Tests Required
 - PUT 合法/部分更新 200、用户不存在 401、非法字段 422；service 返回 False 时响应 `success=false`；fallback 路径 session 关闭断言。
 
+#### 代码锚点
+- `backend/app/api/v1/users.py::update_current_user_profile`
+- `backend/app/api/v1/users.py::delete_current_user_account`
+- `backend/app/services/auth.py::AuthService.update_user_profile`
+- `backend/app/api/v1/auth.py`（`run_in_threadpool` 包裹同步登录）
+- `backend/app/schemas/user.py::UpdateUserProfileRequest`
+
 ### Scenario: Knowledge Extraction Robustness, Upload Size Guard & Object Cleanup
 
 #### 1. Scope / Trigger
@@ -631,6 +728,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 #### 3. Tests Required
 - 单候选重复 snippet index 不崩；重复 temp_id（含与既有 `__dup_1` 冲突）父子关系保持正确；声明超限与谎报 Content-Length 均返回 413 且不进入 `import_material_file`；重拍后旧 key 被删、commit 失败不删；列表统计装配查询数常数级。
 
+#### 代码锚点
+- `backend/app/services/knowledge.py::normalize_extracted_temp_ids`
+- `backend/app/api/v1/materials.py::_read_upload_content_guarded`
+- `backend/app/api/v1/materials.py::_UPLOAD_CHUNK_BYTES`
+- `backend/app/services/material.py::MaterialService._purge_storage_objects`
+
 ### Scenario: Question Generation Bounds, Delete Reason & Answer-Conflict Domains
 
 #### 1. Scope / Trigger
@@ -644,6 +747,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - >20 被前端拦截且后端 422；空/非法题型在 schema 与服务层均抛错；query 与 body-only 两种删除原因均落审计；跨题型不误判、同域相反答案仍判冲突。
+
+#### 代码锚点
+- `backend/app/schemas/question.py::QuestionGenerateRequest.question_types`
+- `backend/app/api/v1/questions.py::_resolve_delete_reason`
+- `backend/app/core/algorithms/question_quality.py::check_answer_conflict`
+- `backend/app/services/question.py::GenerateQuestionsOptions.__post_init__`
 
 ### Scenario: Practice State Machine, Idempotent Replay & Detail Field Semantics
 
@@ -664,6 +773,13 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 #### 4. Tests Required
 - 首次提交 `is_idempotent_replay=False`、二次回放 `True`；`PAUSED/TIMEOUT/PARTIALLY_GRADED` 真实 service 拒绝作答且 `NOT_STARTED` 首次保存仍可；`PAUSED→IN_PROGRESS` 有效、`TIMEOUT` 不可逆；`mode="random"` 详情回读且 `completed_count` = 已答数；迁移 upgrade/downgrade 对称可执行。
 
+#### 代码锚点
+- `backend/app/models/practice.py::PracticeStatus`
+- `backend/app/models/practice.py::validate_practice_transition`
+- `backend/app/services/practice.py::PracticeService.save_answer`
+- `backend/app/services/practice.py::PracticeSubmissionResult.is_idempotent_replay`
+- `backend/app/schemas/practice.py::PracticeDetailResponse.completed_count`
+
 ### Scenario: Submit Snapshot Fault-Tolerance, Elapsed Aggregation & Answer Serialization
 
 #### 1. Scope / Trigger
@@ -677,6 +793,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - `set_result` 抛错时交卷成功且同 key 可回放、不同 key 40011；耗时聚合（含 0）；多选落库可 `json.loads`、历史 repr 归一；标量不变。
+
+#### 代码锚点
+- `backend/app/services/practice.py::PracticeService.submit_practice`
+- `backend/app/services/practice.py::_serialize_user_answer`
+- `backend/app/schemas/practice.py::_normalize_persisted_user_answer`
+- `backend/app/schemas/practice.py::PracticeDetailResponse.time_elapsed_seconds`
 
 ### Scenario: Grading Keyword/Snippet Enrichment & Effective-Record Selection
 
@@ -696,6 +818,13 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 #### 4. Tests Required
 - 顶层/嵌套两来源均渲染要点；生效记录覆盖旧记录且不泄漏旧关键词；切片缺失空态；预加载查询数常数级。
 
+#### 代码锚点
+- `backend/app/schemas/practice.py::PracticeItemDetailResponse`（顶层要点与 `question_snapshot` 双同步）
+- `backend/app/schemas/practice.py::_pick_final_grading_record`
+- `backend/app/services/practice.py::PracticeService._attach_source_snippets`
+- `backend/app/repositories/material.py::MaterialRepository.list_snippets_by_ids`
+- `backend/app/schemas/practice.py::SourceSnippetDTO`
+
 ### Scenario: Deterministic Half-Up Score Rounding & Grade-Record Transaction Safety
 
 #### 1. Scope / Trigger
@@ -709,6 +838,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - `round_half_up(9.25,0.5)==9.5`、`(7.25)==7.5`（对比 `round(9.25/0.5)*0.5==9.0`）；LLM 7.3→7.5、8.24→8.0；`is_correct` 显式覆盖与默认回退；算法异常时单 final + 原记录保留 + 不崩整卷。
+
+#### 代码锚点
+- `backend/app/core/algorithms/grading.py::round_half_up`
+- `backend/app/core/algorithms/grading.py::SCORE_ROUNDING_UNIT`
+- `backend/app/services/grading.py::GradingService._grade_attempt_item`
+- `backend/app/services/grading.py::SelfEvaluateDTO.is_correct`
 
 ### Scenario: Diagnosis Mastery Counts, Filter Pushdown & Delete Contract
 
@@ -724,6 +859,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 #### 3. Tests Required
 - DTO 计数同步（dict/ORM）；error_type 简写归一与非法值空结果；question_type/material_id 过滤与 count 一致；>1000 行无截断且 total 精确；删除响应含 `removed`。
 
+#### 代码锚点
+- `backend/app/schemas/diagnosis.py::UserMasteryOverviewResponse`
+- `backend/app/repositories/diagnosis.py::DiagnosisRepository.list_wrong_records`
+- `backend/app/repositories/diagnosis.py::DiagnosisRepository.count_wrong_records`
+- `backend/app/schemas/diagnosis.py::DeleteWrongRecordResponse.removed`
+
 ### Scenario: Report Generation Race, Create-Practice Idempotency & Mastery Ordering
 
 #### 1. Scope / Trigger
@@ -736,6 +877,12 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - 并发 `IntegrityError` → rollback + 回查返回既有报告；同 key 并发 409；快照写失败仍成功且锁释放可重试；无 key 零回归；薄弱点严格升序（含并列稳定）。
+
+#### 代码锚点
+- `backend/app/services/diagnosis.py::DiagnosisService`（报告生成 `IntegrityError` 回滚回查）
+- `backend/app/api/v1/practices.py::create_practice`（`Idempotency-Key` 头名）
+- `backend/app/services/practice.py::PracticeService.create_practice`
+- `backend/app/services/diagnosis.py::DiagnosisService.get_user_mastery_overview`（薄弱点稳定升序）
 
 ---
 
@@ -785,6 +932,13 @@ for f in self.repo.list_expired(user_id, before=datetime.now(UTC) - timedelta(da
 - 仓储：CRUD、归档默认隐藏、`list_expired` 阈值、批量计数、跨租户隔离。
 - 服务：重名 409、越权 404、归档/恢复、`purge_after=+7d`、**`archived_at=now-8d` 时任意列表查询物理删除课程及其资料**、聚合计数、移动（未分类↔课程、目标归档/他人 404）。
 - API：课程各端点状态码与响应契约；上传带/不带 `folder_id`；列表 `__none__` 与非法 `folder_id` 400；`PATCH /materials/{id}/folder`。
+
+#### 代码锚点
+- `backend/app/models/material.py::MaterialFolder`
+- `backend/app/services/folder.py::FolderService.purge_folder`
+- `backend/app/services/folder.py::FolderService._purge_expired`
+- `backend/app/repositories/folder.py::FolderRepository.list_expired`
+- `backend/app/services/folder.py::ARCHIVE_RETENTION`
 
 ---
 
@@ -843,3 +997,10 @@ self.session.commit()        # 全部成功：唯一一次提交
 - 组卷：folder 范围 `material_id` 为空、`folder_id` 落库、缺省考点展开、题量不足 40012；单资料路径零回归。
 - 仓储：`folder_id` 过滤与 `material_id` 组合、归档排除、`list_knowledge_points_for_folder`/`list_material_ids_for_folder`。
 - 迁移 0006：`material_id` 改可空 + `folder_id` + 索引，`upgrade → downgrade → upgrade` SQLite 对称。
+
+#### 代码锚点
+- `backend/app/services/question.py::QuestionService.generate_questions_for_folder`
+- `backend/app/repositories/question.py::QuestionRepository.list_material_ids_for_folder`
+- `backend/app/repositories/question.py::QuestionRepository.list_knowledge_points_for_folder`
+- `backend/app/repositories/folder.py::FolderRepository.last_practice_at_by_folder_ids`
+- `backend/app/models/question.py::Question.batch_id`
