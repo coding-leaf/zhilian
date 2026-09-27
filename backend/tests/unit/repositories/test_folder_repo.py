@@ -222,6 +222,27 @@ class TestFolderRepositoryCounts:
         assert folder.id in last
         assert last[folder.id] is not None
 
+    def test_last_practice_includes_folder_scoped_practice(self, session: Session) -> None:
+        """课程范围练习（material_id 为空、folder_id 指向课程）须计入最近练习时间。"""
+        repo = FolderRepository(session)
+        user_id = uuid.uuid4()
+        folder = repo.create(user_id=user_id, name="课程范围练习")
+        session.commit()
+
+        folder_practice = Practice(
+            user_id=user_id,
+            material_id=None,
+            folder_id=folder.id,
+            title="课程综合练习",
+        )
+        session.add(folder_practice)
+        session.commit()
+
+        # 无任何资料范围练习；存在值即证明课程范围练习被纳入统计。
+        latest = repo.last_practice_at_by_folder_ids([folder.id], user_id)
+        assert folder.id in latest
+        assert latest[folder.id] is not None
+
     def test_count_queries_empty_ids(self, session: Session) -> None:
         """Verify empty folder id collections short-circuit to empty mappings."""
         repo = FolderRepository(session)

@@ -374,11 +374,17 @@ class FolderRepository:
         folder_ids: Sequence[uuid.UUID],
         user_id: uuid.UUID,
     ) -> dict[uuid.UUID, datetime]:
-        """批量统计各课程资料相关练习的最近创建时间。"""
+        """批量统计各课程相关练习的最近创建时间。
+
+        同时覆盖两种练习归属：资料范围练习（经 `material_id` 归属该课程资料）
+        与课程范围练习（`folder_id` 直接指向该课程、`material_id` 为空），
+        取两者的最大创建时间。
+        """
         ids = self._unique_ids(folder_ids)
         if not ids:
             return {}
-        stmt = (
+
+        by_material = (
             select(Material.folder_id, func.max(Practice.created_at))
             .join(Practice, Practice.material_id == Material.id)
             .where(
@@ -389,7 +395,26 @@ class FolderRepository:
             )
             .group_by(Material.folder_id)
         )
-        return {row[0]: row[1] for row in self.session.execute(stmt).all()}
+        by_folder = (
+            select(Practice.folder_id, func.max(Practice.created_at))
+            .where(
+                Practice.user_id == user_id,
+                Practice.folder_id.in_(ids),
+            )
+            .group_by(Practice.folder_id)
+        )
+
+        result: dict[uuid.UUID, datetime] = {}
+        for row_folder_id, latest in self.session.execute(by_material).all():
+            if row_folder_id is not None and latest is not None:
+                result[row_folder_id] = latest
+        for row_folder_id, latest in self.session.execute(by_folder).all():
+            if row_folder_id is None or latest is None:
+                continue
+            current = result.get(row_folder_id)
+            if current is None or latest > current:
+                result[row_folder_id] = latest
+        return result
 
     @staticmethod
     def _unique_ids(folder_ids: Sequence[uuid.UUID]) -> list[uuid.UUID]:
