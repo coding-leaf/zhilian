@@ -615,3 +615,18 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 4. Tests Required
 - PUT 合法/部分更新 200、用户不存在 401、非法字段 422；service 返回 False 时响应 `success=false`；fallback 路径 session 关闭断言。
+
+### Scenario: Knowledge Extraction Robustness, Upload Size Guard & Object Cleanup
+
+#### 1. Scope / Trigger
+- LLM 知识点抽取落库、资料上传体积门禁、OCR 重拍/硬删除的对象存储清理、资料 DTO 统计字段装配。
+
+#### 2. Contracts
+- 候选知识点索引必须在 `n<=1` 与 `n>1` 两条路径**都**去重（`sorted(set(...))`）；落库 `KnowledgePointSnippet` 关联前再以 `(kp_id, snippet_id)` 集合判重，绝不触发 `uq_knowledge_point_snippets_kp_snippet`。
+- LLM 输出 `temp_id` 必须做唯一性规整：重命名后的新 id 不得占用其他节点已存在的 `temp_id`（含 `__dup_{n}` 形态），并同步修正子节点 `parent_temp_id`，保证每个实体独立 UUID。
+- 上传端点必须**先**校验 `Content-Length`（缺失则跳过，畸形按 -1），随后按 64KB 分块累加读取，累计超上限立即中断并抛 `MaterialInvalidError(status_code=413, error_code=40001)`；禁止先全量 `file.read()` 再校验。
+- 重拍替换的旧对象 key 必须在**成功 commit 之后**清理；硬删除复用同一清理助手；被其他页/版本引用的 key 不得删除；单 key 清理失败仅告警不阻断。
+- DTO 新增统计字段一律附加可选 `int | None = Field(default=None, ge=0)`（未就绪 0/None），装配查询数须为常数级（禁止 N+1）。
+
+#### 3. Tests Required
+- 单候选重复 snippet index 不崩；重复 temp_id（含与既有 `__dup_1` 冲突）父子关系保持正确；声明超限与谎报 Content-Length 均返回 413 且不进入 `import_material_file`；重拍后旧 key 被删、commit 失败不删；列表统计装配查询数常数级。
