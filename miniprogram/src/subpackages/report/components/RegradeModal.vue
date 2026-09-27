@@ -34,13 +34,13 @@
             v-model="localReason"
             class="reason-textarea"
             placeholder="请详细说明您申请重判的理由（例如：答案中已包含关键步骤...）"
-            :maxlength="200"
+            :maxlength="500"
           />
           <view
             class="char-count"
             :class="{ invalid: localReason.trim().length > 0 && localReason.trim().length < 2 }"
           >
-            {{ localReason.length }} / 200
+            {{ localReason.length }} / 500
           </view>
         </view>
       </scroll-view>

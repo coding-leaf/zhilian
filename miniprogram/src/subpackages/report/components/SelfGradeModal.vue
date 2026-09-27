@@ -184,15 +184,75 @@ watch(
   },
 );
 
-const rubricEntries = computed(() => {
-  if (!props.rubric) return [];
-  if (typeof props.rubric === 'string') {
-    return [{ label: '细则说明', text: props.rubric }];
+interface RubricEntry {
+  label: string;
+  text: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function toUnknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? (value as unknown[]) : [];
+}
+
+function pickFirstText(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
   }
-  return Object.entries(props.rubric).map(([k, v]) => ({
-    label: k,
-    text: typeof v === 'object' ? JSON.stringify(v) : String(v),
-  }));
+  return '';
+}
+
+function formatRubricValue(value: unknown): string {
+  const record = asRecord(value);
+  if (record === null) {
+    return value === null || value === undefined ? '' : String(value);
+  }
+  const description = pickFirstText(record, ['description', 'desc', 'point', 'content', 'title']);
+  if (description) {
+    return description;
+  }
+  return Object.entries(record)
+    .map(([key, nested]) => `${key}: ${formatRubricValue(nested)}`)
+    .join('；');
+}
+
+function formatRubricPoint(item: unknown, index: number): RubricEntry {
+  const record = asRecord(item);
+  if (record === null) {
+    return { label: `要点 ${index + 1}`, text: formatRubricValue(item) };
+  }
+  const description = pickFirstText(record, ['description', 'desc', 'point', 'content', 'title']);
+  const rawWeight = record.weight ?? record.score ?? record.points;
+  const weight =
+    typeof rawWeight === 'number' || typeof rawWeight === 'string' ? String(rawWeight) : '';
+  return {
+    label: weight ? `要点 ${index + 1}（${weight}分）` : `要点 ${index + 1}`,
+    text: description || formatRubricValue(record),
+  };
+}
+
+const rubricEntries = computed<RubricEntry[]>(() => {
+  const rubric = props.rubric;
+  if (!rubric) return [];
+  if (typeof rubric === 'string') {
+    return [{ label: '细则说明', text: rubric }];
+  }
+  const points = toUnknownArray(rubric.points);
+  const structured = points.length > 0 ? points : toUnknownArray(rubric.dimensions);
+  if (structured.length > 0) {
+    return structured.map((item, index) => formatRubricPoint(item, index));
+  }
+  return Object.entries(rubric)
+    .filter(([key]) => key !== 'total_score')
+    .map(([key, value]) => ({
+      label: key,
+      text: formatRubricValue(value),
+    }));
 });
 
 function handleClose(): void {

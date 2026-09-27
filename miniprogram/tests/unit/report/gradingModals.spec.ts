@@ -47,6 +47,53 @@ describe('Grading Modals (SelfGradeModal & RegradeModal)', () => {
       expect(wrapper.text()).toContain('/ 10.0 分');
     });
 
+    it('renders structured rubric points without raw JSON noise', () => {
+      const wrapper = mount(SelfGradeModal, {
+        props: {
+          visible: true,
+          attemptItemId: 'att_001',
+          maxScore: 10.0,
+          rubric: {
+            total_score: 10,
+            points: [
+              { point_id: 'p1', description: '列举3种以上置换算法', weight: 3 },
+              { point_id: 'p2', description: '阐述淘汰策略与缺页中断关联', score: 7 },
+            ],
+          },
+        },
+      });
+
+      const text = wrapper.text();
+      expect(text).toContain('列举3种以上置换算法');
+      expect(text).toContain('阐述淘汰策略与缺页中断关联');
+      expect(text).toContain('要点 1');
+      expect(text).toContain('（3分）');
+      expect(text).toContain('要点 2');
+      expect(text).toContain('（7分）');
+      // 严禁把嵌套细则渲染成原始 JSON 或 point_id 噪音
+      expect(text).not.toContain('point_id');
+      expect(text).not.toContain('[object Object]');
+      expect(text).not.toContain('{"');
+    });
+
+    it('renders rubric dimensions items with description and score', () => {
+      const wrapper = mount(SelfGradeModal, {
+        props: {
+          visible: true,
+          attemptItemId: 'att_001',
+          maxScore: 10.0,
+          rubric: {
+            dimensions: [{ point_id: 'dim1', description: '概念理解准确度', score: 2 }],
+          },
+        },
+      });
+
+      const text = wrapper.text();
+      expect(text).toContain('概念理解准确度');
+      expect(text).toContain('要点 1（2分）');
+      expect(text).not.toContain('point_id');
+    });
+
     it('adjusts score via quick adjust pills and slider events', async () => {
       const wrapper = mount(SelfGradeModal, {
         props: {
@@ -213,6 +260,25 @@ describe('Grading Modals (SelfGradeModal & RegradeModal)', () => {
 
       // Enter >= 2 characters -> enabled
       await textarea.setValue('已包含互斥与不可剥夺条件');
+      expect(submitBtn.classes()).not.toContain('disabled');
+    });
+
+    it('allows reason length up to 500 characters aligned with backend', async () => {
+      const wrapper = mount(RegradeModal, {
+        props: {
+          visible: true,
+          attemptItemId: 'att_002',
+        },
+      });
+
+      const textarea = wrapper.find('.reason-textarea');
+      expect(textarea.attributes('maxlength')).toBe('500');
+
+      const longReason = '理'.repeat(300);
+      await textarea.setValue(longReason);
+
+      expect(wrapper.text()).toContain('300 / 500');
+      const submitBtn = wrapper.find('.btn-primary');
       expect(submitBtn.classes()).not.toContain('disabled');
     });
 
