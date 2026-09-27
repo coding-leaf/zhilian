@@ -572,6 +572,29 @@ class MaterialRepository:
         """get_snippets 别名。"""
         return self.get_snippets(version_id=version_id, user_id=user_id)
 
+    def list_snippets_by_ids(
+        self,
+        snippet_ids: Sequence[uuid.UUID],
+        user_id: uuid.UUID,
+    ) -> list[MaterialSnippet]:
+        """批量按主键集合检索知识切片 (强制租户隔离)。
+
+        Args:
+            snippet_ids: 目标切片主键集合。
+            user_id: 租户用户标识。
+
+        Returns:
+            list[MaterialSnippet]: 命中的切片实体列表；集合为空时返回空列表。
+        """
+        resolved_ids = list(snippet_ids)
+        if not resolved_ids:
+            return []
+        stmt = select(MaterialSnippet).where(
+            MaterialSnippet.id.in_(resolved_ids),
+            MaterialSnippet.user_id == user_id,
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
     def delete_snippets_by_version(
         self,
         version_id: uuid.UUID,

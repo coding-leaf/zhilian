@@ -37,6 +37,7 @@ from app.integrations.idempotency.protocol import (
 )
 from app.integrations.queue.factory import create_queue_adapter
 from app.integrations.queue.protocol import QueueProtocol
+from app.models.material import MaterialSnippet
 from app.models.practice import (
     AttemptItem,
     MasteryRecord,
@@ -47,8 +48,15 @@ from app.models.practice import (
     validate_question_snapshot,
 )
 from app.models.question import Question, QuestionStatus
+from app.repositories.material import MaterialRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
+from app.schemas.practice import (
+    PracticeDetailResponse,
+    PracticeItemDetailResponse,
+    QuestionSnapshotDTO,
+    SourceSnippetDTO,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +149,7 @@ class PracticeService:
         *,
         practice_repo: PracticeRepository | None = None,
         question_repo: QuestionRepository | None = None,
+        material_repo: MaterialRepository | None = None,
         idempotency: IdempotencyProtocol | None = None,
         queue: QueueProtocol | None = None,
     ) -> None:
@@ -150,12 +159,14 @@ class PracticeService:
             session: SQLAlchemy 数据库会话。
             practice_repo: 可选注入的练习仓储实例。
             question_repo: 可选注入的题目仓储实例。
+            material_repo: 可选注入的资料仓储实例 (用于切片溯源装配)。
             idempotency: 可选注入的幂等适配器实例。
             queue: 可选注入的任务队列适配器实例。
         """
         self.session = session
         self.practice_repo = practice_repo or PracticeRepository(session)
         self.question_repo = question_repo or QuestionRepository(session)
+        self.material_repo = material_repo or MaterialRepository(session)
         self.idempotency = idempotency or create_idempotency_adapter("memory")
         self.queue = queue or create_queue_adapter("memory")
 
@@ -439,15 +450,15 @@ class PracticeService:
         self,
         user_id: uuid.UUID,
         practice_id: uuid.UUID,
-    ) -> Practice:
-        """获取练习详情及其题目作答项。
+    ) -> PracticeDetailResponse:
+        """获取练习详情、题目作答项及来源切片溯源信息。
 
         Args:
             user_id: 租户用户标识。
             practice_id: 练习主键。
 
         Returns:
-            Practice: 练习实体。
+            PracticeDetailResponse: 练习详情 DTO (含生效判题要点与来源切片)。
 
         Raises:
             PracticeNotFoundError: 练习不存在或无权访问。
@@ -458,7 +469,100 @@ class PracticeService:
                 "请求的练习不存在或无权访问",
                 details={"practice_id": str(practice_id)},
             )
-        return practice
+        detail = PracticeDetailResponse.model_validate(practice)
+        self._attach_source_snippets(detail, user_id)
+        return detail
+
+    @staticmethod
+    def _snapshot_source_snippet_id(item: PracticeItemDetailResponse) -> uuid.UUID | None:
+        """安全解析作答项快照中的来源切片主键。
+
+        Args:
+            item: 作答项详情 DTO。
+
+        Returns:
+            uuid.UUID | None: 合法切片主键；缺失或非法时返回 None。
+        """
+        snapshot = item.question_snapshot
+        raw: Any
+        if isinstance(snapshot, QuestionSnapshotDTO):
+            raw = snapshot.source_snippet_id
+        elif isinstance(snapshot, dict):
+            raw = snapshot.get("source_snippet_id")
+        else:
+            raw = None
+        if not raw:
+            return None
+        try:
+            return uuid.UUID(str(raw))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _resolve_snippet_page_index(snippet: MaterialSnippet) -> int:
+        """解析切片页码 (优先映射列，回退 source_info 元数据)。
+
+        Args:
+            snippet: 切片 ORM 实体。
+
+        Returns:
+            int: 从 1 起算的页码。
+        """
+        page_index = getattr(snippet, "page_index", None)
+        if isinstance(page_index, int) and page_index >= 1:
+            return page_index
+        source_info = getattr(snippet, "source_info", None)
+        if isinstance(source_info, dict):
+            candidate = source_info.get("page_number", source_info.get("page_index"))
+            if isinstance(candidate, int) and candidate >= 1:
+                return candidate
+        return 1
+
+    def _attach_source_snippets(
+        self,
+        detail: PracticeDetailResponse,
+        user_id: uuid.UUID,
+    ) -> None:
+        """按 source_snippet_id 批量关联切片摘要，填充原文溯源对象 (BUG-GRADE-004)。
+
+        Args:
+            detail: 已装配的练习详情 DTO (就地补全 source_snippet)。
+            user_id: 租户用户标识。
+        """
+        snippet_ids: set[uuid.UUID] = set()
+        for item in detail.items:
+            snippet_id = self._snapshot_source_snippet_id(item)
+            if snippet_id is not None:
+                snippet_ids.add(snippet_id)
+        if not snippet_ids:
+            return
+
+        snippet_map = {
+            snippet.id: snippet
+            for snippet in self.material_repo.list_snippets_by_ids(sorted(snippet_ids), user_id)
+        }
+        if not snippet_map:
+            return
+
+        for item in detail.items:
+            snippet_id = self._snapshot_source_snippet_id(item)
+            if snippet_id is None:
+                continue
+            snippet = snippet_map.get(snippet_id)
+            if snippet is None:
+                continue
+            snippet_dto = SourceSnippetDTO(
+                id=snippet.id,
+                chapter_title=snippet.chapter_title or "",
+                page_index=self._resolve_snippet_page_index(snippet),
+                snippet_content=snippet.content or "",
+            )
+            item.source_snippet = snippet_dto
+            snapshot = item.question_snapshot
+            if isinstance(snapshot, QuestionSnapshotDTO):
+                snapshot.source_snippet = snippet_dto
+            elif isinstance(snapshot, dict):
+                snapshot["source_snippet"] = snippet_dto
 
     def list_practices(
         self,

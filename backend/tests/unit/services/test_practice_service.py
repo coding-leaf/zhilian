@@ -36,7 +36,7 @@ from app.integrations.idempotency.memory import MemoryIdempotencyAdapter
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.models.base import Base
 from app.models.knowledge import KnowledgePoint
-from app.models.material import Material, MaterialVersion
+from app.models.material import Material, MaterialSnippet, MaterialVersion
 from app.models.practice import (
     AttemptItem,
     MasteryLevel,
@@ -46,7 +46,7 @@ from app.models.practice import (
     WrongRecord,
 )
 from app.models.question import Question, QuestionStatus, QuestionType
-from app.schemas.practice import PracticeDetailResponse
+from app.schemas.practice import PracticeDetailResponse, SourceSnippetDTO
 from app.services.practice import (
     CreatePracticeOptions,
     PracticeAssemblyMode,
@@ -898,3 +898,79 @@ class TestPracticeServiceTenantIsolation:
                     idempotency_key=str(uuid.uuid4()),
                 ),
             )
+
+    def test_get_practice_attaches_source_snippet(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """验证练习详情按 source_snippet_id 关联装配原文切片对象 (BUG-GRADE-004)."""
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        version_id = test_setup["version_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        snippet_id = uuid.uuid4()
+        session.add(
+            MaterialSnippet(
+                id=snippet_id,
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+                snippet_index=0,
+                content="二叉树中序遍历先左子树后根节点再右子树。",
+                char_length=20,
+                start_offset=0,
+                end_offset=20,
+                chapter_title="第 3 章 树与二叉树",
+                source_info={"page_number": 42},
+            )
+        )
+        session.flush()
+
+        service = PracticeService(session)
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="原文溯源装配测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+            ),
+        )
+
+        orm_item = practice.items[0]
+        snapshot = dict(orm_item.question_snapshot)
+        snapshot["source_snippet_id"] = str(snippet_id)
+        orm_item.question_snapshot = snapshot
+        session.flush()
+
+        detail = service.get_practice(user_id, practice.id)
+        assert len(detail.items) == 1
+        item = detail.items[0]
+        assert item.source_snippet is not None
+        snippet = item.source_snippet
+        assert isinstance(snippet, SourceSnippetDTO)
+        assert snippet.snippet_content == "二叉树中序遍历先左子树后根节点再右子树。"
+        assert snippet.chapter_title == "第 3 章 树与二叉树"
+        assert snippet.page_index == 42
+
+    def test_get_practice_without_snippet_keeps_none(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """验证无 source_snippet_id 时来源切片保持 None (向后兼容)."""
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        service = PracticeService(session)
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="无切片装配测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+            ),
+        )
+
+        detail = service.get_practice(user_id, practice.id)
+        assert detail.items[0].source_snippet is None

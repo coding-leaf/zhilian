@@ -13,6 +13,7 @@ Covers:
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -35,6 +36,7 @@ from app.schemas.practice import (
     QuestionSnapshotDTO,
     SaveAnswerRequest,
     SaveAnswerResponse,
+    SourceSnippetDTO,
     SubmitPracticeResponse,
 )
 
@@ -699,3 +701,142 @@ def test_submit_practice_request_and_response() -> None:
     )
     assert submit_reverse.uncompleted_count == 2
     assert PracticeSubmitResponse is SubmitPracticeResponse
+
+
+def test_source_snippet_dto_roundtrip() -> None:
+    """测试来源切片摘要 DTO 字段解析 (BUG-GRADE-004)。"""
+    snippet_id = uuid.uuid4()
+    snippet = SourceSnippetDTO(
+        id=snippet_id,
+        chapter_title="第 3 章 树与二叉树",
+        page_index=42,
+        snippet_content="二叉树的中序遍历先左后根再右。",
+    )
+    assert snippet.id == snippet_id
+    assert snippet.chapter_title == "第 3 章 树与二叉树"
+    assert snippet.page_index == 42
+    assert snippet.snippet_content == "二叉树的中序遍历先左后根再右。"
+
+    defaulted = SourceSnippetDTO()
+    assert defaulted.chapter_title == ""
+    assert defaulted.page_index == 1
+    assert defaulted.snippet_content == ""
+
+
+def test_practice_item_response_merges_final_grading_keywords() -> None:
+    """测试作答项 DTO 合并生效判题记录的命中/遗漏要点 (BUG-GRADE-003)。"""
+
+    def snapshot_field(snapshot: object, key: str) -> object:
+        if isinstance(snapshot, dict):
+            return snapshot.get(key)
+        return getattr(snapshot, key, None)
+
+    item_id = uuid.uuid4()
+    final_record = SimpleNamespace(
+        is_final=True,
+        hit_keywords=["递归回溯"],
+        missing_keywords=["基准元素", "子数组长度"],
+    )
+    stale_record = SimpleNamespace(
+        is_final=False,
+        hit_keywords=[],
+        missing_keywords=[],
+    )
+    orm_item = SimpleNamespace(
+        id=item_id,
+        order_index=1,
+        is_answered=True,
+        score=0.5,
+        max_score=5.0,
+        user_answer="采用递归回溯求解",
+        grading_records=[stale_record, final_record],
+        question_snapshot={
+            "stem": "请阐述快速排序的递归基设计思想。",
+            "question_type": "short_answer",
+            "answer": "当子数组长度小于等于 1 时直接返回。",
+        },
+    )
+
+    response = PracticeItemDetailResponse.model_validate(orm_item)
+
+    assert response.hit_keywords == ["递归回溯"]
+    assert response.missing_keywords == ["基准元素", "子数组长度"]
+    # 顶层与嵌套快照必须双向同步，保证前端二级兜底可读
+    snapshot = response.question_snapshot
+    assert snapshot_field(snapshot, "hit_keywords") == ["递归回溯"]
+    assert snapshot_field(snapshot, "missing_keywords") == ["基准元素", "子数组长度"]
+
+    # 显式提供的要点不得被判题记录覆盖 (向后兼容)
+    explicit = PracticeItemDetailResponse.model_validate(
+        {
+            "attempt_item_id": item_id,
+            "order_index": 2,
+            "hit_keywords": ["显式命中"],
+            "missing_keywords": ["显式遗漏"],
+            "grading_records": [final_record],
+            "question_snapshot": {
+                "stem": "题干",
+                "question_type": "short_answer",
+                "answer": "参考答案",
+            },
+        }
+    )
+    assert explicit.hit_keywords == ["显式命中"]
+    assert explicit.missing_keywords == ["显式遗漏"]
+
+
+def test_practice_item_response_propagates_source_snippet() -> None:
+    """测试作答项 DTO 透传来源切片对象至顶层与嵌套快照 (BUG-GRADE-004)."""
+    item_id = uuid.uuid4()
+    snippet_id = uuid.uuid4()
+    snippet_payload = {
+        "id": str(snippet_id),
+        "chapter_title": "第 5 章 树形数据结构",
+        "page_index": 108,
+        "snippet_content": "AVL 树是一棵自平衡二叉搜索树。",
+    }
+
+    response = PracticeItemDetailResponse.model_validate(
+        {
+            "attempt_item_id": item_id,
+            "order_index": 1,
+            "source_snippet": snippet_payload,
+            "question_snapshot": {
+                "stem": "AVL 树高度差？",
+                "question_type": "single_choice",
+                "answer": "1",
+                "source_snippet_id": str(snippet_id),
+            },
+        }
+    )
+
+    assert response.source_snippet is not None
+    resolved = (
+        response.source_snippet
+        if isinstance(response.source_snippet, SourceSnippetDTO)
+        else SourceSnippetDTO.model_validate(response.source_snippet)
+    )
+    assert resolved.chapter_title == "第 5 章 树形数据结构"
+    assert resolved.page_index == 108
+    assert resolved.snippet_content == "AVL 树是一棵自平衡二叉搜索树。"
+    nested_snapshot = response.question_snapshot
+    if isinstance(nested_snapshot, dict):
+        assert nested_snapshot.get("source_snippet") is not None
+    else:
+        assert nested_snapshot.source_snippet is not None
+
+    # 默认缺省时必须为 None，不破坏历史响应
+    fallback = PracticeItemDetailResponse.model_validate(
+        {
+            "attempt_item_id": item_id,
+            "order_index": 2,
+            "question_snapshot": {
+                "stem": "题干",
+                "question_type": "single_choice",
+                "answer": "A",
+            },
+        }
+    )
+    assert fallback.source_snippet is None
+    assert fallback.hit_keywords == []
+    assert fallback.missing_keywords == []

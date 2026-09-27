@@ -73,7 +73,9 @@ class PracticeRepository:
             Practice.user_id == user_id,
         )
         if include_items:
-            stmt = stmt.options(selectinload(Practice.items))
+            stmt = stmt.options(
+                selectinload(Practice.items).selectinload(AttemptItem.grading_records)
+            )
         return self.session.execute(stmt).scalars().first()
 
     def find_active_by_source_report(

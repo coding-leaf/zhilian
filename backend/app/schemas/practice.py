@@ -110,6 +110,65 @@ class PracticeCreateRequest(BaseModel):
         return value
 
 
+class SourceSnippetDTO(BaseModel):
+    """题目来源切片摘要数据传输对象模型。
+
+    承载原文溯源抽屉渲染所需的最小切片信息 (章节/页码/正文)。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID | str | None = Field(default=None, description="切片主键标识")
+    chapter_title: str = Field(default="", description="所属章节标题")
+    page_index: int = Field(default=1, ge=1, description="所在页码 (从 1 起算)")
+    snippet_content: str = Field(default="", description="切片纯文本内容")
+
+
+def _pick_final_grading_record(records: Any) -> Any:
+    """从判题记录集合中挑选当前生效的终态记录。
+
+    优先返回标记 ``is_final=True`` 的记录；若均未标记，则回退最后一条记录。
+    兼容 ORM 实体与纯字典两类数据源。
+
+    Args:
+        records: 判题记录集合 (ORM 实体列表或字典列表)。
+
+    Returns:
+        Any: 命中的生效判题记录；集合为空或非法时返回 None。
+    """
+    if not isinstance(records, (list, tuple)) or len(records) == 0:
+        return None
+
+    def _is_final(record: Any) -> bool:
+        if isinstance(record, dict):
+            return bool(record.get("is_final"))
+        return bool(getattr(record, "is_final", False))
+
+    final_records = [record for record in records if _is_final(record)]
+    candidates = final_records or list(records)
+    return candidates[-1]
+
+
+def _extract_keyword_list(record: Any, field_name: str) -> list[str] | None:
+    """从判题记录安全提取关键词列表字段。
+
+    Args:
+        record: 判题记录 ORM 实体或字典。
+        field_name: 目标字段名 (hit_keywords / missing_keywords)。
+
+    Returns:
+        list[str] | None: 规范化后的字符串列表；字段缺失或非法时返回 None。
+    """
+    if record is None:
+        return None
+    value = (
+        record.get(field_name) if isinstance(record, dict) else getattr(record, field_name, None)
+    )
+    if not isinstance(value, list):
+        return None
+    return [str(item) for item in value if item is not None]
+
+
 class QuestionSnapshotDTO(BaseModel):
     """题目 6 要素快照数据传输对象模型。
 
@@ -153,6 +212,18 @@ class QuestionSnapshotDTO(BaseModel):
     grading_rubric: dict[str, Any] = Field(
         default_factory=dict,
         description="主观题评分细则字典",
+    )
+    source_snippet: SourceSnippetDTO | dict[str, Any] | None = Field(
+        default=None,
+        description="来源切片追溯详情对象 (章节/页码/正文)",
+    )
+    hit_keywords: list[str] = Field(
+        default_factory=list,
+        description="命中要点关键词列表 (由生效判题记录合并)",
+    )
+    missing_keywords: list[str] = Field(
+        default_factory=list,
+        description="遗漏核心要点列表 (由生效判题记录合并)",
     )
 
     @model_validator(mode="before")
@@ -206,6 +277,18 @@ class PracticeItemDetailResponse(BaseModel):
         description="作答项判题状态 (unanswered/pending_regrade/graded)",
     )
     max_score: float = Field(default=1.0, description="本题满分基准分值")
+    hit_keywords: list[str] = Field(
+        default_factory=list,
+        description="命中要点关键词列表 (由生效判题记录合并)",
+    )
+    missing_keywords: list[str] = Field(
+        default_factory=list,
+        description="遗漏核心要点列表 (由生效判题记录合并)",
+    )
+    source_snippet: SourceSnippetDTO | dict[str, Any] | None = Field(
+        default=None,
+        description="来源切片追溯详情对象 (章节/页码/正文)",
+    )
     question_snapshot: QuestionSnapshotDTO | dict[str, Any] = Field(
         ...,
         description="题目 6 要素快照",
@@ -214,7 +297,7 @@ class PracticeItemDetailResponse(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def synchronize_item_fields(cls, data: Any) -> Any:
-        """同步主键、耗时及作答标记字段。"""
+        """同步主键、耗时、作答标记、要点关键词及来源切片字段。"""
         if not isinstance(data, dict):
             field_names = (
                 "id",
@@ -229,9 +312,16 @@ class PracticeItemDetailResponse(BaseModel):
                 "score",
                 "grading_status",
                 "max_score",
+                "hit_keywords",
+                "missing_keywords",
+                "source_snippet",
                 "question_snapshot",
             )
             extracted = {name: getattr(data, name) for name in field_names if hasattr(data, name)}
+            # 仅消费已预加载的判题记录关系，避免触发 N+1 惰性查询
+            loaded_records = getattr(data, "__dict__", {}).get("grading_records")
+            if loaded_records is not None:
+                extracted["grading_records"] = loaded_records
             if extracted:
                 data = extracted
 
@@ -260,6 +350,33 @@ class PracticeItemDetailResponse(BaseModel):
             # 兼容历史 Python repr 多选作答，规范化为标准 JSON 字符串 (BUG-PRAC-016)
             if isinstance(data.get("user_answer"), str):
                 data["user_answer"] = _normalize_persisted_user_answer(data["user_answer"])
+
+            # 合并生效判题记录中的命中/遗漏要点 (BUG-GRADE-003)
+            final_record = _pick_final_grading_record(data.get("grading_records"))
+            if data.get("hit_keywords") is None:
+                hit_keywords = _extract_keyword_list(final_record, "hit_keywords")
+                if hit_keywords is not None:
+                    data["hit_keywords"] = hit_keywords
+            if data.get("missing_keywords") is None:
+                missing_keywords = _extract_keyword_list(final_record, "missing_keywords")
+                if missing_keywords is not None:
+                    data["missing_keywords"] = missing_keywords
+
+            # 同步来源切片对象并回填快照 (BUG-GRADE-004)
+            snapshot = data.get("question_snapshot")
+            source_snippet = data.get("source_snippet")
+            if isinstance(snapshot, dict):
+                snapshot = dict(snapshot)
+                data["question_snapshot"] = snapshot
+                if source_snippet is None and snapshot.get("source_snippet") is not None:
+                    source_snippet = snapshot.get("source_snippet")
+                    data["source_snippet"] = source_snippet
+                if data.get("hit_keywords") is not None:
+                    snapshot.setdefault("hit_keywords", data["hit_keywords"])
+                if data.get("missing_keywords") is not None:
+                    snapshot.setdefault("missing_keywords", data["missing_keywords"])
+                if source_snippet is not None:
+                    snapshot.setdefault("source_snippet", source_snippet)
 
             # 计算判题状态 (仅在未显式提供时)，使“待重判”不被误判为“判错”
             if data.get("grading_status") is None:
