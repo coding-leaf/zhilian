@@ -736,3 +736,51 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - 并发 `IntegrityError` → rollback + 回查返回既有报告；同 key 并发 409；快照写失败仍成功且锁释放可重试；无 key 零回归；薄弱点严格升序（含并列稳定）。
+
+---
+
+### Scenario: Course Folder Archive, Lazy Purge & Material Attribution
+
+#### 1. Scope / Trigger
+- 单层「课程文件夹」实体（`material_folders`）、资料归属（`materials.folder_id`）、归档 / 恢复 / 逾期惰性清理，以及按课程过滤与资料移动。
+
+#### 2. Signatures
+- 表 `material_folders`；`materials.folder_id`（可空 FK → `material_folders.id` ON DELETE SET NULL）。
+- API：`POST/GET/GET{id}/PATCH/DELETE /folders`、`POST /folders/{id}/restore`、`DELETE /folders/{id}/purge`；`POST /materials/upload` 可选 `folder_id`；`GET /materials?folder_id=<uuid|__none__>`；`PATCH /materials/{id}/folder` body `{folder_id: UUID|null}`。
+
+#### 3. Contracts
+- **归档即软删除**：`DELETE /folders/{id}` 只写 `archived_at=now`，不回退资料、不物理删除；`purge_after = archived_at + 7d`。列表默认 `archived_at IS NULL` 隐藏归档课程，`include_archived=true` 才返回。
+- **资料随课程隐藏（查询层口径）**：`materials.folder_id` 指向归档课程的资料在列表/详情默认隐藏；未分类（`folder_id IS NULL`）不受影响。过滤条件为 `folder_id IS NULL OR MaterialFolder.archived_at IS NULL`。
+- **惰性清理副作用**：`list_folders` / `get_folder` 入口先把 `archived_at < now - 7d` 的课程物理级联清理（复用 `MaterialService.hard_delete_material` 逐个硬删其下资料，再删课程行），**必须显式 commit**；单课程清理失败仅 `rollback()` 并告警，不得阻断本次只读查询返回。无需常驻调度器。
+- **ON DELETE SET NULL vs purge**：归档不触发 FK 级联；只有显式 `purge` / 惰性清理才逐个硬删资料（FK 的 SET NULL 只兜底课程行被删而资料保留的场景）。
+- **多租户隔离**：所有仓储方法强制 `user_id` 过滤；越权访问课程返回 `FolderNotFoundError`（404）。同用户重名 `FolderNameConflictError`（409）。
+- **移动校验**：目标课程须归属当前用户且未归档，否则 404；`folder_id=null` 移回未分类。
+- **聚合计数 N+1 防护**：列表聚合计数必须走批量分组查询（`_by_folder_ids`），禁止逐课程循环查询。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误：查询层不过滤归档课程，且惰性清理在只读 GET 里不提交事务
+stmt = select(Material).where(Material.user_id == user_id)   # 归档课程的资料仍可见
+expired = repo.list_expired(user_id, before=...)
+for f in expired:
+    self.purge_folder(user_id, f.id)   # purge 未 commit → 只读会话回滚，清理丢失
+```
+##### Correct
+```python
+# 正确：可见性过滤 + 清理入口显式提交且失败降级不阻断
+stmt = stmt.outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id).where(
+    or_(Material.folder_id.is_(None), MaterialFolder.archived_at.is_(None))
+)
+for f in self.repo.list_expired(user_id, before=datetime.now(UTC) - timedelta(days=7)):
+    try:
+        self.purge_folder(user_id, f.id)   # 内部 list/hard_delete/commit
+    except Exception:
+        self.session.rollback()            # 降级为本次不清理，查询照常返回
+```
+
+#### 5. Tests Required
+- 模型/迁移：`(user_id, name)` 唯一约束；`Material.folder_id` FK `SET NULL`；迁移 0005 `upgrade → downgrade → upgrade` 对称。
+- 仓储：CRUD、归档默认隐藏、`list_expired` 阈值、批量计数、跨租户隔离。
+- 服务：重名 409、越权 404、归档/恢复、`purge_after=+7d`、**`archived_at=now-8d` 时任意列表查询物理删除课程及其资料**、聚合计数、移动（未分类↔课程、目标归档/他人 404）。
+- API：课程各端点状态码与响应契约；上传带/不带 `folder_id`；列表 `__none__` 与非法 `folder_id` 400；`PATCH /materials/{id}/folder`。
