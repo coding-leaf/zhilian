@@ -11,52 +11,52 @@
 ## 执行清单（有序）
 
 ### Step 1 — 失败回归测试（红）
-- [ ] 1.1 后端：在 `test_question_quality.py` 新增用例 `test_conflict_cross_type_true_false_and_choice_not_conflicted`（判断题与单选题题干高度相似但在当前逻辑下被误判为冲突 → 预期通过；当前实现返回失败 → 红）。
-- [ ] 1.2 后端：在 `test_question_schemas.py` 增加 `QuestionGenerateRequest(..., question_types=[])` 期望抛出 ValidationError 的断言（当前可通过 → 红）。
-- [ ] 1.3 后端：在 `test_question_service.py` 增加 `GenerateQuestionsOptions(question_types=[])` 期望抛出 ValueError 的断言（当前可通过 → 红）。
-- [ ] 1.4 前端：在 `materialTreeUtils.spec.ts` 中新增/修改 `validateQuestionConfig({ count: 21 })` 返回 false 的断言（当前返回 true → 红）。
-- [ ] 1.5 前端：在 `QuestionConfigDrawer.spec.ts` 中断言输入 25 被 clamp 到 20、文案为 1 到 20（当前为 50 → 红）。
-- [ ] 1.6 前端：在 `api/question.spec.ts` 中断言 `deleteQuestion('q_001', '原因')` 发起请求 URL 包含 `?reason=` 且不发送 body data（当前发送 body data → 红）。
-- [ ] 1.7 运行测试套件，确认上述新增断言全部处于「红」状态。
+- [x] 1.1 后端：在 `test_question_quality.py` 新增用例 `test_conflict_cross_type_true_false_and_choice_not_conflicted`（判断题与单选题题干高度相似但在当前逻辑下被误判为冲突 → 预期通过；当前实现返回失败 → 红）。
+- [x] 1.2 后端：在 `test_question_schemas.py` 增加 `QuestionGenerateRequest(..., question_types=[])` 期望抛出 ValidationError 的断言（当前可通过 → 红）。
+- [x] 1.3 后端：在 `test_question_service.py` 增加 `GenerateQuestionsOptions(question_types=[])` 期望抛出 ValueError 的断言（当前可通过 → 红）。
+- [x] 1.4 前端：在 `materialTreeUtils.spec.ts` 中新增/修改 `validateQuestionConfig({ count: 21 })` 返回 false 的断言（当前返回 true → 红）。
+- [x] 1.5 前端：在 `QuestionConfigDrawer.spec.ts` 中断言输入 25 被 clamp 到 20、文案为 1 到 20（当前为 50 → 红）。
+- [x] 1.6 前端：在 `api/question.spec.ts` 中断言 `deleteQuestion('q_001', '原因')` 发起请求 URL 包含 `?reason=` 且不发送 body data（当前发送 body data → 红）。
+- [x] 1.7 运行测试套件，确认上述新增断言全部处于「红」状态。
 
 ### Step 2 — 后端修复实现（绿）
-- [ ] 2.1 `backend/app/core/algorithms/question_quality.py`：
+- [x] 2.1 `backend/app/core/algorithms/question_quality.py`：
   - 在 `check_answer_conflict` 中判断 `candidate.question_type` 与 `existing_question.question_type` 是否同属判断题或同属选择题，跨类型时直接 `continue` 跳过答案比对（BUG-QGEN-006）。
-- [ ] 2.2 `backend/app/schemas/question.py`：
+- [x] 2.2 `backend/app/schemas/question.py`：
   - `QuestionGenerateRequest.question_types` 添加 `min_length=1` 约束及元素值枚举校验（BUG-QGEN-008）。
-- [ ] 2.3 `backend/app/services/question.py`：
+- [x] 2.3 `backend/app/services/question.py`：
   - `GenerateQuestionsOptions.__post_init__` 增加 `question_types` 非空和有效性校验（BUG-QGEN-008）。
-- [ ] 2.4 `backend/app/api/v1/questions.py`：
+- [x] 2.4 `backend/app/api/v1/questions.py`：
   - `delete_question` 路由参数增加读取可选 Request Body 作为 reason 的兜底（BUG-QGEN-003）。
-- [ ] 2.5 运行后端对应单元测试确认转绿。
+- [x] 2.5 运行后端对应单元测试确认转绿。
 
 ### Step 3 — 前端修复实现（绿）
-- [ ] 3.1 `miniprogram/src/subpackages/material/utils/tree.ts`：
+- [x] 3.1 `miniprogram/src/subpackages/material/utils/tree.ts`：
   - `validateQuestionConfig` 上限校验由 50 修改为 20，文案更新为 `出题数量必须在 1 到 20 题之间`（BUG-QGEN-002）。
-- [ ] 3.2 `miniprogram/src/subpackages/material/components/QuestionConfigDrawer.vue`：
+- [x] 3.2 `miniprogram/src/subpackages/material/components/QuestionConfigDrawer.vue`：
   - 界面提示文案改为 `单次支持生成 1 到 20 道题目`；
   - `clampCount` 上限收敛为 20；
   - 加号按钮禁用条件改为 `questionCount >= 20`（BUG-QGEN-002）。
-- [ ] 3.3 `miniprogram/src/api/question.ts`：
+- [x] 3.3 `miniprogram/src/api/question.ts`：
   - 修改 `deleteQuestion` 实现，将 `reason` 格式化为 query string 追加到 URL，DELETE 不传 data（BUG-QGEN-003）。
-- [ ] 3.4 `miniprogram/src/types/question.ts`：
+- [x] 3.4 `miniprogram/src/types/question.ts`：
   - 更新 `QuestionQualityCheck` 接口定义，对齐后端 `QuestionQualityCheckResponse`（BUG-QGEN-004）。
-- [ ] 3.5 `miniprogram/src/subpackages/material/pages/questions/index.vue`：
+- [x] 3.5 `miniprogram/src/subpackages/material/pages/questions/index.vue`：
   - 在 `handleDeleteQuestion` 删除成功后，重置分页并重新拉取第一页数据 `loadQuestions(true)`，防止 offset 跳题（BUG-QGEN-005）。
-- [ ] 3.6 运行前端对应单元测试确认转绿。
+- [x] 3.6 运行前端对应单元测试确认转绿。
 
 ### Step 4 — 全量门禁校验与收尾
-- [ ] 4.1 后端全套门禁：
+- [x] 4.1 后端全套门禁：
   - `uv run ruff format --check .`
   - `uv run ruff check .`
   - `uv run mypy app`
   - `uv run lint-imports`
   - `uv run pytest tests`
-- [ ] 4.2 前端全套门禁：
+- [x] 4.2 前端全套门禁：
   - `pnpm run lint`
   - `pnpm run type-check`
   - `pnpm run test:unit`
-- [ ] 4.3 确认所有回归测试与既有测试均通过，无 warning/error，关闭 BUG-QGEN-002、003、004、005、006、008。
+- [x] 4.3 确认所有回归测试与既有测试均通过，无 warning/error，关闭 BUG-QGEN-002、003、004、005、006、008。
 
 ---
 
@@ -87,3 +87,22 @@ pnpm run lint && pnpm run type-check && pnpm run test:unit
   - 若需回滚 QGEN-003，后端由于保留双向兼容，前端单文件 revert 即可；
   - 若需回滚 QGEN-004，前端字段含有可选兼容别名，无破坏性；
   - 若需回滚 QGEN-005、006、008，均为单一函数级变更，单文件 revert 即可。
+
+---
+
+## 完成记录（Implement Agent）
+
+- 全部 Step 1~4 已完成，红绿反转成立（新增断言先红后绿）。
+- 新增/补充测试：
+  - 后端 `test_question_quality.py`：`test_conflict_cross_type_true_false_and_choice_not_conflicted`（红→绿）、`test_conflict_same_type_choice_different_answers_still_conflicted`（守回归，双向跨题型均不再误判）。
+  - 后端 `test_question_schemas.py`：空题型与非法题型两条 ValidationError 断言。
+  - 后端 `test_question_service.py`：`GenerateQuestionsOptions` 空/非法题型 ValueError 断言。
+  - 后端 `test_question_router.py`：`test_delete_question_reason_from_json_body_fallback`（旧客户端 body reason 兜底）。
+  - 前端 `materialTreeUtils.spec.ts`：上限 20 / 边界 1&20 / 21&50 拒绝。
+  - 前端 `QuestionConfigDrawer.spec.ts`：文案 1 到 20、输入 25/99 clamp 到 20。
+  - 前端 `api/question.spec.ts`：deleteQuestion reason 走 query、无 body、无原因不带 query。
+  - 前端 `questionList.spec.ts`：删除后重新拉取第 1 页（调用次数 + 分页参数 + 数据对齐）。
+- 门禁结果：
+  - 后端：`ruff format --check .`（216 files）、`ruff check .`（All checks passed）、`mypy app`（125 source files）、`lint-imports`（5 kept）、`pytest tests`（**1188 passed**）全绿。
+  - 前端：`pnpm run lint`、`pnpm run type-check`、`pnpm run test:unit`（**58 files / 519 tests passed**）全绿。
+- 与 design.md 的偏差：无。QGEN-002 以后端 1~20 为权威；QGEN-003 前端改 query、后端保留 Query 并新增 JSON body 兜底；QGEN-004 前端保留废弃别名字段。
