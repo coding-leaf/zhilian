@@ -5,11 +5,18 @@
 所有敏感凭证（密码、密钥、Token）统一使用 SecretStr 脱敏防护。
 """
 
+import logging
 from functools import lru_cache
 from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# 依据：系统安全基线要求，生产环境强制由 ZHILIAN_SECRET_KEY 注入；非生产环境提供开发测试保底密钥。
+# 该常量同时作为「开发默认密钥」的唯一判定源，任何生产环境检测到仍在使用时必须启动期 fail-fast。
+DEVELOPMENT_SECRET_KEY: str = "zhilian-development-secret-key-32bytes-min!"  # noqa: S105
 
 
 class DatabaseSettings(BaseSettings):
@@ -396,7 +403,7 @@ class AppSettings(BaseSettings):
         description="是否开启调试模式",
     )
     secret_key: SecretStr = Field(
-        default=SecretStr("zhilian-development-secret-key-32bytes-min!"),
+        default=SecretStr(DEVELOPMENT_SECRET_KEY),
         description="系统核心 JWT 签名私钥",
     )
     wechat_app_id: str | None = Field(
@@ -425,6 +432,15 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    @property
+    def uses_insecure_default_secret_key(self) -> bool:
+        """判断当前 JWT 签名密钥是否仍为开发默认密钥。
+
+        Returns:
+            bool: 仍在使用开发默认密钥时返回 True，否则返回 False。
+        """
+        return self.secret_key.get_secret_value() == DEVELOPMENT_SECRET_KEY
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> AppSettings:
@@ -436,3 +452,31 @@ def get_settings() -> AppSettings:
         AppSettings: 全局配置单例实例。
     """
     return AppSettings()
+
+
+def validate_secret_key(settings: AppSettings | None = None) -> None:
+    """校验 JWT 签名密钥在生产环境的安全性（启动期 fail-fast）。
+
+    生产环境检测到仍使用开发默认密钥时必须立即中止启动，防止以可预测密钥
+    签发 JWT 导致凭据可被伪造；非生产环境仅记录告警。
+
+    Args:
+        settings: 待校验配置，缺省使用 get_settings() 单例。
+
+    Raises:
+        RuntimeError: 当运行环境为 production 且仍使用开发默认密钥时。
+    """
+    resolved = settings if settings is not None else get_settings()
+    if not resolved.uses_insecure_default_secret_key:
+        return
+
+    if resolved.env == "production":
+        raise RuntimeError(
+            "生产环境安全校验失败: 检测到仍在使用开发默认 JWT 密钥，"
+            "请通过环境变量 ZHILIAN_SECRET_KEY 注入强随机密钥。"
+        )
+
+    logger.warning(
+        "当前环境 (%s) 正在使用开发默认 JWT 密钥，生产部署前必须通过 ZHILIAN_SECRET_KEY 覆写。",
+        resolved.env,
+    )

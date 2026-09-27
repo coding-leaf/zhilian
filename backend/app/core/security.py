@@ -8,13 +8,13 @@
 """
 
 import hashlib
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
 
+from app.core.config import get_settings
 from app.core.errors import AuthenticationError
 
 # 依据：轻量级高频 HMAC-SHA256 签名，兼具计算能效与移动端传输开销，对齐工业通用基线
@@ -26,19 +26,22 @@ ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
 # 依据：微信小程序移动端免登录无感刷新体验的最佳实践推荐窗口 (30 天)
 REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-# 依据：系统安全基线要求，生产环境强制由环境变量注入；非生产环境提供开发测试保底密钥
-DEFAULT_SECRET_KEY: str = "zhilian-insecure-development-secret-key-change-in-production-2026"  # noqa: S105
 
-
-def get_secret_key() -> str:
+def get_secret_key(*, secret_key: str | None = None) -> str:
     """获取系统用于 JWT 签名的密钥。
 
-    优先读取环境变量 SECRET_KEY，未配置时回退至开发默认密钥。
+    唯一真相源为强类型 Settings (`ZHILIAN_SECRET_KEY`)；显式入参仅用于测试注入，
+    严禁绕过 Settings 读取裸环境变量，避免生产注入被静默忽略。
+
+    Args:
+        secret_key: 可选的显式密钥，优先级最高 (供测试注入)。
 
     Returns:
         str: 签名密钥。
     """
-    return os.getenv("SECRET_KEY", DEFAULT_SECRET_KEY)
+    if secret_key is not None:
+        return secret_key
+    return get_settings().secret_key.get_secret_value()
 
 
 def create_access_token(

@@ -9,7 +9,9 @@ from datetime import timedelta
 
 import jwt
 import pytest
+from pydantic import SecretStr
 
+from app.core.config import DEVELOPMENT_SECRET_KEY, AppSettings, get_settings, validate_secret_key
 from app.core.errors import AuthenticationError
 from app.core.security import (
     ALGORITHM,
@@ -196,8 +198,52 @@ class TestTokenVersionAndUserRef:
         uid_b = uuid.uuid4()
         assert generate_user_ref(uid_a) != generate_user_ref(uid_b)
 
-    def test_get_secret_key_environment_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify SECRET_KEY environment variable overrides default key."""
+    def test_get_secret_key_resolves_typed_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify ZHILIAN_SECRET_KEY is resolved through strongly-typed Settings (BUG-AUTH-001)."""
         custom_key = "my-custom-production-key-999-32-chars-long"
-        monkeypatch.setenv("SECRET_KEY", custom_key)
+        monkeypatch.setenv("ZHILIAN_SECRET_KEY", custom_key)
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+        get_settings.cache_clear()
+
         assert get_secret_key() == custom_key
+        assert get_secret_key() == get_settings().secret_key.get_secret_value()
+
+    def test_get_secret_key_ignores_bare_secret_key_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify a bare SECRET_KEY no longer shadows the ZHILIAN_ typed Settings contract."""
+        monkeypatch.setenv("SECRET_KEY", "bare-env-should-be-ignored-32chars!")
+        monkeypatch.delenv("ZHILIAN_SECRET_KEY", raising=False)
+        get_settings.cache_clear()
+
+        expected = get_settings().secret_key.get_secret_value()
+        assert get_secret_key() == expected
+        assert get_secret_key() != "bare-env-should-be-ignored-32chars!"
+
+    def test_get_secret_key_explicit_argument_has_priority(self) -> None:
+        """Verify an explicitly supplied secret_key overrides Settings resolution."""
+        explicit_key = "explicit-override-key-999-32-chars-long!!"
+        assert get_secret_key(secret_key=explicit_key) == explicit_key
+
+
+class TestSecretKeyProductionGuard:
+    """Test suite for production fail-fast validation of the JWT signing secret."""
+
+    def test_production_with_default_secret_key_fails_fast(self) -> None:
+        """Verify production boot aborts when the development default key is still in use."""
+        settings = AppSettings(env="production", secret_key=SecretStr(DEVELOPMENT_SECRET_KEY))
+        with pytest.raises(RuntimeError, match="ZHILIAN_SECRET_KEY"):
+            validate_secret_key(settings)
+
+    def test_production_with_custom_secret_key_passes(self) -> None:
+        """Verify production boot succeeds when a non-default strong key is configured."""
+        settings = AppSettings(
+            env="production",
+            secret_key=SecretStr("strong-production-secret-key-32bytes!"),
+        )
+        validate_secret_key(settings)
+
+    def test_development_with_default_secret_key_passes(self) -> None:
+        """Verify non-production environments may keep the development default key."""
+        settings = AppSettings(env="development", secret_key=DEVELOPMENT_SECRET_KEY)
+        validate_secret_key(settings)

@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import api_v1_router
 from app.container import AppContainer
-from app.core.config import get_settings
+from app.core.config import get_settings, validate_secret_key
 from app.core.errors import AppError
 
 
@@ -36,6 +36,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     own_container = False
     if container is None:
         settings = get_settings()
+        # 生产环境使用开发默认密钥时启动期 fail-fast（安全基线红线）
+        validate_secret_key(settings)
         container = AppContainer.create_from_settings(settings)
         app.state.container = container
         own_container = True
