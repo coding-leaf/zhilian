@@ -461,3 +461,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 标准+旧枚举均可识别；`fill_in_blank` 渲染「填空题」；点击重置父组件仅 1 次 `loadData`；删除响应解构 `removed === true`。
+
+### Scenario: Report Reset, Draft Metadata & Continue-Practice Idempotency Header
+
+#### 1. Scope / Trigger
+- 报告状态重置、练习草稿元数据、继续练习幂等头、报告页空态。
+
+#### 2. Contracts
+- `setReport` 必须在新报告无 `weak_points`（缺失/null/空）时把 `weakPoints` 重置为 `[]`，禁止残留旧报告数据。
+- `initSession` 生成的草稿必须写入 `total_count`（及可选 `title`/`material_id`），`extractLatestDraftPractice` 消费真实值。
+- 继续练习请求头必须是 `Idempotency-Key`（与后端逐字一致）。
+- 报告详情页在非 loading、非 error 且无 `currentReport` 时必须渲染空态（`.empty-state` + 操作按钮），不得白屏；空态不得遮蔽 loading/error 分支。
+
+#### 3. Tests Required
+- 空/无 `weak_points` 报告切换后无残留；草稿含 `total_count`/`title`/`material_id` 并被展示；`continuePractice` 头为 `Idempotency-Key`；无 pid/空报告渲染 `.empty-state` 且不发起请求。

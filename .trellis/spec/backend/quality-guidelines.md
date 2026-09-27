@@ -723,3 +723,16 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - DTO 计数同步（dict/ORM）；error_type 简写归一与非法值空结果；question_type/material_id 过滤与 count 一致；>1000 行无截断且 total 精确；删除响应含 `removed`。
+
+### Scenario: Report Generation Race, Create-Practice Idempotency & Mastery Ordering
+
+#### 1. Scope / Trigger
+- 报告生成并发唯一键冲突、`POST /practices` 幂等创建、掌握度全景薄弱点排序。
+
+#### 2. Contracts
+- 报告生成先查后插若并发撞 `practice_id` 唯一约束，必须捕获 `IntegrityError`、`rollback()` 后回查并返回既有报告；非冲突异常不得吞掉。
+- `POST /practices` 幂等：头名与前端逐字一致（`Idempotency-Key`）；命中已完成快照则回放（不取锁），并发同 key 拒绝（409），无 key 走旧链路；**锁必须在任何失败路径释放**，快照写入失败须降级告警（不得 commit 后 500 或泄漏锁）。
+- `get_user_mastery_overview` 的薄弱点按 `(mastery_score, knowledge_point_id)` 升序稳定排序（最弱在前）。
+
+#### 3. Tests Required
+- 并发 `IntegrityError` → rollback + 回查返回既有报告；同 key 并发 409；快照写失败仍成功且锁释放可重试；无 key 零回归；薄弱点严格升序（含并列稳定）。
