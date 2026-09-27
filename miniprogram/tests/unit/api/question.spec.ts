@@ -9,7 +9,39 @@ import {
   fetchQuestionAudit,
   fetchQuestionAuditLogs,
 } from '@/api/question';
-import type { GenerationRequest } from '@/types/question';
+import type { GenerationRequest, QuestionUpdateRequest } from '@/types/question';
+
+/**
+ * Real backend option contract: elements are `{ key, content }`
+ * (backend/app/schemas/question.py -> QuestionDetailResponse.options).
+ */
+const backendOptions = [
+  { key: 'A', content: '访问临界资源的代码段' },
+  { key: 'B', content: '一种存储设备' },
+];
+
+/** Builds a raw backend question payload (before the adapter normalizes it). */
+function backendQuestion(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'q_001',
+    material_id: 'mat_001',
+    version_id: 'ver_001',
+    knowledge_point_id: 'kp_001',
+    question_type: 'single_choice',
+    status: 'available',
+    is_deleted: false,
+    stem: '什么是临界区？',
+    options: backendOptions,
+    answer: 'A',
+    analysis: '临界区指进程中访问临界资源的那段代码。',
+    difficulty: 3,
+    grading_rubric: {},
+    source_snippet_ids: [],
+    created_at: '2026-09-27T00:00:00Z',
+    updated_at: '2026-09-27T00:00:00Z',
+    ...overrides,
+  };
+}
 
 describe('Question API Module', () => {
   beforeEach(() => {
@@ -25,12 +57,13 @@ describe('Question API Module', () => {
         material_id: 'mat_001',
         version_id: 'ver_001',
         knowledge_point_id: 'kp_001',
-        total_generated: 3,
-        qualified_count: 3,
-        pending_count: 0,
+        knowledge_point_ids: ['kp_001'],
+        total_generated: 2,
+        qualified_count: 1,
+        pending_count: 1,
         retry_count: 0,
-        qualified_questions: [],
-        pending_questions: [],
+        qualified_questions: [backendQuestion()],
+        pending_questions: [backendQuestion({ id: 'q_002', stem: '第二题描述内容' })],
         quality_checks: [],
       },
     };
@@ -52,25 +85,20 @@ describe('Question API Module', () => {
       data: payload,
       timeout: 180000,
     });
-    expect(res).toEqual(mockResponse);
+    // Real backend nested option `content` is normalized to frontend `text`.
+    expect(res.data.qualified_questions[0].options?.[0]).toEqual({
+      key: 'A',
+      text: '访问临界资源的代码段',
+    });
+    expect(res.data.pending_questions[0].options?.[1].text).toBe('一种存储设备');
   });
 
-  it('should call fetchQuestionList with GET /api/v1/questions and query params', async () => {
+  it('should call fetchQuestionList with GET /api/v1/questions and normalize options', async () => {
     const mockResponse = {
       code: 0,
       message: 'success',
       data: {
-        items: [
-          {
-            id: 'q_001',
-            material_id: 'mat_001',
-            version_id: 'ver_001',
-            knowledge_point_id: 'kp_001',
-            question_type: 'single_choice',
-            stem: 'What is HTTP?',
-            difficulty: 2,
-          },
-        ],
+        items: [backendQuestion()],
         total: 1,
         limit: 20,
         offset: 0,
@@ -93,22 +121,18 @@ describe('Question API Module', () => {
       method: 'GET',
       data: params,
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.items[0].options?.[0]).toEqual({
+      key: 'A',
+      text: '访问临界资源的代码段',
+    });
+    expect(res.data.items[0].options?.[1].text).toBe('一种存储设备');
   });
 
-  it('should call fetchQuestionDetail with GET /api/v1/questions/:id', async () => {
+  it('should call fetchQuestionDetail with GET /api/v1/questions/:id and normalize options', async () => {
     const mockResponse = {
       code: 0,
       message: 'success',
-      data: {
-        id: 'q_001',
-        material_id: 'mat_001',
-        version_id: 'ver_001',
-        knowledge_point_id: 'kp_001',
-        question_type: 'single_choice',
-        stem: 'What is HTTP?',
-        difficulty: 2,
-      },
+      data: backendQuestion(),
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
 
@@ -119,30 +143,38 @@ describe('Question API Module', () => {
       url: '/api/v1/questions/q_001',
       method: 'GET',
     });
-    expect(res).toEqual(mockResponse);
+    expect(res.data.stem).toBe('什么是临界区？');
+    expect(res.data.options?.[0].text).toBe('访问临界资源的代码段');
+    expect(res.data.options?.[1].text).toBe('一种存储设备');
   });
 
-  it('should call updateQuestion with PUT /api/v1/questions/:id and payload', async () => {
+  it('should send option content instead of text on updateQuestion', async () => {
     const mockResponse = {
       code: 0,
       message: 'success',
-      data: {
-        id: 'q_001',
-        stem: 'Updated question stem',
-      },
+      data: backendQuestion({ stem: '更新后的题干内容' }),
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
 
-    const payload = { stem: 'Updated question stem', reason: 'Typo fix' };
+    const payload: QuestionUpdateRequest = {
+      stem: '更新后的题干内容',
+      options: [{ key: 'A', text: '选项正文' }],
+      reason: '修正选项正文',
+    };
     const res = await updateQuestion('q_001', payload);
 
     expect(requestSpy).toHaveBeenCalledTimes(1);
     expect(requestSpy).toHaveBeenCalledWith({
       url: '/api/v1/questions/q_001',
       method: 'PUT',
-      data: payload,
+      data: {
+        stem: '更新后的题干内容',
+        options: [{ key: 'A', content: '选项正文' }],
+        reason: '修正选项正文',
+      },
     });
-    expect(res).toEqual(mockResponse);
+    // The PUT response is also adapted back into the frontend text contract.
+    expect(res.data.options?.[0].text).toBe('访问临界资源的代码段');
   });
 
   it('should call deleteQuestion with DELETE /api/v1/questions/:id and optional reason', async () => {

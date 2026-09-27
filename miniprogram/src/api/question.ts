@@ -6,6 +6,13 @@
  */
 
 import { request } from '../utils/request';
+import {
+  adaptGenerateResponse,
+  adaptQuestionPage,
+  adaptQuestionResponse,
+  toQuestionUpdatePayload,
+  type QuestionUpdatePayloadInput,
+} from './adapters/question';
 import type { ApiResponse, PageResult } from '../types/common';
 import type {
   QuestionItem,
@@ -13,8 +20,9 @@ import type {
   GenerationRequest,
   QuestionGenerateResponse,
   QuestionListQueryParams,
-  QuestionUpdateRequest,
   QuestionAuditLogsResponse,
+  RawQuestionGenerateResponse,
+  RawQuestionItem,
 } from '../types/question';
 
 /** 出题流水线单次请求超时（毫秒），真实生成耗时可 30s+，故放宽至 3 分钟。 */
@@ -26,15 +34,16 @@ export const GENERATE_QUESTIONS_TIMEOUT = 180000;
  * @param payload 出题生成配置参数模型。
  * @returns 统一响应包，包含出题结果与质检通过题目列表。
  */
-export function generateQuestions(
+export async function generateQuestions(
   payload: QuestionGenerateRequest | GenerationRequest,
 ): Promise<ApiResponse<QuestionGenerateResponse>> {
-  return request<QuestionGenerateResponse>({
+  const res = await request<RawQuestionGenerateResponse>({
     url: '/api/v1/questions/generate',
     method: 'POST',
     data: payload,
     timeout: GENERATE_QUESTIONS_TIMEOUT,
   });
+  return { ...res, data: adaptGenerateResponse(res.data) };
 }
 
 /**
@@ -43,14 +52,15 @@ export function generateQuestions(
  * @param params 过滤与分页参数（资料 ID、知识点 ID、题型、难度、状态等）。
  * @returns 统一响应包，包含题目列表及总数。
  */
-export function fetchQuestionList(
+export async function fetchQuestionList(
   params?: QuestionListQueryParams,
 ): Promise<ApiResponse<PageResult<QuestionItem>>> {
-  return request<PageResult<QuestionItem>>({
+  const res = await request<PageResult<RawQuestionItem>>({
     url: '/api/v1/questions',
     method: 'GET',
     data: params,
   });
+  return { ...res, data: adaptQuestionPage(res.data) };
 }
 
 /**
@@ -59,11 +69,12 @@ export function fetchQuestionList(
  * @param questionId 题目主键 ID。
  * @returns 统一响应包，包含题目题干、选项、答案与解析。
  */
-export function fetchQuestionDetail(questionId: string): Promise<ApiResponse<QuestionItem>> {
-  return request<QuestionItem>({
+export async function fetchQuestionDetail(questionId: string): Promise<ApiResponse<QuestionItem>> {
+  const res = await request<RawQuestionItem>({
     url: `/api/v1/questions/${questionId}`,
     method: 'GET',
   });
+  return adaptQuestionResponse(res);
 }
 
 /**
@@ -73,15 +84,16 @@ export function fetchQuestionDetail(questionId: string): Promise<ApiResponse<Que
  * @param payload 待更新的字段与修改原因。
  * @returns 统一响应包，包含更新后的题目详情。
  */
-export function updateQuestion(
+export async function updateQuestion(
   questionId: string,
-  payload: QuestionUpdateRequest | (Partial<QuestionItem> & { reason?: string }),
+  payload: QuestionUpdatePayloadInput,
 ): Promise<ApiResponse<QuestionItem>> {
-  return request<QuestionItem>({
+  const res = await request<RawQuestionItem>({
     url: `/api/v1/questions/${questionId}`,
     method: 'PUT',
-    data: payload,
+    data: toQuestionUpdatePayload(payload),
   });
+  return adaptQuestionResponse(res);
 }
 
 /**

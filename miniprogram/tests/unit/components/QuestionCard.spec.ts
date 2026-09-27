@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
 import QuestionCard from '@/subpackages/material/components/QuestionCard.vue';
-import type { QuestionItem } from '@/types/question';
+import { adaptQuestionItem } from '@/api/adapters/question';
+import type { QuestionItem, RawQuestionItem } from '@/types/question';
 
 describe('QuestionCard.vue', () => {
   const choiceQuestion: QuestionItem = {
@@ -50,5 +51,24 @@ describe('QuestionCard.vue', () => {
 
     expect(wrapper.findAll('.q-option').length).toBe(0);
     expect(wrapper.text()).toContain('主观简答题');
+  });
+
+  it('renders option text from a real backend payload after adaptation (QGEN-001)', () => {
+    const raw: RawQuestionItem = {
+      id: 'q_raw_1',
+      material_id: 'mat_001',
+      version_id: 'ver_001',
+      knowledge_point_id: 'kp_001',
+      question_type: 'single_choice',
+      stem: '真实后端题干',
+      options: [{ key: 'A', content: '后端选项正文' }],
+      answer: 'A',
+      difficulty: 2,
+    };
+
+    const wrapper = mount(QuestionCard, { props: { question: adaptQuestionItem(raw) } });
+
+    expect(wrapper.findAll('.q-option').length).toBe(1);
+    expect(wrapper.find('.option-text').text()).toBe('后端选项正文');
   });
 });

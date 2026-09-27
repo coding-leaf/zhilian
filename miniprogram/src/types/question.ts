@@ -9,6 +9,11 @@ export type QuestionType =
 export interface QuestionOption {
   key: string;
   text: string;
+  /**
+   * Raw backend option field alias (`{ key, content }`).
+   * Only present on un-adapted payloads; the API adapter normalizes it to `text`.
+   */
+  content?: string;
 }
 
 export interface QuestionItem {
@@ -118,3 +123,58 @@ export interface QuestionListQueryParams {
   limit?: number;
   offset?: number;
 }
+
+/**
+ * Raw backend option element. Authoritative contract:
+ * `backend/app/schemas/question.py` -> `QuestionDetailResponse.options` (`{ key, content }`).
+ */
+export interface RawQuestionOption {
+  key?: string;
+  content?: string;
+  text?: string;
+}
+
+/**
+ * Raw backend question payload (before adaptation).
+ * Authoritative contract: `backend/app/schemas/question.py` -> `QuestionDetailResponse`.
+ */
+export interface RawQuestionItem {
+  id?: string;
+  material_id?: string;
+  version_id?: string;
+  knowledge_point_id?: string;
+  source_snippet_id?: string | null;
+  question_type?: string;
+  status?: string;
+  is_deleted?: boolean;
+  stem?: string;
+  options?: RawQuestionOption[];
+  answer?: string;
+  analysis?: string;
+  difficulty?: number;
+  grading_rubric?: Record<string, unknown>;
+  source_snippet_ids?: Array<Record<string, unknown>>;
+  reason?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Raw backend generate response whose nested questions carry raw options.
+ * Authoritative contract: `backend/app/schemas/question.py` -> `QuestionGenerateResponse`.
+ */
+export interface RawQuestionGenerateResponse extends Omit<
+  QuestionGenerateResponse,
+  'qualified_questions' | 'pending_questions'
+> {
+  qualified_questions: RawQuestionItem[];
+  pending_questions: RawQuestionItem[];
+}
+
+/**
+ * Raw backend update payload after mapping frontend `text` back to `content`.
+ * Authoritative contract: `backend/app/schemas/question.py` -> `QuestionUpdateRequest`.
+ */
+export type RawQuestionUpdatePayload = Omit<QuestionUpdateRequest, 'options'> & {
+  options?: RawQuestionOption[];
+};
