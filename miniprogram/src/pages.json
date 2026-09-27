@@ -37,6 +37,13 @@
           }
         },
         {
+          "path": "pages/course/index",
+          "style": {
+            "navigationBarTitleText": "课程详情",
+            "enablePullDownRefresh": true
+          }
+        },
+        {
           "path": "pages/detail/index",
           "style": {
             "navigationBarTitleText": "资料详情"

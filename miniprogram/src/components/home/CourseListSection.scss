@@ -1,0 +1,120 @@
+/**
+ * CourseListSection.scss
+ * 控制台课程区块：课程列表 + 未分类入口 + 已归档课程。
+ * Complies with docs/DESIGN.md tokens.
+ */
+
+.course-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: $spacing-md;
+}
+
+.section-title {
+  font-size: $font-size-section;
+  font-weight: $font-weight-heavy;
+  color: $--wot-color-gray-9;
+}
+
+.create-btn {
+  display: flex;
+  align-items: center;
+  min-height: 56rpx;
+  padding: 0 $spacing-lg;
+  border-radius: $radius-pill;
+  background-color: $--wot-color-theme-light;
+  border: 1px solid $--wot-color-theme-border;
+
+  &:active {
+    transform: $scale-active;
+  }
+}
+
+.create-plus {
+  font-size: $font-size-card;
+  font-weight: $font-weight-heavy;
+  color: $--wot-color-theme;
+  margin-right: 6rpx;
+}
+
+.create-text {
+  font-size: $font-size-caption;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-theme;
+}
+
+.course-empty {
+  background-color: #ffffff;
+  border: 1px dashed $--wot-color-gray-4;
+  border-radius: $radius-lg;
+  padding: $spacing-xl;
+  text-align: center;
+  margin-bottom: $spacing-md;
+}
+
+.empty-text {
+  font-size: $font-size-body;
+  color: $--wot-color-gray-6;
+}
+
+.course-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.unclassified-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: #ffffff;
+  border: 1px solid $--wot-color-gray-4;
+  border-radius: $radius-lg;
+  box-shadow: $shadow-card;
+  padding: $spacing-lg;
+  margin-bottom: $spacing-md;
+
+  &:active {
+    transform: $scale-active;
+  }
+}
+
+.entry-left {
+  display: flex;
+  flex-direction: column;
+}
+
+.entry-title {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.entry-desc {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+  margin-top: 4rpx;
+}
+
+.entry-arrow {
+  font-size: $font-size-card;
+  color: $--wot-color-gray-6;
+}
+
+.archived-block {
+  display: flex;
+  flex-direction: column;
+  margin-top: $spacing-xs;
+}
+
+.archived-heading {
+  font-size: $font-size-caption;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-7;
+  margin-bottom: $spacing-sm;
+}

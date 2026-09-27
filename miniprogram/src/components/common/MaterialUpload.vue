@@ -66,6 +66,8 @@ import { generateIdempotencyKey, validateMaterialFile, type SelectedFileInfo } f
 interface Props {
   visible?: boolean;
   modelValue?: boolean;
+  /** 归属课程文件夹标识；缺省表示未分类上传。 */
+  folderId?: string;
 }
 interface Emits {
   (e: 'update:visible', val: boolean): void;
@@ -73,7 +75,11 @@ interface Emits {
   (e: 'close'): void;
   (e: 'success', data: MaterialUploadResponse): void;
 }
-const props = withDefaults(defineProps<Props>(), { visible: false, modelValue: false });
+const props = withDefaults(defineProps<Props>(), {
+  visible: false,
+  modelValue: false,
+  folderId: '',
+});
 const emit = defineEmits<Emits>();
 const store = useMaterialStore();
 
@@ -184,6 +190,7 @@ async function handleStartUpload(): Promise<void> {
       title: customTitle.value.trim() || selectedFile.value.name,
       sourceType: selectedFile.value.sourceType,
       idempotencyKey: generateIdempotencyKey(),
+      folderId: props.folderId || undefined,
       onProgressUpdate: (p) => {
         progress.value = p;
       },

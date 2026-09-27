@@ -34,6 +34,9 @@ export const useMaterialStore = defineStore('material', () => {
   const selectedCount = computed(() => selectedKnowledgeIds.value.length);
   const isAnyKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 0);
 
+  /** 未分类资料（folder_id 为空）视图，供控制台「未分类」入口使用。 */
+  const unclassifiedMaterials = computed(() => materials.value.filter((item) => !item.folder_id));
+
   const hasLowConfidenceNode = computed(() => {
     function checkNode(node: KnowledgeTreeNode): boolean {
       if (node.is_low_confidence) {
@@ -67,6 +70,23 @@ export const useMaterialStore = defineStore('material', () => {
 
   function appendMaterialsList(list: MaterialItem[]): void {
     materials.value = [...materials.value, ...list];
+  }
+
+  /** 本地剔除资料（移动课程 / 删除后同步全局切片，不发请求）。 */
+  function removeMaterial(id: string): void {
+    materials.value = materials.value.filter((item) => item.id !== id);
+    if (activeMaterialId.value === id) {
+      activeMaterialId.value = null;
+      activeVersionId.value = null;
+    }
+  }
+
+  /** 本地更新资料归属课程（移动成功后即时刷新，不发请求）。 */
+  function updateMaterialFolder(id: string, folderId: string | null): void {
+    const item = materials.value.find((m) => m.id === id);
+    if (item) {
+      item.folder_id = folderId;
+    }
   }
 
   function updateMaterialStatus(id: string, status: MaterialStatus): void {
@@ -170,10 +190,13 @@ export const useMaterialStore = defineStore('material', () => {
     selectedCount,
     isAnyKnowledgeSelected,
     hasLowConfidenceNode,
+    unclassifiedMaterials,
     setMaterials,
     setMaterialsList,
     addMaterial,
     appendMaterialsList,
+    removeMaterial,
+    updateMaterialFolder,
     updateMaterialStatus,
     setActiveMaterial,
     setCurrentMaterialId,

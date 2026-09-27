@@ -21,14 +21,17 @@
 
     <!-- 核心工作台内容区 -->
     <view v-else class="dashboard-content">
-      <!-- 掌握度全景状态栏 -->
-      <MasteryDashboardBar
-        :overview="reportStore.masteryOverview"
-        :loading="loading"
-        @tap-detail="handleNavigateReport"
+      <!-- 课程文件夹信息架构入口 -->
+      <CourseListSection
+        :folders="folderStore.folders"
+        :archived-folders="folderStore.archivedFolders"
+        :unclassified-count="folderStore.unclassifiedCount"
+        @enter="handleEnterCourse"
+        @view-unclassified="handleViewUnclassified"
+        @changed="handleCoursesChanged"
       />
 
-      <!-- 快捷上传横幅 -->
+      <!-- 快捷上传横幅（未选课程即落未分类） -->
       <QuickUploadBar ref="quickUploadRef" @upload-success="handleUploadSuccess" />
 
       <!-- 智能双轨：新手引导卡 或 最近学习流 -->
@@ -52,21 +55,23 @@ import { computed, ref, onMounted } from 'vue';
 import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
 import { useUserStore } from '@/stores/userStore';
 import { useMaterialStore } from '@/stores/materialStore';
+import { useFolderStore } from '@/stores/folderStore';
 import { usePracticeStore } from '@/stores/practiceStore';
-import { useReportStore } from '@/stores/reportStore';
-import { fetchMasteryOverview } from '@/api/diagnosis';
 import { fetchMaterialList } from '@/api/material';
+import { fetchFolderList } from '@/api/folder';
+import { UNCLASSIFIED_FOLDER_ID } from '@/types/folder';
 import type { MaterialItem } from '@/types/material';
-import MasteryDashboardBar from '@/components/home/MasteryDashboardBar.vue';
+import type { FolderItem } from '@/types/folder';
 import QuickUploadBar from '@/components/home/QuickUploadBar.vue';
+import CourseListSection from '@/components/home/CourseListSection.vue';
 import RecentLearningSection from '@/components/home/RecentLearningSection.vue';
 import NewbieGuideCard from '@/components/home/NewbieGuideCard.vue';
 import { extractLatestDraftPractice } from '@/utils/recentLearning';
 
 const userStore = useUserStore();
 const materialStore = useMaterialStore();
+const folderStore = useFolderStore();
 const practiceStore = usePracticeStore();
-const reportStore = useReportStore();
 
 const loading = ref(false);
 const hasLoadedOnce = ref(false);
@@ -103,17 +108,22 @@ async function loadDashboardData(showSkeleton = true): Promise<void> {
 
   practiceStore.loadDraftFromStorage();
 
-  const [masteryRes, materialsRes] = await Promise.allSettled([
-    fetchMasteryOverview(),
+  const [foldersRes, materialsRes, unclassifiedRes] = await Promise.allSettled([
+    fetchFolderList({ include_archived: true }),
     fetchMaterialList({ page: 1, page_size: 5 }),
+    fetchMaterialList({ folder_id: UNCLASSIFIED_FOLDER_ID, page: 1, page_size: 1 }),
   ]);
 
-  if (masteryRes.status === 'fulfilled' && masteryRes.value?.data) {
-    reportStore.setMasteryOverview(masteryRes.value.data);
+  if (foldersRes.status === 'fulfilled' && foldersRes.value?.data?.items) {
+    folderStore.setFolderList(foldersRes.value.data.items);
   }
 
   if (materialsRes.status === 'fulfilled' && materialsRes.value?.data?.items) {
     materialStore.setMaterialsList(materialsRes.value.data.items);
+  }
+
+  if (unclassifiedRes.status === 'fulfilled') {
+    folderStore.setUnclassifiedCount(unclassifiedRes.value?.data?.total ?? 0);
   }
 
   loading.value = false;
@@ -123,6 +133,7 @@ async function loadDashboardData(showSkeleton = true): Promise<void> {
 function handleNavigateLogin(): void {
   uni.navigateTo({
     url: '/pages/auth/login',
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
 }
 
@@ -130,10 +141,23 @@ function handleLogout(): void {
   userStore.logout();
 }
 
-function handleNavigateReport(): void {
+function handleEnterCourse(folder: FolderItem): void {
+  folderStore.setCurrentFolder(folder);
   uni.navigateTo({
-    url: '/subpackages/report/pages/detail/index',
+    url: `/subpackages/material/pages/course/index?folder_id=${folder.id}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
+}
+
+function handleViewUnclassified(): void {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/list/index?folder_id=${UNCLASSIFIED_FOLDER_ID}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+  });
+}
+
+function handleCoursesChanged(): void {
+  void loadDashboardData(false);
 }
 
 async function handleUploadSuccess(): Promise<void> {
@@ -149,24 +173,28 @@ function handleStartFirst(): void {
 function handleContinuePractice(practiceId: string): void {
   uni.navigateTo({
     url: `/subpackages/practice/pages/session/index?id=${practiceId}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
 }
 
 function handleQuickQuiz(mat: MaterialItem): void {
   uni.navigateTo({
-    url: `/subpackages/material/pages/knowledge-tree/index?id=${mat.id}`,
+    url: `/subpackages/material/pages/knowledge-tree/index?material_id=${mat.id}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
 }
 
 function handleViewMaterial(materialId: string): void {
   uni.navigateTo({
-    url: `/subpackages/material/pages/detail/index?id=${materialId}`,
+    url: `/subpackages/material/pages/detail/index?material_id=${materialId}`,
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
 }
 
 function handleViewAllMaterials(): void {
   uni.navigateTo({
     url: '/subpackages/material/pages/list/index',
+    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
   });
 }
 

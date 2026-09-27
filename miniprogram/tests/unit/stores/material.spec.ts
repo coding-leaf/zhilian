@@ -119,4 +119,37 @@ describe('MaterialStore', () => {
     expect(store.currentKnowledgeTree).toEqual([]);
     expect(store.currentMaterial).toBeNull();
   });
+
+  it('derives unclassified materials from missing folder_id', () => {
+    const store = useMaterialStore();
+    store.setMaterials([
+      { ...mockMaterial1, folder_id: 'folder_a' },
+      { ...mockMaterial2, folder_id: null },
+    ]);
+
+    expect(store.unclassifiedMaterials).toHaveLength(1);
+    expect(store.unclassifiedMaterials[0].id).toBe('mat-002');
+  });
+
+  it('removeMaterial drops the item and clears an active selection on it', () => {
+    const store = useMaterialStore();
+    store.setMaterials([mockMaterial1, mockMaterial2]);
+    store.setActiveMaterial('mat-001', 'ver-001');
+
+    store.removeMaterial('mat-001');
+
+    expect(store.materials.map((m) => m.id)).toEqual(['mat-002']);
+    expect(store.activeMaterialId).toBeNull();
+    expect(store.activeVersionId).toBeNull();
+  });
+
+  it('updateMaterialFolder mutates the local folder_id after a move', () => {
+    const store = useMaterialStore();
+    store.setMaterials([{ ...mockMaterial1, folder_id: null }]);
+
+    store.updateMaterialFolder('mat-001', 'folder_b');
+
+    expect(store.materials[0].folder_id).toBe('folder_b');
+    expect(store.unclassifiedMaterials).toHaveLength(0);
+  });
 });

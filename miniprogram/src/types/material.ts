@@ -25,6 +25,8 @@ export interface MaterialItem {
   source_type: string;
   status: MaterialStatus;
   current_version_id?: string | null;
+  /** 所属课程文件夹标识 (null / undefined = 未分类)。与后端 MaterialListItem.folder_id 对齐。 */
+  folder_id?: string | null;
   versions_count?: number;
   parse_status?: string | null;
   progress_percentage?: number | null;
@@ -51,6 +53,8 @@ export interface MaterialListQueryParams {
   offset?: number;
   keyword?: string;
   status?: string;
+  /** 课程文件夹过滤；'__none__' 表示未分类资料（与后端 MaterialListQuery 对齐）。 */
+  folder_id?: string;
 }
 
 export interface KnowledgeTreeNode {

@@ -272,7 +272,9 @@ export async function request<T = unknown>(options: RequestOptions): Promise<Api
   try {
     response = await callUniRequest({
       url: resolveUrl(options.url),
-      method: options.method || 'GET',
+      // PATCH is a valid HTTP verb used by folder rename / material move, but the
+      // bundled UniApp typings omit it; assert to the framework's method union.
+      method: (options.method || 'GET') as UniApp.RequestOptions['method'],
       data: requestData as string | AnyObject | ArrayBuffer | undefined,
       header: headers,
       timeout: options.timeout || 15000,

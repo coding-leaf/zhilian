@@ -24,6 +24,7 @@
     <!-- 挂载资料上传模态弹窗 -->
     <MaterialUpload
       v-model:visible="isUploadModalVisible"
+      :folder-id="folderId"
       @success="handleUploadSuccess"
       @close="handleUploadClose"
     />
@@ -37,6 +38,8 @@ import type { MaterialUploadResponse } from '@/types/material';
 
 interface Props {
   disabled?: boolean;
+  /** 归属课程文件夹标识；缺省表示未分类上传。 */
+  folderId?: string;
 }
 
 interface Emits {
@@ -45,6 +48,7 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   disabled: false,
+  folderId: '',
 });
 
 const emit = defineEmits<Emits>();

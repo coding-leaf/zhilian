@@ -1,19 +1,17 @@
 /**
  * 学习资料管理 API 网络接口模块。
  *
- * 封装资料列表检索、详情查询、状态轮询、资料删除与知识树拓扑获取。
+ * 封装资料列表检索、详情查询、状态轮询、资料删除、归属移动与知识树拓扑获取。
+ * 上传 / 单页重拍相关接口拆分至 `materialUpload.ts`，此处再导出以保持调用契约稳定。
  * 严格遵循 AGENTS.md 规范：单文件 <= 300 行、零表情包、全英文标识符。
  */
 
 import { request } from '../utils/request';
-import { uploadFile } from '../utils/upload';
 import type { ApiResponse, PageResult } from '../types/common';
 import type {
   MaterialItem,
   MaterialListQueryParams,
   KnowledgeTreeResponse,
-  MaterialUploadResponse,
-  MaterialReshootResponse,
   MaterialParseResponse,
   MaterialOCRPagesResponse,
 } from '../types/material';
@@ -21,7 +19,7 @@ import type {
 /**
  * 分页检索当前用户的学习资料列表。
  *
- * @param params 分页与筛选条件（页码、条数、关键词、状态）。
+ * @param params 分页与筛选条件（页码、条数、关键词、状态、课程）。
  * @returns 统一响应包，包含分页资料项列表与总数。
  */
 export function fetchMaterialList(
@@ -138,86 +136,20 @@ export function fetchKnowledgeTree(
 }
 
 /**
- * 上传学习资料文件并创建初始版本。
- *
- * @param file 待上传的文件对象或本地临时路径。
- * @param title 资料展示标题（可选）。
- * @param idempotencyKey 防重放幂等键（可选）。
- * @returns 统一响应包，包含上传后的资料信息。
- */
-function isRealMiniProgramUpload(): boolean {
-  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'test') {
-    return false;
-  }
-  return typeof uni !== 'undefined' && typeof uni.uploadFile === 'function';
-}
-
-export function uploadMaterial(
-  file: File | Blob | string,
-  title?: string,
-  idempotencyKey?: string,
-  sourceType: 'local' | 'wechat' = 'local',
-  onProgressUpdate?: (progress: number) => void,
-): Promise<ApiResponse<MaterialUploadResponse>> {
-  const headers: Record<string, string> = {};
-  if (idempotencyKey) {
-    headers['Idempotency-Key'] = idempotencyKey;
-  }
-  if (isRealMiniProgramUpload() && typeof file === 'string') {
-    return uploadFile<MaterialUploadResponse>({
-      url: '/api/v1/materials/upload',
-      filePath: file,
-      name: 'file',
-      formData: {
-        title: title || '',
-        source_type: sourceType,
-      },
-      headers,
-      onProgressUpdate,
-    });
-  }
-  return request<MaterialUploadResponse>({
-    url: '/api/v1/materials/upload',
-    method: 'POST',
-    data: { file, title, source_type: sourceType },
-    headers,
-  });
-}
-
-/**
- * 针对 OCR 质检不达标的单页进行重拍替换与重检。
+ * 移动指定资料的归属课程（folder_id 为 null 表示移回未分类）。
  *
  * @param materialId 目标资料主键 ID。
- * @param pageNo 重拍目标页码（从 1 开始）。
- * @param file 重新拍摄的单页图片。
- * @param idempotencyKey 防重放幂等键（可选）。
- * @returns 统一响应包，包含重拍判定结果。
+ * @param folderId 目标课程主键 ID，或 null（未分类）。
+ * @returns 统一响应包，包含移动后的资料详情。
  */
-export function retakeMaterialPage(
+export function moveMaterialFolder(
   materialId: string,
-  pageNo: number,
-  file: File | Blob | string,
-  idempotencyKey?: string,
-): Promise<ApiResponse<MaterialReshootResponse>> {
-  const headers: Record<string, string> = {};
-  if (idempotencyKey) {
-    headers['Idempotency-Key'] = idempotencyKey;
-  }
-  // 真机端后端契约为 multipart File+Form；非真机（测试/开发）保留 JSON 分支。
-  if (isRealMiniProgramUpload() && typeof file === 'string') {
-    return uploadFile<MaterialReshootResponse>({
-      url: `/api/v1/materials/${materialId}/reshoot`,
-      filePath: file,
-      name: 'file',
-      formData: { page_index: pageNo },
-      headers,
-    });
-  }
-  return request<MaterialReshootResponse>({
-    url: `/api/v1/materials/${materialId}/reshoot`,
-    method: 'POST',
-    data: { page_index: pageNo, file },
-    headers,
+  folderId: string | null,
+): Promise<ApiResponse<MaterialItem>> {
+  return request<MaterialItem>({
+    url: `/api/v1/materials/${materialId}/folder`,
+    method: 'PATCH',
+    data: { folder_id: folderId },
   });
 }
 
@@ -239,68 +171,9 @@ export function fetchMaterialOCRPages(
   });
 }
 
-/**
- * 上传资料文件标准别名契约 (支持对象式调用与进度监听)。
- *
- * @param params 上传参数对象。
- * @returns 统一响应包。
- */
-export function uploadMaterialFile(params: {
-  filePath: string;
-  title?: string;
-  sourceType?: 'local' | 'wechat';
-  idempotencyKey?: string;
-  onProgressUpdate?: (progress: number) => void;
-}): Promise<ApiResponse<MaterialUploadResponse>> {
-  return uploadMaterial(
-    params.filePath,
-    params.title,
-    params.idempotencyKey,
-    params.sourceType || 'local',
-    params.onProgressUpdate,
-  );
-}
-
-/**
- * 单页重拍标准别名契约 (支持对象式调用)。
- *
- * @param params 重拍参数对象。
- * @returns 统一响应包。
- */
-export function reshootMaterialPage(params: {
-  materialId: string;
-  pageIndex: number;
-  filePath: string;
-  versionId?: string;
-  idempotencyKey?: string;
-}): Promise<ApiResponse<MaterialReshootResponse>> {
-  const headers: Record<string, string> = {};
-  if (params.idempotencyKey) {
-    headers['Idempotency-Key'] = params.idempotencyKey;
-  }
-  if (isRealMiniProgramUpload() && typeof params.filePath === 'string') {
-    const formData: Record<string, string | number> = {
-      page_index: params.pageIndex,
-    };
-    if (params.versionId) {
-      formData.version_id = params.versionId;
-    }
-    return uploadFile<MaterialReshootResponse>({
-      url: `/api/v1/materials/${params.materialId}/reshoot`,
-      filePath: params.filePath,
-      name: 'file',
-      formData,
-      headers,
-    });
-  }
-  return request<MaterialReshootResponse>({
-    url: `/api/v1/materials/${params.materialId}/reshoot`,
-    method: 'POST',
-    data: {
-      page_index: params.pageIndex,
-      file: params.filePath,
-      version_id: params.versionId,
-    },
-    headers,
-  });
-}
+export {
+  uploadMaterial,
+  retakeMaterialPage,
+  uploadMaterialFile,
+  reshootMaterialPage,
+} from './materialUpload';

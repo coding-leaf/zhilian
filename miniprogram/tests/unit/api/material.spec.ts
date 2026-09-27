@@ -13,6 +13,7 @@ import {
   uploadMaterialFile,
   reshootMaterialPage,
   fetchMaterialOCRPages,
+  moveMaterialFolder,
 } from '@/api/material';
 
 describe('Material API Module', () => {
@@ -379,5 +380,39 @@ describe('Material API Module', () => {
     });
 
     expect(requestSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('attaches folder_id to the upload payload when a course is selected (AC3)', async () => {
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: { id: 'm1', version_id: 'v1', status: 'pending' },
+    });
+
+    await uploadMaterial('file-data', 'Doc', 'idem-3', 'local', undefined, 'folder_1');
+
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/upload',
+      method: 'POST',
+      data: { file: 'file-data', title: 'Doc', source_type: 'local', folder_id: 'folder_1' },
+      headers: { 'Idempotency-Key': 'idem-3' },
+    });
+  });
+
+  it('moveMaterialFolder patches /api/v1/materials/:id/folder with null for unclassified', async () => {
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: { id: 'mat_1', folder_id: null },
+    });
+
+    const res = await moveMaterialFolder('mat_1', null);
+
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/mat_1/folder',
+      method: 'PATCH',
+      data: { folder_id: null },
+    });
+    expect(res.data.folder_id).toBeNull();
   });
 });

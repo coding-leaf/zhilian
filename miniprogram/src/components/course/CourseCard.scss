@@ -1,0 +1,121 @@
+/**
+ * CourseCard.scss
+ * 课程卡片：名称、资料/考点/题目计数、最近练习与进入/管理动作。
+ * Complies with docs/DESIGN.md tokens.
+ */
+
+.course-card {
+  background-color: #ffffff;
+  border-radius: $radius-lg;
+  border: 1px solid $--wot-color-gray-4;
+  box-shadow: $shadow-card;
+  padding: $spacing-lg;
+  margin-bottom: $spacing-md;
+  transition: $transition-bounce;
+
+  &:active {
+    transform: $scale-active;
+  }
+}
+
+.course-head {
+  display: flex;
+  align-items: center;
+}
+
+.course-badge {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: $radius-md;
+  background-color: $--wot-color-theme-light;
+  border: 1px solid $--wot-color-theme-border;
+  color: $--wot-color-theme;
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: $spacing-md;
+}
+
+.course-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.course-name {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+  line-height: $line-height-card;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.course-meta {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+  margin-top: 4rpx;
+}
+
+.enter-pill {
+  padding: 6rpx 20rpx;
+  border-radius: $radius-pill;
+  background-color: $--wot-color-theme;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.enter-text {
+  font-size: $font-size-caption;
+  font-weight: $font-weight-bold;
+  color: #ffffff;
+}
+
+.course-stats {
+  display: flex;
+  margin-top: $spacing-md;
+  background-color: $--wot-color-gray-1;
+  border-radius: $radius-md;
+  padding: $spacing-sm 0;
+}
+
+.stat-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-num {
+  font-size: $font-size-card;
+  font-weight: $font-weight-bold;
+  color: $--wot-color-gray-9;
+}
+
+.stat-label {
+  font-size: $font-size-caption;
+  color: $--wot-color-gray-7;
+  margin-top: 2rpx;
+}
+
+.course-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-lg;
+  margin-top: $spacing-sm;
+}
+
+.action-link {
+  font-size: $font-size-caption;
+  font-weight: $font-weight-medium;
+  color: $--wot-color-theme;
+
+  &.danger {
+    color: $--wot-color-danger;
+  }
+}

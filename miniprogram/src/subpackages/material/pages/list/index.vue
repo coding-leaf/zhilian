@@ -1,5 +1,10 @@
 <template>
   <view class="material-list-page">
+    <view v-if="isUnclassifiedView" class="scope-banner">
+      <text class="scope-text">未分类资料</text>
+      <text class="scope-hint">选择「移动到课程」将其归入课程</text>
+    </view>
+
     <view class="filter-tabs">
       <view
         v-for="tab in tabs"
@@ -25,15 +30,18 @@
       </view>
 
       <view v-else class="cards-list">
-        <MaterialCard
-          v-for="item in listData"
-          :key="item.id"
-          :material="item"
-          @click="handleCardClick"
-          @delete="handleCardDelete"
-          @retry="handleCardRetry"
-          @trigger-parse="handleCardTriggerParse"
-        />
+        <view v-for="item in listData" :key="item.id" class="list-row">
+          <MaterialCard
+            :material="item"
+            @click="handleCardClick"
+            @delete="handleCardDelete"
+            @retry="handleCardRetry"
+            @trigger-parse="handleCardTriggerParse"
+          />
+          <view class="row-move" role="button" @tap="handleOpenMove(item)">
+            <text class="row-move-text">移动到课程</text>
+          </view>
+        </view>
       </view>
     </view>
 
@@ -42,24 +50,37 @@
       <text class="fab-label">导入资料</text>
     </view>
 
-    <MaterialUpload v-model="uploadVisible" @success="handleUploadSuccess" />
+    <MaterialUpload
+      v-model="uploadVisible"
+      :folder-id="uploadFolderId"
+      @success="handleUploadSuccess"
+    />
+    <MoveMaterialSheet
+      v-model:visible="moveVisible"
+      :folders="folderStore.folders"
+      :current-folder-id="currentFolderId"
+      :allow-unclassified="!isUnclassifiedView"
+      @select="handleMoveSelect"
+    />
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
-import { onShow, onHide, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
+import { onLoad, onShow, onHide, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
-import {
-  fetchMaterialList,
-  fetchMaterialStatus,
-  deleteMaterial,
-  retryMaterial,
-  triggerMaterialParse,
-} from '@/api/material';
+import { useFolderStore } from '@/stores/folderStore';
+import { fetchMaterialList } from '@/api/material';
+import { UNCLASSIFIED_FOLDER_ID } from '@/types/folder';
 import MaterialCard from '../../components/MaterialCard.vue';
 import MaterialUpload from '@/components/common/MaterialUpload.vue';
+import MoveMaterialSheet from '@/components/course/MoveMaterialSheet.vue';
+import { useMaterialListPolling } from '../../composables/useMaterialListPolling';
+import { useMaterialFolderMove } from '../../composables/useMaterialFolderMove';
+import { useMaterialCardActions } from '../../composables/useMaterialCardActions';
 import type { MaterialItem } from '@/types/material';
+
+defineOptions({ name: 'MaterialListPage' });
 
 interface TabItem {
   key: string;
@@ -75,6 +96,7 @@ const tabs: TabItem[] = [
 ];
 
 const materialStore = useMaterialStore();
+const folderStore = useFolderStore();
 const listData = ref<MaterialItem[]>([]);
 const activeTab = ref('all');
 const page = ref(1);
@@ -82,6 +104,13 @@ const pageSize = 20;
 const total = ref(0);
 const loading = ref(false);
 const uploadVisible = ref(false);
+const targetFolderId = ref('');
+const isPageVisible = ref(true);
+let isComponentMounted = false;
+
+const isUnclassifiedView = computed(() => targetFolderId.value === UNCLASSIFIED_FOLDER_ID);
+const uploadFolderId = computed(() => (isUnclassifiedView.value ? '' : targetFolderId.value));
+const currentFolderId = computed(() => (isUnclassifiedView.value ? null : targetFolderId.value));
 
 const currentStatus = computed(() => {
   if (activeTab.value === 'all') return undefined;
@@ -89,88 +118,18 @@ const currentStatus = computed(() => {
   return item?.status;
 });
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-let currentPollInterval = 1500;
-const backoffFactor = 1.5;
-const maxPollInterval = 8000;
-const maxTimeoutMs = 180000;
-let pollStartTime = 0;
-let isPageVisible = true;
-let isComponentMounted = false;
+const { stopPolling, checkAndStartPolling } = useMaterialListPolling({
+  items: listData,
+  isPageVisible,
+  onItemUpdated: (item) => materialStore.addMaterial(item),
+});
 
-function stopPolling(): void {
-  if (pollTimer !== null) {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-}
+const { moveVisible, loadMoveTargets, handleOpenMove, handleMoveSelect } = useMaterialFolderMove({
+  listData,
+});
 
-function checkAndStartPolling(): void {
-  stopPolling();
-  if (!isPageVisible) {
-    return;
-  }
-  const hasPending = listData.value.some(
-    (item) => item.status === 'parsing' || item.status === 'pending',
-  );
-  if (!hasPending) {
-    return;
-  }
-  pollStartTime = Date.now();
-  currentPollInterval = 1500;
-  scheduleNextPoll();
-}
-
-function scheduleNextPoll(): void {
-  stopPolling();
-  const delay = currentPollInterval;
-  currentPollInterval = Math.min(Math.round(currentPollInterval * backoffFactor), maxPollInterval);
-
-  pollTimer = setTimeout(async () => {
-    if (!isPageVisible || Date.now() - pollStartTime > maxTimeoutMs) {
-      stopPolling();
-      return;
-    }
-    await pollPendingItems();
-  }, delay);
-}
-
-async function pollPendingItems(): Promise<void> {
-  const pendingItems = listData.value.filter(
-    (item) => item.status === 'parsing' || item.status === 'pending',
-  );
-  if (pendingItems.length === 0) {
-    stopPolling();
-    return;
-  }
-
-  try {
-    const results = await Promise.allSettled(
-      pendingItems.map((item) => fetchMaterialStatus(item.id)),
-    );
-    for (const res of results) {
-      if (res.status === 'fulfilled' && res.value?.data) {
-        const updated = res.value.data;
-        const targetIndex = listData.value.findIndex((m) => m.id === updated.id);
-        if (targetIndex >= 0) {
-          listData.value[targetIndex] = { ...listData.value[targetIndex], ...updated };
-          materialStore.addMaterial(listData.value[targetIndex]);
-        }
-      }
-    }
-  } catch {
-    // 忽略偶发网络轮询异常
-  }
-
-  const stillPending = listData.value.some(
-    (item) => item.status === 'parsing' || item.status === 'pending',
-  );
-  if (stillPending && isPageVisible && Date.now() - pollStartTime <= maxTimeoutMs) {
-    scheduleNextPoll();
-  } else {
-    stopPolling();
-  }
-}
+const { handleCardClick, handleCardDelete, handleCardRetry, handleCardTriggerParse } =
+  useMaterialCardActions({ refresh: () => loadData(true) });
 
 async function loadData(reset = false): Promise<void> {
   if (loading.value) return;
@@ -183,6 +142,7 @@ async function loadData(reset = false): Promise<void> {
       page: page.value,
       page_size: pageSize,
       status: currentStatus.value,
+      folder_id: targetFolderId.value || undefined,
     });
     if (res && res.data) {
       const items = res.data.items || [];
@@ -215,57 +175,6 @@ function handleSelectTab(key: string): void {
   void loadData(true);
 }
 
-function handleCardClick(item: MaterialItem): void {
-  materialStore.setActiveMaterial(item.id, item.current_version_id || null);
-  uni.navigateTo({
-    url: `../detail/index?id=${item.id}`,
-  });
-}
-
-async function handleCardDelete(item: MaterialItem): Promise<void> {
-  try {
-    await deleteMaterial(item.id);
-    uni.showToast({ title: '已删除资料', icon: 'none' });
-    await loadData(true);
-  } catch (err: unknown) {
-    uni.showToast({ title: '删除失败', icon: 'none' });
-  }
-}
-
-async function handleCardRetry(item: MaterialItem): Promise<void> {
-  try {
-    if (typeof uni !== 'undefined' && typeof uni.showLoading === 'function') {
-      uni.showLoading({ title: '正在发起重试...' });
-    }
-    await retryMaterial(item.id);
-    uni.showToast({ title: '已发起重新解析', icon: 'success' });
-    await loadData(true);
-  } catch {
-    uni.showToast({ title: '重试失败，请稍后重试', icon: 'none' });
-  } finally {
-    if (typeof uni !== 'undefined' && typeof uni.hideLoading === 'function') {
-      uni.hideLoading();
-    }
-  }
-}
-
-async function handleCardTriggerParse(item: MaterialItem): Promise<void> {
-  try {
-    if (typeof uni !== 'undefined' && typeof uni.showLoading === 'function') {
-      uni.showLoading({ title: '正在开始解析...' });
-    }
-    await triggerMaterialParse(item.id);
-    uni.showToast({ title: '已开始解析', icon: 'success' });
-    await loadData(true);
-  } catch {
-    uni.showToast({ title: '发起解析失败，请稍后重试', icon: 'none' });
-  } finally {
-    if (typeof uni !== 'undefined' && typeof uni.hideLoading === 'function') {
-      uni.hideLoading();
-    }
-  }
-}
-
 function handleOpenUpload(): void {
   uploadVisible.value = true;
 }
@@ -294,7 +203,7 @@ onReachBottom(handleReachBottom);
 // Subsequent `onShow` events mean the user returned to the page -> refresh.
 let hasShownOnce = false;
 onShow(() => {
-  isPageVisible = true;
+  isPageVisible.value = true;
   if (hasShownOnce) {
     void loadData(true);
   } else {
@@ -304,19 +213,27 @@ onShow(() => {
 
 onHide(() => {
   if (!isComponentMounted) return;
-  isPageVisible = false;
+  isPageVisible.value = false;
   stopPolling();
 });
 
 onUnmounted(() => {
   isComponentMounted = false;
-  isPageVisible = false;
+  isPageVisible.value = false;
   stopPolling();
+});
+
+onLoad((query?: Record<string, string | undefined>) => {
+  const resolved = query?.folder_id || query?.folderId || '';
+  if (resolved) {
+    targetFolderId.value = resolved;
+  }
 });
 
 onMounted(() => {
   isComponentMounted = true;
   void loadData(true);
+  void loadMoveTargets();
 });
 
 defineExpose({
@@ -324,11 +241,16 @@ defineExpose({
   listData,
   activeTab,
   uploadVisible,
+  moveVisible,
+  targetFolderId,
+  isUnclassifiedView,
   handleSelectTab,
   handleCardClick,
   handleCardDelete,
   handleCardRetry,
   handleCardTriggerParse,
+  handleOpenMove,
+  handleMoveSelect,
   handleOpenUpload,
   handleUploadSuccess,
   handleReachBottom,

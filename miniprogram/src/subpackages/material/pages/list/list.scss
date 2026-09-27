@@ -6,6 +6,28 @@
   padding-bottom: 160rpx;
 }
 
+.scope-banner {
+  display: flex;
+  flex-direction: column;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 16rpx;
+  padding: 20rpx 24rpx;
+  margin-bottom: 20rpx;
+}
+
+.scope-text {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.scope-hint {
+  font-size: 22rpx;
+  color: #64748b;
+  margin-top: 4rpx;
+}
+
 .filter-tabs {
   display: flex;
   background: #ffffff;
@@ -104,6 +126,25 @@
   display: flex;
   flex-direction: column;
   gap: 20rpx;
+}
+
+.list-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.row-move {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 8rpx;
+  margin-top: -8rpx;
+  margin-bottom: 12rpx;
+}
+
+.row-move-text {
+  font-size: 22rpx;
+  color: #2563eb;
+  font-weight: 500;
 }
 
 .fab-upload-btn {

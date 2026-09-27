@@ -1,11 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { onShow } from '@dcloudio/uni-app';
+import { onShow, onLoad } from '@dcloudio/uni-app';
 import { setActivePinia, createPinia } from 'pinia';
 import MaterialListPage from '@/subpackages/material/pages/list/index.vue';
 import { useMaterialStore } from '@/stores/materialStore';
 import * as materialApi from '@/api/material';
 import type { MaterialItem } from '@/types/material';
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10));
 
 describe('MaterialListPage (list/index.vue)', () => {
   const sampleMaterials: MaterialItem[] = [
@@ -178,7 +180,8 @@ describe('MaterialListPage (list/index.vue)', () => {
 
     await firstCard.trigger('tap');
     expect(navigateSpy).toHaveBeenCalledWith({
-      url: '../detail/index?id=mat_01',
+      url: '../detail/index?material_id=mat_01',
+      fail: expect.any(Function),
     });
     expect(materialStore.currentMaterialId).toBe('mat_01');
   });
@@ -406,5 +409,55 @@ describe('MaterialListPage (list/index.vue)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('resolves folder_id=__none__ from route query and passes it to the list request', async () => {
+    const fetchSpy = vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: [], total: 0, limit: 20, offset: 0 },
+    });
+
+    const wrapper = mount(MaterialListPage);
+    await flush();
+
+    const onLoadMock = vi.mocked(onLoad);
+    const loadCallback = onLoadMock.mock.calls.at(-1)?.[0] as
+      ((query?: Record<string, string>) => void) | undefined;
+    loadCallback?.({ folder_id: '__none__' });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.targetFolderId).toBe('__none__');
+    expect(wrapper.vm.isUnclassifiedView).toBe(true);
+    expect(wrapper.find('.scope-banner').exists()).toBe(true);
+
+    await wrapper.vm.loadData(true);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ folder_id: '__none__', page: 1 }),
+    );
+  });
+
+  it('moves a material to a course via PATCH and removes it from the local list (AC4)', async () => {
+    vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: [sampleMaterials[0]], total: 1, limit: 20, offset: 0 },
+    });
+    const moveSpy = vi.spyOn(materialApi, 'moveMaterialFolder').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { ...sampleMaterials[0], folder_id: 'folder_x' },
+    });
+
+    const wrapper = mount(MaterialListPage);
+    await flush();
+
+    wrapper.vm.handleOpenMove(sampleMaterials[0]);
+    expect(wrapper.vm.moveVisible).toBe(true);
+
+    await wrapper.vm.handleMoveSelect('folder_x');
+
+    expect(moveSpy).toHaveBeenCalledWith('mat_01', 'folder_x');
+    expect(wrapper.vm.listData).toHaveLength(0);
   });
 });

@@ -281,8 +281,9 @@ async function handleRetryPipeline(): Promise<void> {
 }
 
 onLoad((query?: Record<string, string | undefined>) => {
-  if (query?.id) {
-    targetId.value = query.id;
+  const resolved = query?.material_id || query?.materialId || query?.id || '';
+  if (resolved) {
+    targetId.value = resolved;
   }
 });
 
