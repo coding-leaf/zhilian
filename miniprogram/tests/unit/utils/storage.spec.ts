@@ -94,6 +94,30 @@ describe('Storage Whitelist Manager', () => {
     }
   });
 
+  it('should throw AppError(10001, "Storage key forbidden") when multibyte payload exceeds 20KB in UTF-8 bytes', () => {
+    const multibyte = '\u4e2d'.repeat(8000); // 8000 CJK chars -> ~24KB in UTF-8, <= 20480 UTF-16 units
+    expect(multibyte.length).toBeLessThanOrEqual(20 * 1024);
+
+    const payload = {
+      access_token: multibyte,
+      refresh_token: 'token',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    };
+
+    expect(() => {
+      storage.setItem('auth_tokens', payload);
+    }).toThrow(AppError);
+
+    try {
+      storage.setItem('auth_tokens', payload);
+    } catch (err) {
+      const appErr = err as AppError;
+      expect(appErr.code).toBe(10001);
+      expect(appErr.message).toBe('Storage key forbidden');
+    }
+  });
+
   it('should reject objects containing sensitive full-text keys', () => {
     const leakAttempt = {
       theme: 'light',

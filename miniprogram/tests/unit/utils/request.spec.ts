@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { request, _resetStateForTesting } from '@/utils/request';
+import { request, _resetStateForTesting, setTokenRefreshListener } from '@/utils/request';
 import { storage } from '@/utils/storage';
 import { AppError } from '@/utils/error';
 import type { TokenPairResponse } from '@/types/auth';
@@ -257,6 +257,95 @@ describe('Unified Network Request Client', () => {
     expect(updatedTokens?.access_token).toBe('new_access_token');
     expect(updatedTokens?.refresh_token).toBe('new_refresh_token');
     expect(callCount).toBe(3); // 1st try (401), refresh, retry (200)
+  });
+
+  it('should notify the registered token refresh listener after silent refresh', async () => {
+    const listener = vi.fn();
+    setTokenRefreshListener(listener);
+
+    const initialTokens: TokenPairResponse = {
+      access_token: 'listener_old_access',
+      refresh_token: 'listener_refresh',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    };
+    storage.setItem('auth_tokens', initialTokens);
+
+    uni.request = vi.fn().mockImplementation((opts: UniApp.RequestOptions) => {
+      if (opts.url === '/api/v1/auth/refresh') {
+        return Promise.resolve({
+          statusCode: 200,
+          data: {
+            code: 0,
+            data: {
+              access_token: 'listener_new_access',
+              refresh_token: 'listener_new_refresh',
+              token_type: 'Bearer',
+              expires_in: 7200,
+            },
+          },
+        });
+      }
+
+      if (opts.header?.['Authorization'] === 'Bearer listener_old_access') {
+        return Promise.resolve({
+          statusCode: 401,
+          data: { code: 20001, message: 'Expired' },
+        });
+      }
+
+      return Promise.resolve({
+        statusCode: 200,
+        data: { code: 0, data: { status: 'success' } },
+      });
+    });
+
+    await request({ url: '/api/v1/listener' });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: 'listener_new_access' }),
+    );
+  });
+
+  it('should break the refresh loop after one retry when replayed request keeps returning 401', async () => {
+    const initialTokens: TokenPairResponse = {
+      access_token: 'loop_old_access',
+      refresh_token: 'loop_refresh',
+      token_type: 'Bearer',
+      expires_in: 7200,
+    };
+    storage.setItem('auth_tokens', initialTokens);
+
+    let refreshCallCount = 0;
+    uni.request = vi.fn().mockImplementation((opts: UniApp.RequestOptions) => {
+      if (opts.url === '/api/v1/auth/refresh') {
+        refreshCallCount++;
+        return Promise.resolve({
+          statusCode: 200,
+          data: {
+            code: 0,
+            data: {
+              access_token: 'loop_rotated_access',
+              refresh_token: 'loop_rotated_refresh',
+              token_type: 'Bearer',
+              expires_in: 7200,
+            },
+          },
+        });
+      }
+
+      return Promise.resolve({
+        statusCode: 401,
+        data: { code: 20001, message: 'Unauthorized' },
+      });
+    });
+
+    await expect(request({ url: '/api/v1/business' })).rejects.toThrow(AppError);
+
+    expect(refreshCallCount).toBe(1);
+    expect(storage.getItem('auth_tokens')).toBeNull();
+    expect(uni.reLaunch).toHaveBeenCalledWith({ url: '/pages/auth/login' });
   });
 
   it('should queue concurrent requests during refresh and replay all upon success', async () => {

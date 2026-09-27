@@ -26,4 +26,6 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   skipAuth?: boolean;
   timeout?: number;
+  /** Internal counter guarding against unbounded 401 silent-refresh replay loops. */
+  _retryCount?: number;
 }

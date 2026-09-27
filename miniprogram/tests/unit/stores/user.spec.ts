@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setActivePinia, createPinia } from 'pinia';
 import { useUserStore } from '@/stores/userStore';
 import { storage } from '@/utils/storage';
+import { request, _resetStateForTesting } from '@/utils/request';
 import * as userApi from '@/api/user';
 import { AppError } from '@/utils/error';
 import type { TokenPairResponse, UserProfileResponse } from '@/types/auth';
@@ -148,5 +149,50 @@ describe('UserStore', () => {
     expect(store.tokens).toBeNull();
     expect(store.isAuthenticated).toBe(false);
     expect(store.profile).toBeNull();
+  });
+
+  it('should sync in-memory tokens after silent refresh in the request layer', async () => {
+    _resetStateForTesting();
+    storage.setItem('auth_tokens', mockTokens);
+
+    const store = useUserStore();
+    store.initFromStorage();
+    expect(store.tokens?.access_token).toBe('mock-access-token-12345');
+
+    uni.request = vi.fn().mockImplementation((opts: UniApp.RequestOptions) => {
+      if (opts.url === '/api/v1/auth/refresh') {
+        return Promise.resolve({
+          statusCode: 200,
+          data: {
+            code: 0,
+            data: {
+              access_token: 'refreshed_access_token',
+              refresh_token: 'refreshed_refresh_token',
+              token_type: 'Bearer',
+              expires_in: 7200,
+            },
+          },
+        });
+      }
+
+      if (opts.header?.['Authorization'] === 'Bearer mock-access-token-12345') {
+        return Promise.resolve({
+          statusCode: 401,
+          data: { code: 20001, message: 'Expired' },
+        });
+      }
+
+      return Promise.resolve({
+        statusCode: 200,
+        data: { code: 0, data: { ok: true } },
+      });
+    });
+
+    await request({ url: '/api/v1/materials' });
+
+    expect(store.tokens?.access_token).toBe('refreshed_access_token');
+    expect(store.tokens?.refresh_token).toBe('refreshed_refresh_token');
+    expect(storage.getItem('auth_tokens')?.access_token).toBe('refreshed_access_token');
+    expect(store.isAuthenticated).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { TokenPairResponse, UserProfileResponse } from '../types/auth';
 import { storage } from '../utils/storage';
+import { setTokenRefreshListener } from '../utils/request';
 import { fetchUserProfile } from '../api/user';
 import { AppError } from '../utils/error';
 
@@ -15,6 +16,12 @@ export const useUserStore = defineStore('user', () => {
   // State
   const tokens = ref<TokenPairResponse | null>(null);
   const profile = ref<UserProfileResponse | null>(null);
+
+  // Sync in-memory tokens whenever the request layer silently refreshes credentials,
+  // keeping runtime state strictly consistent with storage without a circular import.
+  setTokenRefreshListener((refreshedTokens) => {
+    tokens.value = refreshedTokens;
+  });
 
   // Getters
   const isAuthenticated = computed(() => !!tokens.value?.access_token);

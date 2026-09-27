@@ -20,6 +20,35 @@ const FORBIDDEN_CONTENT_KEYS = [
 ];
 
 /**
+ * Calculates the real UTF-8 encoded byte length of a string.
+ *
+ * Uses the standard TextEncoder when available (UniApp/modern runtimes) and
+ * falls back to a manual code-point walk on runtimes without it.
+ */
+function calculateUtf8Bytes(value: string): number {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(value).length;
+  }
+
+  let bytes = 0;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      // High surrogate of a surrogate pair -> 4 bytes UTF-8
+      bytes += 4;
+      i++;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/**
  * Recursively scans an object for forbidden content keys to prevent storage leakage.
  */
 function containsForbiddenContent(target: unknown): boolean {
@@ -70,7 +99,7 @@ export function validateStoragePayload(key: string, value: unknown): void {
     }
   }
 
-  if (serialized.length > MAX_STORAGE_BYTES) {
+  if (calculateUtf8Bytes(serialized) > MAX_STORAGE_BYTES) {
     throw new AppError(10001, 'Storage key forbidden');
   }
 

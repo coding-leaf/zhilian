@@ -20,12 +20,30 @@ interface PendingRequest {
 let isRefreshing = false;
 let pendingQueue: PendingRequest[] = [];
 
+/** Maximum number of silent-refresh replays before aborting to avoid an unbounded loop. */
+const MAX_AUTH_RETRY_COUNT = 1;
+
+export type TokenRefreshListener = (tokens: TokenPairResponse) => void;
+
+let tokenRefreshListener: TokenRefreshListener | null = null;
+
+/**
+ * Registers a listener notified whenever a silent token refresh succeeds.
+ *
+ * Keeps request layer free of store imports (no circular dependency): the Pinia
+ * user store subscribes here to sync its in-memory tokens with storage.
+ */
+export function setTokenRefreshListener(listener: TokenRefreshListener | null): void {
+  tokenRefreshListener = listener;
+}
+
 /**
  * Resets internal state for test environment isolation.
  */
 export function _resetStateForTesting(): void {
   isRefreshing = false;
   pendingQueue = [];
+  tokenRefreshListener = null;
 }
 
 /**
@@ -160,16 +178,25 @@ async function handle401Error<T>(options: RequestOptions): Promise<ApiResponse<T
   try {
     const newTokens = await executeRefreshToken(tokens.refresh_token);
     storage.setItem('auth_tokens', newTokens);
+    tokenRefreshListener?.(newTokens);
     isRefreshing = false;
 
-    // Retry the original failing request with the refreshed token
-    const retryResult = await request<T>(options);
+    // Retry the original failing request with the refreshed token, marking the attempt
+    const retryOptions: RequestOptions = {
+      ...options,
+      _retryCount: (options._retryCount ?? 0) + 1,
+    };
+    const retryResult = await request<T>(retryOptions);
 
     // Drain pending replay queue
     const queuedRequests = [...pendingQueue];
     pendingQueue = [];
     queuedRequests.forEach((item) => {
-      request(item.options).then(item.resolve).catch(item.reject);
+      const queuedOptions: RequestOptions = {
+        ...item.options,
+        _retryCount: (item.options._retryCount ?? 0) + 1,
+      };
+      request(queuedOptions).then(item.resolve).catch(item.reject);
     });
 
     return retryResult;
@@ -267,6 +294,13 @@ export async function request<T = unknown>(options: RequestOptions): Promise<Api
   // to the raw error interception below (no token clearing, no redirectToLogin).
   const is401 = statusCode === 401 || resData.code === 20001;
   if (is401 && !isRefreshUrl && !isAnonymous) {
+    // Circuit breaker: a replayed request that still returns 401 must not re-enter the
+    // silent-refresh loop, otherwise a half-failed backend hangs the promise forever.
+    if ((options._retryCount ?? 0) >= MAX_AUTH_RETRY_COUNT) {
+      storage.removeItem('auth_tokens');
+      redirectToLogin();
+      throw new AppError(20001, '登录状态已过期，请重新登录', { status_code: 401 });
+    }
     return handle401Error<T>(options);
   }
 

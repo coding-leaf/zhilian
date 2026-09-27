@@ -69,14 +69,18 @@ async function handleWeChatLogin(): Promise<void> {
 
     userStore.setTokens(res.data);
 
-    userStore.setUserProfile({
-      id: 'usr_current',
-      nickname: '学员用户',
-      avatar_url: '',
-      created_at: new Date().toISOString(),
-    });
-
-    void userStore.hydrateProfile();
+    // Profile truth source is the backend: block on hydration and never inject a
+    // hardcoded placeholder. On failure, roll back credentials and surface the error.
+    const hydratedProfile = await userStore.hydrateProfile();
+    if (!hydratedProfile) {
+      userStore.clearTokens();
+      userStore.clearProfile();
+      uni.showToast({
+        title: '获取用户资料失败，请重新登录',
+        icon: 'none',
+      });
+      return;
+    }
 
     uni.showToast({
       title: '登录成功',
