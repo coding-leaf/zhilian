@@ -7,7 +7,8 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { QuestionItem } from '../types/question';
-import type { PracticeQuestionOutline, PracticeQuestionItem, AnswerDraft } from '../types/practice';
+import type { PracticeQuestionOutline, PracticeQuestionItem } from '../types/practice';
+import type { PracticeDraftRecord } from '../subpackages/practice/types/draft';
 import { storage } from '../utils/storage';
 
 export type PracticeQuestion = QuestionItem | PracticeQuestionOutline | PracticeQuestionItem;
@@ -17,7 +18,7 @@ export const usePracticeStore = defineStore('practice', () => {
   const sessionId = ref<string | null>(null);
   const questions = ref<PracticeQuestion[]>([]);
   const currentIndex = ref<number>(0);
-  const drafts = ref<Record<string, AnswerDraft>>({});
+  const drafts = ref<Record<string, PracticeDraftRecord>>({});
   const isSubmitting = ref<boolean>(false);
 
   // Getters
@@ -31,7 +32,7 @@ export const usePracticeStore = defineStore('practice', () => {
   const totalQuestions = computed(() => questions.value.length);
   const practiceId = computed(() => sessionId.value);
 
-  const currentDraft = computed<AnswerDraft | null>(() => {
+  const currentDraft = computed<PracticeDraftRecord | null>(() => {
     if (!sessionId.value) {
       return null;
     }
@@ -82,6 +83,7 @@ export const usePracticeStore = defineStore('practice', () => {
     if (!drafts.value[id]) {
       drafts.value[id] = {
         practice_id: id,
+        items: {},
         answers: {},
         updated_at: Date.now(),
       };
@@ -126,6 +128,7 @@ export const usePracticeStore = defineStore('practice', () => {
     if (!drafts.value[id]) {
       drafts.value[id] = {
         practice_id: id,
+        items: {},
         answers: {},
         updated_at: Date.now(),
       };
@@ -152,7 +155,26 @@ export const usePracticeStore = defineStore('practice', () => {
     }
   }
 
-  function clearSession(): void {
+  /**
+   * Removes a single practice draft entry from the in-memory map.
+   *
+   * Used after a successful submit so an archived practice no longer surfaces as
+   * the home-page "continue practice" entry (PRAC-008).
+   */
+  function removeDraft(id: string): void {
+    if (!id || !drafts.value[id]) {
+      return;
+    }
+    const nextDrafts = { ...drafts.value };
+    delete nextDrafts[id];
+    drafts.value = nextDrafts;
+  }
+
+  function clearSession(id?: string): void {
+    const targetId = id ?? sessionId.value;
+    if (targetId) {
+      removeDraft(targetId);
+    }
     sessionId.value = null;
     questions.value = [];
     currentIndex.value = 0;
@@ -181,6 +203,7 @@ export const usePracticeStore = defineStore('practice', () => {
     updateAnswer,
     syncDraftToStorage,
     loadDraftFromStorage,
+    removeDraft,
     clearSession,
   };
 });

@@ -4,7 +4,7 @@
  */
 
 import type { TokenPairResponse } from './auth';
-import type { AnswerDraft } from './practice';
+import type { PracticeDraftRecord } from '../subpackages/practice/types/draft';
 
 export const KEY_WHITELIST = ['auth_tokens', 'practice_drafts', 'user_settings'] as const;
 
@@ -18,6 +18,6 @@ export interface UserSettings {
 
 export interface StorageDataMap {
   auth_tokens: TokenPairResponse;
-  practice_drafts: Record<string, AnswerDraft>;
+  practice_drafts: Record<string, PracticeDraftRecord>;
   user_settings: UserSettings;
 }

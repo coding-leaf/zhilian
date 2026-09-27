@@ -21,6 +21,8 @@ export interface PracticeDraftItem {
 /**
  * 练习会话本地离线草稿包
  * 对应 Storage 白名单 key: practice_drafts 的单场练习记录
+ *
+ * 规范结构含 `items`；历史仅含 `answers` 的旧条目读取时按缺省空对象兼容。
  */
 export interface PracticeDraftRecord {
   practice_id: string;

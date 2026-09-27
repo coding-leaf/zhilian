@@ -199,7 +199,7 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
 
     clearSubmitKey(targetPracticeId);
     clearDraftFromStorage(targetPracticeId);
-    practiceStore.clearSession();
+    practiceStore.clearSession(targetPracticeId);
     confirmModalVisible.value = false;
 
     uni.showToast({

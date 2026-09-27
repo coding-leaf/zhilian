@@ -184,13 +184,12 @@ export function extractPendingSyncItems(draft: PracticeDraftRecord | null): Prac
  */
 export function saveDraftToStorage(practiceId: string, draft: PracticeDraftRecord): void {
   try {
-    const currentMap =
-      (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) || {};
+    const currentMap = storage.getItem('practice_drafts') ?? {};
     const nextMap: Record<string, PracticeDraftRecord> = {
       ...currentMap,
       [practiceId]: draft,
     };
-    storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
+    storage.setItem('practice_drafts', nextMap);
   } catch (error: unknown) {
     console.warn('[practice] draft storage write degraded', error);
   }
@@ -200,12 +199,11 @@ export function saveDraftToStorage(practiceId: string, draft: PracticeDraftRecor
  * 从 Storage 加载整场练习草稿
  */
 export function loadDraftFromStorage(practiceId: string): PracticeDraftRecord | null {
-  const currentMap =
-    (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) || null;
+  const currentMap = storage.getItem('practice_drafts');
   if (!currentMap || !currentMap[practiceId]) {
     return null;
   }
-  return (currentMap[practiceId] as unknown as PracticeDraftRecord) ?? null;
+  return currentMap[practiceId];
 }
 
 /**
@@ -215,15 +213,13 @@ export function loadDraftFromStorage(practiceId: string): PracticeDraftRecord | 
  */
 export function clearDraftFromStorage(practiceId: string): void {
   try {
-    const currentMap =
-      (storage.getItem('practice_drafts') as unknown as Record<string, PracticeDraftRecord>) ||
-      null;
+    const currentMap = storage.getItem('practice_drafts');
     if (!currentMap || !currentMap[practiceId]) {
       return;
     }
     const nextMap = { ...currentMap };
     delete nextMap[practiceId];
-    storage.setItem('practice_drafts', nextMap as unknown as Record<string, never>);
+    storage.setItem('practice_drafts', nextMap);
   } catch (error: unknown) {
     console.warn('[practice] draft storage clear degraded', error);
   }

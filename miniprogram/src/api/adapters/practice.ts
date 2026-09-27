@@ -50,13 +50,14 @@ function adaptOptions(options?: RawPracticeQuestionOption[]): PracticeQuestionOp
 }
 
 /** Normalizes backend practice status values into the frontend status union. */
-function adaptStatus(status?: string): PracticeStatus {
+export function adaptStatus(status?: string): PracticeStatus {
   switch (status) {
     case 'in_progress':
     case 'paused':
       return status;
     case 'completed':
     case 'partially_graded':
+    case 'timeout':
       return 'submitted';
     case 'not_started':
       return 'idle';

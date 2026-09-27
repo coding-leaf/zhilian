@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adaptPracticeItem, adaptPracticeSession } from '@/api/adapters/practice';
+import { adaptPracticeItem, adaptPracticeSession, adaptStatus } from '@/api/adapters/practice';
 import type { RawPracticeItem, RawPracticeSession } from '@/types/practice';
 
 const rawItem: RawPracticeItem = {
@@ -110,5 +110,15 @@ describe('practice response adapter (real backend contract)', () => {
     expect(question.id).toBe('');
     expect(question.stem).toBe('');
     expect(question.options).toEqual([]);
+  });
+
+  it('maps every backend practice status into the frontend union (PRAC-010)', () => {
+    expect(adaptStatus('not_started')).toBe('idle');
+    expect(adaptStatus('in_progress')).toBe('in_progress');
+    expect(adaptStatus('paused')).toBe('paused');
+    expect(adaptStatus('completed')).toBe('submitted');
+    expect(adaptStatus('partially_graded')).toBe('submitted');
+    expect(adaptStatus('timeout')).toBe('submitted');
+    expect(adaptStatus(undefined)).toBe('in_progress');
   });
 });

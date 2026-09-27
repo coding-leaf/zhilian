@@ -48,7 +48,7 @@ describe('Storage Whitelist Manager', () => {
     expect(storage.getItem('user_settings')?.sound_enabled).toBe(true);
 
     storage.setItem('practice_drafts', {
-      p1: { practice_id: 'p1', answers: { q1: 'A' }, updated_at: 1000 },
+      p1: { practice_id: 'p1', items: {}, answers: { q1: 'A' }, updated_at: 1000 },
     });
     expect(storage.getItem('practice_drafts')?.p1.answers).toEqual({ q1: 'A' });
   });

@@ -153,4 +153,29 @@ describe('PracticeStore', () => {
     expect(store.currentQuestion).toBeNull();
     expect(store.isSubmitting).toBe(false);
   });
+
+  it('should purge the submitted draft from the in-memory drafts map (PRAC-008)', () => {
+    const store = usePracticeStore();
+    store.initSession('session-100', mockQuestions);
+    store.updateDraft('q-001', 'A');
+    expect(store.drafts['session-100']).toBeDefined();
+
+    // Submitting clears both the active session and its lingering draft entry
+    store.clearSession('session-100');
+
+    expect(store.sessionId).toBeNull();
+    expect(store.drafts['session-100']).toBeUndefined();
+  });
+
+  it('should expose removeDraft to drop a single practice draft (PRAC-008)', () => {
+    const store = usePracticeStore();
+    store.initSession('session-100', mockQuestions);
+    store.initSession('session-200', mockQuestions);
+    store.updateDraft('q-001', 'A');
+
+    store.removeDraft('session-100');
+
+    expect(store.drafts['session-100']).toBeUndefined();
+    expect(store.sessionId).toBe('session-200');
+  });
 });
