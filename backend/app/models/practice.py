@@ -231,12 +231,20 @@ class Practice(Base, TimestampMixin, TenantModelMixin):
         default=uuid.uuid4,
         comment="练习主键 UUIDv4",
     )
-    material_id: Mapped[uuid.UUID] = mapped_column(
+    material_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("materials.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="关联学习资料标识",
+        comment="关联学习资料标识 (NULL=课程文件夹范围练习)",
+    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("material_folders.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="归属课程文件夹 (NULL=单资料练习)",
     )
     title: Mapped[str] = mapped_column(
         String(128),
@@ -359,6 +367,8 @@ class Practice(Base, TimestampMixin, TenantModelMixin):
         Index("ix_practices_user_source_status", "user_id", "source_report_id", "status"),
         # 资料维度练习列表索引
         Index("ix_practices_user_mat_status", "user_id", "material_id", "status"),
+        # 课程文件夹维度练习列表索引
+        Index("ix_practices_user_folder_status", "user_id", "folder_id", "status"),
         # 用户练习状态索引
         Index("ix_practices_user_status", "user_id", "status"),
         # 交卷强幂等联合唯一索引 (阻断24小时内重复交卷, FR-35)

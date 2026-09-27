@@ -57,10 +57,13 @@ class PracticeCreateRequest(BaseModel):
         default=None,
         description="归属学习资料主键 UUIDv4；缺省时由所选题目资料自动解析",
     )
+    folder_id: uuid.UUID | None = Field(
+        default=None,
+        description="归属课程文件夹主键 UUIDv4；提供时按课程范围抽题，material_id 可为空",
+    )
     knowledge_point_ids: list[uuid.UUID] = Field(
-        ...,
-        min_length=1,
-        description="练习覆盖的知识点主键 UUID 列表，至少包含 1 个知识点",
+        default_factory=list,
+        description="练习覆盖的知识点主键 UUID 列表；folder_id 缺省时至少包含 1 个知识点",
     )
     question_count: int = Field(
         default=10,
@@ -113,6 +116,13 @@ class PracticeCreateRequest(BaseModel):
                 f"source_type 必须为 {VALID_PRACTICE_SOURCE_TYPES} 之一，当前输入: {value}"
             )
         return value
+
+    @model_validator(mode="after")
+    def _require_practice_scope(self) -> "PracticeCreateRequest":
+        """校验 folder_id 缺省时必须显式提供至少一个知识点。"""
+        if self.folder_id is None and not self.knowledge_point_ids:
+            raise ValueError("folder_id 与 knowledge_point_ids 至少提供一个")
+        return self
 
 
 class SourceSnippetDTO(BaseModel):
@@ -406,7 +416,10 @@ class PracticeDetailResponse(BaseModel):
     practice_id: uuid.UUID = Field(..., description="练习主键 UUIDv4")
     id: uuid.UUID | None = Field(default=None, description="练习主键标识别名")
     title: str = Field(..., description="练习标题")
-    material_id: uuid.UUID = Field(..., description="关联学习资料标识")
+    material_id: uuid.UUID | None = Field(
+        default=None, description="关联学习资料标识（课程范围练习为空）"
+    )
+    folder_id: uuid.UUID | None = Field(default=None, description="关联课程文件夹标识")
     mode: str = Field(default="sequential", description="组卷模式")
     status: str = Field(..., description="练习生命周期状态")
     total_count: int = Field(..., ge=0, description="练习题目总数")
@@ -442,6 +455,7 @@ class PracticeDetailResponse(BaseModel):
                 "practice_id",
                 "title",
                 "material_id",
+                "folder_id",
                 "mode",
                 "status",
                 "total_count",
@@ -512,7 +526,10 @@ class PracticeSummaryResponse(BaseModel):
 
     id: uuid.UUID = Field(..., description="练习主键 UUIDv4")
     practice_id: uuid.UUID | None = Field(default=None, description="练习主键标识别名")
-    material_id: uuid.UUID = Field(..., description="关联学习资料主键")
+    material_id: uuid.UUID | None = Field(
+        default=None, description="关联学习资料主键（课程范围练习为空）"
+    )
+    folder_id: uuid.UUID | None = Field(default=None, description="关联课程文件夹标识")
     title: str = Field(..., description="练习标题")
     status: str = Field(..., description="练习生命周期状态")
     question_count: int = Field(default=0, ge=0, description="题目总数")
@@ -535,6 +552,7 @@ class PracticeSummaryResponse(BaseModel):
                 "id",
                 "practice_id",
                 "material_id",
+                "folder_id",
                 "title",
                 "status",
                 "question_count",
@@ -592,7 +610,10 @@ class PracticeCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID = Field(..., description="练习主键 UUIDv4")
-    material_id: uuid.UUID = Field(..., description="归属学习资料主键")
+    material_id: uuid.UUID | None = Field(
+        default=None, description="归属学习资料主键（课程范围练习为空）"
+    )
+    folder_id: uuid.UUID | None = Field(default=None, description="归属课程文件夹标识")
     title: str = Field(..., description="练习标题")
     status: str = Field(default="not_started", description="练习生命周期状态")
     question_count: int = Field(..., ge=1, le=50, description="练习题目总数")

@@ -25,6 +25,8 @@ from sqlalchemy.orm import Session
 from app.core.algorithms.practice import scatter_adjacent_knowledge_questions
 from app.core.errors import (
     AppError,
+    FolderNotFoundError,
+    KnowledgeNotFoundError,
     PracticeEmptyQuestionsError,
     PracticeNotFoundError,
     PracticeStatusError,
@@ -48,6 +50,8 @@ from app.models.practice import (
     validate_question_snapshot,
 )
 from app.models.question import Question, QuestionStatus
+from app.repositories.folder import FolderRepository
+from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
@@ -105,6 +109,7 @@ class CreatePracticeOptions:
     source_type: str = PracticeSourceType.NORMAL.value
     source_report_id: uuid.UUID | None = None
     idempotency_key: str | None = None
+    folder_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +156,8 @@ class PracticeService:
         practice_repo: PracticeRepository | None = None,
         question_repo: QuestionRepository | None = None,
         material_repo: MaterialRepository | None = None,
+        knowledge_repo: KnowledgeRepository | None = None,
+        folder_repo: FolderRepository | None = None,
         idempotency: IdempotencyProtocol | None = None,
         queue: QueueProtocol | None = None,
     ) -> None:
@@ -161,6 +168,8 @@ class PracticeService:
             practice_repo: 可选注入的练习仓储实例。
             question_repo: 可选注入的题目仓储实例。
             material_repo: 可选注入的资料仓储实例 (用于切片溯源装配)。
+            knowledge_repo: 可选注入的知识点仓储实例 (课程范围考点校验)。
+            folder_repo: 可选注入的课程文件夹仓储实例。
             idempotency: 可选注入的幂等适配器实例。
             queue: 可选注入的任务队列适配器实例。
         """
@@ -168,6 +177,8 @@ class PracticeService:
         self.practice_repo = practice_repo or PracticeRepository(session)
         self.question_repo = question_repo or QuestionRepository(session)
         self.material_repo = material_repo or MaterialRepository(session)
+        self.knowledge_repo = knowledge_repo or KnowledgeRepository(session)
+        self.folder_repo = folder_repo or FolderRepository(session)
         self.idempotency = idempotency or create_idempotency_adapter("memory")
         self.queue = queue or create_queue_adapter("memory")
 
@@ -330,6 +341,58 @@ class PracticeService:
             include_items=True,
         )
 
+    def _resolve_folder_scope_knowledge_points(
+        self,
+        user_id: uuid.UUID,
+        options: CreatePracticeOptions,
+    ) -> list[uuid.UUID]:
+        """解析练习目标考点集，支持课程文件夹范围。
+
+        未指定 ``folder_id`` 时原样返回请求考点；指定时校验课程归属（不存在/已归档
+        抛 ``FolderNotFoundError``），缺省考点取该文件夹全部 ready 资料考点，
+        显式考点则逐个校验其归属资料属于该未归档课程。
+
+        Args:
+            user_id: 租户用户标识。
+            options: 组卷配置选项。
+
+        Returns:
+            list[uuid.UUID]: 去重后保序的目标考点标识列表。
+
+        Raises:
+            FolderNotFoundError: 课程文件夹不存在、已归档或越权。
+            KnowledgeNotFoundError: 显式考点不属于该课程文件夹。
+            PracticeEmptyQuestionsError: 课程文件夹下无可用考点。
+        """
+        if options.folder_id is None:
+            return list(dict.fromkeys(options.knowledge_point_ids))
+
+        folder = self.folder_repo.get_by_id(options.folder_id, user_id, include_archived=False)
+        if folder is None:
+            raise FolderNotFoundError()
+
+        explicit_ids = list(dict.fromkeys(options.knowledge_point_ids))
+        if not explicit_ids:
+            points = self.question_repo.list_knowledge_points_for_folder(user_id, options.folder_id)
+            if not points:
+                raise PracticeEmptyQuestionsError(
+                    "课程文件夹下没有可用的知识点，无法组卷",
+                    details={"folder_id": str(options.folder_id)},
+                )
+            return [point.id for point in points]
+
+        allowed_material_ids = set(
+            self.question_repo.list_material_ids_for_folder(user_id, options.folder_id)
+        )
+        for kp_id in explicit_ids:
+            point = self.knowledge_repo.get_knowledge_point_by_id(kp_id, user_id)
+            if point is None or point.material_id not in allowed_material_ids:
+                raise KnowledgeNotFoundError(
+                    "请求的知识点不存在、越权或不属于该课程文件夹",
+                    details={"knowledge_point_id": str(kp_id)},
+                )
+        return explicit_ids
+
     def _assemble_and_persist_practice(
         self,
         user_id: uuid.UUID,
@@ -366,9 +429,10 @@ class PracticeService:
                 return existing
 
         # Step 2: 检索候选可用题目 (按知识点轮转交织，保证各知识点均衡覆盖)
+        effective_kp_ids = self._resolve_folder_scope_knowledge_points(user_id, options)
         kp_questions_map: dict[uuid.UUID, list[Question]] = {}
         total_available = 0
-        for kp_id in options.knowledge_point_ids:
+        for kp_id in effective_kp_ids:
             kp_questions = self.question_repo.list_questions_by_knowledge_point(
                 knowledge_point_id=kp_id,
                 user_id=user_id,
@@ -407,7 +471,7 @@ class PracticeService:
         interleaved_candidates: list[Question] = []
         max_kp_len = max((len(qs) for qs in kp_questions_map.values()), default=0)
         for idx in range(max_kp_len):
-            for kp_id in options.knowledge_point_ids:
+            for kp_id in effective_kp_ids:
                 qs = kp_questions_map[kp_id]
                 if idx < len(qs):
                     interleaved_candidates.append(qs[idx])
@@ -479,16 +543,18 @@ class PracticeService:
                 )
             snapshots.append(snapshot)
 
-        # Step 4.5: 解析归属资料 (缺省时由选中题目回填，支持错题本等无资料上下文来源)
+        # Step 4.5: 解析归属资料 (缺省时由选中题目回填，支持错题本等无资料上下文来源；
+        # 课程文件夹范围练习保持 material_id 为空，仅落库 folder_id)
         resolved_material_id = options.material_id
-        if resolved_material_id is None:
+        if resolved_material_id is None and options.folder_id is None:
             resolved_material_id = scattered_questions[0].material_id
 
         try:
             practice = Practice(
                 material_id=resolved_material_id,
+                folder_id=options.folder_id,
                 title=options.title,
-                knowledge_point_ids=[str(kp) for kp in options.knowledge_point_ids],
+                knowledge_point_ids=[str(kp) for kp in effective_kp_ids],
                 question_types=list(options.question_types) if options.question_types else [],
                 difficulty=options.difficulty,
                 question_count=len(scattered_questions),

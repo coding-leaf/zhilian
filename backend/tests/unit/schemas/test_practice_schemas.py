@@ -150,6 +150,20 @@ def test_practice_create_request_empty_knowledge_points() -> None:
         )
 
 
+def test_practice_create_request_folder_scope_without_points() -> None:
+    """课程文件夹范围允许 knowledge_point_ids 缺省（默认取文件夹全部考点）。"""
+    folder_id = uuid.uuid4()
+    request = PracticeCreateRequest(
+        title="课程范围练习",
+        folder_id=folder_id,
+        question_count=5,
+    )
+
+    assert request.folder_id == folder_id
+    assert request.knowledge_point_ids == []
+    assert request.material_id is None
+
+
 def test_practice_create_request_wrong_record_and_optional_material() -> None:
     """测试 wrong_record 来源合法且 material_id 缺省时可创建 (由后端解析)。"""
     kp_id = uuid.uuid4()

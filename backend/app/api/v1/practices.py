@@ -87,6 +87,7 @@ async def create_practice(
             source_type=request.source_type,
             source_report_id=request.source_report_id,
             idempotency_key=idempotency_key or request.idempotency_key,
+            folder_id=request.folder_id,
         )
         practice = practice_service.create_practice(
             user_id=current_user.id,
