@@ -1,0 +1,31 @@
+{
+  "id": "course-folder-practice-loop",
+  "name": "course-folder-practice-loop",
+  "title": "课程文件夹与出题-答题闭环重构",
+  "description": "以课程文件夹为分类容器，支持多批次上传与独立解析范围；打通知识树→出题→独立答题页闭环并按是否需LLM介入分流判题；控制台移除总学习分。前后端全改含后端模型与迁移。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-27-folder-backend-model",
+    "09-27-folder-scope-generation",
+    "09-27-course-ia-frontend",
+    "09-27-question-answer-loop"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

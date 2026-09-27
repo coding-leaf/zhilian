@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端分层/事务/错误处理/命名/工具链门禁的强制约定；实现 models/repositories/services/routers 与迁移前必读"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端组件≤300行、Store 不发请求、分包导航参数契约、零 Emoji、DESIGN token 等强制约定；实现课程页/题目页/控制台改版前必读"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本次重构跨 后端 API ↔ 前端 api/store/组件 多层；folder_id 契约在层间传递，需按跨层指南核对"}
+{"file": "docs/DESIGN.md", "reason": "前端唯一客观设计参数源（颜色/间距/组件装配/文案字典）；课程列表与课程详情页视觉需对齐"}
+{"file": "docs/specs_extracted/智练自主学习平台_软件需求规格说明书_V2.0.md", "reason": "原始需求基线（目标用户、资料/知识片段/知识点模型、范围选择语义、FR 编号）；确认新增文件夹不违背原始取舍"}

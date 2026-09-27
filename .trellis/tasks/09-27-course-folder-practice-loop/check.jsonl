@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验后端改动是否符合分层/事务/错误码/工具链门禁与既有契约场景"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验前端改动是否符合组件行数、Store 铁律、分包导航契约、零 Emoji 等质量门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层核对 folder_id / folder 范围出题 的字段与语义在 API↔store↔组件 是否一致"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用检查：distribute_count / generate_questions_for_knowledge_points / createPractice 等既有能力不得重复实现"}

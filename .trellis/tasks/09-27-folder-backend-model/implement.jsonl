@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端分层/事务/错误码/命名/工具链门禁与既有契约场景；实现 model/migration/repository/service/router 前必读"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "folder_id 与归档状态需在 router→service→repository 三层一致传递与过滤，按跨层指南核对"}
+{"file": "docs/specs_extracted/智练自主学习平台_软件需求规格说明书_V2.0.md", "reason": "原始数据模型（用户→学习资料→知识片段→知识点）与租户隔离约定，确保新增文件夹不破坏既有实体语义"}
