@@ -222,10 +222,37 @@ describe('Material API Module', () => {
     expect(requestSpy).toHaveBeenCalledWith({
       url: '/api/v1/materials/upload',
       method: 'POST',
-      data: { file: 'file-data', title: 'Operating Systems' },
+      data: { file: 'file-data', title: 'Operating Systems', source_type: 'local' },
       headers: { 'Idempotency-Key': 'test-uuid-key' },
     });
     expect(res).toEqual(mockResponse);
+  });
+
+  it('keeps the caller-provided source_type on non-mini-program upload (MAT-014)', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        id: 'mat_003',
+        version_id: 'ver_003',
+        title: 'Wechat Doc',
+        file_format: 'pdf',
+        file_size: 1024,
+        source_type: 'wechat',
+        status: 'pending',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    await uploadMaterial('file-data', 'Wechat Doc', 'idem-2', 'wechat');
+
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/upload',
+      method: 'POST',
+      data: { file: 'file-data', title: 'Wechat Doc', source_type: 'wechat' },
+      headers: { 'Idempotency-Key': 'idem-2' },
+    });
   });
 
   it('should call retakeMaterialPage with POST /api/v1/materials/:id/reshoot', async () => {

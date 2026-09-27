@@ -123,7 +123,14 @@ def deduplicate_candidate_points(
     """
     n = len(items)
     if n <= 1:
-        return list(items)
+        # 即使仅 0/1 个候选，也必须对重复来源序号去重归一，
+        # 否则后续关联落库会命中 uq_knowledge_point_snippets_kp_snippet 唯一约束。
+        return [
+            item.model_copy(
+                update={"source_snippet_indices": sorted(set(item.source_snippet_indices))}
+            )
+            for item in items
+        ]
 
     merged_into: dict[int, int] = {}
     redirect_map: dict[str, str] = {}
@@ -166,6 +173,39 @@ def deduplicate_candidate_points(
     return result
 
 
+def normalize_extracted_temp_ids(
+    items: Sequence[ExtractedKnowledgeItem],
+) -> list[ExtractedKnowledgeItem]:
+    """消除大模型输出中重复的 temp_id，保证每个待建实体获得独立映射。
+
+    首次出现的 temp_id 保持不变（供子节点 ``parent_temp_id`` 引用）；后续重复项
+    追加唯一后缀，从而避免字典键坍缩导致多个知识点共享同一 UUID 或节点丢失。
+
+    Args:
+        items: 候选知识点列表。
+
+    Returns:
+        list[ExtractedKnowledgeItem]: temp_id 全局唯一的候选列表（保序）。
+    """
+    # 合成后缀时必须避开「全部原始 temp_id」，否则可能把另一节点的真实 ID 抢走，
+    # 导致引用该 ID 的子节点错挂到重复节点上。
+    reserved_ids = {item.temp_id for item in items}
+    seen: set[str] = set()
+    normalized: list[ExtractedKnowledgeItem] = []
+    for idx, item in enumerate(items):
+        temp_id = item.temp_id
+        if temp_id in seen:
+            candidate = f"{temp_id}__dup_{idx}"
+            while candidate in seen or candidate in reserved_ids:
+                candidate = f"{candidate}_x"
+            normalized.append(item.model_copy(update={"temp_id": candidate}))
+            seen.add(candidate)
+        else:
+            seen.add(temp_id)
+            normalized.append(item)
+    return normalized
+
+
 def _has_cycle(
     start_id: str,
     parent_map: dict[str, str | None],
@@ -205,12 +245,13 @@ def build_knowledge_hierarchy(
     Returns:
         tuple[list[KnowledgePoint], dict[str, uuid.UUID]]: (实体列表, temp_id 到实体 UUID 映射)。
     """
-    temp_parents = {it.temp_id: it.parent_temp_id for it in items}
-    temp_to_uuid = {it.temp_id: uuid.uuid4() for it in items}
+    normalized_items = normalize_extracted_temp_ids(items)
+    temp_parents = {it.temp_id: it.parent_temp_id for it in normalized_items}
+    temp_to_uuid = {it.temp_id: uuid.uuid4() for it in normalized_items}
 
     # 自愈环形依赖及丢失的父节点
     safe_parents: dict[str, str | None] = {}
-    for it in items:
+    for it in normalized_items:
         p_id = it.parent_temp_id
         if p_id is None or p_id not in temp_to_uuid or _has_cycle(it.temp_id, temp_parents):
             safe_parents[it.temp_id] = None
@@ -226,7 +267,7 @@ def build_knowledge_hierarchy(
         return depth
 
     result_points: list[KnowledgePoint] = []
-    for it in items:
+    for it in normalized_items:
         p_tid = safe_parents.get(it.temp_id)
         parent_uuid = temp_to_uuid[p_tid] if p_tid else None
         lvl = _calc_depth(it.temp_id)
@@ -436,6 +477,8 @@ class KnowledgeService:
                 embeddings,
                 similarity_threshold=0.92,
             )
+            # 防御大模型重复 temp_id：在质检与建树前规整为全局唯一标识。
+            deduped_items = normalize_extracted_temp_ids(deduped_items)
 
             # 5. 纯函数门禁质检
             candidate_points = [
@@ -494,17 +537,24 @@ class KnowledgeService:
         # 7. 数据库事务落库与关联建立
         snippet_index_map = {s.snippet_index: s.id for s in snippets}
         relations_to_save: list[KnowledgePointSnippet] = []
+        seen_relations: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for it in deduped_items:
             kp_uuid = temp_to_uuid[it.temp_id]
             for s_idx in it.source_snippet_indices:
-                if s_idx in snippet_index_map:
-                    relations_to_save.append(
-                        KnowledgePointSnippet(
-                            user_id=user_id,
-                            knowledge_point_id=kp_uuid,
-                            snippet_id=snippet_index_map[s_idx],
-                        )
+                snippet_id = snippet_index_map.get(s_idx)
+                if snippet_id is None:
+                    continue
+                relation_key = (kp_uuid, snippet_id)
+                if relation_key in seen_relations:
+                    continue
+                seen_relations.add(relation_key)
+                relations_to_save.append(
+                    KnowledgePointSnippet(
+                        user_id=user_id,
+                        knowledge_point_id=kp_uuid,
+                        snippet_id=snippet_id,
                     )
+                )
 
         try:
             # 清理历史可能存在的残留数据并写入
@@ -780,4 +830,5 @@ __all__ = [
     "build_knowledge_hierarchy",
     "compute_chapter_stats",
     "deduplicate_candidate_points",
+    "normalize_extracted_temp_ids",
 ]

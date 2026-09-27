@@ -324,6 +324,78 @@ class TestKnowledgeHelpers:
         deduped_all = deduplicate_candidate_points([kp_a, kp_b, kp_c], [va, vb, vc], 0.92)
         assert len(deduped_all) == 1
 
+    def test_deduplicate_single_candidate_dedupes_repeated_snippet_indices(self) -> None:
+        """BUG-MAT-015：n<=1 短路分支也必须对重复 source_snippet_indices 去重归一。"""
+        item = ExtractedKnowledgeItem(
+            temp_id="kp_single",
+            name="单一知识点",
+            level=1,
+            source_snippet_indices=[0, 0, 1, 1],
+        )
+
+        result = deduplicate_candidate_points([item], [[0.1] * 1024])
+
+        assert len(result) == 1
+        assert result[0].source_snippet_indices == [0, 1]
+
+    def test_build_knowledge_hierarchy_duplicate_temp_ids_get_distinct_uuids(self) -> None:
+        """BUG-MAT-016：LLM 输出重复 temp_id 时不得共享同一 UUID 或丢失节点。"""
+        user_id = uuid.uuid4()
+        mat_id = uuid.uuid4()
+        ver_id = uuid.uuid4()
+
+        items = [
+            ExtractedKnowledgeItem(temp_id="kp_dup", name="重复节点甲", level=1),
+            ExtractedKnowledgeItem(temp_id="kp_dup", name="重复节点乙", level=1),
+            ExtractedKnowledgeItem(
+                temp_id="kp_child",
+                parent_temp_id="kp_dup",
+                name="重复节点子级",
+                level=2,
+            ),
+        ]
+
+        points, temp_map = build_knowledge_hierarchy(
+            items,
+            material_id=mat_id,
+            version_id=ver_id,
+            user_id=user_id,
+            batch_id="b_dup",
+        )
+
+        assert len(points) == 3
+        assert len({p.id for p in points}) == 3
+        assert len(temp_map) == 3
+
+    def test_duplicate_temp_id_rename_avoids_collision_with_existing_ids(self) -> None:
+        """BUG-MAT-016：合成重命名 ID 不得与原 temp_id 冲突而错挂父子关系。"""
+        items = [
+            ExtractedKnowledgeItem(temp_id="a", name="根节点甲", level=1),
+            ExtractedKnowledgeItem(temp_id="a", name="重复节点甲", level=1),
+            ExtractedKnowledgeItem(temp_id="a__dup_1", name="原名含后缀", level=1),
+            ExtractedKnowledgeItem(
+                temp_id="child",
+                parent_temp_id="a__dup_1",
+                name="后缀节点子级",
+                level=2,
+            ),
+        ]
+
+        points, temp_map = build_knowledge_hierarchy(
+            items,
+            material_id=uuid.uuid4(),
+            version_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            batch_id="b_collide",
+        )
+
+        by_name = {p.name: p for p in points}
+        assert len(points) == 4
+        assert len({p.id for p in points}) == 4
+        assert len(temp_map) == 4
+        # 子节点必须挂在「原名含后缀」节点下，而不是被重命名的重复节点。
+        assert by_name["后缀节点子级"].parent_id == by_name["原名含后缀"].id
+
     def test_build_knowledge_hierarchy_and_healing(self) -> None:
         """测试树形拓扑构建、环形依赖自愈与孤儿节点修复。"""
         user_id = uuid.uuid4()
@@ -486,6 +558,99 @@ class TestKnowledgeServiceWorkflow:
         assert len(child["children"]) == 1
         grandchild = child["children"][0]
         assert grandchild["name"] == "无穷小量阶比较与代换"
+
+    def test_extract_single_candidate_with_duplicate_indices_is_deduped(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """BUG-MAT-015：单候选重复 snippet index 落库时不得触发唯一约束冲突。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        single_candidate = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id="kp_single",
+                    name="极限唯一考点",
+                    description="单一候选知识点但带重复来源序号",
+                    level=1,
+                    chapter_title="第一章 极限与连续",
+                    source_snippet_indices=[0, 0],
+                )
+            ]
+        )
+        fake_llm = StubLLM([single_candidate, single_candidate, single_candidate])
+        fake_embed = StubEmbedding()
+        service = KnowledgeService(session, fake_llm, fake_embed)
+
+        points = service.extract_and_build_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+
+        assert len(points) == 1
+        relations = service.knowledge_repo.get_snippets_for_point(points[0].id, user_id)
+        assert len(relations) == 1
+        assert relations[0].snippet_index == 0
+
+    def test_extract_duplicate_temp_ids_persists_distinct_entities(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """BUG-MAT-016：LLM 重复 temp_id 时抽取落库成功且实体 UUID 互不相同。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        duplicate_output = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id="kp_dup",
+                    parent_temp_id=None,
+                    name="极限概念与定义",
+                    description="重复临时标识的第一个知识点",
+                    level=1,
+                    chapter_title="第一章 极限与连续",
+                    source_snippet_indices=[0],
+                ),
+                ExtractedKnowledgeItem(
+                    temp_id="kp_dup",
+                    parent_temp_id=None,
+                    name="极限四则运算性质",
+                    description="重复临时标识的第二个知识点",
+                    level=1,
+                    chapter_title="第一章 极限与连续",
+                    source_snippet_indices=[1],
+                ),
+                ExtractedKnowledgeItem(
+                    temp_id="kp_child",
+                    parent_temp_id="kp_dup",
+                    name="无穷小量阶的比较",
+                    description="依赖重复父临时标识的子知识点",
+                    level=2,
+                    chapter_title="第一章 极限与连续",
+                    source_snippet_indices=[2],
+                ),
+            ]
+        )
+        fake_llm = StubLLM([duplicate_output])
+        fake_embed = StubEmbedding()
+        service = KnowledgeService(session, fake_llm, fake_embed)
+
+        points = service.extract_and_build_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+
+        assert len(points) == 3
+        assert len({p.id for p in points}) == 3
+        tree = service.get_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+        assert len(tree) >= 1
 
     def test_precondition_validations(
         self, session: Session, seed_material: dict[str, Any]

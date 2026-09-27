@@ -82,6 +82,8 @@ class MaterialDetailResponse(BaseModel):
         default=None, ge=0, le=100, description="解析进度百分比 (0-100)"
     )
     versions_count: int = Field(default=0, ge=0, description="关联历史版本总数")
+    key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
+    page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 
@@ -104,6 +106,8 @@ class MaterialListItem(BaseModel):
     progress_percentage: int | None = Field(
         default=None, ge=0, le=100, description="解析进度百分比 (0-100)"
     )
+    key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
+    page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 

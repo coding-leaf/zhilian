@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.knowledge import KnowledgePoint
 from app.models.material import (
     Material,
     MaterialOCRPage,
@@ -142,12 +143,39 @@ class MaterialRepository:
             stmt = stmt.where(Material.status == status)
 
         stmt = (
-            stmt.options(selectinload(Material.versions))
+            stmt.options(selectinload(Material.versions).selectinload(MaterialVersion.ocr_pages))
             .order_by(Material.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    def count_knowledge_points_by_version_ids(
+        self,
+        version_ids: Sequence[uuid.UUID],
+        user_id: uuid.UUID,
+    ) -> dict[uuid.UUID, int]:
+        """按版本批量统计知识点实体数量（单次分组查询，杜绝 N+1）。
+
+        Args:
+            version_ids: 待统计的目标版本主键集合。
+            user_id: 租户用户标识（强制隔离）。
+
+        Returns:
+            dict[uuid.UUID, int]: 版本主键到知识点数量的映射，缺失版本不在字典中。
+        """
+        unique_ids = list(dict.fromkeys(version_ids))
+        if not unique_ids:
+            return {}
+        stmt = (
+            select(KnowledgePoint.version_id, func.count(KnowledgePoint.id))
+            .where(
+                KnowledgePoint.user_id == user_id,
+                KnowledgePoint.version_id.in_(unique_ids),
+            )
+            .group_by(KnowledgePoint.version_id)
+        )
+        return {row[0]: int(row[1]) for row in self.session.execute(stmt).all()}
 
     def list_materials_by_user(
         self,

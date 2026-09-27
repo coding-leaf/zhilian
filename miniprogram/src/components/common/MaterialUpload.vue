@@ -127,9 +127,13 @@ function handleChooseMedia(): void {
     success: (res) => {
       const paths = Array.isArray(res.tempFilePaths) ? res.tempFilePaths : [res.tempFilePaths];
       const path = paths[0];
+      if (!path) return;
       const files = res.tempFiles as Array<{ size?: number }> | undefined;
-      const size = files?.[0]?.size || 1024;
-      if (path) {
+      void resolveMediaSize(path, files?.[0]?.size).then((size) => {
+        if (size === null) {
+          uni.showToast({ title: '无法获取文件大小，请重新选择', icon: 'none' });
+          return;
+        }
         const name = path.split('/').pop() || 'photo.jpg';
         handleFilePicked({
           name: name.includes('.') ? name : `${name}.jpg`,
@@ -137,8 +141,36 @@ function handleChooseMedia(): void {
           size,
           sourceType: 'local',
         });
-      }
+      });
     },
+  });
+}
+
+/**
+ * Resolve the real byte size of a picked media file.
+ *
+ * The mini-program runtime does not always populate `tempFiles[0].size`
+ * (observed on several real devices). Falling back to a small constant would
+ * silently bypass the size gate, so when the size is missing we query
+ * `uni.getFileInfo`; if it still cannot be determined we return null and the
+ * caller must block the selection.
+ */
+function resolveMediaSize(path: string, provided?: number): Promise<number | null> {
+  if (typeof provided === 'number' && provided > 0) {
+    return Promise.resolve(provided);
+  }
+  return new Promise((resolve) => {
+    if (typeof uni === 'undefined' || typeof uni.getFileInfo !== 'function') {
+      resolve(null);
+      return;
+    }
+    uni.getFileInfo({
+      filePath: path,
+      success: (info) => {
+        resolve(typeof info.size === 'number' && info.size > 0 ? info.size : null);
+      },
+      fail: () => resolve(null),
+    });
   });
 }
 

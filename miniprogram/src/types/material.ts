@@ -28,6 +28,8 @@ export interface MaterialItem {
   versions_count?: number;
   parse_status?: string | null;
   progress_percentage?: number | null;
+  key_points_count?: number | null;
+  page_count?: number | null;
   created_at: string;
   updated_at?: string;
 }

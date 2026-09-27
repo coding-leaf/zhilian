@@ -196,6 +196,63 @@ def test_material_list_item_and_response() -> None:
         MaterialListResponse(items=[], total=-1, limit=20, offset=0)
 
 
+def test_material_stats_fields_are_optional_and_serialized() -> None:
+    """BUG-MAT-013：列表/详情 DTO 必须承载可选考点数与页数统计字段。"""
+    mat_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    item = MaterialListItem(
+        id=mat_id,
+        title="统计字段资料.pdf",
+        file_format="pdf",
+        file_size=4096,
+        source_type="local",
+        status="ready",
+        current_version_id=None,
+        key_points_count=7,
+        page_count=4,
+        created_at=now,
+        updated_at=now,
+    )
+    assert item.key_points_count == 7
+    assert item.page_count == 4
+    dumped = item.model_dump()
+    assert dumped["key_points_count"] == 7
+    assert dumped["page_count"] == 4
+
+    detail = MaterialDetailResponse(
+        id=mat_id,
+        title="统计字段资料.pdf",
+        file_format="pdf",
+        file_size=4096,
+        source_type="local",
+        status="ready",
+        current_version_id=None,
+        versions_count=1,
+        key_points_count=3,
+        page_count=2,
+        created_at=now,
+        updated_at=now,
+    )
+    assert detail.key_points_count == 3
+    assert detail.page_count == 2
+
+    # 附加可选字段：旧客户端未传时默认为 None，保持向后兼容。
+    item_default = MaterialListItem(
+        id=mat_id,
+        title="无统计资料.pdf",
+        file_format="pdf",
+        file_size=100,
+        source_type="local",
+        status="pending",
+        current_version_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    assert item_default.key_points_count is None
+    assert item_default.page_count is None
+
+
 def test_material_parse_request_and_response() -> None:
     """Tests MaterialParseRequest defaults and MaterialParseResponse."""
     req_default = MaterialParseRequest()

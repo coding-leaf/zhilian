@@ -13,6 +13,7 @@ import io
 import logging
 import uuid
 import zipfile
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree
 
@@ -828,6 +829,23 @@ class MaterialService:
         self.session.refresh(version)
         return material, version
 
+    def _purge_storage_objects(self, keys: Iterable[str]) -> None:
+        """幂等清理对象存储中的指定键，单键失败不阻断主流程。
+
+        Args:
+            keys: 待物理删除的对象存储键集合。
+        """
+        for storage_key in keys:
+            if not storage_key:
+                continue
+            try:
+                self.storage.delete_object(self.bucket, storage_key)
+            except Exception as exc:
+                logger.warning(
+                    "failed to delete storage object",
+                    extra={"error_code": 0, "details": str(exc)},
+                )
+
     def retry_ocr_pages(
         self,
         *,
@@ -855,6 +873,10 @@ class MaterialService:
         if version is None:
             raise MaterialNotFoundError("请求的资料版本不存在")
 
+        # BUG-MAT-017：记录每次重拍被替换的旧图片键，提交后统一物理清理，
+        # 避免历次重拍产生永久孤儿对象（仅当前 key 会被硬删引用）。
+        purge_keys: list[str] = []
+
         for page_num, image_bytes in page_replaces.items():
             page = self.repo.get_ocr_page(version_id, page_num, user_id)
             if page is None:
@@ -863,6 +885,7 @@ class MaterialService:
             if page.reshoot_count >= 3:
                 raise ReshootLimitExceededError("页面重拍次数已达上限熔断，请重新上传清晰文件")
 
+            old_storage_key = page.image_storage_key
             next_reshoot_count = page.reshoot_count + 1
             ocr_result = self.ocr.recognize_image(image_bytes)
 
@@ -891,6 +914,8 @@ class MaterialService:
                 reshoot_count=next_reshoot_count,
                 image_storage_key=new_storage_key,
             )
+            if old_storage_key and old_storage_key != new_storage_key:
+                purge_keys.append(old_storage_key)
 
             # 熔断检测
             if not page_rep.is_qualified and next_reshoot_count >= 3:
@@ -903,6 +928,7 @@ class MaterialService:
                 )
                 self.repo.update_material_status(material_id, user_id, MaterialStatus.FAILED.value)
                 self.session.commit()
+                self._purge_storage_objects(purge_keys)
                 raise ReshootLimitExceededError("页面重拍次数已达上限熔断，请重新上传清晰文件")
 
         # 检查是否全部页面已达标
@@ -979,6 +1005,7 @@ class MaterialService:
             )
 
         self.session.commit()
+        self._purge_storage_objects(purge_keys)
         return version
 
     def get_material(
@@ -1074,13 +1101,33 @@ class MaterialService:
         适用于单条详情路径（逐条查询版本）。列表路径请改用
         ``_pick_loaded_version`` + ``_compose_parse_status`` 以避免 N+1 查询。
         """
+        version = self._resolve_material_version(material, user_id)
+        return self._compose_parse_status(material, version)
+
+    def _resolve_material_version(
+        self,
+        material: Material,
+        user_id: uuid.UUID,
+    ) -> MaterialVersion | None:
+        """解析资料当前激活版本，缺省回退至最新版本（逐条查询）。"""
         version: MaterialVersion | None = None
         if material.current_version_id is not None:
             version = self.repo.get_version_by_id(material.current_version_id, user_id)
         if version is None:
             version = self.repo.get_latest_version(material.id, user_id)
+        return version
 
-        return self._compose_parse_status(material, version)
+    def _compose_version_counts(
+        self,
+        version: MaterialVersion | None,
+        user_id: uuid.UUID,
+    ) -> tuple[int | None, int | None]:
+        """装配指定版本的考点总数与 OCR 页数（(key_points_count, page_count)）。"""
+        if version is None:
+            return None, None
+        counts = self.repo.count_knowledge_points_by_version_ids([version.id], user_id)
+        page_count = len(self.repo.get_ocr_pages(version.id, user_id))
+        return counts.get(version.id, 0), page_count
 
     @staticmethod
     def _pick_loaded_version(material: Material) -> MaterialVersion | None:
@@ -1134,9 +1181,13 @@ class MaterialService:
             MaterialNotFoundError: 资料不存在或已软删除。
         """
         material = self.get_material(material_id=material_id, user_id=user_id)
-        parse_status, progress_pct = self._resolve_version_parse_status(material, user_id)
+        version = self._resolve_material_version(material, user_id)
+        parse_status, progress_pct = self._compose_parse_status(material, version)
         material.parse_status = parse_status  # type: ignore[attr-defined]
         material.progress_percentage = progress_pct  # type: ignore[attr-defined]
+        key_points_count, page_count = self._compose_version_counts(version, user_id)
+        material.key_points_count = key_points_count  # type: ignore[attr-defined]
+        material.page_count = page_count  # type: ignore[attr-defined]
         return material
 
     def list_materials(
@@ -1190,6 +1241,20 @@ class MaterialService:
             parse_status, progress_pct = self._compose_parse_status(item, version)
             item.parse_status = parse_status  # type: ignore[attr-defined]
             item.progress_percentage = progress_pct  # type: ignore[attr-defined]
+
+        # 批量统计各激活版本考点数（单次分组查询，杜绝列表内逐条 N+1）
+        version_ids = [
+            version.id for item in items if (version := self._pick_loaded_version(item)) is not None
+        ]
+        kp_counts = self.repo.count_knowledge_points_by_version_ids(version_ids, resolved_user_id)
+        for item in items:
+            version = self._pick_loaded_version(item)
+            if version is None:
+                item.key_points_count = None  # type: ignore[attr-defined]
+                item.page_count = None  # type: ignore[attr-defined]
+                continue
+            item.key_points_count = kp_counts.get(version.id, 0)  # type: ignore[attr-defined]
+            item.page_count = len(version.ocr_pages)  # type: ignore[attr-defined]
         return items, total
 
     def list_material_versions(
@@ -1522,14 +1587,7 @@ class MaterialService:
         self.session.commit()
 
         # 同步清理存储文件
-        for storage_key in keys_to_purge:
-            try:
-                self.storage.delete_object(self.bucket, storage_key)
-            except Exception as exc:
-                logger.warning(
-                    "failed to delete storage object",
-                    extra={"error_code": 0, "details": str(exc)},
-                )
+        self._purge_storage_objects(keys_to_purge)
 
         return True
 

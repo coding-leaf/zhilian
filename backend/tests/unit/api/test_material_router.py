@@ -452,6 +452,126 @@ async def test_list_materials_default_params(
 
 
 @pytest.mark.asyncio
+async def test_list_materials_includes_knowledge_and_page_counts(
+    mock_user: User, mock_material_service: MagicMock
+) -> None:
+    """BUG-MAT-013：列表响应必须透传 key_points_count 与 page_count 统计字段。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    now = datetime.now(UTC)
+    material = Material(
+        id=uuid.uuid4(),
+        user_id=mock_user.id,
+        title="统计资料.pdf",
+        file_format="pdf",
+        file_size=1024,
+        source_type=SourceType.LOCAL.value,
+        status=MaterialStatus.READY.value,
+        current_version_id=uuid.uuid4(),
+    )
+    material.created_at = now
+    material.updated_at = now
+    material.key_points_count = 9  # type: ignore[attr-defined]
+    material.page_count = 5  # type: ignore[attr-defined]
+
+    mock_material_service.list_materials.return_value = ([material], 1)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/materials")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["key_points_count"] == 9
+    assert item["page_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_get_material_detail_includes_knowledge_and_page_counts(
+    mock_user: User, mock_material_service: MagicMock
+) -> None:
+    """BUG-MAT-013：详情响应必须透传 key_points_count 与 page_count 统计字段。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    material_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    fake_material = Material(
+        id=material_id,
+        user_id=mock_user.id,
+        title="统计详情.pdf",
+        file_format="pdf",
+        file_size=2048,
+        source_type=SourceType.LOCAL.value,
+        status=MaterialStatus.READY.value,
+        current_version_id=version_id,
+    )
+    fake_material.created_at = now
+    fake_material.updated_at = now
+    fake_material.key_points_count = 6  # type: ignore[attr-defined]
+    fake_material.page_count = 3  # type: ignore[attr-defined]
+    mock_material_service.get_material_detail.return_value = fake_material
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/materials/{material_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["key_points_count"] == 6
+    assert payload["page_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_upload_material_rejects_oversized_content_length(
+    mock_user: User, mock_material_service: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BUG-MAT-018：Content-Length 声明超限时必须在读取请求体之前直接拒绝。"""
+    from app.api.v1 import materials as materials_module
+
+    monkeypatch.setattr(materials_module, "MAX_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr(materials_module, "CONTENT_LENGTH_TOLERANCE_BYTES", 0)
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        files = {"file": ("big.pdf", io.BytesIO(b"%PDF-1.4" + b"x" * 4096), "application/pdf")}
+        response = await client.post("/api/v1/materials/upload", files=files)
+
+    assert response.status_code == 413
+    assert response.json()["code"] == 40001
+    mock_material_service.import_material_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_material_rejects_stream_exceeding_limit(
+    mock_user: User, mock_material_service: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BUG-MAT-018：绕过声明体积的流式请求也必须在累计超限时立即中止。"""
+    from app.api.v1 import materials as materials_module
+
+    monkeypatch.setattr(materials_module, "MAX_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr(materials_module, "CONTENT_LENGTH_TOLERANCE_BYTES", 10 * 1024 * 1024)
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        files = {"file": ("big.pdf", io.BytesIO(b"%PDF-1.4" + b"x" * 4096), "application/pdf")}
+        response = await client.post("/api/v1/materials/upload", files=files)
+
+    assert response.status_code == 413
+    assert response.json()["code"] == 40001
+    mock_material_service.import_material_file.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_list_materials_status_filter_normalization(
     mock_user: User, mock_material_service: MagicMock
 ) -> None:

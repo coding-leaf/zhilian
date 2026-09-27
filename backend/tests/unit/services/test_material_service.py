@@ -988,6 +988,50 @@ class TestMaterialCreationAndLifecycle:
                 file_content=png_bytes,
             )
 
+    def test_reshoot_purges_replaced_image_object(
+        self,
+        service: MaterialService,
+        storage: MemoryStorageAdapter,
+    ) -> None:
+        """BUG-MAT-017：单页重拍替换后必须物理清理被覆盖的旧图片对象。"""
+        user_id = uuid.uuid4()
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"seed image"
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="PurgeMat.png",
+            file_format="png",
+            file_size=len(png_bytes),
+            file_content=png_bytes,
+        )
+
+        old_key = "users/test/materials/pages/page_1_reshoot_0.png"
+        storage.put_object("zhilian-materials", old_key, b"old-image-bytes", "image/png")
+        page = MaterialOCRPage(
+            version_id=ver.id,
+            material_id=mat.id,
+            user_id=user_id,
+            page_number=1,
+            image_storage_key=old_key,
+            raw_text="old text",
+            valid_char_count=8,
+            gibberish_ratio=0.0,
+            is_qualified=True,
+        )
+        service.repo.create_ocr_pages([page])
+
+        new_bytes = b"\x89PNG\r\n\x1a\n" + b"new image"
+        updated = service.reshoot_material_page(
+            user_id=user_id,
+            material_id=mat.id,
+            page_index=1,
+            file_content=new_bytes,
+            version_id=ver.id,
+        )
+
+        assert updated.image_storage_key != old_key
+        assert storage.object_exists("zhilian-materials", old_key) is False
+        assert storage.object_exists("zhilian-materials", updated.image_storage_key) is True
+
     def test_same_hash_uploads_own_independent_storage_object(
         self,
         service: MaterialService,

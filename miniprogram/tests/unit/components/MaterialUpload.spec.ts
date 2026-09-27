@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { setActivePinia, createPinia } from 'pinia';
 import MaterialUpload, {
   generateIdempotencyKey,
@@ -122,6 +122,85 @@ describe('MaterialUpload.vue', () => {
         icon: 'none',
       }),
     );
+  });
+
+  it('resolves missing media size via uni.getFileInfo before validating (MAT-012)', async () => {
+    const showToastSpy = vi.fn();
+    const getFileInfoSpy = vi.fn(
+      (options: {
+        filePath: string;
+        success?: (result: { size: number; errMsg: string }) => void;
+      }) => {
+        options.success?.({ size: 300 * 1024, errMsg: 'getFileInfo:ok' });
+      },
+    );
+    const uniStub = (globalThis as unknown as { uni: Record<string, unknown> }).uni;
+    uniStub.getFileInfo = getFileInfoSpy;
+    uniStub.showToast = showToastSpy;
+    uniStub.chooseImage = vi.fn((options: { success?: (res: unknown) => void }) => {
+      options.success?.({
+        tempFilePaths: ['file://tmp/photo_missing_size.jpg'],
+        tempFiles: [{}],
+      });
+    });
+
+    const wrapper = mount(MaterialUpload, { props: { visible: true } });
+    await wrapper.find('.media-btn').trigger('tap');
+    await flushPromises();
+
+    expect(getFileInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: 'file://tmp/photo_missing_size.jpg' }),
+    );
+    expect(showToastSpy).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('photo_missing_size.jpg');
+  });
+
+  it('blocks media when resolved size exceeds the limit (MAT-012)', async () => {
+    const showToastSpy = vi.fn();
+    const uniStub = (globalThis as unknown as { uni: Record<string, unknown> }).uni;
+    uniStub.getFileInfo = vi.fn(
+      (options: { success?: (result: { size: number; errMsg: string }) => void }) => {
+        options.success?.({ size: 30 * 1024 * 1024, errMsg: 'getFileInfo:ok' });
+      },
+    );
+    uniStub.showToast = showToastSpy;
+    uniStub.chooseImage = vi.fn((options: { success?: (res: unknown) => void }) => {
+      options.success?.({
+        tempFilePaths: ['file://tmp/huge_photo.jpg'],
+        tempFiles: [{}],
+      });
+    });
+
+    const wrapper = mount(MaterialUpload, { props: { visible: true } });
+    await wrapper.find('.media-btn').trigger('tap');
+    await flushPromises();
+
+    expect(showToastSpy).toHaveBeenCalledWith(expect.objectContaining({ icon: 'none' }));
+    expect(wrapper.text()).toContain('未选择文件');
+  });
+
+  it('blocks media when file size cannot be resolved (MAT-012)', async () => {
+    const showToastSpy = vi.fn();
+    const uniStub = (globalThis as unknown as { uni: Record<string, unknown> }).uni;
+    uniStub.getFileInfo = vi.fn((options: { fail?: (err: unknown) => void }) => {
+      options.fail?.({ errMsg: 'getFileInfo:fail' });
+    });
+    uniStub.showToast = showToastSpy;
+    uniStub.chooseImage = vi.fn((options: { success?: (res: unknown) => void }) => {
+      options.success?.({
+        tempFilePaths: ['file://tmp/unknown_photo.jpg'],
+        tempFiles: [{}],
+      });
+    });
+
+    const wrapper = mount(MaterialUpload, { props: { visible: true } });
+    await wrapper.find('.media-btn').trigger('tap');
+    await flushPromises();
+
+    expect(showToastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '无法获取文件大小，请重新选择', icon: 'none' }),
+    );
+    expect(wrapper.text()).toContain('未选择文件');
   });
 
   it('handles valid file selection and successful upload flow with store update', async () => {

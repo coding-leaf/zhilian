@@ -21,6 +21,7 @@ from fastapi import (
     Form,
     Header,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -29,6 +30,7 @@ from app.api.deps.auth import get_current_user
 from app.api.deps.container import get_container
 from app.api.deps.material import get_material_service
 from app.container import AppContainer
+from app.core.errors import MaterialInvalidError
 from app.core.security import generate_user_ref
 from app.models.material import MaterialStatus
 from app.models.user import User
@@ -46,11 +48,65 @@ from app.schemas.material import (
     MaterialVersionItem,
     MaterialVersionListResponse,
 )
-from app.services.material import MaterialService
+from app.services.material import MAX_FILE_SIZES, MaterialService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/materials", tags=["materials"])
+
+# 依据：全局单文件上传上限 = 各格式上限的最大值 (20MB)，另加 multipart 信封容差；
+# 攻击者可借超限请求体放大内存，故在读取前先校验 Content-Length，读取时再流式累计。
+MAX_UPLOAD_BYTES: int = max(MAX_FILE_SIZES.values())
+CONTENT_LENGTH_TOLERANCE_BYTES: int = 512 * 1024
+_UPLOAD_CHUNK_BYTES: int = 64 * 1024
+_HTTP_413_PAYLOAD_TOO_LARGE: int = 413
+
+
+async def _read_upload_content_guarded(file: UploadFile, request: Request) -> bytes:
+    """在读取请求体之前与读取过程中双重执行体积门禁，杜绝内存放大 DoS。
+
+    先校验 ``Content-Length`` 声明体积，超限立即拒绝且不读取任何字节；
+    再按 64KB 分块流式读取并累计字节数，一旦超过全局上限立刻中止。
+
+    Args:
+        file: 上传文件流对象。
+        request: 当前 HTTP 请求，用于读取 Content-Length 请求头。
+
+    Returns:
+        bytes: 校验通过后的完整文件内容。
+
+    Raises:
+        MaterialInvalidError: 声明体积或实际读取体积超过全局单文件上限 (HTTP 413)。
+    """
+    max_bytes = MAX_UPLOAD_BYTES
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_len = int(declared)
+        except ValueError:
+            declared_len = -1
+        if declared_len > max_bytes + CONTENT_LENGTH_TOLERANCE_BYTES:
+            raise MaterialInvalidError(
+                f"上传请求体积过大，最大允许 {max_bytes // (1024 * 1024)}MB",
+                status_code=_HTTP_413_PAYLOAD_TOO_LARGE,
+                details={"declared_bytes": declared_len, "max_bytes": max_bytes},
+            )
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise MaterialInvalidError(
+                f"上传文件体积过大，最大允许 {max_bytes // (1024 * 1024)}MB",
+                status_code=_HTTP_413_PAYLOAD_TOO_LARGE,
+                details={"actual_bytes": total, "max_bytes": max_bytes},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def run_material_pipeline_background(
@@ -109,6 +165,7 @@ run_parse_material_background = run_material_pipeline_background
     summary="上传并创建学习资料",
 )
 async def upload_material(
+    request: Request,
     file: Annotated[UploadFile, File(description="待解析学习资料文件二进制流")],
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -121,8 +178,10 @@ async def upload_material(
     """上传文件创建学习资料并触发异步解析流水线。
 
     读取文件流并委托 MaterialService 执行格式魔数校验、内容查重秒传与入队调度。
+    读取前先做 Content-Length 与流式累计双重体积门禁，防范内存放大 DoS。
 
     Args:
+        request: 当前 HTTP 请求对象 (体积门禁读取 Content-Length)。
         file: 客户端上传的文件流对象。
         title: 可选的资料展示标题。
         source_type: 导入来源渠道 (local/wechat)。
@@ -135,7 +194,7 @@ async def upload_material(
     Returns:
         MaterialUploadResponse: 创建就绪的资料与版本初始元数据。
     """
-    content = await file.read()
+    content = await _read_upload_content_guarded(file, request)
     material, version = material_service.import_material_file(
         user_id=user.id,
         file_content=content,
@@ -232,6 +291,8 @@ async def list_materials(
                 current_version_id=item.current_version_id,
                 parse_status=getattr(item, "parse_status", None),
                 progress_percentage=getattr(item, "progress_percentage", None),
+                key_points_count=getattr(item, "key_points_count", None),
+                page_count=getattr(item, "page_count", None),
                 created_at=item.created_at,
                 updated_at=item.updated_at,
             )
@@ -286,6 +347,8 @@ async def get_material_detail(
         parse_status=getattr(material, "parse_status", None),
         progress_percentage=getattr(material, "progress_percentage", None),
         versions_count=versions_count,
+        key_points_count=getattr(material, "key_points_count", None),
+        page_count=getattr(material, "page_count", None),
         created_at=material.created_at,
         updated_at=material.updated_at,
     )

@@ -179,7 +179,7 @@ export function uploadMaterial(
   return request<MaterialUploadResponse>({
     url: '/api/v1/materials/upload',
     method: 'POST',
-    data: { file, title },
+    data: { file, title, source_type: sourceType },
     headers,
   });
 }
