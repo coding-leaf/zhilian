@@ -222,31 +222,46 @@ LLMOptions(temperature=0.3)   # tool schema 无 strict=true → 模型输出 opt
 - **优先级**：`knowledge_point_ids` 非空优先；否则用 `knowledge_point_id`；两者皆空 → 校验失败（422）。
 - **题量分配**：均分 + 余数前置（前 `rem` 个各 `base+1`）；**每考点至少 1 题**；`total < n` 时实际总数 = n。非法入参（`total<=0` 或 `n<=0`）抛 `ValueError`。
 - **聚合**：`qualified_questions`/`pending_questions`/`quality_checks` 按调用顺序拼接；计数求和；`knowledge_point_id`（旧字段）= 首个考点；`knowledge_point_ids`（新字段）= 全量去重保序。
-- **fail-fast**：任一考点异常（`KnowledgeNotFoundError`/`MissingSourceSnippetError`）立即抛出，不静默跳过、不做部分成功降级（跨考点非原子，如需全有或全无另立任务）。
+- **fail-fast + 单事务原子**：任一考点异常（`KnowledgeNotFoundError`/`MissingSourceSnippetError`）立即抛出，不静默跳过、不做部分成功降级；且**跨考点必须全有或全无**——多考点编排在**同一个外层事务**内提交，任一考点失败则整批回滚，不得遗留部分已入库题目。
+- **提交边界**：`generate_questions(*, ..., defer_commit: bool = False)`——单考点默认 `False`（内部自行 `commit()`，零回归）；多考点编排传 `defer_commit=True` 并**仅由外层**在全部成功时 `commit()` 一次，失败时 `rollback()`。
+- **仓储假设**：`batch_create_questions` / `batch_create_quality_checks` 必须仅 `add`+`flush()`，**禁止**内部独立 `commit()`，否则外层单事务不成立。
 - **纯函数无 IO**：`distribute_count` 不得引入仓储/网络依赖（守 import-linter）。
 
 #### 4. Wrong vs Correct
 ##### Wrong
 ```python
-# 错误：把 RRF/无下限的简单整除当分配，total<n 时某些考点 0 题；或静默跳过失败考点
+# 错误1：把简单整除当分配，total<n 时某些考点 0 题；或静默跳过失败考点
 per = total // n
 for kp in kps:
     try:
         generate(kp, per)   # 0 题；且吞错继续
     except Exception:
         pass
+
+# 错误2：逐考点各自 commit —— 第 N 个失败时前 N-1 个已入库（非原子，遗留部分题目）
+for kp, cnt in zip(kps, counts):
+    generate_questions(..., knowledge_point_id=kp, options=...)  # 内部 commit()
 ```
 ##### Correct
 ```python
-# 正确：均分+余数前置+每考点>=1；fail-fast
+# 正确：均分+余数前置+每考点>=1；多考点单事务原子（外层唯一提交/回滚）
 counts = distribute_count(total, n)     # (2,3) -> [1,1,1]
-for kp, cnt in zip(kps, counts):
-    generate(kp, cnt)                   # 异常直接向上抛
+try:
+    for kp, cnt in zip(kps, counts):
+        result = self.generate_questions(..., knowledge_point_id=kp, options=per_kp_opts,
+                                         defer_commit=True)   # 不在内层提交
+        aggregate(result)
+    self.session.commit()               # 全部成功：单次提交
+except Exception:
+    self.session.rollback()             # 任一失败：整批回滚，零遗留
+    raise
 ```
 
 #### 5. Tests Required
 - `distribute_count` 边界：`(6,3)=[2,2,2]`、`(7,3)=[3,2,2]`、`(2,3)=[1,1,1]`、`(1,1)=[1]`、非法入参抛错。
 - 编排：调用次数=去重考点数；各考点题量；聚合计数；题目 `knowledge_point_id` 覆盖集合；fail-fast（失败后不再调用后续考点）。
+- **原子性（真实 SQLite）**：某考点抛 `MissingSourceSnippetError` → 落库计数为 **0**；全成功 → **单次** `commit()` 且全部落库。
+- **单考点零回归**：`generate_questions` 默认 `defer_commit=False` 行为不变（内部自行提交）。
 - API：多考点请求返回 `knowledge_point_ids` 与聚合题目；**旧单考点请求零回归**。
 
 ---
