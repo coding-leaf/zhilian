@@ -695,3 +695,17 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 4. Tests Required
 - 顶层/嵌套两来源均渲染要点；生效记录覆盖旧记录且不泄漏旧关键词；切片缺失空态；预加载查询数常数级。
+
+### Scenario: Deterministic Half-Up Score Rounding & Grade-Record Transaction Safety
+
+#### 1. Scope / Trigger
+- 主观题得分舍入、LLM 判分/重批粒度、自评正误契约、判题记录失效/生效顺序。
+
+#### 2. Contracts
+- 得分舍入必须为**确定性 half-up**（`Decimal` + `ROUND_HALF_UP`，粒度默认 0.5），禁止使用 Python 原生 `round`（银行家舍入）；`.25`/`.75` 边界必须稳定向上。
+- LLM 首次判分与重批：先 clamp 到 `[0, max_score]`，再 `round_half_up(..., SCORE_ROUNDING_UNIT)`；全链路分值必须为 0.5 整数倍。
+- `SelfEvaluateDTO.is_correct` 附加可选；显式值时优先采纳，`None` 才回退 `score > 0`。
+- `_grade_attempt_item` 必须在算法**成功产出结果后**才失效旧记录并写入新生效记录；算法异常须捕获并降级 `pending_regrade`，保证任一时刻恰有一条 `is_final` 记录、不整卷崩溃。
+
+#### 3. Tests Required
+- `round_half_up(9.25,0.5)==9.5`、`(7.25)==7.5`（对比 `round(9.25/0.5)*0.5==9.0`）；LLM 7.3→7.5、8.24→8.0；`is_correct` 显式覆盖与默认回退；算法异常时单 final + 原记录保留 + 不崩整卷。
