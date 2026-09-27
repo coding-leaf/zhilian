@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.models.question import QuestionType
+
 
 class QuestionGenerateRequest(BaseModel):
     """触发出题生成请求入参模型。"""
@@ -52,8 +54,20 @@ class QuestionGenerateRequest(BaseModel):
             "true_false",
             "short_answer",
         ],
-        description="目标生成的题型列表",
+        min_length=1,
+        description="目标生成的题型列表，至少 1 项且取值必须为合法 QuestionType",
     )
+
+    @field_validator("question_types")
+    @classmethod
+    def _validate_question_types(cls, value: list[str]) -> list[str]:
+        """校验题型列表非空且每一项均为合法 QuestionType 枚举值。"""
+        valid_types = {item.value for item in QuestionType}
+        invalid_types = [item for item in value if item not in valid_types]
+        if invalid_types:
+            raise ValueError(f"question_types 含非法题型: {', '.join(invalid_types)}")
+        return value
+
     max_retries: int = Field(
         default=2, ge=0, le=5, description="质检未通过最大重抽轮次，0~5，默认 2"
     )

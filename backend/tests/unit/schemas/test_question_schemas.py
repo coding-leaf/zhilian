@@ -54,6 +54,26 @@ def test_question_generate_request_requires_knowledge_point_target() -> None:
         QuestionGenerateRequest(material_id=uuid.uuid4(), count=3)
 
 
+def test_question_generate_request_rejects_empty_question_types() -> None:
+    """BUG-QGEN-008: explicit empty question_types must fail validation."""
+    with pytest.raises(ValidationError):
+        QuestionGenerateRequest(
+            material_id=uuid.uuid4(),
+            knowledge_point_id=uuid.uuid4(),
+            question_types=[],
+        )
+
+
+def test_question_generate_request_rejects_invalid_question_type() -> None:
+    """BUG-QGEN-008: unknown question type values must fail validation."""
+    with pytest.raises(ValidationError):
+        QuestionGenerateRequest(
+            material_id=uuid.uuid4(),
+            knowledge_point_id=uuid.uuid4(),
+            question_types=["not_a_question_type"],
+        )
+
+
 def test_question_generate_response_knowledge_point_ids_defaults_empty() -> None:
     """The new response field is additive and defaults to an empty list."""
     response = QuestionGenerateResponse(

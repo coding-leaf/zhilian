@@ -86,7 +86,7 @@ describe('QuestionConfigDrawer.vue', () => {
     expect(emojiRegex.test(text)).toBe(false);
   });
 
-  it('clamps question count between 1 and 50 with stepper and input', async () => {
+  it('clamps question count between 1 and 20 with stepper and input', async () => {
     const wrapper = mount(QuestionConfigDrawer, {
       props: {
         visible: true,
@@ -94,6 +94,8 @@ describe('QuestionConfigDrawer.vue', () => {
         selectedKnowledgeIds: ['kp_001'],
       },
     });
+
+    expect(wrapper.text()).toContain('单次支持生成 1 到 20 道题目');
 
     const stepBtns = wrapper.findAll('.step-btn');
     const minusBtn = stepBtns[0];
@@ -112,9 +114,12 @@ describe('QuestionConfigDrawer.vue', () => {
     await input.trigger('input', { detail: { value: '0' } });
     expect((wrapper.find('.count-input').element as HTMLInputElement).value).toBe('1');
 
-    // Input boundary > 50 -> clamped to 50
+    // Input boundary > 20 -> clamped to 20
+    await input.trigger('input', { detail: { value: '25' } });
+    expect((wrapper.find('.count-input').element as HTMLInputElement).value).toBe('20');
+
     await input.trigger('input', { detail: { value: '99' } });
-    expect((wrapper.find('.count-input').element as HTMLInputElement).value).toBe('50');
+    expect((wrapper.find('.count-input').element as HTMLInputElement).value).toBe('20');
   });
 
   it('enforces selecting at least 1 question type', async () => {

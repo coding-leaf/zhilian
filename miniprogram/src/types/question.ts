@@ -90,9 +90,29 @@ export interface QuestionDeleteResponse {
   message?: string;
 }
 
+/**
+ * Quality-check record contract.
+ *
+ * Authoritative counterpart: `backend/app/schemas/question.py`
+ * -> `QuestionQualityCheckResponse`. Field names are taken verbatim from the
+ * backend; the deprecated aliases (`rule_code` / `passed` / `message`) are kept
+ * optional for smooth migration and MUST NOT be relied upon by new code.
+ */
 export interface QuestionQualityCheck {
-  rule_code: string;
-  passed: boolean;
+  id?: string;
+  question_id?: string;
+  batch_id?: string;
+  check_type: string;
+  is_passed: boolean;
+  reason?: string | null;
+  similarity_score?: number | null;
+  check_metadata?: Record<string, unknown>;
+  created_at?: string;
+  /** @deprecated use `check_type` */
+  rule_code?: string;
+  /** @deprecated use `is_passed` */
+  passed?: boolean;
+  /** @deprecated use `reason` */
   message?: string;
 }
 

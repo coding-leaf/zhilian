@@ -1106,6 +1106,13 @@ class TestQuestionServiceCRUDAndAudit:
         with pytest.raises(ValueError, match="max_retries 必须在 0 到 5 之间"):
             GenerateQuestionsOptions(max_retries=6)
 
+        # BUG-QGEN-008: empty / invalid question_types must be rejected.
+        with pytest.raises(ValueError, match="question_types"):
+            GenerateQuestionsOptions(question_types=[])
+
+        with pytest.raises(ValueError, match="question_types"):
+            GenerateQuestionsOptions(question_types=["not_a_question_type"])
+
     def test_empty_llm_output_triggers_retry_or_break(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:

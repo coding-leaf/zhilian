@@ -199,7 +199,7 @@ describe('materialTreeUtils', () => {
         question_types: ['single_choice'],
       });
       expect(resZero.valid).toBe(false);
-      expect(resZero.message).toContain('1 到 50');
+      expect(resZero.message).toContain('1 到 20');
 
       const resNeg = validateQuestionConfig({
         count: -1,
@@ -208,22 +208,29 @@ describe('materialTreeUtils', () => {
       expect(resNeg.valid).toBe(false);
     });
 
-    it('should accept boundary values 1 and 50', () => {
+    it('should accept boundary values 1 and 20', () => {
       expect(validateQuestionConfig({ count: 1, question_types: ['single_choice'] }).valid).toBe(
         true,
       );
-      expect(validateQuestionConfig({ count: 50, question_types: ['single_choice'] }).valid).toBe(
+      expect(validateQuestionConfig({ count: 20, question_types: ['single_choice'] }).valid).toBe(
         true,
       );
     });
 
-    it('should reject when count exceeds 50', () => {
+    it('should reject when count exceeds the backend bound of 20', () => {
       const res = validateQuestionConfig({
-        count: 51,
+        count: 21,
         question_types: ['single_choice'],
       });
       expect(res.valid).toBe(false);
-      expect(res.message).toContain('1 到 50');
+      expect(res.message).toContain('1 到 20');
+
+      const resFar = validateQuestionConfig({
+        count: 50,
+        question_types: ['single_choice'],
+      });
+      expect(resFar.valid).toBe(false);
+      expect(resFar.message).toContain('1 到 20');
     });
 
     it('should reject when question_types is empty or undefined', () => {

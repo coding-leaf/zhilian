@@ -526,6 +526,33 @@ async def test_delete_question_success(mock_user: User, mock_question_service: M
 
 
 @pytest.mark.asyncio
+async def test_delete_question_reason_from_json_body_fallback(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """BUG-QGEN-003: reason in the JSON body is honored when the query is absent."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    q_id = uuid.uuid4()
+    mock_question_service.delete_question.return_value = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request(
+            "DELETE",
+            f"/api/v1/questions/{q_id}",
+            json={"reason": "旧客户端请求体原因"},
+        )
+
+    assert response.status_code == 200
+    mock_question_service.delete_question.assert_called_once_with(
+        question_id=q_id,
+        user_id=mock_user.id,
+        reason="旧客户端请求体原因",
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_question_edit_logs_success(
     mock_user: User, mock_question_service: MagicMock
 ) -> None:

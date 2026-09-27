@@ -11,7 +11,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, Request, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.question import get_question_service
@@ -36,6 +36,29 @@ from app.services.question import (
 )
 
 router = APIRouter(tags=["questions"])
+
+
+async def _resolve_delete_reason(request: Request, reason: str | None) -> str | None:
+    """解析删除原因，优先 Query，缺省时兜底读取 JSON 请求体的 reason 字段。
+
+    Args:
+        request: 原始 HTTP 请求对象。
+        reason: Query 参数传入的删除原因。
+
+    Returns:
+        str | None: 解析到的删除原因，均缺省时返回 None。
+    """
+    if reason is not None:
+        return reason
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    if isinstance(body, dict):
+        body_reason = body.get("reason")
+        if isinstance(body_reason, str):
+            return body_reason
+    return None
 
 
 def _build_generate_response(
@@ -280,6 +303,7 @@ async def update_question(
 )
 async def delete_question(
     id: uuid.UUID,
+    request: Request,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     reason: Annotated[str | None, Query(description="删除原因说明")] = None,
@@ -288,6 +312,7 @@ async def delete_question(
 
     Args:
         id: 题目主键 UUIDv4。
+        request: 原始 HTTP 请求对象，用于请求体原因兜底解析。
         user: 当前已认证登录租户用户对象。
         question_service: 题目领域编排服务。
         reason: 可选的删除原因备注。
@@ -298,10 +323,11 @@ async def delete_question(
     Raises:
         QuestionNotFoundError: 题目不存在或越权 (40009)。
     """
+    resolved_reason = await _resolve_delete_reason(request, reason)
     success = question_service.delete_question(
         question_id=id,
         user_id=user.id,
-        reason=reason,
+        reason=resolved_reason,
     )
     return QuestionDeleteResponse(
         id=id,

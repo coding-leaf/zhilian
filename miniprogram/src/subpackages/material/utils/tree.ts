@@ -171,7 +171,7 @@ export function calculateKnowledgeCoverage(
 
 /**
  * 出题生成参数纯函数校验。
- * 校验题数必须在 1~50 之间，题型列表不可为空。
+ * 校验题数必须在 1~20 之间（与后端契约一致），题型列表不可为空。
  *
  * @param config 出题配置对象。
  * @returns 校验结果及失败提示文案。
@@ -184,8 +184,8 @@ export function validateQuestionConfig(config: { count?: number; question_types?
   if (count === undefined || count === null || isNaN(count)) {
     return { valid: false, message: '请输入出题数量' };
   }
-  if (count < 1 || count > 50) {
-    return { valid: false, message: '出题数量必须在 1 到 50 题之间' };
+  if (count < 1 || count > 20) {
+    return { valid: false, message: '出题数量必须在 1 到 20 题之间' };
   }
   if (!config.question_types || config.question_types.length === 0) {
     return { valid: false, message: '请至少选择一种题型' };

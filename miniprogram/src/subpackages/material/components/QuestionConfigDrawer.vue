@@ -29,10 +29,10 @@
           <text v-if="distributionHint" class="section-tip">{{ distributionHint }}</text>
         </view>
 
-        <!-- 出题量步进器 (1~50题边界约束，默认10题) -->
+        <!-- 出题量步进器 (1~20题边界约束，默认10题) -->
         <view class="config-section">
           <text class="section-label">出题数量</text>
-          <text class="section-tip">单次支持生成 1 到 50 道题目</text>
+          <text class="section-tip">单次支持生成 1 到 20 道题目</text>
           <view class="stepper-row">
             <button
               class="step-btn"
@@ -52,7 +52,7 @@
             />
             <button
               class="step-btn"
-              :class="{ disabled: questionCount >= 50 || submitting }"
+              :class="{ disabled: questionCount >= 20 || submitting }"
               :disabled="submitting"
               @tap="handleStepPlus"
             >
@@ -195,7 +195,7 @@ const distributionHint = computed<string>(() => {
 
 function clampCount(val: number): number {
   if (isNaN(val) || val < 1) return 1;
-  if (val > 50) return 50;
+  if (val > 20) return 20;
   return val;
 }
 

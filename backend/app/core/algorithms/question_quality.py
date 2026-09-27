@@ -623,6 +623,14 @@ def check_answer_conflict(
         max_similarity = max(max_similarity, stem_similarity)
 
         if stem_similarity >= config.conflict_vector_threshold:
+            # 答案冲突仅在「同一答案域」内比对：判断题答案域为布尔，选择题答案域为
+            # 选项键集合，二者跨类型比较永不相等（如 True != frozenset({'A'})），
+            # 若强行比对会把题型不同的近似题误判为一票否决的答案冲突。
+            candidate_is_true_false = candidate.question_type == QuestionType.TRUE_FALSE
+            existing_is_true_false = existing_question.question_type == QuestionType.TRUE_FALSE
+            if candidate_is_true_false != existing_is_true_false:
+                continue
+
             existing_answer = _normalize_objective_answer(
                 existing_question.question_type, existing_question.answer
             )

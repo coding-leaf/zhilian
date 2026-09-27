@@ -82,6 +82,12 @@ class GenerateQuestionsOptions:
             raise ValueError("difficulty 必须在 1 到 5 之间")
         if self.max_retries < 0 or self.max_retries > 5:
             raise ValueError("max_retries 必须在 0 到 5 之间")
+        if not self.question_types:
+            raise ValueError("question_types 不能为空")
+        valid_types = {item.value for item in QuestionType}
+        invalid_types = [item for item in self.question_types if item not in valid_types]
+        if invalid_types:
+            raise ValueError(f"question_types 含非法题型: {', '.join(invalid_types)}")
 
 
 @dataclass(frozen=True)

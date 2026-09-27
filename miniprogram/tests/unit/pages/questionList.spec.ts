@@ -133,8 +133,8 @@ describe('QuestionsPage (questions/index.vue)', () => {
     });
   });
 
-  it('removes the question from the local list immediately after a confirmed delete', async () => {
-    mockList(sampleQuestions);
+  it('reloads page 1 after a confirmed delete so shifted items are not skipped', async () => {
+    const fetchSpy = mockList(sampleQuestions);
     const deleteSpy = vi.spyOn(questionApi, 'deleteQuestion').mockResolvedValue({
       code: 200,
       message: 'success',
@@ -151,12 +151,26 @@ describe('QuestionsPage (questions/index.vue)', () => {
     await wrapper.vm.$nextTick();
     await flush();
 
+    // After deletion the backend view no longer contains q_001 (items shift forward).
+    fetchSpy.mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: [sampleQuestions[1]], total: 1, limit: 20, offset: 0 },
+    });
+
     await wrapper.findAll('.action-btn.danger')[0].trigger('tap');
     await flush();
     await wrapper.vm.$nextTick();
 
     expect(deleteSpy).toHaveBeenCalledWith('q_001', '用户手动删除');
+    // A fresh page-1 fetch must be triggered after the delete (initial load + reload).
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // Pagination resets to page 1 so the next "load more" uses the real offset.
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ material_id: 'mat_001', page: 1, page_size: 20 }),
+    );
     expect(wrapper.vm.listData.some((q) => q.id === 'q_001')).toBe(false);
+    expect(wrapper.vm.listData.map((q) => q.id)).toEqual(['q_002']);
     expect(wrapper.text()).not.toContain('什么是临界区？');
   });
 

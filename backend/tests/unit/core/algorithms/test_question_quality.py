@@ -548,6 +548,76 @@ def test_tc_qq_20_conflict_true_false_boolean() -> None:
     assert reason == "题干高度相似但客观题标准答案冲突"
 
 
+def test_conflict_cross_type_true_false_and_choice_not_conflicted() -> None:
+    """BUG-QGEN-006: 判断题与选择题答案域不兼容，题干高度相似亦不误判答案冲突。"""
+    config = QuestionQualityConfig()
+    # 候选题为单选题，已有题为判断题，题干向量完全一致（相似度 1.0）。
+    candidate_choice = _build_candidate(
+        stem="进程是资源分配的基本单位",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.SINGLE_CHOICE,
+        answer="A",
+    )
+    existing_true_false = _build_existing(
+        stem="进程是资源分配的基本单位",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.TRUE_FALSE,
+        answer="正确",
+    )
+    is_valid, reason, _score, _is_degraded = check_answer_conflict(
+        candidate=candidate_choice,
+        existing=(existing_true_false,),
+        config=config,
+    )
+    assert is_valid is True
+    assert reason is None
+
+    # 反向：候选题为判断题，已有题为单选题，同样不得误判冲突。
+    candidate_true_false = _build_candidate(
+        stem="线程是调度的基本单位",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.TRUE_FALSE,
+        answer="正确",
+    )
+    existing_choice = _build_existing(
+        stem="线程是调度的基本单位",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.SINGLE_CHOICE,
+        answer="B",
+    )
+    is_valid_reversed, reason_reversed, _score2, _is_degraded2 = check_answer_conflict(
+        candidate=candidate_true_false,
+        existing=(existing_choice,),
+        config=config,
+    )
+    assert is_valid_reversed is True
+    assert reason_reversed is None
+
+
+def test_conflict_same_type_choice_different_answers_still_conflicted() -> None:
+    """BUG-QGEN-006 守回归：同为选择题（单选 vs 多选）答案不同仍判冲突。"""
+    config = QuestionQualityConfig()
+    candidate = _build_candidate(
+        stem="操作系统进程调度算法对比",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.SINGLE_CHOICE,
+        answer="A",
+    )
+    existing = _build_existing(
+        stem="操作系统进程调度算法对比",
+        embedding=(1.0, 0.0),
+        question_type=QuestionType.MULTIPLE_CHOICE,
+        answer="C",
+    )
+    is_valid, reason, _score, _is_degraded = check_answer_conflict(
+        candidate=candidate,
+        existing=(existing,),
+        config=config,
+    )
+    assert is_valid is False
+    assert reason == "题干高度相似但客观题标准答案冲突"
+
+
 # ==============================================================================
 # 6. 规则 4：明显歧义检查决策表测试 (check_ambiguity, C4-1 ~ C4-5)
 # ==============================================================================

@@ -146,6 +146,9 @@ function handleDeleteQuestion(questionId: string): void {
         listData.value = listData.value.filter((item) => item.id !== questionId);
         total.value = Math.max(0, total.value - 1);
         uni.showToast({ title: '已删除题目', icon: 'success' });
+        // 删除后后端数据集整体前移，重置到第 1 页重新拉取当前可见深度，
+        // 确保后续「加载更多」按真实 offset 请求，不跳过前移的题目。
+        await loadQuestions(true);
       } catch {
         uni.showToast({ title: '删除失败，请重试', icon: 'none' });
       }

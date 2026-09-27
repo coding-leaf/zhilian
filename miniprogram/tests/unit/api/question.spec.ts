@@ -177,7 +177,7 @@ describe('Question API Module', () => {
     expect(res.data.options?.[0].text).toBe('访问临界资源的代码段');
   });
 
-  it('should call deleteQuestion with DELETE /api/v1/questions/:id and optional reason', async () => {
+  it('should call deleteQuestion with DELETE and the reason as a query parameter', async () => {
     const mockResponse = {
       code: 0,
       message: 'success',
@@ -185,15 +185,33 @@ describe('Question API Module', () => {
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
 
-    const res = await deleteQuestion('q_001', 'Redundant question');
+    const res = await deleteQuestion('q_001', '原因');
 
     expect(requestSpy).toHaveBeenCalledTimes(1);
     expect(requestSpy).toHaveBeenCalledWith({
+      url: `/api/v1/questions/q_001?reason=${encodeURIComponent('原因')}`,
+      method: 'DELETE',
+    });
+    // The DELETE body must not carry a redundant `reason` payload.
+    const callArg = requestSpy.mock.calls[0][0] as { data?: unknown };
+    expect(callArg.data).toBeUndefined();
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should omit the query string when deleteQuestion has no reason', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: { id: 'q_001', is_deleted: true },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    await deleteQuestion('q_001');
+
+    expect(requestSpy).toHaveBeenCalledWith({
       url: '/api/v1/questions/q_001',
       method: 'DELETE',
-      data: { reason: 'Redundant question' },
     });
-    expect(res).toEqual(mockResponse);
   });
 
   it('should call fetchQuestionAudit with GET /api/v1/questions/:id/edit-logs', async () => {

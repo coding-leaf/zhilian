@@ -99,6 +99,9 @@ export async function updateQuestion(
 /**
  * 软删除指定题目并留存审计痕迹。
  *
+ * 删除原因以 Query Parameter 传递（与后端 `reason: Query` 契约一致）；
+ * DELETE 请求不携带请求体，避免 body 被代理/路由忽略导致审计原因丢失。
+ *
  * @param questionId 题目主键 ID。
  * @param reason 可选的删除原因说明。
  * @returns 统一响应包，包含软删除执行结果。
@@ -107,10 +110,10 @@ export function deleteQuestion(
   questionId: string,
   reason?: string,
 ): Promise<ApiResponse<{ id: string; is_deleted: boolean }>> {
+  const query = reason ? `?reason=${encodeURIComponent(reason)}` : '';
   return request<{ id: string; is_deleted: boolean }>({
-    url: `/api/v1/questions/${questionId}`,
+    url: `/api/v1/questions/${questionId}${query}`,
     method: 'DELETE',
-    data: reason ? { reason } : undefined,
   });
 }
 
