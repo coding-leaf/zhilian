@@ -677,3 +677,21 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - `set_result` 抛错时交卷成功且同 key 可回放、不同 key 40011；耗时聚合（含 0）；多选落库可 `json.loads`、历史 repr 归一；标量不变。
+
+### Scenario: Grading Keyword/Snippet Enrichment & Effective-Record Selection
+
+#### 1. Scope / Trigger
+- 练习/报告逐题接口需下发判题命中要点与原文切片；判题记录多版本时的生效选择。
+
+#### 2. Signatures
+- `PracticeItemDetailResponse` / `QuestionSnapshotDTO` 附加可选 `hit_keywords: list[str]`、`missing_keywords: list[str]`、`source_snippet: SourceSnippetDTO | None`。
+- `SourceSnippetDTO{id, chapter_title, page_index, snippet_content}`。
+- `MaterialRepository.list_snippets_by_ids(ids, user_id)`（批量+租户过滤）。
+
+#### 3. Contracts
+- 要点字段须在顶层与 `question_snapshot` 双同步，前端二者任一可读；来源为**该作答项唯一生效**（`is_final=True`）的 `GradingRecord`，禁止泄漏被取代记录。
+- 原文切片按 `source_snippet_id` 批量关联（单查询、按 `user_id` 过滤，禁 N+1、禁跨用户泄漏）；缺失时 DTO 为 `None`，前端渲染空态。
+- 装配判题记录须 `selectinload` 预加载（固定查询数）；`get_practice` 返回 `PracticeDetailResponse` 时保持既有调用方兼容。
+
+#### 4. Tests Required
+- 顶层/嵌套两来源均渲染要点；生效记录覆盖旧记录且不泄漏旧关键词；切片缺失空态；预加载查询数常数级。

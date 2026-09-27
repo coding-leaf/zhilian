@@ -432,3 +432,18 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 卸载 flush 触发且有 pending 不丢（竞态用例：旧同步回调不得清掉新作答）；`term_explanation`/`case_analysis` 渲染输入框与标签；真实耗时非常量；pause/resume 发对应 POST。
+
+### Scenario: Report Detail Loading Guard, Subjective Regrade & Snippet/Keyword Reading
+
+#### 1. Scope / Trigger
+- 报告详情页首屏加载、主观题自评/重判入口、要点与原文渲染。
+
+#### 2. Contracts
+- 报告详情首屏只允许一次加载（并发锁 + 已加载 practiceId 守卫），返回刷新不得被永久阻断，切换 practiceId 必须重新加载。
+- 逐题数据唯一来源为 `practiceRes.data.items`，禁止引用不存在的 `repData.items` 死分支；加载失败展示可重试错误态。
+- `canSelfGrade` 的主观题集合须与后端 `SUBJECTIVE_QUESTION_TYPES` 一致（含 `term_explanation`/`case_analysis`）；客观题不受影响。
+- 重判入口要求 `is_answered === true` 且 `user_answer` 非空，未作答不得展示（避免后端 403）。
+- 要点读顶层或 `question_snapshot` 任一；原文按后端字段渲染，缺失显示空态。
+
+#### 3. Tests Required
+- 首屏单次加载与切换 pid 重载；主观题入口覆盖三类、客观题不显示；未作答题隐藏重判；要点双层来源；切片空态。
