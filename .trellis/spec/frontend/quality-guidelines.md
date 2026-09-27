@@ -529,3 +529,70 @@ uni.navigateTo({
 - `formatPurgeRemaining` 边界（已过期/剩余天/剩余小时/剩余分钟/非法）。
 - `folderStore` 增删改、归档拆分、`reset`；`materialStore.removeMaterial`/`updateMaterialFolder`/`unclassifiedMaterials`。
 - 控制台断言**不再渲染** `MasteryDashboardBar`、课程列表入口与未分类门禁；课程详情页 `folder_id` 解析与移动；列表页 `folder_id=__none__` 过滤与移动剔除。
+
+---
+
+### Scenario: Course-Scope Generate -> Question List -> Start Practice Loop Contract
+
+#### 1. Scope / Trigger
+- 课程详情「智能出题」、课程范围题目列表与「开始答题」组卷跳转（出题 -> 答题闭环）。
+
+#### 2. Signatures
+```typescript
+// src/types/question.ts
+interface QuestionGenerateRequest {
+  material_id?: string; folder_id?: string; count?: number;
+  difficulty?: number; question_types?: QuestionType[];
+}
+interface QuestionListQueryParams { material_id?: string; folder_id?: string; page?: number; page_size?: number; }
+interface QuestionGenerateResponse {
+  material_id?: string; version_id?: string; knowledge_point_id?: string;
+  qualified_questions: QuestionItem[];
+}
+// src/types/practice.ts
+interface CreatePracticePayload {
+  title: string; material_id?: string; folder_id?: string;
+  knowledge_point_ids?: string[]; question_count?: number;
+  question_types?: QuestionType[]; mode?: 'sequential' | 'random' | 'weak_points';
+}
+interface PracticeSession {
+  id: string; title: string; material_id?: string; folder_id?: string | null;
+  status: PracticeStatus; questions: PracticeQuestionItem[];
+}
+```
+
+#### 3. Contracts
+- **范围二选一**：`material_id` 与 `folder_id` 至少提供其一；课程范围传 `folder_id` 且 `material_id` 可省。空值一律清洗（`undefined`/`null`）为「不过滤」，禁止落成恒假条件。
+- **可空字段容错**：后端 `QuestionGenerateResponse` 的 `material_id`/`version_id`/`knowledge_point_id` 与 `PracticeSession.material_id` 放开为可空，前端类型同步可选，消费处用 `?? ''`/`?? null` 兜底，禁止渲染 `undefined`。
+- **课程出题**：`CourseGenerateDrawer` 提交 `generateQuestions({ folder_id, count: 1~20, difficulty, question_types })`，不传 `knowledge_point_ids`（交后端用课程缺省范围）；空结果保留抽屉可重试；成功 `emit('success', folderId)` 由课程页跳题目列表（`folder_id`）。
+- **开始答题**：题目列表课程范围且有题时展示吸底 `PracticeStartBar`，点击 `createPractice({ title, folder_id, question_count: Math.min(total, 20), question_types, mode: 'sequential' })` -> `practiceStore.initSession(id, questions || [], { title, folder_id })` -> `uni.navigateTo('/subpackages/practice/pages/session/index?id=<id>')`（带 `fail`）。`total === 0` 时隐藏/禁用。
+- **零回归**：未传 `folder_id` 时保持既有 `material_id` 出题/组卷/列表行为；`QuestionConfigDrawer` 知识树出题逻辑不改。
+- **导航契约**：课程范围跳转统一 `folder_id`，资料范围统一 `material_id`；接收页（questions）兼容 `material_id`/`materialId`/`id` 与 `folder_id`/`folderId`；所有 `uni.navigateTo` 带 `fail` 兜底。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：课程范围仍强依赖 material_id；createPractice 无调用点（死代码）；导航无 fail
+await generateQuestions({ material_id: materialId, knowledge_point_ids: ids });
+```
+##### Correct
+```typescript
+// 正确：folder 范围透传 folder_id；题目列表组卷并跳转；导航带 fail
+await generateQuestions({ folder_id: folderId, count, difficulty, question_types });
+const res = await createPractice({
+  title: '课程练习', folder_id: folderId,
+  question_count: Math.min(total, 20), question_types, mode: 'sequential',
+});
+practiceStore.initSession(res.data.id, res.data.questions || [], {
+  title: res.data.title, folder_id: folderId,
+});
+uni.navigateTo({
+  url: `/subpackages/practice/pages/session/index?id=${res.data.id}`,
+  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+});
+```
+
+#### 5. Tests Required
+- `CourseGenerateDrawer`：默认值（题量/题型/难度）、提交 payload 含 `folder_id`、成功 `success` emit、空结果/网络/业务错误保留可重试、提交禁用防重。
+- `questions/index`：`folder_id` 解析与 `material_id` 兜底、空态范围引导（去出题/去知识树）、`createPractice` 接线（payload + 跳转 `id`）、`total===0` 禁用。
+- 单资料路径零回归（既有 `material_id` 列表/出题断言保持）。
