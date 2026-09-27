@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核判题状态与字段契约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "复核 DTO 可空字段与记录语义"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端判级与门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核 grading_status/status/score 跨层一致"}
