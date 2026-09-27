@@ -475,3 +475,57 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 空/无 `weak_points` 报告切换后无残留；草稿含 `total_count`/`title`/`material_id` 并被展示；`continuePractice` 头为 `Idempotency-Key`；无 pid/空报告渲染 `.empty-state` 且不发起请求。
+
+### Scenario: Course IA Navigation, Unclassified & Archive Contracts
+
+#### 1. Scope / Trigger
+- 控制台课程列表入口、课程详情页、未分类资料列表、课程归档/恢复与资料移动课程。
+
+#### 2. Signatures
+```typescript
+// src/types/folder.ts
+export const UNCLASSIFIED_FOLDER_ID = '__none__';
+export interface FolderItem {
+  id: string; name: string; is_archived: boolean;
+  archived_at?: string | null; purge_after?: string | null;
+  material_count: number; ready_material_count: number;
+  knowledge_point_count: number; question_count: number;
+  last_practice_at?: string | null; created_at: string; updated_at?: string;
+}
+// src/api/folder.ts
+fetchFolderList({ include_archived }); fetchFolderDetail(id);
+createFolder({ name }); renameFolder(id, { name });
+archiveFolder(id); restoreFolder(id);
+// src/api/material.ts
+moveMaterialFolder(materialId, folderId: string | null); // PATCH /materials/{id}/folder
+uploadMaterial(file, title, idem, sourceType, onProgress, folderId?);
+```
+
+#### 3. Contracts
+- **字段名与后端逐字一致**：消费 `FolderDetailResponse` 的 `is_archived` / `purge_after` / `material_count` / `ready_material_count` / `knowledge_point_count` / `question_count` / `last_practice_at`；禁止自造 `archived`/`materials_count` 等漂移名（渲染 `undefined` 静默失败）。
+- **导航参数统一 `material_id`**：资料分包内跳转一律 `?material_id=<id>`；接收页必须兼容 `material_id` / `materialId` / `id` 兜底。课程相关跳转用 `folder_id`（未分类传 `__none__`）。所有 `uni.navigateTo` 必带 `fail` 兜底提示。
+- **未分类入口门禁**：控制台「未分类」入口仅在 `folder_id IS NULL` 的资料存在时渲染；未选课程上传即落未分类（不阻断）。
+- **Store 不发请求**：`folderStore` 仅承载 `folders`/`archivedFolders`/`unclassifiedCount`/`currentFolder` 状态与增删改 action；网络调用一律经 `src/api/folder.ts` 由组件触发。
+- **归档反悔时间**：归档项展示 `purge_after - now` 剩余时间，使用纯函数 `formatPurgeRemaining(purgeAfter, now)`（缺省/非法/过期 → `已过期`）。
+- **控制台去总分卡**：移除 `MasteryDashboardBar` 总分展示，但保留 `fetchMasteryOverview` API 能力（报告页仍可用），不得删除后端能力。
+- **列表页隔离**：二级列表页维护本地 `listData`，仅对全局 `materialStore` 做增量 `addMaterial`；移动/删除后本地剔除并 `updateMaterialFolder`，禁止分页结果全量覆盖首页概览切片。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：控制台首屏仍是总分卡；未分类入口恒显；导航只认一种参数名
+uni.navigateTo({ url: `/subpackages/material/pages/detail/index?id=${id}` }); // 无 fail 兜底
+```
+##### Correct
+```typescript
+// 正确：课程列表入口 + 条件渲染未分类 + 统一 material_id 且带 fail
+uni.navigateTo({
+  url: `/subpackages/material/pages/detail/index?material_id=${id}`,
+  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+});
+```
+
+#### 5. Tests Required
+- `formatPurgeRemaining` 边界（已过期/剩余天/剩余小时/剩余分钟/非法）。
+- `folderStore` 增删改、归档拆分、`reset`；`materialStore.removeMaterial`/`updateMaterialFolder`/`unclassifiedMaterials`。
+- 控制台断言**不再渲染** `MasteryDashboardBar`、课程列表入口与未分类门禁；课程详情页 `folder_id` 解析与移动；列表页 `folder_id=__none__` 过滤与移动剔除。
