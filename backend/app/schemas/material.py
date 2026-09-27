@@ -175,6 +175,27 @@ class MaterialReshootResponse(BaseModel):
     unqualified_reason: str | None = Field(default=None, description="不合格原因说明")
 
 
+class MaterialOCRPageItem(BaseModel):
+    """单页 OCR 质检结果条目 DTO。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    page_number: int = Field(..., ge=1, description="页码序号 (从 1 开始)")
+    is_qualified: bool = Field(..., description="页面是否达到质检准出标准")
+    reshoot_count: int = Field(..., ge=0, le=3, description="累计重拍次数 (<=3)")
+    unqualified_reason: str | None = Field(default=None, description="不合格原因说明")
+
+
+class MaterialOCRPagesResponse(BaseModel):
+    """资料页级 OCR 质检列表响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    material_id: uuid.UUID = Field(..., description="资料标识 UUIDv4")
+    version_id: uuid.UUID | None = Field(default=None, description="版本标识 UUIDv4")
+    items: list[MaterialOCRPageItem] = Field(..., description="页级质检记录列表")
+
+
 class MaterialDeleteResponse(BaseModel):
     """资料删除结果响应模型 (软删除与硬删除复用)。"""
 

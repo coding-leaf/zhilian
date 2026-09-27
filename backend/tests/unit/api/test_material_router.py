@@ -917,6 +917,68 @@ async def test_reshoot_material_page_invalid_index(
 
 
 @pytest.mark.asyncio
+async def test_list_material_ocr_pages_success(
+    mock_user: User, mock_material_service: MagicMock
+) -> None:
+    """Tests GET /api/v1/materials/{id}/ocr-pages returns page quality items."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    material_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    unqualified = MaterialOCRPage(
+        id=uuid.uuid4(),
+        material_id=material_id,
+        version_id=version_id,
+        page_number=3,
+        image_storage_key="users/.../page_3.png",
+        raw_text="不合格文本",
+        gibberish_ratio=0.4,
+        valid_char_count=12,
+        is_qualified=False,
+        unqualified_reason="乱码率过高",
+        reshoot_count=1,
+    )
+    qualified = MaterialOCRPage(
+        id=uuid.uuid4(),
+        material_id=material_id,
+        version_id=version_id,
+        page_number=4,
+        image_storage_key="users/.../page_4.png",
+        raw_text="清晰文本",
+        gibberish_ratio=0.0,
+        valid_char_count=120,
+        is_qualified=True,
+        reshoot_count=0,
+    )
+    mock_material_service.list_ocr_pages.return_value = (version_id, [unqualified, qualified])
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/materials/{material_id}/ocr-pages?only_unqualified=true"
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["material_id"] == str(material_id)
+    assert data["version_id"] == str(version_id)
+    assert len(data["items"]) == 2
+    assert data["items"][0]["page_number"] == 3
+    assert data["items"][0]["is_qualified"] is False
+    assert data["items"][0]["reshoot_count"] == 1
+    assert data["items"][0]["unqualified_reason"] == "乱码率过高"
+    assert data["items"][1]["page_number"] == 4
+    assert data["items"][1]["is_qualified"] is True
+
+    mock_material_service.list_ocr_pages.assert_called_once_with(
+        material_id=material_id,
+        user_id=mock_user.id,
+        only_unqualified=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_soft_delete_material_success(
     mock_user: User, mock_material_service: MagicMock
 ) -> None:

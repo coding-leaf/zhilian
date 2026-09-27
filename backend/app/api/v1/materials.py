@@ -37,6 +37,8 @@ from app.schemas.material import (
     MaterialDetailResponse,
     MaterialListItem,
     MaterialListResponse,
+    MaterialOCRPageItem,
+    MaterialOCRPagesResponse,
     MaterialParseRequest,
     MaterialParseResponse,
     MaterialReshootResponse,
@@ -286,6 +288,51 @@ async def get_material_detail(
         versions_count=versions_count,
         created_at=material.created_at,
         updated_at=material.updated_at,
+    )
+
+
+@router.get(
+    "/{material_id}/ocr-pages",
+    response_model=MaterialOCRPagesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查询资料页级 OCR 质检记录",
+)
+async def list_material_ocr_pages(
+    material_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    material_service: Annotated[MaterialService, Depends(get_material_service)],
+    only_unqualified: Annotated[bool, Query(description="是否仅返回未达标页面")] = False,
+) -> MaterialOCRPagesResponse:
+    """查询指定资料当前激活（或最新）版本的页级 OCR 质检记录。
+
+    前端「待重拍」入口据此获取真实的不合格页面清单并驱动逐页重拍。
+
+    Args:
+        material_id: 目标资料主键。
+        user: 当前登录租户用户对象。
+        material_service: 资料领域编排服务。
+        only_unqualified: 是否仅返回未达标页面。
+
+    Returns:
+        MaterialOCRPagesResponse: 版本标识与页级质检记录列表。
+    """
+    version_id, pages = material_service.list_ocr_pages(
+        material_id=material_id,
+        user_id=user.id,
+        only_unqualified=only_unqualified,
+    )
+    return MaterialOCRPagesResponse(
+        material_id=material_id,
+        version_id=version_id,
+        items=[
+            MaterialOCRPageItem(
+                page_number=page.page_number,
+                is_qualified=page.is_qualified,
+                reshoot_count=page.reshoot_count,
+                unqualified_reason=page.unqualified_reason,
+            )
+            for page in pages
+        ],
     )
 
 
@@ -603,6 +650,7 @@ async def soft_delete_material(
 __all__ = [
     "get_material_detail",
     "hard_delete_material",
+    "list_material_ocr_pages",
     "list_material_versions",
     "list_materials",
     "reshoot_material_page",
