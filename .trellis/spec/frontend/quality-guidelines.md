@@ -405,3 +405,16 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 21/50 被拒、1 与 20 通过；25/99 clamp 到 20；删除 URL 含 `?reason=` 且无 body；删除后重新请求 page=1。
+
+### Scenario: Practice Draft Lifecycle & Status Mapping
+
+#### 1. Scope / Trigger
+- 交卷后本地草稿清理、`practice_drafts` 单一 schema、前后端练习状态映射。
+
+#### 2. Contracts
+- `StorageDataMap['practice_drafts']` 唯一契约为 `Record<string, PracticeDraftRecord>`；禁止 `as unknown as Record<string, never>` 之类强转。
+- 交卷成功后必须同时清 Storage **与** store 内存 `drafts`，`extractLatestDraftPractice` 不得再提取已交卷练习；清理不得影响其他练习草稿。
+- `adaptStatus` 必须覆盖后端全量状态（含 `timeout→submitted`、`paused`、`partially_graded`），未知值回退 `in_progress`。
+
+#### 3. Tests Required
+- `clearSession(id)` 删除目标 draft 且保留兄弟 draft；`adaptStatus('timeout')==='submitted'`；旧结构（仅 `answers`）读取不抛错。

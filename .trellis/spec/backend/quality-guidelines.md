@@ -644,3 +644,22 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - >20 被前端拦截且后端 422；空/非法题型在 schema 与服务层均抛错；query 与 body-only 两种删除原因均落审计；跨题型不误判、同域相反答案仍判冲突。
+
+### Scenario: Practice State Machine, Idempotent Replay & Detail Field Semantics
+
+#### 1. Scope / Trigger
+- 练习状态持久化与跃迁、交卷幂等回放标记、作答保存状态白名单、详情 `mode`/`completed_count`。
+
+#### 2. Signatures
+- `PracticeStatus`（StrEnum）必须包含 `not_started/in_progress/paused/timeout/partially_graded/completed`；service 禁止以字面量持久化状态。
+- `PracticeSubmissionResult.is_idempotent_replay: bool = False`；命中幂等缓存回放分支时置 `True`，正常提交保持 `False`。
+- `PracticeService.save_answer` 仅允许 `NOT_STARTED`（自跃迁为 `IN_PROGRESS`）与 `IN_PROGRESS`，其余一律 `PracticeStatusError`（40011/HTTP 400）。
+- `PracticeDetailResponse.completed_count` 由 `items[].is_answered` 派生；`mode` 落库于 `Practice.mode`，旧行/None 回退 `"sequential"`。
+
+#### 3. Contracts
+- 新增状态值必须同时纳入 `validate_practice_transition`：`PAUSED` 可恢复至 `IN_PROGRESS`；`TIMEOUT` 为不可逆终态。
+- 新增列须有对称的 Alembic 迁移（`batch_alter_table` 保证 SQLite 可用），`down_revision` 挂在真实 head 上。
+- 详情派生字段不得覆盖调用方显式提供的非零值。
+
+#### 4. Tests Required
+- 首次提交 `is_idempotent_replay=False`、二次回放 `True`；`PAUSED/TIMEOUT/PARTIALLY_GRADED` 真实 service 拒绝作答且 `NOT_STARTED` 首次保存仍可；`PAUSED→IN_PROGRESS` 有效、`TIMEOUT` 不可逆；`mode="random"` 详情回读且 `completed_count` = 已答数；迁移 upgrade/downgrade 对称可执行。
