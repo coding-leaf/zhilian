@@ -108,34 +108,34 @@ class TestCheckRegression:
     """测试退步研判纯函数 (check_regression)。"""
 
     def test_regression_boundary_exact_005(self) -> None:
-        """测试恰好等于 0.05 降幅时判定为显著退步。"""
+        """测试恰好等于 0.05 降幅时判定为显著退步，变化量为负 (DIAG-008)。"""
         is_regressed, score_delta = check_regression(0.75, 0.80)
         assert is_regressed is True
-        assert score_delta == 0.05
+        assert score_delta == -0.05
 
     def test_regression_boundary_just_below_005(self) -> None:
-        """测试略低于 0.05 降幅 (0.0499) 判定为未退步。"""
+        """测试略低于 0.05 降幅 (0.0499) 判定为未退步，变化量为负。"""
         is_regressed, score_delta = check_regression(0.7501, 0.80)
         assert is_regressed is False
-        assert score_delta == 0.0499
+        assert score_delta == -0.0499
 
     def test_regression_score_increased(self) -> None:
-        """测试分数提升 (负降幅) 判定为未退步。"""
+        """测试分数提升时变化量为正且判定为未退步 (DIAG-008)。"""
         is_regressed, score_delta = check_regression(0.80, 0.60)
         assert is_regressed is False
-        assert score_delta == -0.20
+        assert score_delta == 0.20
 
     def test_regression_none_previous_score(self) -> None:
-        """测试首次评估无历史分数基线判定为未退步且降幅为 0.0。"""
+        """测试首次评估无历史分数基线判定为未退步且变化量为 0.0。"""
         is_regressed, score_delta = check_regression(0.75, None)
         assert is_regressed is False
         assert score_delta == 0.0
 
     def test_regression_custom_threshold(self) -> None:
-        """测试支持自定义退步阈值。"""
+        """测试支持自定义退步阈值，未达阈值时变化量保留负号。"""
         is_regressed, score_delta = check_regression(0.70, 0.80, threshold=0.15)
         assert is_regressed is False
-        assert score_delta == 0.10
+        assert score_delta == -0.10
 
     def test_alias_consistency(self) -> None:
         """测试别名函数 check_knowledge_regression 与 check_regression 行为一致。"""
@@ -295,7 +295,7 @@ class TestEvaluateCauseType:
             previous_score=0.75,
             days_since_last_practice=10.0,
         )
-        cause, explanation, advice = evaluate_cause_type(item, mistakes=[], score_delta=0.10)
+        cause, explanation, advice = evaluate_cause_type(item, mistakes=[], score_delta=-0.10)
         assert cause == CauseType.TIME_DECAY_FORGOTTEN
         assert "历史掌握度低/时间衰减" in explanation
         assert "艾宾浩斯间隔记忆法" in advice
@@ -551,9 +551,9 @@ class TestSynthesizeDiagnosisReport:
         assert result.weak_points[0].score_delta == 0.0
 
     def test_regressed_point_independent_of_weak(self) -> None:
-        """测试高分退步点独立进入 regressed_points 但不进入 weak_points。"""
+        """测试高分退步点独立进入 regressed_points 且变化量为负 (DIAG-008)。"""
         # previous 0.90 -> current 0.75, score >= 0.70 不属于 weak
-        # 但 delta 0.15 >= 0.05 属于 regressed
+        # 但 delta -0.15 <= -0.05 属于 regressed
         items = [
             KnowledgeEvaluationInput("k1", "Advanced", 0.75, previous_score=0.90),
         ]
@@ -564,19 +564,19 @@ class TestSynthesizeDiagnosisReport:
         assert len(result.weak_points) == 0
         assert len(result.regressed_points) == 1
         assert result.regressed_points[0].is_regressed is True
-        assert result.regressed_points[0].score_delta == 0.15
+        assert result.regressed_points[0].score_delta == -0.15
 
     def test_sorting_order(self) -> None:
-        """测试排序：weak_points 按得分升序，regressed_points 按降幅降序。"""
+        """测试排序：weak_points 按得分升序，regressed_points 按变化量升序（最负在前）。"""
         items = [
-            KnowledgeEvaluationInput("k1", "K1", 0.30, previous_score=0.40),  # delta 0.10
-            KnowledgeEvaluationInput("k2", "K2", 0.10, previous_score=0.15),  # delta 0.05
-            KnowledgeEvaluationInput("k3", "K3", 0.20, previous_score=0.45),  # delta 0.25
+            KnowledgeEvaluationInput("k1", "K1", 0.30, previous_score=0.40),  # delta -0.10
+            KnowledgeEvaluationInput("k2", "K2", 0.10, previous_score=0.15),  # delta -0.05
+            KnowledgeEvaluationInput("k3", "K3", 0.20, previous_score=0.45),  # delta -0.25
         ]
         result = synthesize_diagnosis_report("rep-sort", items)
         # weak_points: 按照 current_score 升序 -> k2(0.10), k3(0.20), k1(0.30)
         assert [p.knowledge_id for p in result.weak_points] == ["k2", "k3", "k1"]
-        # regressed_points: 按照 score_delta 降序 -> k3(0.25), k1(0.10), k2(0.05)
+        # regressed_points: 按照 score_delta 升序（降幅最大在前）-> k3(-0.25), k1(-0.10), k2(-0.05)
         assert [p.knowledge_id for p in result.regressed_points] == ["k3", "k1", "k2"]
 
     def test_review_actions_deduplication(self) -> None:

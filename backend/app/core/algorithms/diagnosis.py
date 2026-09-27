@@ -130,8 +130,8 @@ class WeakKnowledgeItem:
         knowledge_title: 知识点名称。
         current_score: 当前掌握度得分。
         previous_score: 历史基线得分，无历史记录为 None。
-        score_delta: 分数变化值 (previous_score - current_score)，降幅为正。
-        is_regressed: 是否判定为显著退步 (score_delta >= 0.05)。
+        score_delta: 分数变化值 (current_score - previous_score)，降幅为负。
+        is_regressed: 是否判定为显著退步 (score_delta <= -0.05)。
         cause_type: 归因成因类型枚举。
         cause_explanation: 成因详细解释文本。
         actionable_advice: 针对该薄弱点的可执行提升建议。
@@ -157,8 +157,8 @@ class DiagnosisReportResult:
     Attributes:
         report_id: 诊断报告唯一标识符。
         overall_score: 全局综合平均掌握度得分 [0.0, 1.0]。
-        weak_points: 薄弱知识点清单（按得分升序、降幅降序排列）。
-        regressed_points: 显著退步知识点预警清单（按降幅降序排列）。
+        weak_points: 薄弱知识点清单（按得分升序、变化量升序即降幅最大在前排列）。
+        regressed_points: 显著退步知识点预警清单（按变化量升序即降幅最大在前排列）。
         mastered_points_count: 达到掌握标准 (score >= 0.70) 的知识点总数。
         total_points_evaluated: 评估的知识点总数。
         summary_evaluation: 全局客观评价总结。
@@ -188,13 +188,14 @@ def check_regression(
         threshold: 触发退步判定的最小降幅阈值，默认 0.05。
 
     Returns:
-        tuple[bool, float]: (是否显著退步, 分数降幅保留4位小数)。
-            若 previous_score 为 None，降幅为 0.0 且判定为 False。
+        tuple[bool, float]: (是否显著退步, 分数变化值保留4位小数)。
+            score_delta = current_score - previous_score，负数为掌握度下降（退步）。
+            若 previous_score 为 None，变化量为 0.0 且判定为 False。
     """
     if previous_score is None:
         return False, 0.0
-    score_delta = round(previous_score - current_score, 4)
-    return score_delta >= threshold, score_delta
+    score_delta = round(current_score - previous_score, 4)
+    return score_delta <= -threshold, score_delta
 
 
 def check_knowledge_regression(
@@ -210,7 +211,7 @@ def check_knowledge_regression(
         threshold: 触发退步判定的最小降幅阈值，默认 0.05。
 
     Returns:
-        tuple[bool, float]: (是否显著退步, 分数降幅)。
+        tuple[bool, float]: (是否显著退步, 分数变化值)，负数为退步。
     """
     return check_regression(current_score, previous_score, threshold=threshold)
 
@@ -280,7 +281,7 @@ def _is_time_decay_forgotten(
         and input_item.days_since_last_practice >= TIME_DECAY_DAYS_THRESHOLD
     ):
         return True
-    return score_delta >= REGRESSION_DELTA_THRESHOLD and len(mistakes) == 0
+    return score_delta <= -REGRESSION_DELTA_THRESHOLD and len(mistakes) == 0
 
 
 def evaluate_cause_type(
@@ -300,7 +301,7 @@ def evaluate_cause_type(
     Args:
         input_item: 知识点评估输入信息。
         mistakes: 该知识点关联的错题列表。
-        score_delta: 掌握度得分降幅。
+        score_delta: 掌握度变化值 (current_score - previous_score)，负数为降幅。
 
     Returns:
         tuple[CauseType, str, str]: (成因枚举, 归因解释文本, 可执行复习建议)。
@@ -360,7 +361,7 @@ def diagnose_cause_and_advice(
     Args:
         input_item: 知识点评估输入信息。
         mistakes: 该知识点关联的错题列表。
-        score_delta: 掌握度得分降幅。
+        score_delta: 掌握度变化值 (current_score - previous_score)，负数为降幅。
 
     Returns:
         tuple[CauseType, str, str]: (成因枚举, 归因解释文本, 可执行复习建议)。
@@ -440,7 +441,7 @@ def _build_weak_knowledge_item(
         current_score: 钳制在 [0.0, 1.0] 的当前得分。
         previous_score: 钳制在 [0.0, 1.0] 的历史基线得分，或 None。
         item_mistakes: 该知识点关联的错题列表。
-        score_delta: 掌握度得分降幅。
+        score_delta: 掌握度变化值 (current_score - previous_score)，负数为降幅。
         is_regressed: 是否判定为显著退步。
 
     Returns:
@@ -583,8 +584,8 @@ def synthesize_diagnosis_report(
         evaluated_knowledge_items, mistakes_by_knowledge
     )
 
-    weak_points.sort(key=lambda x: (x.current_score, -x.score_delta))
-    regressed_points.sort(key=lambda x: (-x.score_delta, x.current_score))
+    weak_points.sort(key=lambda x: (x.current_score, x.score_delta))
+    regressed_points.sort(key=lambda x: (x.score_delta, x.current_score))
 
     total_count = len(evaluated_knowledge_items)
     overall_score = round(clamped_scores_sum / total_count, 4)
