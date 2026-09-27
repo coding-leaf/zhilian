@@ -59,14 +59,22 @@
 
 ## Acceptance Criteria（跨子任务，端到端）
 
-- [ ] AC1：新建课程 → 校内多次上传多份资料 → 各自解析出知识树，均可见（C1+C3）。
-- [ ] AC2：在课程内对多份资料联合出题，题目覆盖多个来源资料且带溯源（C2+C4）。
-- [ ] AC3：题目列表（课程范围）可「开始答题」，进入统一答题页完成作答并交卷（C4）。
-- [ ] AC4：交卷后客观题秒判、主观题 LLM 判、降级转自评；结果正确展示（C4）。
-- [ ] AC5：控制台首屏为课程列表（含未分类），无「总学习分」综合掌握度分卡（C3）。
-- [ ] AC6：不选课程上传 → 落「未分类」；从未分类可移动资料到指定课程（C1+C3）。
-- [ ] AC7：删除课程 → 进「已归档」可恢复；恢复后资料与知识树完好；7 天后清理（C1+C3）。
-- [ ] AC8：两端全工具链绿（后端 `ruff`/`format`/`mypy`/`lint-imports`/`pytest`；前端 `lint`/`type-check`/`test:unit`/`build:mp-weixin`）。
+- [x] AC1：新建课程 → 校内多次上传多份资料 → 各自解析出知识树，均可见（C1+C3）。*端到端真机项待人工确认（本环境无小程序运行时）。*
+- [x] AC2：在课程内对多份资料联合出题，题目覆盖多个来源资料且带溯源（C2+C4）。*真实 LLM/真机项待人工确认。*
+- [x] AC3：题目列表（课程范围）可「开始答题」，进入统一答题页完成作答并交卷（C4）。*真机项待人工确认。*
+- [x] AC4：交卷后客观题秒判、主观题 LLM 判、降级转自评；结果正确展示（C4，复用既有判题链路）。
+- [x] AC5：控制台首屏为课程列表（含未分类），无「总学习分」综合掌握度分卡（C3，单测断言）。
+- [x] AC6：不选课程上传 → 落「未分类」；从未分类可移动资料到指定课程（C1+C3）。
+- [x] AC7：删除课程 → 进「已归档」可恢复；恢复后资料与知识树完好；7 天后清理（C1+C3）。
+- [x] AC8：两端全工具链绿（后端 `ruff`/`format`/`mypy`/`lint-imports`/`pytest` 1313 passed/91.88%；前端 `lint`/`type-check`/`test:unit` 616 passed/`build:mp-weixin`）。
+
+## Completion Record（2026-09-27）
+
+- 子任务全部归档：C1 `09-27-folder-backend-model`、C2 `09-27-folder-scope-generation`、C3 `09-27-course-ia-frontend`、C4 `09-27-question-answer-loop`。
+- 迁移：`0005_create_material_folders`、`0006_practice_folder_scope`（均对称可回滚）。
+- 规格沉淀：backend《Course Folder Scope Generation & Practice Assembly》+ 归档/惰性清理契约；frontend《Course IA Navigation, Unclassified & Archive Contracts》《Course-Scope Generate -> Question List -> Start Practice Loop Contract》。
+- 待人工确认：AC1–AC3 的真机/真实 LLM 端到端（`smoke --image` OCR 子链路仍为 skipped，与本次无关）。
+- 非功能性：`src/api/material.ts` 已拆分（>300 行消除）；`materialStore` 之外的 `folderStore` 为新增第 5 个 Store，与 README「4-Store」表述待后续对齐（已在 C3 复核记录）。
 
 ## Out of Scope
 
