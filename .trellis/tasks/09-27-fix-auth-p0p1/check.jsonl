@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核密钥解析与生产 fail-fast 是否落地"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "复核鉴权错误码与异常语义"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端请求层与门禁全绿"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核登录错误语义跨层一致性"}

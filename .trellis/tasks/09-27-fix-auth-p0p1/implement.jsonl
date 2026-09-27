@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "后端包规范入口与开发前检查清单"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "含 Secret Resolution 与字段契约场景，AUTH-001 的判定依据"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "后端错误处理约定，鉴权失败错误码需遵守"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁与请求/鉴权契约场景"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "前端类型契约规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层契约与错误语义核对方法"}
+{"file": ".trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-AUTH.md", "reason": "BUG-AUTH-001..003 的完整证据与复现步骤"}
