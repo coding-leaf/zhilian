@@ -116,6 +116,11 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] **Diffed field names** between the backend response model and every frontend
+      type/binding; a name drift (e.g. `items` vs `questions`, `content` vs
+      `text`, `weak_knowledge_points` vs `weak_points`) renders `undefined`
+      silently and can pass both test suites if each side invents its own fixture.
+      See backend spec scenario "Backend↔Frontend Response Field-Name Contract Pinning".
 - [ ] Checked that consumers import shared decoders / projections instead of
       casting payload fields locally
 - [ ] Checked that derived state points back to the source event identifier

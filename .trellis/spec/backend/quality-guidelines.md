@@ -249,3 +249,82 @@ for kp, cnt in zip(kps, counts):
 - 编排：调用次数=去重考点数；各考点题量；聚合计数；题目 `knowledge_point_id` 覆盖集合；fail-fast（失败后不再调用后续考点）。
 - API：多考点请求返回 `knowledge_point_ids` 与聚合题目；**旧单考点请求零回归**。
 
+---
+
+### Scenario: Secret Resolution Must Go Through Strongly-Typed Settings
+
+#### 1. Scope / Trigger
+- 任何读取密钥/凭证的代码路径（JWT 签名与验签、第三方 provider 密钥、DB 口令等）。
+
+#### 2. Signatures
+- Settings 模型：`Settings.secret_key: SecretStr`，环境变量名由 `model_config = SettingsConfigDict(env_prefix="ZHILIAN_")` 派生，即 **`ZHILIAN_SECRET_KEY`**。
+- 读取入口：`get_settings().secret_key.get_secret_value()`。
+
+#### 3. Contracts
+- **唯一真相源**：密钥必须经 `get_settings()` 读取，**禁止**裸 `os.getenv("SECRET_KEY", ...)` 直接取密钥——`env_prefix="ZHILIAN_"` 会使规范注入的 `ZHILIAN_SECRET_KEY` 落在 Settings 上，裸 `SECRET_KEY` 恒为未设置并静默回退默认值。
+- 开发默认密钥仅允许在**非生产**环境生效；生产检测到仍为默认密钥时须 fail-fast（启动期抛错）。
+
+#### 4. Validation & Error Matrix
+- 未配置密钥 + 非生产 → 使用开发默认密钥（记录警告）。
+- 未配置密钥 + 生产 → 启动失败（fail-fast）。
+- 已配置 `ZHILIAN_SECRET_KEY` → 必须与 `settings.secret_key` 一致。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误：绕过 Settings，忽略 ZHILIAN_ 前缀，生产注入被无视并回退硬编码默认密钥
+DEFAULT_SECRET_KEY = "zhilian-insecure-development-...-2026"
+def get_secret_key() -> str:
+    return os.getenv("SECRET_KEY", DEFAULT_SECRET_KEY)
+```
+##### Correct
+```python
+# 正确：统一经强类型 Settings 读取（保留显式入参用于测试注入）
+def get_secret_key(*, secret_key: str | None = None) -> str:
+    if secret_key is not None:
+        return secret_key
+    return get_settings().secret_key.get_secret_value()
+```
+
+#### 6. Tests Required
+- 只设置 `ZHILIAN_SECRET_KEY`、清空 `SECRET_KEY` 时，`get_secret_key()` **等于** `get_settings().secret_key`（守本缺陷回归）。
+- 生产 + 默认密钥 → 启动期 fail-fast 断言。
+- 显式 `secret_key` 入参优先级高于 Settings。
+
+---
+
+### Scenario: Backend↔Frontend Response Field-Name Contract Pinning
+
+#### 1. Scope / Trigger
+- 任何新增/变更的 API 响应模型，其字段会被前端 `src/api/*`、`src/types/*`、store 或组件直接消费时。
+
+#### 2. Contracts
+- 响应字段名是**跨层契约**，后端 schema 字段名即为契约真名；前端类型与绑定必须逐字段对齐，**不得**在两侧各用一套命名。
+- 需要别名/兼容时，必须在**同一处**显式声明（后端 `alias`/`serialization_alias`，或前端统一归一化层），并在响应模型上以注释标注。
+- 已知高风险命名族（历史缺陷）：
+  - 题目选项：后端 `{key, content}` vs 前端 `{key, text}` → 客观题选项渲染为空。
+  - 练习详情/创建题目列表：后端 `items[]`（元素 `question_snapshot`）vs 前端 `questions` → 会话题目恒空。
+  - 诊断薄弱知识点：后端 `weak_knowledge_points` vs 前端 `weak_points` → 卡片不渲染。
+
+#### 3. Validation & Error Matrix
+- 前端读取到未定义字段 → `undefined`，绑定静默渲染为空（不报错、不抛异常）——**最隐蔽**，测试夹具若两侧各用一套命名亦无法发现。
+
+#### 4. Tests Required
+- 前端 api/类型层测试的夹具字段名必须**逐字取自真实后端响应模型**，禁止自造字段名。
+- 交叉契约测试：以真实后端响应模型（或其 `model_json_schema()`）为准，断言前端类型/归一化输出的字段存在且非 `undefined`。
+- `pytest` 与 `vitest` 夹具字段名须同源（如从共享 schema/常量派生），防止双侧夹具各自漂移而同时“通过”。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：前端自造 questions/text，与后端 items/content 脱节，测试也自造同名夹具 → 双侧假绿
+practiceStore.initSession(id, res.data.questions);      // 后端是 items
+<text>{{ option.text }}</text>                          // 后端是 option.content
+```
+##### Correct
+```typescript
+// 正确：字段名以后端响应模型为准；需要适配则集中在一处归一化
+const items = res.data.items.map(adaptItem);            // items -> 内部模型
+<text>{{ option.content }}</text>                       // 与后端 content 对齐（或归一为 text 后统一消费）
+```
+
