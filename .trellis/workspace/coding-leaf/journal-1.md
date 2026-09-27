@@ -214,3 +214,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: 父任务集成验收：课程文件夹与出题-答题闭环重构（C1-C4 全部归档）
+<!-- trellis-session: v=2 fp=9e5685ecd3d69de7 -->
+
+**Date**: 2026-09-28
+**Task**: 父任务集成验收：课程文件夹与出题-答题闭环重构（C1-C4 全部归档）
+**Branch**: `master`
+
+### Summary
+
+四个子任务全部完成并归档：C1 后端课程文件夹实体/归档/资料归属（迁移 0005）、C2 后端文件夹范围出题与组卷（迁移 0006）、C3 前端课程 IA/未分类/归档、C4 前端出题→答题闭环（消除 createPractice 死代码）。父任务最终集成验收：后端 1313 passed/覆盖率 91.88%（ruff/format/mypy/lint-imports 全绿）、前端 67 files/616 tests + build:mp-weixin 成功。规格沉淀 backend 课程范围契约 + frontend 课程 IA 与出题答题闭环契约。AC1-AC3 真机/真实 LLM 端到端待人工确认。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `13f5860` | chore(task): 父任务课程文件夹重构集成验收完成 |
+
+### Status
+
+[OK] **Completed**

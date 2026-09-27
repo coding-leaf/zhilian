@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-09-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~216 | Active |
+| `journal-1.md` | ~238 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-09-28 | 父任务集成验收：课程文件夹与出题-答题闭环重构（C1-C4 全部归档） | `13f5860` | `master` |
 | 4 | 2026-09-28 | C4 前端出题→答题闭环 | `84cf0ed` | `master` |
 | 3 | 2026-09-28 | C3 前端课程信息架构、未分类与归档 | `f7f8185` | `master` |
 | 2 | 2026-09-28 | C2 后端文件夹范围出题与组卷（迁移 0006） | `36c4093` | `master` |
