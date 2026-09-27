@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "09-27-read-only-bug-audit"
+    "09-27-read-only-bug-audit",
+    "09-27-fix-prac-p0p1"
   ],
   "parent": null,
   "relatedFiles": [],

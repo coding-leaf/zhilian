@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "复核前端 lint/type-check/test 门禁是否全绿"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "复核适配层类型契约与无 any/类型漏洞"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核字段契约钉死与密钥解析场景，验证适配未反向破坏契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核跨层字段名一致性检查是否落地"}
