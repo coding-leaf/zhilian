@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as requestModule from '@/utils/request';
+import * as uploadModule from '@/utils/upload';
 import {
   fetchMaterialList,
   fetchMaterialDetail,
@@ -11,6 +12,7 @@ import {
   retakeMaterialPage,
   uploadMaterialFile,
   reshootMaterialPage,
+  fetchMaterialOCRPages,
 } from '@/api/material';
 
 describe('Material API Module', () => {
@@ -247,6 +249,68 @@ describe('Material API Module', () => {
       method: 'POST',
       data: { page_index: 4, file: 'retake-file-path' },
       headers: { 'Idempotency-Key': 'idemp-key-1' },
+    });
+    expect(res).toEqual(mockResponse);
+  });
+
+  it('should use multipart uni.uploadFile for retakeMaterialPage on real device', async () => {
+    const uploadSpy = vi.spyOn(uploadModule, 'uploadFile').mockResolvedValue({
+      code: 0,
+      message: 'success',
+      data: {
+        material_id: 'mat_002',
+        page_index: 4,
+        is_qualified: true,
+        reshoot_count: 1,
+        parse_status: 'ready',
+      },
+    } as never);
+
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    (globalThis as unknown as { uni: Record<string, unknown> }).uni.uploadFile = vi.fn();
+    try {
+      await retakeMaterialPage('mat_002', 4, 'wxfile://tmp_page_4.jpg', 'idemp-key-1');
+    } finally {
+      process.env.NODE_ENV = originalEnv;
+    }
+
+    expect(uploadSpy).toHaveBeenCalledTimes(1);
+    expect(uploadSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/mat_002/reshoot',
+      filePath: 'wxfile://tmp_page_4.jpg',
+      name: 'file',
+      formData: { page_index: 4 },
+      headers: { 'Idempotency-Key': 'idemp-key-1' },
+    });
+  });
+
+  it('should call fetchMaterialOCRPages with only_unqualified filter', async () => {
+    const mockResponse = {
+      code: 0,
+      message: 'success',
+      data: {
+        material_id: 'mat_002',
+        version_id: 'ver_002',
+        items: [
+          {
+            page_number: 3,
+            is_qualified: false,
+            reshoot_count: 1,
+            unqualified_reason: '乱码率过高',
+          },
+        ],
+      },
+    };
+    const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
+
+    const res = await fetchMaterialOCRPages('mat_002', true);
+
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(requestSpy).toHaveBeenCalledWith({
+      url: '/api/v1/materials/mat_002/ocr-pages',
+      method: 'GET',
+      data: { only_unqualified: true },
     });
     expect(res).toEqual(mockResponse);
   });

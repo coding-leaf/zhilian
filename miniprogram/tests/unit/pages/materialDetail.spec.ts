@@ -97,6 +97,22 @@ describe('MaterialDetailPage (detail/index.vue)', () => {
       message: 'success',
       data: retakeDetail,
     });
+    vi.spyOn(materialApi, 'fetchMaterialOCRPages').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        material_id: 'mat_detail_01',
+        version_id: 'ver_001',
+        items: [
+          {
+            page_number: 2,
+            is_qualified: false,
+            reshoot_count: 1,
+            unqualified_reason: '文字模糊',
+          },
+        ],
+      },
+    });
 
     const wrapper = mount(MaterialDetailPage, {
       props: {
@@ -121,6 +137,115 @@ describe('MaterialDetailPage (detail/index.vue)', () => {
     expect(wrapper.vm.isRetakeDrawerVisible).toBe(true);
   });
 
+  it('populates unqualified pages from OCR pages API instead of a hardcoded placeholder', async () => {
+    const retakeDetail: MaterialItem = {
+      ...baseDetail,
+      status: 'retake_required',
+    };
+
+    vi.spyOn(materialApi, 'fetchMaterialDetail').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: retakeDetail,
+    });
+    const pagesSpy = vi.spyOn(materialApi, 'fetchMaterialOCRPages').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        material_id: 'mat_detail_01',
+        version_id: 'ver_001',
+        items: [
+          {
+            page_number: 2,
+            is_qualified: false,
+            reshoot_count: 1,
+            unqualified_reason: '文字模糊',
+          },
+          {
+            page_number: 5,
+            is_qualified: false,
+            reshoot_count: 0,
+            unqualified_reason: '光线不足',
+          },
+          {
+            page_number: 6,
+            is_qualified: true,
+            reshoot_count: 0,
+            unqualified_reason: null,
+          },
+        ],
+      },
+    });
+
+    const wrapper = mount(MaterialDetailPage, {
+      props: {
+        id: 'mat_detail_01',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await wrapper.vm.$nextTick();
+
+    expect(pagesSpy).toHaveBeenCalledWith('mat_detail_01', true);
+    expect(wrapper.vm.unqualifiedPages).toHaveLength(2);
+    expect(wrapper.vm.unqualifiedPages[0].page_no).toBe(2);
+    expect(wrapper.vm.unqualifiedPages[1].page_no).toBe(5);
+    expect(wrapper.text()).toContain('有 2 个页面需要重拍');
+  });
+
+  it('loads unqualified pages when polling transitions into retake_required', async () => {
+    const parsingDetail: MaterialItem = {
+      ...baseDetail,
+      status: 'parsing',
+    };
+
+    vi.spyOn(materialApi, 'fetchMaterialDetail').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: parsingDetail,
+    });
+    vi.spyOn(materialApi, 'fetchMaterialStatus').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        ...baseDetail,
+        status: 'retake_required',
+      },
+    });
+    const pagesSpy = vi.spyOn(materialApi, 'fetchMaterialOCRPages').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        material_id: 'mat_detail_01',
+        version_id: 'ver_001',
+        items: [
+          {
+            page_number: 3,
+            is_qualified: false,
+            reshoot_count: 0,
+            unqualified_reason: '光线不足',
+          },
+        ],
+      },
+    });
+
+    const wrapper = mount(MaterialDetailPage, {
+      props: {
+        id: 'mat_detail_01',
+      },
+    });
+
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await wrapper.vm.$nextTick();
+
+    expect(pagesSpy).toHaveBeenCalledWith('mat_detail_01', true);
+    expect(wrapper.vm.unqualifiedPages).toHaveLength(1);
+    expect(wrapper.vm.unqualifiedPages[0].page_no).toBe(3);
+    expect(wrapper.text()).toContain('有 1 个页面需要重拍');
+  });
+
   it('refreshes detail and restarts polling after retake success', async () => {
     const retakeDetail: MaterialItem = {
       ...baseDetail,
@@ -131,6 +256,15 @@ describe('MaterialDetailPage (detail/index.vue)', () => {
       code: 200,
       message: 'success',
       data: retakeDetail,
+    });
+    vi.spyOn(materialApi, 'fetchMaterialOCRPages').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: {
+        material_id: 'mat_detail_01',
+        version_id: 'ver_001',
+        items: [],
+      },
     });
     vi.spyOn(materialApi, 'fetchMaterialStatus').mockResolvedValue({
       code: 200,

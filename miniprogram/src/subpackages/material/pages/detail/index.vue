@@ -116,11 +116,11 @@
 import { ref, computed, onMounted } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
 import { useMaterialStore } from '@/stores/materialStore';
-import { fetchMaterialDetail, retryMaterial } from '@/api/material';
+import { fetchMaterialDetail, fetchMaterialOCRPages, retryMaterial } from '@/api/material';
 import { resolveMaterialStatusTag } from '@/subpackages/material/utils/copywriting';
 import { useMaterialPolling } from '../../composables/useMaterialPolling';
 import RetakeDrawer from '../../components/RetakeDrawer.vue';
-import type { MaterialItem, PageOCRStatus } from '@/types/material';
+import type { MaterialItem, MaterialOCRPageItem, PageOCRStatus } from '@/types/material';
 
 interface Props {
   id?: string;
@@ -139,6 +139,10 @@ const { isPolling, startPolling, stopPolling } = useMaterialPolling(targetId, {
     if (detail.value) {
       detail.value.status = status;
       materialStore.updateMaterialStatus(detail.value.id, status);
+    }
+    // 轮询期间转入「待重拍」时须实时拉取真实不合格页，否则横幅显示 0 页、抽屉为空
+    if (String(status || '').toLowerCase() === 'retake_required') {
+      void loadUnqualifiedPages();
     }
   },
   onComplete: (data) => {
@@ -163,9 +167,30 @@ const isFailed = computed(() => {
 });
 
 const isRetakeRequired = computed(() => {
-  const s = String(detail.value?.status || '').toUpperCase();
-  return s === 'RETAKE_REQUIRED' || unqualifiedPages.value.length > 0;
+  const s = String(detail.value?.status || '').toLowerCase();
+  return s === 'retake_required' || unqualifiedPages.value.length > 0;
 });
+
+function mapOcrPageToStatus(page: MaterialOCRPageItem): PageOCRStatus {
+  return {
+    page_no: page.page_number,
+    is_qualified: page.is_qualified,
+    issue_type: null,
+    issue_description: page.unqualified_reason ?? null,
+    retake_count: page.reshoot_count,
+    max_retakes: 3,
+  };
+}
+
+async function loadUnqualifiedPages(): Promise<void> {
+  try {
+    const res = await fetchMaterialOCRPages(targetId.value, true);
+    const items = res?.data?.items ?? [];
+    unqualifiedPages.value = items.filter((item) => !item.is_qualified).map(mapOcrPageToStatus);
+  } catch {
+    unqualifiedPages.value = [];
+  }
+}
 
 const formatLabel = computed(() => (detail.value?.file_format || 'DOC').toUpperCase());
 
@@ -196,21 +221,12 @@ async function loadDetail(): Promise<void> {
       detail.value = res.data;
       materialStore.setActiveMaterial(res.data.id, res.data.current_version_id || null);
 
-      const statusUpper = String(res.data.status || '').toUpperCase();
-      if (statusUpper === 'RETAKE_REQUIRED' && unqualifiedPages.value.length === 0) {
-        unqualifiedPages.value = [
-          {
-            page_no: 1,
-            is_qualified: false,
-            issue_type: 'blur',
-            issue_description: '文字模糊，需重新拍摄',
-            retake_count: 0,
-            max_retakes: 3,
-          },
-        ];
+      const statusLower = String(res.data.status || '').toLowerCase();
+      if (statusLower === 'retake_required') {
+        await loadUnqualifiedPages();
       }
 
-      if (statusUpper === 'PARSING' || statusUpper === 'PENDING') {
+      if (statusLower === 'parsing' || statusLower === 'pending') {
         startPolling();
       }
     }

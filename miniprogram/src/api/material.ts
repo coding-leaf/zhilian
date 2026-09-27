@@ -16,6 +16,7 @@ import type {
   MaterialReshootResponse,
   RetakePageResponse,
   MaterialParseResponse,
+  MaterialOCRPagesResponse,
 } from '../types/material';
 
 /**
@@ -203,11 +204,39 @@ export function retakeMaterialPage(
   if (idempotencyKey) {
     headers['Idempotency-Key'] = idempotencyKey;
   }
+  // 真机端后端契约为 multipart File+Form；非真机（测试/开发）保留 JSON 分支。
+  if (isRealMiniProgramUpload() && typeof file === 'string') {
+    return uploadFile<RetakePageResponse>({
+      url: `/api/v1/materials/${materialId}/reshoot`,
+      filePath: file,
+      name: 'file',
+      formData: { page_index: pageNo },
+      headers,
+    });
+  }
   return request<RetakePageResponse>({
     url: `/api/v1/materials/${materialId}/reshoot`,
     method: 'POST',
     data: { page_index: pageNo, file },
     headers,
+  });
+}
+
+/**
+ * 查询资料当前激活（或最新）版本的页级 OCR 质检记录。
+ *
+ * @param materialId 目标资料主键 ID。
+ * @param onlyUnqualified 是否仅返回未达标页面，默认 false（全量）。
+ * @returns 统一响应包，包含页级质检记录列表。
+ */
+export function fetchMaterialOCRPages(
+  materialId: string,
+  onlyUnqualified = false,
+): Promise<ApiResponse<MaterialOCRPagesResponse>> {
+  return request<MaterialOCRPagesResponse>({
+    url: `/api/v1/materials/${materialId}/ocr-pages`,
+    method: 'GET',
+    data: { only_unqualified: onlyUnqualified },
   });
 }
 

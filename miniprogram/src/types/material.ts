@@ -134,3 +134,22 @@ export interface MaterialParseResponse {
   is_active: boolean;
   message: string;
 }
+
+/**
+ * 单页 OCR 质检记录 (与后端 MaterialOCRPageItem 字段对齐)
+ */
+export interface MaterialOCRPageItem {
+  page_number: number;
+  is_qualified: boolean;
+  reshoot_count: number;
+  unqualified_reason?: string | null;
+}
+
+/**
+ * 资料页级 OCR 质检列表响应 DTO (与后端 MaterialOCRPagesResponse 字段对齐)
+ */
+export interface MaterialOCRPagesResponse {
+  material_id: string;
+  version_id?: string | null;
+  items: MaterialOCRPageItem[];
+}
