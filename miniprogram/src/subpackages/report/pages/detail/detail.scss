@@ -83,6 +83,49 @@
     flex-direction: column;
   }
 
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: $spacing-xxl $spacing-xl;
+    text-align: center;
+
+    .empty-text {
+      font-size: $font-size-card;
+      color: $--wot-color-gray-7;
+      margin-bottom: $spacing-lg;
+    }
+
+    .empty-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: $spacing-md;
+    }
+
+    .empty-btn {
+      min-width: 240rpx;
+      min-height: 88rpx;
+      border-radius: $radius-pill;
+      background: #ffffff;
+      border: 1px solid $--wot-color-gray-4;
+      color: $--wot-color-gray-7;
+      font-size: $font-size-card;
+      font-weight: $font-weight-bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      &.primary {
+        background: $--wot-color-theme;
+        border-color: $--wot-color-theme;
+        color: #ffffff;
+        box-shadow: $shadow-btn-primary;
+      }
+    }
+  }
+
   .items-error-state {
     display: flex;
     flex-direction: column;

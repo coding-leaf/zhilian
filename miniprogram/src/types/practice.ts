@@ -140,6 +140,12 @@ export interface AnswerDraft {
   practice_id: string;
   answers: Record<string, string | string[]>;
   updated_at: number;
+  /** Real question total captured at session init (BUG-DIAG-017). */
+  total_count?: number;
+  /** Practice title captured at session init (BUG-DIAG-017). */
+  title?: string;
+  /** Owning material id captured at session init (BUG-DIAG-017). */
+  material_id?: string;
 }
 
 export interface SubmitPracticeRequest {

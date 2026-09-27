@@ -48,6 +48,19 @@
       />
     </view>
 
+    <!-- 空态：缺失 practiceId 或报告不存在，避免静默白屏 (BUG-DIAG-022) -->
+    <view v-else class="empty-state">
+      <text class="empty-text">暂无诊断报告数据</text>
+      <view class="empty-actions">
+        <view class="empty-btn primary back-home-btn" @tap="handleBackHome">
+          <text>返回学习中心</text>
+        </view>
+        <view v-if="currentPracticeId" class="empty-btn" @tap="handleRetry">
+          <text>重新加载</text>
+        </view>
+      </view>
+    </view>
+
     <!-- 吸底一键继续练习操作栏 -->
     <ContinuePracticeBar
       v-if="!loading && currentReport"
@@ -221,6 +234,15 @@ function handleRetry(): void {
   if (currentPracticeId.value) {
     loadReportData(currentPracticeId.value);
   }
+}
+
+function handleBackHome(): void {
+  uni.reLaunch({
+    url: '/pages/index/index',
+    fail: () => {
+      uni.showToast({ title: '返回学习中心失败', icon: 'none' });
+    },
+  });
 }
 
 function handleViewSnippet(item: AttemptGradingItem): void {

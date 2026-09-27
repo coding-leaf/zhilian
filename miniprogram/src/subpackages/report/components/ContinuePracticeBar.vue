@@ -133,7 +133,10 @@ async function handleTap(): Promise<void> {
     const res = await continuePractice(payload);
 
     if (res.data?.id) {
-      practiceStore.initSession(res.data.id, res.data.questions || []);
+      practiceStore.initSession(res.data.id, res.data.questions || [], {
+        title: res.data.title,
+        material_id: res.data.material_id,
+      });
       if (props.autoNavigate) {
         uni.navigateTo({
           url: `/subpackages/practice/pages/session/index?id=${res.data.id}`,

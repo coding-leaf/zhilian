@@ -123,14 +123,27 @@ export interface UserMasteryOverview {
   unlearned_count: number;
   overall_score?: number;
   weak_points?: WeakPoint[];
+  // Compatibility aliases mirrored from the backend mastery DTO (BUG-DIAG-021).
+  weak_knowledge_points?: KnowledgeMasterySummary[];
+  points?: KnowledgeMasterySummary[];
+  overall_mastery_score?: number;
+  total_points?: number;
+  total_knowledge_points?: number;
 }
 
 export interface KnowledgeMasterySummary {
   knowledge_point_id: string;
-  current_score: number;
-  tier: MasteryTier;
-  sample_count: number;
+  knowledge_name?: string;
+  // Backend `KnowledgeMasterySummaryResponse` field names (authoritative).
+  mastery_score?: number;
+  level?: string;
+  practice_count?: number;
+  correct_count?: number;
   last_practiced_at?: string;
+  // Legacy frontend aliases (kept for backend/legacy payload compatibility).
+  current_score?: number;
+  tier?: MasteryTier;
+  sample_count?: number;
 }
 
 export type WrongErrorType =

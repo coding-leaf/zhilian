@@ -118,6 +118,25 @@ describe('ReportDetailPage (subpackages/report/pages/detail/index.vue)', () => {
     expect(wrapper.find('.report-content').exists()).toBe(false);
   });
 
+  it('renders empty state when no practice id is provided (BUG-DIAG-022)', async () => {
+    const reportSpy = vi.spyOn(diagnosisApi, 'fetchDiagnosisReport');
+
+    const wrapper = mount(ReportDetailPage, {
+      global: { plugins: [pinia] },
+    });
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('.empty-state').exists()).toBe(true);
+    });
+
+    expect(wrapper.text()).toContain('暂无诊断报告数据');
+    expect(wrapper.find('.back-home-btn').exists()).toBe(true);
+    expect(wrapper.find('.empty-btn.primary').exists()).toBe(true);
+    expect(wrapper.find('.skeleton-wrapper').exists()).toBe(false);
+    expect(wrapper.find('.report-content').exists()).toBe(false);
+    expect(reportSpy).not.toHaveBeenCalled();
+  });
+
   it('renders error state and retries successfully', async () => {
     const fetchSpy = vi
       .spyOn(diagnosisApi, 'fetchDiagnosisReport')

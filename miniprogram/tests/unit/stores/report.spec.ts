@@ -110,4 +110,28 @@ describe('ReportStore', () => {
     expect(store.weakPointCount).toBe(0);
     expect(store.masteryTier).toBe('unlearned');
   });
+
+  it('should reset weakPoints when a new report has no weak points (BUG-DIAG-016)', () => {
+    const store = useReportStore();
+    store.setReport(mockReport);
+    expect(store.weakPoints).toHaveLength(1);
+
+    const emptyReport: DiagnosisReport = { ...mockReport, id: 'rep-002', weak_points: [] };
+    store.setReport(emptyReport);
+
+    expect(store.currentReport?.id).toBe('rep-002');
+    expect(store.weakPoints).toEqual([]);
+    expect(store.weakPointCount).toBe(0);
+  });
+
+  it('should clear weakPoints when setReport(null) is called (BUG-DIAG-016)', () => {
+    const store = useReportStore();
+    store.setReport(mockReport);
+    expect(store.weakPoints).toHaveLength(1);
+
+    store.setReport(null);
+
+    expect(store.currentReport).toBeNull();
+    expect(store.weakPoints).toEqual([]);
+  });
 });

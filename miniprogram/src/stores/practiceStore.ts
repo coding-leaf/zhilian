@@ -74,7 +74,11 @@ export const usePracticeStore = defineStore('practice', () => {
   });
 
   // Actions
-  function initSession(id: string, questionList: PracticeQuestion[]): void {
+  function initSession(
+    id: string,
+    questionList: PracticeQuestion[],
+    meta?: { title?: string; material_id?: string },
+  ): void {
     sessionId.value = id;
     questions.value = [...questionList];
     currentIndex.value = 0;
@@ -86,6 +90,9 @@ export const usePracticeStore = defineStore('practice', () => {
         items: {},
         answers: {},
         updated_at: Date.now(),
+        total_count: questionList.length,
+        title: meta?.title,
+        material_id: meta?.material_id,
       };
     }
   }
@@ -131,6 +138,7 @@ export const usePracticeStore = defineStore('practice', () => {
         items: {},
         answers: {},
         updated_at: Date.now(),
+        total_count: questions.value.length,
       };
     }
     drafts.value[id].answers[questionId] = answer;

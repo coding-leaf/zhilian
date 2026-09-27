@@ -308,7 +308,7 @@ describe('Diagnosis API Module', () => {
       url: '/api/v1/practices',
       method: 'POST',
       headers: {
-        'X-Idempotency-Key': 'idem-key-1234',
+        'Idempotency-Key': 'idem-key-1234',
       },
       data: {
         title: '错题巩固练习',

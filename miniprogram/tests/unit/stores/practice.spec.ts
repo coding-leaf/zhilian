@@ -178,4 +178,24 @@ describe('PracticeStore', () => {
     expect(store.drafts['session-100']).toBeUndefined();
     expect(store.sessionId).toBe('session-200');
   });
+
+  it('should persist total_count and session metadata into the draft (BUG-DIAG-017)', () => {
+    const store = usePracticeStore();
+    store.initSession('session-meta', mockQuestions, {
+      title: '网络协议专项练习',
+      material_id: 'mat-001',
+    });
+
+    const draft = store.drafts['session-meta'];
+    expect(draft.total_count).toBe(2);
+    expect(draft.title).toBe('网络协议专项练习');
+    expect(draft.material_id).toBe('mat-001');
+  });
+
+  it('should still record total_count without metadata (BUG-DIAG-017)', () => {
+    const store = usePracticeStore();
+    store.initSession('session-plain', mockQuestions);
+
+    expect(store.drafts['session-plain'].total_count).toBe(2);
+  });
 });

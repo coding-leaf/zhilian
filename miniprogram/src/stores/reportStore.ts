@@ -56,9 +56,9 @@ export const useReportStore = defineStore('report', () => {
   // Actions - Diagnosis Report
   function setReport(report: DiagnosisReport | null): void {
     currentReport.value = report;
-    if (report?.weak_points) {
-      weakPoints.value = [...report.weak_points];
-    }
+    // Always resync weak points: an absent/empty list must clear stale entries
+    // left over from a previously viewed report (BUG-DIAG-016).
+    weakPoints.value = report?.weak_points ? [...report.weak_points] : [];
   }
 
   function setReportSummary(report: DiagnosisReport | null): void {

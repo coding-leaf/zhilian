@@ -31,6 +31,13 @@ export interface PracticeDraftRecord {
   updated_at: number;
   /** Persisted submit idempotency key so retries reuse the same key. */
   submit_key?: string;
+  /**
+   * Session metadata captured at init so the home page can render the real
+   * question total, title and material without guessing (BUG-DIAG-017).
+   */
+  total_count?: number;
+  title?: string;
+  material_id?: string;
 }
 
 /**

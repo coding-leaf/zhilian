@@ -106,6 +106,24 @@ describe('RecentLearningSection.vue & Pure Calculation Kernels', () => {
       const result = extractLatestDraftPractice(drafts, materials, fixedNow);
       expect(result?.title).toBe('离散数学 专项练习');
     });
+
+    it('consumes the real total_count and title persisted in the draft (BUG-DIAG-017)', () => {
+      const drafts: Record<string, AnswerDraft> = {
+        draft_meta: {
+          practice_id: 'prac_meta',
+          answers: { q1: 'A' },
+          updated_at: fixedNow - 1_000,
+          total_count: 25,
+          title: '操作系统精练',
+          material_id: 'mat_meta',
+        },
+      };
+
+      const result = extractLatestDraftPractice(drafts, [], fixedNow);
+      expect(result?.practiceId).toBe('prac_meta');
+      expect(result?.totalCount).toBe(25);
+      expect(result?.title).toBe('操作系统精练');
+    });
   });
 
   describe('Component Mounting & Interactions', () => {

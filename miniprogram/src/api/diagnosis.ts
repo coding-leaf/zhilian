@@ -167,7 +167,8 @@ export async function continuePractice(
 ): Promise<ApiResponse<PracticeSession>> {
   const headers: Record<string, string> = {};
   if (payload.idempotency_key) {
-    headers['X-Idempotency-Key'] = payload.idempotency_key;
+    // Standard project-wide idempotency header (mirrors practice.ts / material.ts).
+    headers['Idempotency-Key'] = payload.idempotency_key;
   }
   const res = await request<RawPracticeSession>({
     url: '/api/v1/practices',

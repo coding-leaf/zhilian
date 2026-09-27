@@ -80,7 +80,10 @@ export function usePracticeSession() {
       const res = await fetchPracticeSession(id);
       if (res.data) {
         practiceTitle.value = res.data.title || '练习作答';
-        practiceStore.initSession(id, res.data.questions || []);
+        practiceStore.initSession(id, res.data.questions || [], {
+          title: res.data.title,
+          material_id: res.data.material_id,
+        });
         elapsedSeconds.value = res.data.time_elapsed_seconds || 0;
         questionStartTime = Date.now();
 
