@@ -83,3 +83,4 @@
 
 - 上游参考：`archive/2026-09/09-27-read-only-bug-audit/research/slice-MAT.md`。
 - BUG-MAT-006 确认为小程序端有意收窄支持格式（移动端针对性限制），代码层面明确规范化即可，不强制放开未适配格式。
+- **BUG-MAT-006 状态：已失效/误报（设计收窄，非缺陷）**。证据：`miniprogram/src/utils/file.ts` 白名单为后端 `backend/app/models/material.py:MaterialDocType` / `backend/app/services/material.py:MAX_FILE_SIZES` 的有意子集；产品设计限定移动端仅开放 pdf/docx/图片（微信选文与预览能力约束），未开放 pptx/txt/md。已在 `file.ts` 注释显式记录该子集关系，并在 `tests/unit/components/MaterialUpload.spec.ts` 增加受控收窄断言（pptx/txt/md 被拒绝）。行为保持不变。
