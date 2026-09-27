@@ -10,45 +10,37 @@
 ## 执行清单（有序步骤）
 
 ### Step 1 — 编写失败回归测试（红）
-- [ ] 1.1 **GRADE-009**：在 `backend/tests/unit/core/algorithms/test_grading.py` 新增偶数边界 `k.5` 舍入用例（如 raw_score 9.25, unit 0.5 舍入应得 9.5，当前银行家舍入得 9.0 → 红）。
-- [ ] 1.2 **GRADE-010**：在 `backend/tests/unit/services/test_grading_service.py` 补充 LLM 判题和重判分非 0.5 粒度断言（Mock LLM 返回 7.3 分，断言落库 score 应为 7.5 → 红）。
-- [ ] 1.3 **GRADE-011**：在 `backend/tests/unit/api/test_grading_router.py` 和 `test_grading_service.py` 增加显式传递 `is_correct=False`（即使 score=5.0）或 `is_correct=True`（即使 score=0.0）断言 `grading_metadata["is_correct"]` 正确反映传入值（当前被丢弃 → 红）。
-- [ ] 1.4 **GRADE-012**：在 `miniprogram/tests/unit/report/gradingModals.spec.ts` 增加自评弹窗接收嵌套 `points` 细则对象用例，断言渲染出要点标签和分值说明，且不包含原始 JSON 字符串（当前包含 JSON → 红）。
-- [ ] 1.5 **GRADE-013**：在 `miniprogram/tests/unit/report/gradingModals.spec.ts` 增加重判弹窗支持超过 200 字且不超过 500 字输入的断言，验证 maxlength 为 500（当前为 200 → 红）。
-- [ ] 1.6 **GRADE-016**：在 `backend/tests/unit/services/test_grading_service.py` 增加算法执行异常时旧生效记录保护测试，验证若算法抛出异常，原生效记录 `is_final` 仍为 True 或安全降级且不崩溃整卷（当前先失效旧记录 → 红）。
+- [x] 1.1 **GRADE-009**：新增 `TestHalfUpScoreRounding`（`round_half_up(9.25, 0.5)==9.5`、`7.25→7.5`、离线构造器 raw=9.25→9.5）。旧实现银行家舍入得 9.0/7.0（已实测确认）。
+- [x] 1.2 **GRADE-010**：新增 LLM 首次判分 7.3→7.5、8.24→8.0、重判 7.3→7.5 断言；同步修正既有重判用例 4.8→5.0。
+- [x] 1.3 **GRADE-011**：服务层显式 `is_correct=False/True` 覆盖与缺省 `score>0` 回退断言；路由层 `dto.is_correct is False` 透传断言。
+- [x] 1.4 **GRADE-012**：自评弹窗嵌套 `points` / `dimensions` 用例，断言要点标签+分值与无 `point_id`/JSON 噪音。
+- [x] 1.5 **GRADE-013**：重判弹窗断言 `maxlength=500`、`300 / 500` 计数与 >200 字可提交。
+- [x] 1.6 **GRADE-016**：算法抛异常时整卷不崩溃、原记录不丢失、唯一生效记录（安全降级 pending）断言。
 
 ### Step 2 — 后端算法与服务层修复（绿）
-- [ ] 2.1 **GRADE-009**：
-  - 在 `backend/app/core/algorithms/grading.py` 实现 `round_half_up(value: float, unit: float = 0.5) -> float`。
-  - 在 `_build_subjective_offline_result` 中将 `round(raw_score / unit) * unit` 替换为 `round_half_up(raw_score, unit)`。
-- [ ] 2.2 **GRADE-010**：
-  - 在 `backend/app/services/grading.py` 的 `_grade_with_llm` 及 `regrade_attempt` 中，对最终分值应用 `round_half_up(raw_score, SCORE_ROUNDING_UNIT)`。
-- [ ] 2.3 **GRADE-011**：
-  - 在 `backend/app/services/grading.py` 的 `SelfEvaluateDTO` 添加 `is_correct: bool | None = None`。
-  - 在 `backend/app/api/v1/grading.py` 的 `self_evaluate` 接口将 `request.is_correct` 透传至 `SelfEvaluateDTO`。
-  - 在 `GradingService.self_evaluate_attempt` 中支持 `dto.is_correct` 覆盖默认推导规则。
-- [ ] 2.4 **GRADE-016**：
-  - 在 `backend/app/services/grading.py` 的 `_grade_attempt_item` 中，将 `set_records_non_final_by_attempt_id` 移至算法计算完成之后、创建新生效记录之前。
-  - 对算法核调用 `match_and_grade_answer` 增加异常捕获，若发生非预期异常，记录告警并安全降级处理（保留原生效记录或降级 pending）。
+- [x] 2.1 **GRADE-009**：
+  - 在 `backend/app/core/algorithms/grading.py` 实现 `round_half_up(value, unit=SCORE_ROUNDING_UNIT)`（Decimal + ROUND_HALF_UP）。
+  - `_build_subjective_offline_result` 改用 `round_half_up(raw_score, unit)`。
+- [x] 2.2 **GRADE-010**：
+  - `_grade_with_llm` 与 `regrade_attempt` 的 clamp 后分值统一 `round_half_up(..., SCORE_ROUNDING_UNIT)`。
+- [x] 2.3 **GRADE-011**：
+  - `SelfEvaluateDTO` 增加 `is_correct: bool | None = None`。
+  - `api/v1/grading.py` 透传 `request.is_correct`。
+  - `self_evaluate_attempt` 优先采纳 `dto.is_correct`，为空回退 `score > 0`。
+- [x] 2.4 **GRADE-016**：
+  - 取消入口处提前失效；改为「算法完成/即将落库新记录前」才 `set_records_non_final_by_attempt_id`。
+  - `match_and_grade_answer`（含快照解析）加 `try...except Exception`，异常记录告警并安全降级为 `pending_regrade`，不丢原记录、不中断整卷。
 
 ### Step 3 — 前端组件修复（绿）
-- [ ] 3.1 **GRADE-012**：
-  - 在 `miniprogram/src/subpackages/report/components/SelfGradeModal.vue` 升级 `rubricEntries`：支持结构化 `{ points: [...] }` 与 `{ dimensions: [...] }` 展开格式化。
-- [ ] 3.2 **GRADE-013**：
-  - 在 `miniprogram/src/subpackages/report/components/RegradeModal.vue` 将 `textarea` 的 `:maxlength` 设置为 500，字数展示改为 `500`。
+- [x] 3.1 **GRADE-012**：
+  - `SelfGradeModal.vue` 重写 `rubricEntries`：解析 `{ points: [...] }` / `{ dimensions: [...] }`，格式化 `要点 N（X分）` 与描述；平铺/字符串/嵌套对象优雅回退，去除 `total_score` 与原始 JSON。
+- [x] 3.2 **GRADE-013**：
+  - `RegradeModal.vue` `:maxlength="500"`，字数展示 `x / 500`。
 
 ### Step 4 — 全量门禁校验与收尾
-- [ ] 4.1 运行后端全量校验门禁：
-  - `uv run ruff format --check .`
-  - `uv run ruff check .`
-  - `uv run mypy app`
-  - `uv run lint-imports`
-  - `uv run pytest tests`
-- [ ] 4.2 运行前端全量校验门禁：
-  - `pnpm run lint`
-  - `pnpm run type-check`
-  - `pnpm run test:unit`
-- [ ] 4.3 确认所有修复项先红后绿。
+- [x] 4.1 后端门禁全绿：`ruff format --check` / `ruff check` / `mypy app` / `lint-imports` / `pytest`（1212 passed）。
+- [x] 4.2 前端门禁全绿：`pnpm run lint` / `pnpm run type-check` / `pnpm run test:unit`（544 passed，59 files）。
+- [x] 4.3 所有修复项先红后绿（旧实现实测：`round(9.25/0.5)*0.5=9.0`；`round(7.25/0.5)*0.5=7.0`；LLM 7.3 原样落库）。
 
 ---
 
