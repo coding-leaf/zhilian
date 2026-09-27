@@ -445,3 +445,58 @@ version = self.repo.get_version_by_id(material.current_version_id, user_id) or \
 - 无 `current_version_id` 时重拍回退最新版本成功。
 - 前端详情由接口（非硬编码）填充待重拍列表；轮询转入 `retake_required` 拉取页面。
 
+---
+
+### Scenario: Practice Item Grading Status & Degraded-Score Semantics
+
+#### 1. Scope / Trigger
+- 练习/报告逐题判级展示，以及判题失败降级（待重判）、同步重判回填。
+
+#### 2. Signatures
+- `PracticeItemDetailResponse.grading_status: str | None`（附加可选）∈ `unanswered | pending_regrade | graded`；`PracticeItemDetailResponse.status` 为**遗留字段**。
+- `RegradeResponse.status: str = "success"`，新增 `score: float | None`、`is_final: bool = True`；`GradingService.regrade_attempt` **同步**返回生效记录。
+
+#### 3. Contracts
+- **`status` 不可作为判题状态来源**：`AttemptItem` 无 `status` 列，`PracticeItemDetailResponse.status` 对真实 ORM 恒为默认 `"unanswered"`（before-validator 触不到该键）。判题状态必须由显式 `grading_status` 表达。
+- **`grading_status` 三态派生**（由 `is_answered`/`score`）：`is_answered is False` → `unanswered`；否则 `score is None` → `pending_regrade`；否则 `graded`。上游若显式提供则尊重（不覆盖）。
+- **降级不变量**：待重判必须 `AttemptItem.score = None`（未定分），**禁止**写 `0.0`——否则与“真实 0 分（判错）”不可区分。汇总口径 `sum(it.score or 0.0)` 已容忍 `None`；`GradingRecord.score` 可保持 `0.0`。
+- **前端判定优先级**：`grading_status` 显式存在时**优先**（pending/unanswered 直接命中；`graded` 走 score 阈值），**不得**再回落到遗留 `status`；仅当 `grading_status` 缺失（旧数据）时回退 `status`。
+- **重批为同步**：成功即 `status="success"` 且回传新 `score`；前端据此就地更新分数并判级，**禁止**成功路径硬编码 `pending_regrade`。
+
+#### 4. Validation & Error Matrix
+- 已答 + `score=None` → `pending_regrade`（显示“待重新判题/待判定”）。
+- 未作答（`is_answered=False`）→ `unanswered`。
+- 已判分（`score` 有值，含 `0.0`）→ `graded`（再按 `score >= max*0.6` 判对/判错）。
+- `grading_status='graded'` + 遗留 `status='unanswered'` → 必须按 score 渲染，**不得**显示“未作答”。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：降级 pending 仍写 0.0，与真实 0 分（判错）混淆
+item.score = 0.0            # status=pending_regrade
+
+# 错误2：前端把遗留 status 当判题状态
+if item.status === 'unanswered': return UNANSWERED   # 真实 ORM 恒为 unanswered → 全部误判未作答
+```
+##### Correct
+```python
+# 正确1：待重判 = 未定分
+item.score = None           # grading_status 派生为 pending_regrade
+```
+```typescript
+// 正确2：显式 grading_status 优先，仅缺失时回退遗留 status
+const gs = item.grading_status;
+if (gs === 'pending_regrade') return PENDING;
+if (gs === 'unanswered') return UNANSWERED;
+if (gs == null) { /* legacy fallback on item.status */ }
+if (item.score == null) return PENDING;
+return item.score >= max * 0.6 ? CORRECT : WRONG;
+```
+
+#### 6. Tests Required
+- 服务：LLM 超时降级 → `AttemptItem.score is None` 且 `GradingRecord.status == pending_regrade`。
+- Schema：`grading_status` 三态（unanswered / pending_regrade / graded）与显式覆盖不重算。
+- 路由：重批成功返回 `status="success"` 与新 `score`。
+- 前端：`grading_status` 优先级、`graded` 覆盖遗留 `status='unanswered'`、重批成功就地更新分数文本。
+- 夹具字段名逐字取自后端；双侧夹具同源，禁各自漂移。
+
