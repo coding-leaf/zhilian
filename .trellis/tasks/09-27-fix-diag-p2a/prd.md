@@ -78,3 +78,6 @@
 
 - 审计证据：`.trellis/tasks/archive/2026-09/09-27-read-only-bug-audit/research/slice-DIAG.md`。
 - 依赖关系：无前置依赖，与已落地的 `09-27-fix-diag-read-p1` 及 `09-27-fix-diag-wrongbook-p1` 保持无缝衔接。
+- **DIAG-014 已在当前 HEAD 修复**（`1d39896 fix(report): single-load guard ...`，与 BUG-GRADE-006 重叠）：`detail/index.vue` 已具备 `lastLoadedPracticeId` 守卫，onLoad/onMounted 对同一 practice 仅触发 1 次加载。本次仅补充强化回归测试，未改动页面代码。
+- **实现偏差（DIAG-011 范围内的小幅对齐）**：`WrongRecordFilterBar` 的题型「填空」取值由权威类型不存在的 `fill_in_the_blank` 修正为 `fill_in_blank`（与后端 `QuestionType.FILL_IN_BLANK`、`types/question.ts` 一致），否则该题型筛选项永不命中；属 DIAG-011 题型过滤生效的必要对齐。
+- **DIAG-010 标准化位置**：`error_type` 的简写→权威枚举映射实现于 `DiagnosisService.normalize_error_type`（而非路由层），路由层保持薄透传；功能与验收标准一致。
