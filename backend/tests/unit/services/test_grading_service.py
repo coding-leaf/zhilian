@@ -319,6 +319,8 @@ class TestGradingService:
         assert sub_record.score == 0.0
         assert sub_record.is_final is True
         assert "超时" in (sub_record.feedback or "")
+        # 待重判的作答项必须为“未定分”(None)，与真实 0 分区分，供前端判定为“待重新判题”
+        assert item_sub.score is None
 
     def test_grade_practice_submission_alias(
         self,

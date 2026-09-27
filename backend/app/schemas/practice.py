@@ -172,6 +172,10 @@ class PracticeItemDetailResponse(BaseModel):
     )
     is_answered: bool = Field(default=False, description="是否已作答")
     score: float | None = Field(default=None, description="本题判定得分")
+    grading_status: str | None = Field(
+        default=None,
+        description="作答项判题状态 (unanswered/pending_regrade/graded)",
+    )
     max_score: float = Field(default=1.0, description="本题满分基准分值")
     question_snapshot: QuestionSnapshotDTO | dict[str, Any] = Field(
         ...,
@@ -194,6 +198,7 @@ class PracticeItemDetailResponse(BaseModel):
                 "duration_seconds",
                 "is_answered",
                 "score",
+                "grading_status",
                 "max_score",
                 "question_snapshot",
             )
@@ -222,6 +227,15 @@ class PracticeItemDetailResponse(BaseModel):
                 data.setdefault("is_answered", True)
                 if data.get("status") == "unanswered":
                     data["status"] = "answered"
+
+            # 计算判题状态 (仅在未显式提供时)，使“待重判”不被误判为“判错”
+            if data.get("grading_status") is None:
+                if data.get("is_answered") is False:
+                    data["grading_status"] = "unanswered"
+                elif data.get("score") is None:
+                    data["grading_status"] = "pending_regrade"
+                else:
+                    data["grading_status"] = "graded"
         return data
 
 

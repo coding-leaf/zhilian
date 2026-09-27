@@ -237,6 +237,59 @@ def test_practice_item_detail_response_and_aliases() -> None:
     assert AttemptItemDetailResponse is PracticeItemDetailResponse
 
 
+def test_practice_item_grading_status_three_states() -> None:
+    """测试作答项判题状态三态(未作答/待重判/已判分)计算与真实 0 分区分。"""
+    item_id = uuid.uuid4()
+    snapshot = {"stem": "题干", "question_type": "short_answer", "answer": "参考答案"}
+
+    unanswered = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 1,
+            "is_answered": False,
+            "score": None,
+            "question_snapshot": snapshot,
+        }
+    )
+    assert unanswered.grading_status == "unanswered"
+
+    pending = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 2,
+            "is_answered": True,
+            "score": None,
+            "question_snapshot": snapshot,
+        }
+    )
+    assert pending.grading_status == "pending_regrade"
+
+    # 真实 0 分必须判定为 graded，不能被误判为 pending_regrade
+    graded_zero = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 3,
+            "is_answered": True,
+            "score": 0.0,
+            "question_snapshot": snapshot,
+        }
+    )
+    assert graded_zero.grading_status == "graded"
+
+    # 显式提供的 grading_status 必须被尊重，不被自动计算覆盖
+    explicit = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 4,
+            "is_answered": True,
+            "score": 0.0,
+            "grading_status": "pending_regrade",
+            "question_snapshot": snapshot,
+        }
+    )
+    assert explicit.grading_status == "pending_regrade"
+
+
 def test_practice_detail_response_and_summary() -> None:
     """测试练习详情响应与摘要列表模型。"""
     practice_id = uuid.uuid4()

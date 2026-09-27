@@ -505,7 +505,8 @@ class GradingService:
         error_msg: str,
     ) -> tuple[GradingRecord, bool]:
         """构建待重新判题降级记录 (FR-42 严禁判错)。"""
-        item.score = 0.0
+        # 待重判时作答项得分为“未定分”(None)，与真实 0 分区分，供前端判定为待重新判题
+        item.score = None
 
         record = GradingRecord(
             id=uuid.uuid4(),
