@@ -391,3 +391,17 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 3. Tests Required
 - 15MB jpg 被拒 / 15MB pdf 通过；pptx/txt/md 被拒（收窄断言）；`getNodeCheckStatus` 叶子/混合/空输入；切换资料后选中与折叠归零；分页偏移重复数据去重；首屏仅发 1 次列表请求。
+
+### Scenario: Question Config Bound, Deletion Reason Query & Quality-Check Type Alignment
+
+#### 1. Scope / Trigger
+- 出题数量配置、题目删除请求、质检记录消费。
+
+#### 2. Contracts
+- 出题数量上限与后端逐字一致（1–20）：`validateQuestionConfig` 上限、`clampCount` 截断、提示文案、`+` 按钮禁用条件全部对齐 20，禁止残留 50。
+- `deleteQuestion(id, reason)` 必须把 `reason` 作为 **query** 拼接（`?reason=`），DELETE 不携带 body data。
+- `QuestionQualityCheck` 字段名必须为后端 `QuestionQualityCheckResponse` 逐字（`check_type/is_passed/reason/similarity_score/check_metadata`）；旧别名仅可保留为**可选**废弃字段。
+- 列表删除成功后必须重置到第 1 页重新拉取，避免 offset 前移跳题。
+
+#### 3. Tests Required
+- 21/50 被拒、1 与 20 通过；25/99 clamp 到 20；删除 URL 含 `?reason=` 且无 body；删除后重新请求 page=1。

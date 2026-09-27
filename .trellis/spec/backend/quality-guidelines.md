@@ -630,3 +630,17 @@ resolved_material_id = options.material_id or scattered_questions[0].material_id
 
 #### 3. Tests Required
 - 单候选重复 snippet index 不崩；重复 temp_id（含与既有 `__dup_1` 冲突）父子关系保持正确；声明超限与谎报 Content-Length 均返回 413 且不进入 `import_material_file`；重拍后旧 key 被删、commit 失败不删；列表统计装配查询数常数级。
+
+### Scenario: Question Generation Bounds, Delete Reason & Answer-Conflict Domains
+
+#### 1. Scope / Trigger
+- 出题数量校验、题目删除原因传递、客观题答案冲突判定。
+
+#### 2. Contracts
+- 出题数量硬上限以后端为准（1–20）；前端输入框/校验必须与之逐字对齐，禁止前端放行 >20 的请求。
+- 删除原因参数位置统一为 **Query**（前端拼接 `?reason=`，不发送 body）；后端以 Query 为准并对旧客户端保留 JSON body 兜底。
+- `check_answer_conflict` 仅在**同一答案域**内比对：`true_false` 与选择题之间答案域不兼容，跨域即使题干相似度超阈值也不判冲突；同域答案相反/不同仍须判冲突。
+- `question_types` 必须非空（`min_length=1`）且每项为合法 `QuestionType`，请求 schema 与 `GenerateQuestionsOptions.__post_init__` 双向校验。
+
+#### 3. Tests Required
+- >20 被前端拦截且后端 422；空/非法题型在 schema 与服务层均抛错；query 与 body-only 两种删除原因均落审计；跨题型不误判、同域相反答案仍判冲突。
