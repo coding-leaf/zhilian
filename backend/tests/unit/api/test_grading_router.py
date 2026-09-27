@@ -240,7 +240,7 @@ async def test_regrade_success(
     mock_user: User,
     mock_grading_service: MagicMock,
 ) -> None:
-    """测试主观题重判受理成功返回 HTTP 200 与受理状态。"""
+    """测试主观题重判同步完成返回 HTTP 200 与真实终态及新分数。"""
     app = create_test_app()
     app.dependency_overrides[get_current_user] = lambda: mock_user
     app.dependency_overrides[get_grading_service] = lambda: mock_grading_service
@@ -252,7 +252,8 @@ async def test_regrade_success(
         attempt_item_id=attempt_item_id,
         record_id=record_id,
         channel="ai",
-        status_str="pending_regrade",
+        status_str="success",
+        score=4.2,
     )
     mock_grading_service.regrade_attempt.return_value = mock_record
 
@@ -271,9 +272,11 @@ async def test_regrade_success(
     assert response.status_code == 200
     data = response.json()
     assert data["attempt_item_id"] == str(attempt_item_id)
-    assert data["status"] == "pending_regrade"
+    assert data["status"] == "success"
+    assert data["score"] == 4.2
+    assert data["is_final"] is True
     assert data["grading_record_id"] == str(record_id)
-    assert "受理" in data["message"]
+    assert "完成" in data["message"]
 
     mock_grading_service.regrade_attempt.assert_called_once()
     call_kwargs = mock_grading_service.regrade_attempt.call_args.kwargs

@@ -81,20 +81,25 @@ RegradeAttemptRequest = RegradeRequest
 
 
 class RegradeResponse(BaseModel):
-    """申请重新判题受理响应模型。"""
+    """申请重新判题受理响应模型 (同步语义：成功即返回真实终态)。"""
 
     model_config = ConfigDict(from_attributes=True)
 
     attempt_item_id: uuid.UUID = Field(..., description="关联作答项主键 UUIDv4")
     status: str = Field(
-        default="pending_regrade",
-        description="重判处理状态 (如: pending_regrade)",
+        default="success",
+        description="重判处理状态 (同步语义：完成即 success)",
     )
-    message: str = Field(default="", description="重判受理提示信息")
+    message: str = Field(default="", description="重判完成提示信息")
     grading_record_id: uuid.UUID | None = Field(
         default=None,
         description="重判关联的新判题记录主键标识 (可选)",
     )
+    score: float | None = Field(
+        default=None,
+        description="重判后的新分数 (未定分时为 None)",
+    )
+    is_final: bool = Field(default=True, description="重判记录是否生效为最终终态")
 
 
 class GradingRecordDTO(BaseModel):

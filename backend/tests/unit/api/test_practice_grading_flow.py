@@ -457,7 +457,7 @@ async def test_practice_grading_full_closed_loop_flow(
         assert self_eval_data["feedback"] == "对照标准答案，自我评估逻辑严谨"
 
         # ----------------------------------------------------------------------
-        # 步骤 8: 申请大模型重新判题 (POST /api/v1/grading/regrade)
+        # 步骤 8: 申请大模型重新判题 (POST /api/v1/grading/regrade，同步完成)
         # ----------------------------------------------------------------------
         regrade_record = make_fake_grading_record(
             user_id=user_a.id,
@@ -465,10 +465,10 @@ async def test_practice_grading_full_closed_loop_flow(
             practice_id=practice_id,
             question_id=sub_question_id,
             channel="ai",
-            status_str="pending_regrade",
-            score=0.0,
-            feedback="申请重判排队中",
-            is_final=False,
+            status_str="success",
+            score=4.2,
+            feedback="重判后得分更新",
+            is_final=True,
         )
         mock_grading_service.regrade_attempt.return_value = regrade_record
 
@@ -482,8 +482,10 @@ async def test_practice_grading_full_closed_loop_flow(
         assert regrade_response.status_code == 200
         regrade_data = regrade_response.json()
         assert regrade_data["attempt_item_id"] == str(item_sub.id)
-        assert regrade_data["status"] == "pending_regrade"
-        assert "受理" in regrade_data["message"]
+        assert regrade_data["status"] == "success"
+        assert regrade_data["score"] == 4.2
+        assert regrade_data["is_final"] is True
+        assert "完成" in regrade_data["message"]
 
 
 # ==============================================================================

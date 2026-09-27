@@ -134,9 +134,11 @@ async def regrade(
         )
         return RegradeResponse(
             attempt_item_id=getattr(record, "attempt_item_id", request.attempt_item_id),
-            status=getattr(record, "status", "pending_regrade"),
-            message="已受理重新判题申请",
+            status=getattr(record, "status", "success"),
+            message="重新判题已完成",
             grading_record_id=getattr(record, "id", None),
+            score=getattr(record, "score", None),
+            is_final=getattr(record, "is_final", True),
         )
     except AttemptItemNotFoundError:
         raise
