@@ -148,3 +148,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: C2 后端文件夹范围出题与组卷（迁移 0006）
+<!-- trellis-session: v=2 fp=d340c0b21f51f1a7 -->
+
+**Date**: 2026-09-28
+**Task**: C2 后端文件夹范围出题与组卷（迁移 0006）
+**Branch**: `master`
+
+### Summary
+
+出题与组卷范围扩展到课程文件夹：QuestionGenerateRequest.folder_id 跨资料综合出题（按 (material,version) 分组、题量均分、单事务原子、归档过滤、跨课程归属校验）、GET /questions?folder_id= 过滤、Practice 支持 folder_id 且 material_id 放开为可空（迁移 0006）。修复跨任务集成缺口：last_practice_at 兼顾课程范围练习。C2 实现+复核零缺陷，后端 1313 passed / 覆盖率 91.88%，全工具链绿；规格沉淀课程范围契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36c4093` | feat(question): 文件夹范围综合出题与题库过滤 |
+
+### Status
+
+[OK] **Completed**
