@@ -196,6 +196,95 @@ class TestKnowledgeRepositoryCRUD:
         by_usr = repo.list_by_user_id(user_id, limit=10)
         assert len(by_usr) == 2
 
+    def test_list_all_by_user_id_aggregates_across_materials(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify list_all_by_user_id aggregates every user point across materials (DIAG-007)."""
+        repo = KnowledgeRepository(session)
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        version_id = helper_setup["version_id"]
+
+        # Second material owned by the same user
+        material_b = Material(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            title="第二教材.pdf",
+            file_format="pdf",
+            file_size=512,
+        )
+        version_b = MaterialVersion(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_b.id,
+            version_number=1,
+            storage_key="materials/b.pdf",
+            content_hash="hash-b",
+        )
+        session.add_all([material_b, version_b])
+
+        # Material owned by a different tenant (must never leak)
+        other_user_id = uuid.uuid4()
+        other_material = Material(
+            id=uuid.uuid4(),
+            user_id=other_user_id,
+            title="他人教材.pdf",
+            file_format="pdf",
+            file_size=1,
+        )
+        other_version = MaterialVersion(
+            id=uuid.uuid4(),
+            user_id=other_user_id,
+            material_id=other_material.id,
+            version_number=1,
+            storage_key="materials/o.pdf",
+            content_hash="hash-o",
+        )
+        session.add_all([other_material, other_version])
+        session.commit()
+
+        repo.create_knowledge_point(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="A-1",
+            level=2,
+            batch_id="b",
+        )
+        repo.create_knowledge_point(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="A-2",
+            level=1,
+            batch_id="b",
+        )
+        repo.create_knowledge_point(
+            user_id=user_id,
+            material_id=material_b.id,
+            version_id=version_b.id,
+            name="B-1",
+            level=1,
+            batch_id="b",
+        )
+        repo.create_knowledge_point(
+            user_id=other_user_id,
+            material_id=other_material.id,
+            version_id=other_version.id,
+            name="OTHER",
+            level=1,
+            batch_id="b",
+        )
+        session.commit()
+
+        points = repo.list_all_by_user_id(user_id)
+
+        assert len(points) == 3
+        assert {point.name for point in points} == {"A-1", "A-2", "B-1"}
+        # Ordered by level asc, then created_at asc
+        assert points[0].level == 1
+        assert points[-1].level == 2
+
     def test_update_knowledge_point(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:

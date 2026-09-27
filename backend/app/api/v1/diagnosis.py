@@ -219,7 +219,7 @@ async def get_mastery_overview(
     """
     overview = diagnosis_service.get_user_mastery_overview(
         user_id=current_user.id,
-        material_id=material_id,  # type: ignore[arg-type]
+        material_id=material_id,
     )
     if isinstance(overview, UserMasteryOverviewResponse):
         return overview

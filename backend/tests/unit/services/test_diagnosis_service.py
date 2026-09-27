@@ -801,6 +801,63 @@ class TestUserMasteryOverview:
         assert overview.total_knowledge_points == 0
         assert overview.overall_mastery_score == 0.0
 
+    def test_get_user_mastery_overview_without_material_aggregates_all(
+        self,
+        diagnosis_service: DiagnosisService,
+        mock_repos: dict[str, MagicMock],
+    ) -> None:
+        """Verify material_id=None aggregates ALL user knowledge points (DIAG-007)."""
+        user_id = uuid.uuid4()
+        material_a = uuid.uuid4()
+        material_b = uuid.uuid4()
+
+        kp_1 = KnowledgePoint(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_a,
+            version_id=uuid.uuid4(),
+            name="知识点-薄弱",
+        )
+        kp_2 = KnowledgePoint(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_b,
+            version_id=uuid.uuid4(),
+            name="知识点-熟练",
+        )
+
+        mock_repos["knowledge_repo"].list_all_by_user_id.return_value = [kp_1, kp_2]
+        mock_repos["diagnosis_repo"].list_mastery_records_by_user.return_value = [
+            MasteryRecord(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                knowledge_point_id=kp_1.id,
+                mastery_score=0.30,
+                level=MasteryLevel.WEAK.value,
+            ),
+            MasteryRecord(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                knowledge_point_id=kp_2.id,
+                mastery_score=0.90,
+                level=MasteryLevel.PROFICIENT.value,
+            ),
+        ]
+
+        overview = diagnosis_service.get_user_mastery_overview(user_id, None)
+
+        assert overview.material_id is None
+        assert overview.total_knowledge_points == 2
+        assert overview.weak_count == 1
+        assert overview.proficient_count == 1
+        # (0.30 + 0.90) / 2 = 0.60
+        assert overview.overall_mastery_score == 0.60
+        mock_repos["knowledge_repo"].list_all_by_user_id.assert_called_once_with(user_id=user_id)
+        mock_repos["knowledge_repo"].list_by_material_id.assert_not_called()
+        mock_repos["diagnosis_repo"].list_mastery_records_by_user.assert_called_once_with(
+            user_id=user_id
+        )
+
 
 class TestWrongRecordsManagement:
     """Tests for listing and deletion of wrong records."""

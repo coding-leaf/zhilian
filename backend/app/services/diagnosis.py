@@ -72,7 +72,7 @@ class KnowledgeMasterySummaryDTO:
 class UserMasteryOverviewDTO:
     """用户在指定学习资料下的掌握度宏观全景数据传输实体。"""
 
-    material_id: uuid.UUID
+    material_id: uuid.UUID | None
     overall_mastery_score: float
     total_knowledge_points: int
     unlearned_count: int
@@ -903,14 +903,17 @@ class DiagnosisService:
     def get_user_mastery_overview(
         self,
         user_id: uuid.UUID,
-        material_id: uuid.UUID,
+        material_id: uuid.UUID | None = None,
         request_id: str | None = None,
     ) -> UserMasteryOverviewDTO:
-        """获取用户针对特定教材资料的全局知识点掌握度宏观全景。
+        """获取用户的知识点掌握度宏观全景。
+
+        当 ``material_id`` 缺省为 None 时，聚合该用户全部知识点与其掌握度记录
+        （跨资料），而非退化为 ``material_id IS NULL`` 查询（该列 NOT NULL 会恒空）。
 
         Args:
             user_id: 租户用户主键。
-            material_id: 资料主键。
+            material_id: 可选资料主键；None 表示聚合该用户全部资料知识点。
             request_id: 请求追踪标识。
 
         Returns:
@@ -919,14 +922,18 @@ class DiagnosisService:
         start_time = time.perf_counter()
         request_id = request_id or str(uuid.uuid4())
 
-        knowledge_points = self.knowledge_repo.list_by_material_id(
-            material_id=material_id,
-            user_id=user_id,
-        )
-        mastery_records = self.diagnosis_repo.list_mastery_records_by_material(
-            material_id=material_id,
-            user_id=user_id,
-        )
+        if material_id is not None:
+            knowledge_points = self.knowledge_repo.list_by_material_id(
+                material_id=material_id,
+                user_id=user_id,
+            )
+            mastery_records = self.diagnosis_repo.list_mastery_records_by_material(
+                material_id=material_id,
+                user_id=user_id,
+            )
+        else:
+            knowledge_points = self.knowledge_repo.list_all_by_user_id(user_id=user_id)
+            mastery_records = self.diagnosis_repo.list_mastery_records_by_user(user_id=user_id)
         record_map = {record.knowledge_point_id: record for record in mastery_records}
 
         unlearned_count = 0
@@ -1001,7 +1008,7 @@ class DiagnosisService:
             action="GET_MASTERY_OVERVIEW",
             request_id=request_id,
             user_id=user_id,
-            target_id=material_id,
+            target_id=material_id if material_id is not None else "all",
             duration_ms=duration_ms,
             error_code=0,
             extra={

@@ -195,6 +195,28 @@ class KnowledgeRepository:
         )
         return list(self.session.execute(stmt).scalars().all())
 
+    def list_all_by_user_id(
+        self,
+        user_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """获取指定租户用户的全部知识点（无分页上限，跨资料聚合）。
+
+        用于用户掌握度宏观全景在缺省资料时聚合该用户所有知识点，
+        与按资料过滤的 list_by_material_id 严格区分（禁止退化为 material_id IS NULL）。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            list[KnowledgePoint]: 按层级递增、创建时间递增排序的全部知识点列表。
+        """
+        stmt = (
+            select(KnowledgePoint)
+            .where(KnowledgePoint.user_id == user_id)
+            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
     def get_knowledge_points_by_version(
         self,
         material_id: uuid.UUID,

@@ -894,6 +894,7 @@ def test_delete_wrong_record_fallback_boolean(
 def test_get_mastery_overview_alias_endpoint(
     client: TestClient,
     mock_diagnosis_service: MagicMock,
+    mock_user: User,
 ) -> None:
     """测试 /mastery/overview 别名路由与主路由行为一致。"""
     fake_overview = make_fake_mastery_overview()
@@ -904,6 +905,11 @@ def test_get_mastery_overview_alias_endpoint(
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["total_points"] == 12
+    # DIAG-007: no material_id must forward None (aggregate all user points), not a dummy UUID.
+    mock_diagnosis_service.get_user_mastery_overview.assert_called_once_with(
+        user_id=mock_user.id,
+        material_id=None,
+    )
 
 
 def test_model_validate_conversion_branches(
