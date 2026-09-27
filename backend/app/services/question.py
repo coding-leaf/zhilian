@@ -738,6 +738,7 @@ class QuestionService:
         version_id: uuid.UUID | None = None,
         knowledge_point_id: uuid.UUID,
         options: GenerateQuestionsOptions | None = None,
+        defer_commit: bool = False,
     ) -> QuestionGenerationResult:
         """全流程编排：大模型结构化出题、向量化、门禁质检重抽与原子落库。
 
@@ -747,6 +748,8 @@ class QuestionService:
             version_id: 可选的资料版本主键（若为空或不符将智能对齐）。
             knowledge_point_id: 知识点主键。
             options: 可选的生成控制选项。
+            defer_commit: 为 True 时仅 flush 不提交，由外层调用方统一提交/回滚，
+                用于多考点单事务原子编排；默认 False 保持单考点原行为。
 
         Returns:
             QuestionGenerationResult: 包含合格题、待处理题及质检记录的结果对象。
@@ -1007,7 +1010,8 @@ class QuestionService:
                 saved_checks = self.question_repo.batch_create_quality_checks(
                     all_quality_checks, user_id
                 )
-            self.session.commit()
+            if not defer_commit:
+                self.session.commit()
         except Exception:
             self.session.rollback()
             raise
@@ -1090,30 +1094,40 @@ class QuestionService:
         total_retry = 0
         aligned_version_id: uuid.UUID | None = None
 
-        for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True):
-            per_kp_options = GenerateQuestionsOptions(
-                question_types=effective_options.question_types,
-                count=kp_count,
-                difficulty=effective_options.difficulty,
-                max_retries=effective_options.max_retries,
-            )
-            result = self.generate_questions(
-                user_id=user_id,
-                material_id=material_id,
-                version_id=version_id,
-                knowledge_point_id=kp_id,
-                options=per_kp_options,
-            )
-            if aligned_version_id is None:
-                aligned_version_id = result.version_id
-            total_generated += result.total_generated
-            total_retry += result.retry_count
-            aggregated_qualified.extend(result.qualified_questions)
-            aggregated_pending.extend(result.pending_questions)
-            aggregated_checks.extend(result.quality_checks)
+        # 单事务原子编排：所有考点在同一事务内仅 flush（defer_commit=True），
+        # 全部成功后一次性提交；任一考点失败则整批回滚，不遗留部分题目。
+        try:
+            for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True):
+                per_kp_options = GenerateQuestionsOptions(
+                    question_types=effective_options.question_types,
+                    count=kp_count,
+                    difficulty=effective_options.difficulty,
+                    max_retries=effective_options.max_retries,
+                )
+                result = self.generate_questions(
+                    user_id=user_id,
+                    material_id=material_id,
+                    version_id=version_id,
+                    knowledge_point_id=kp_id,
+                    options=per_kp_options,
+                    defer_commit=True,
+                )
+                if aligned_version_id is None:
+                    aligned_version_id = result.version_id
+                total_generated += result.total_generated
+                total_retry += result.retry_count
+                aggregated_qualified.extend(result.qualified_questions)
+                aggregated_pending.extend(result.pending_questions)
+                aggregated_checks.extend(result.quality_checks)
 
-        if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
-            raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+            if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
+                raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+
+            # 全部考点成功：单次提交，保证多考点批次原子落库。
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
 
         logger.info(
             "multi knowledge point question generation completed",

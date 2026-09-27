@@ -30,6 +30,7 @@ Verifies:
 import uuid
 from collections.abc import Generator, Sequence
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -1205,6 +1206,47 @@ class TestQuestionServiceCRUDAndAudit:
                 user_id=user_id,
                 question_id=saved_q2.id,
             )
+
+    def test_generate_questions_defer_commit_defers_to_caller(
+        self, session: Session, helper_setup: dict[str, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """defer_commit=True must not commit; the caller owns the boundary (QGEN-007)."""
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        version_id = helper_setup["version_id"]
+        point_id = helper_setup["point_id"]
+
+        valid_question = LLMGeneratedQuestionItem(
+            question_type=QuestionType.TRUE_FALSE.value,
+            stem="在 敏捷开发 中，核心理念是持续交付 软件。",
+            answer="正确",
+            source_snippet_index=0,
+        )
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(
+                canned_outputs=[LLMQuestionBatchOutput(questions=[valid_question])]
+            ),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        commit_spy = MagicMock(wraps=session.commit)
+        monkeypatch.setattr(session, "commit", commit_spy)
+
+        result = service.generate_questions(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=point_id,
+            options=GenerateQuestionsOptions(count=1, max_retries=0),
+            defer_commit=True,
+        )
+
+        # Rows are flushed but the service must not commit them on its own.
+        assert result.total_generated == 1
+        assert commit_spy.call_count == 0
+
+        session.commit()
+        assert commit_spy.call_count == 1
 
     def test_search_adapter_exception_handled_gracefully(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
