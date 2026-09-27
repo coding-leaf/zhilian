@@ -690,6 +690,85 @@ class TestWrongRecordCRUD:
         paged = repo.list_wrong_records(user_id=user_id, limit=1, offset=0)
         assert len(paged) == 1
 
+    def test_count_wrong_records_filtered(
+        self,
+        session: Session,
+        helper_setup: dict[str, uuid.UUID],
+    ) -> None:
+        """Verify count_wrong_records mirrors list_wrong_records filtering conditions."""
+        repo = DiagnosisRepository(session)
+        user_id = helper_setup["user_id"]
+        point_id_1 = helper_setup["point_id_1"]
+        point_id_2 = helper_setup["point_id_2"]
+        practice_id = helper_setup["practice_id"]
+        item_id_1 = helper_setup["attempt_item_id_1"]
+        item_id_2 = helper_setup["attempt_item_id_2"]
+        qid_1 = helper_setup["question_id_1"]
+        qid_2 = helper_setup["question_id_2"]
+
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=qid_1,
+            knowledge_point_id=point_id_1,
+            practice_id=practice_id,
+            attempt_item_id=item_id_1,
+            error_type="BLIND_SPOT",
+            question_snapshot={"stem": "题干1"},
+        )
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=qid_2,
+            knowledge_point_id=point_id_2,
+            practice_id=practice_id,
+            attempt_item_id=item_id_2,
+            error_type="FORGOTTEN",
+            question_snapshot={"stem": "题干2"},
+        )
+        repo.mark_wrong_record_mastered(qid_1, user_id=user_id)
+
+        assert repo.count_wrong_records(user_id=user_id) == 2
+        assert repo.count_wrong_records(user_id=user_id, is_mastered=True) == 1
+        assert repo.count_wrong_records(user_id=user_id, is_mastered=False) == 1
+        assert repo.count_wrong_records(user_id=user_id, knowledge_point_id=point_id_2) == 1
+        assert repo.count_wrong_records(user_id=uuid.uuid4()) == 0
+
+    def test_mark_wrong_record_mastered_toggle(
+        self,
+        session: Session,
+        helper_setup: dict[str, uuid.UUID],
+    ) -> None:
+        """Verify mark_wrong_record_mastered supports is_mastered=False (clear mastered_at)."""
+        repo = DiagnosisRepository(session)
+        user_id = helper_setup["user_id"]
+        qid = helper_setup["question_id_1"]
+        point_id = helper_setup["point_id_1"]
+        practice_id = helper_setup["practice_id"]
+        item_id = helper_setup["attempt_item_id_1"]
+
+        rec = repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=qid,
+            knowledge_point_id=point_id,
+            practice_id=practice_id,
+            attempt_item_id=item_id,
+            error_type="BLIND_SPOT",
+            question_snapshot={"stem": "题干"},
+        )
+
+        mastered = repo.mark_wrong_record_mastered(
+            wrong_record_id=rec.id, user_id=user_id, is_mastered=True
+        )
+        assert mastered is not None
+        assert mastered.is_mastered is True
+        assert mastered.mastered_at is not None
+
+        unmastered = repo.mark_wrong_record_mastered(
+            wrong_record_id=rec.id, user_id=user_id, is_mastered=False
+        )
+        assert unmastered is not None
+        assert unmastered.is_mastered is False
+        assert unmastered.mastered_at is None
+
     def test_delete_wrong_record(
         self,
         session: Session,

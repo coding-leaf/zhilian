@@ -870,15 +870,23 @@ class TestWrongRecordsManagement:
         """Verify list_wrong_records parameter mappings."""
         user_id = uuid.uuid4()
         mock_repos["diagnosis_repo"].list_wrong_records.return_value = []
+        mock_repos["diagnosis_repo"].count_wrong_records.return_value = 0
 
         # 1. status="mastered" maps to is_mastered=True
-        diagnosis_service.list_wrong_records(user_id=user_id, status="mastered")
+        records, total = diagnosis_service.list_wrong_records(user_id=user_id, status="mastered")
+        assert records == []
+        assert total == 0
         mock_repos["diagnosis_repo"].list_wrong_records.assert_called_with(
             user_id=user_id,
             is_mastered=True,
             knowledge_point_id=None,
             limit=50,
             offset=0,
+        )
+        mock_repos["diagnosis_repo"].count_wrong_records.assert_called_with(
+            user_id=user_id,
+            is_mastered=True,
+            knowledge_point_id=None,
         )
 
         # 2. status="active" maps to is_mastered=False
@@ -890,6 +898,35 @@ class TestWrongRecordsManagement:
             limit=50,
             offset=0,
         )
+        mock_repos["diagnosis_repo"].count_wrong_records.assert_called_with(
+            user_id=user_id,
+            is_mastered=False,
+            knowledge_point_id=None,
+        )
+
+    def test_list_wrong_records_returns_real_total(
+        self,
+        diagnosis_service: DiagnosisService,
+        mock_repos: dict[str, MagicMock],
+    ) -> None:
+        """Verify list_wrong_records returns the repository real total, not len(page)."""
+        user_id = uuid.uuid4()
+        page_record = WrongRecord(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            knowledge_point_id=uuid.uuid4(),
+            practice_id=uuid.uuid4(),
+            attempt_item_id=uuid.uuid4(),
+            error_type="conceptual",
+            question_snapshot={},
+        )
+        mock_repos["diagnosis_repo"].list_wrong_records.return_value = [page_record]
+        mock_repos["diagnosis_repo"].count_wrong_records.return_value = 5
+
+        records, total = diagnosis_service.list_wrong_records(user_id=user_id, page_size=1)
+
+        assert records == [page_record]
+        assert total == 5
 
     def test_list_wrong_records_material_filter(
         self,
@@ -931,10 +968,11 @@ class TestWrongRecordsManagement:
         )
         mock_repos["diagnosis_repo"].list_wrong_records.return_value = [rec_1, rec_2]
 
-        results = diagnosis_service.list_wrong_records(
+        results, total = diagnosis_service.list_wrong_records(
             user_id=user_id,
             material_id=material_id,
         )
+        assert total == 1
         assert len(results) == 1
         assert results[0].knowledge_point_id == point_id_1
 

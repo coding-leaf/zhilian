@@ -584,11 +584,25 @@ def test_list_wrong_records_success(
     )
 
 
+def test_list_wrong_records_real_total_from_tuple(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+) -> None:
+    """测试 Service 返回 (items, real_total) 元组时路由下发真实总数而非当前页条数。"""
+    fake_wrong = make_fake_wrong_record()
+    mock_diagnosis_service.list_wrong_records.return_value = ([fake_wrong], 42)
+
+    response = client.get("/wrong-records", params={"page": 1, "page_size": 1})
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["total"] == 42
+    assert len(data["items"]) == 1
+
+
 # ==============================================================================
 # 8. POST /wrong-records/{id}/master (错题攻克标记) 测试
 # ==============================================================================
-
-
 def test_mark_wrong_record_mastered_success(
     client: TestClient,
     mock_diagnosis_service: MagicMock,
@@ -615,6 +629,37 @@ def test_mark_wrong_record_mastered_success(
     mock_diagnosis_service.mark_wrong_record_mastered.assert_called_once_with(
         user_id=mock_user.id,
         record_id=record_id,
+        is_mastered=True,
+    )
+
+
+def test_mark_wrong_record_unmastered_with_body(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试请求体 {is_mastered:false} 时取消攻克并透传 False。"""
+    record_id = uuid.uuid4()
+    mock_record = MagicMock()
+    mock_record.id = record_id
+    mock_record.is_mastered = False
+    mock_record.mastered_at = None
+    mock_diagnosis_service.mark_wrong_record_mastered.return_value = mock_record
+
+    response = client.post(
+        f"/wrong-records/{record_id}/master",
+        json={"is_mastered": False},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["is_mastered"] is False
+    assert data["mastered_at"] is None
+    assert "取消" in data["message"]
+    mock_diagnosis_service.mark_wrong_record_mastered.assert_called_once_with(
+        user_id=mock_user.id,
+        record_id=record_id,
+        is_mastered=False,
     )
 
 

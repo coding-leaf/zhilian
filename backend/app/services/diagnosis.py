@@ -1102,8 +1102,8 @@ class DiagnosisService:
         page_size: int = 50,
         limit: int | None = None,
         offset: int | None = None,
-    ) -> list[WrongRecord]:
-        """多维分页查询当前租户用户的错题列表。
+    ) -> tuple[list[WrongRecord], int]:
+        """多维分页查询当前租户用户的错题列表及真实总数。
 
         Args:
             user_id: 租户用户主键。
@@ -1117,7 +1117,7 @@ class DiagnosisService:
             offset: 可选的直接 offset。
 
         Returns:
-            list[WrongRecord]: 错题实体列表。
+            tuple[list[WrongRecord], int]: 当前页错题实体列表与符合过滤条件的真实总数。
         """
         effective_limit = limit if limit is not None else page_size
         effective_offset = offset if offset is not None else max(0, (page - 1) * page_size)
@@ -1136,7 +1136,7 @@ class DiagnosisService:
                 user_id=user_id,
             )
             if not material_points:
-                return []
+                return [], 0
             material_point_id_set = {point.id for point in material_points}
             all_records = self.diagnosis_repo.list_wrong_records(
                 user_id=user_id,
@@ -1145,27 +1145,37 @@ class DiagnosisService:
                 offset=0,
             )
             filtered = [r for r in all_records if r.knowledge_point_id in material_point_id_set]
-            return filtered[effective_offset : effective_offset + effective_limit]
+            return filtered[effective_offset : effective_offset + effective_limit], len(filtered)
 
-        return self.diagnosis_repo.list_wrong_records(
+        records = self.diagnosis_repo.list_wrong_records(
             user_id=user_id,
             is_mastered=effective_is_mastered,
             knowledge_point_id=knowledge_point_id,
             limit=effective_limit,
             offset=effective_offset,
         )
+        total = int(
+            self.diagnosis_repo.count_wrong_records(
+                user_id=user_id,
+                is_mastered=effective_is_mastered,
+                knowledge_point_id=knowledge_point_id,
+            )
+        )
+        return records, total
 
     def mark_wrong_record_mastered(
         self,
         user_id: uuid.UUID,
         record_id: uuid.UUID,
+        is_mastered: bool = True,
         request_id: str | None = None,
     ) -> WrongRecord:
-        """标记指定错题记录已攻克掌握。
+        """标记或取消指定错题记录的攻克掌握状态。
 
         Args:
             user_id: 租户用户主键。
             record_id: 错题记录主键。
+            is_mastered: 目标攻克状态，默认 True (向后兼容)。
             request_id: 请求追踪标识。
 
         Returns:
@@ -1180,6 +1190,7 @@ class DiagnosisService:
         record = self.diagnosis_repo.mark_wrong_record_mastered(
             wrong_record_id=record_id,
             user_id=user_id,
+            is_mastered=is_mastered,
         )
         if record is None:
             self._log_metric(

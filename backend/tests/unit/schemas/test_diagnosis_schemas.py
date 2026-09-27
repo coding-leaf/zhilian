@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from app.models.practice import WrongRecord
 from app.schemas.diagnosis import (
     ActionableSuggestionItemDTO,
     AnalysisCauseItemDTO,
@@ -21,6 +22,7 @@ from app.schemas.diagnosis import (
     DiagnosisReportResponse,
     KnowledgeEvaluationItemDTO,
     KnowledgeMasterySummaryResponse,
+    MarkWrongRecordMasteredRequest,
     MarkWrongRecordMasteredResponse,
     MistakeEvidenceItemDTO,
     RegressedKnowledgeItemDTO,
@@ -265,6 +267,45 @@ class TestWrongRecordSchemas:
         assert len(list_response.items) == 1
         assert list_response.offset == 0
         assert list_response.limit == 20
+
+    def test_wrong_record_item_user_answer_from_orm(self) -> None:
+        """验证 ORM from_attributes 路径将 last_wrong_answer 映射为 user_answer。"""
+        record = WrongRecord(
+            id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            question_id=uuid.uuid4(),
+            knowledge_point_id=uuid.uuid4(),
+            practice_id=uuid.uuid4(),
+            attempt_item_id=uuid.uuid4(),
+            error_type="conceptual",
+            question_snapshot={"stem": "TCP 建立连接需要几次握手？"},
+            last_wrong_answer="C",
+        )
+        item = WrongRecordItemResponse.model_validate(record)
+        assert item.user_answer == "C"
+        assert item.wrong_count == item.error_count
+
+    def test_wrong_record_item_user_answer_explicit(self) -> None:
+        """验证显式传入 user_answer 时优先于 last_wrong_answer。"""
+        item = WrongRecordItemResponse.model_validate(
+            {
+                "id": uuid.uuid4(),
+                "question_id": uuid.uuid4(),
+                "practice_id": uuid.uuid4(),
+                "attempt_item_id": uuid.uuid4(),
+                "knowledge_point_id": uuid.uuid4(),
+                "question_snapshot": {},
+                "user_answer": "B",
+                "last_wrong_answer": "C",
+            }
+        )
+        assert item.user_answer == "B"
+
+    def test_mark_wrong_record_mastered_request_optional(self) -> None:
+        """验证攻克请求体 is_mastered 可选且缺省为 None。"""
+        assert MarkWrongRecordMasteredRequest().is_mastered is None
+        assert MarkWrongRecordMasteredRequest(is_mastered=False).is_mastered is False
+        assert MarkWrongRecordMasteredRequest(is_mastered=True).is_mastered is True
 
     def test_mark_wrong_record_mastered_response(self) -> None:
         """验证标记已攻克响应。"""

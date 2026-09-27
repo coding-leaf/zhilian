@@ -378,15 +378,45 @@ class WrongRecordItemResponse(BaseModel):
     mastered_at: datetime | None = Field(default=None, description="攻克掌握时间戳")
     created_at: datetime | None = Field(default=None, description="创建时间戳")
     updated_at: datetime | None = Field(default=None, description="更新时间戳")
+    user_answer: str | None = Field(default=None, description="用户最近一次作答内容")
 
     @model_validator(mode="before")
     @classmethod
     def _sync_counts(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "wrong_count" in data and "error_count" not in data:
-                data["error_count"] = data["wrong_count"]
-            elif "error_count" in data and "wrong_count" not in data:
-                data["wrong_count"] = data["error_count"]
+        if not isinstance(data, dict):
+            # ORM from_attributes 路径：抽取实体字段为字典，兼容 last_wrong_answer 映射。
+            # 未 flush 的实体其列默认值仍为 None，跳过以便应用模型默认值。
+            extracted: dict[str, Any] = {}
+            for field in (
+                "id",
+                "question_id",
+                "practice_id",
+                "attempt_item_id",
+                "knowledge_point_id",
+                "error_type",
+                "is_mastered",
+                "error_count",
+                "wrong_count",
+                "question_snapshot",
+                "first_wrong_at",
+                "mastered_at",
+                "created_at",
+                "updated_at",
+                "last_wrong_answer",
+                "user_answer",
+            ):
+                if not hasattr(data, field):
+                    continue
+                value = getattr(data, field)
+                if value is not None:
+                    extracted[field] = value
+            data = extracted
+        if "wrong_count" in data and "error_count" not in data:
+            data["error_count"] = data["wrong_count"]
+        elif "error_count" in data and "wrong_count" not in data:
+            data["wrong_count"] = data["error_count"]
+        if not data.get("user_answer") and data.get("last_wrong_answer") is not None:
+            data["user_answer"] = data["last_wrong_answer"]
         return data
 
     @model_validator(mode="after")
@@ -434,6 +464,14 @@ class WrongRecordListResponse(BaseModel):
         return data
 
 
+class MarkWrongRecordMasteredRequest(BaseModel):
+    """标记/取消错题攻克状态请求模型 (请求体可选)。"""
+
+    is_mastered: bool | None = Field(
+        default=None, description="目标攻克状态；缺省时按 True (置为已攻克) 处理"
+    )
+
+
 class MarkWrongRecordMasteredResponse(BaseModel):
     """标记错题已掌握响应模型。"""
 
@@ -464,6 +502,7 @@ __all__ = [
     "DiagnosisReportResponse",
     "KnowledgeEvaluationItemDTO",
     "KnowledgeMasterySummaryResponse",
+    "MarkWrongRecordMasteredRequest",
     "MarkWrongRecordMasteredResponse",
     "MistakeEvidenceItemDTO",
     "RegressedKnowledgeItemDTO",

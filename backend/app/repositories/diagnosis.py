@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint
@@ -434,14 +434,16 @@ class DiagnosisRepository:
         question_id: uuid.UUID | None = None,
         user_id: uuid.UUID | None = None,
         *,
+        is_mastered: bool = True,
         wrong_record_id: uuid.UUID | None = None,
         record_id: uuid.UUID | None = None,
     ) -> WrongRecord | None:
-        """标记指定错题记录已攻克掌握。
+        """标记或取消指定错题记录的攻克掌握状态。
 
         Args:
             question_id: 题目标识。
             user_id: 租户用户标识。
+            is_mastered: 目标攻克状态，默认 True (向后兼容)。
             wrong_record_id: 错题记录主键 (可选)。
             record_id: 错题记录主键别名 (可选)。
 
@@ -460,8 +462,8 @@ class DiagnosisRepository:
 
         if record is None:
             return None
-        record.is_mastered = True
-        record.mastered_at = datetime.now(UTC)
+        record.is_mastered = is_mastered
+        record.mastered_at = datetime.now(UTC) if is_mastered else None
         self.session.flush()
         return record
 
@@ -517,6 +519,32 @@ class DiagnosisRepository:
 
         statement = statement.order_by(WrongRecord.updated_at.desc()).offset(offset).limit(limit)
         return list(self.session.execute(statement).scalars().all())
+
+    def count_wrong_records(
+        self,
+        user_id: uuid.UUID,
+        is_mastered: bool | None = None,
+        knowledge_point_id: uuid.UUID | None = None,
+    ) -> int:
+        """统计符合过滤条件的租户用户错题总数 (与 list_wrong_records 同条件)。
+
+        Args:
+            user_id: 租户用户标识。
+            is_mastered: 攻克掌握状态过滤 (None 表示不限)。
+            knowledge_point_id: 指定知识点过滤 (None 表示不限)。
+
+        Returns:
+            int: 符合过滤条件的错题总数。
+        """
+        statement = (
+            select(func.count()).select_from(WrongRecord).where(WrongRecord.user_id == user_id)
+        )
+        if is_mastered is not None:
+            statement = statement.where(WrongRecord.is_mastered == is_mastered)
+        if knowledge_point_id is not None:
+            statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
+
+        return int(self.session.execute(statement).scalar_one())
 
     def delete_wrong_record(
         self,

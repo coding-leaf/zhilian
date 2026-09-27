@@ -151,6 +151,45 @@ class TestDiagnosisServiceFacade:
         mock_repos["diagnosis_repo"].mark_wrong_record_mastered.assert_called_once_with(
             wrong_record_id=record_id,
             user_id=user_id,
+            is_mastered=True,
+        )
+        mock_session.commit.assert_called_once()
+
+    def test_mark_wrong_record_unmastered(
+        self,
+        service: DiagnosisService,
+        mock_session: MagicMock,
+        mock_repos: dict[str, MagicMock],
+    ) -> None:
+        """测试取消错题攻克状态时透传 is_mastered=False。"""
+        user_id = uuid.uuid4()
+        record_id = uuid.uuid4()
+
+        fake_record = WrongRecord(
+            id=record_id,
+            user_id=user_id,
+            question_id=uuid.uuid4(),
+            knowledge_point_id=uuid.uuid4(),
+            practice_id=uuid.uuid4(),
+            attempt_item_id=uuid.uuid4(),
+            error_type="conceptual",
+            is_mastered=False,
+            mastered_at=None,
+        )
+        mock_repos["diagnosis_repo"].mark_wrong_record_mastered.return_value = fake_record
+
+        result = service.mark_wrong_record_mastered(
+            user_id=user_id,
+            record_id=record_id,
+            is_mastered=False,
+        )
+
+        assert result is fake_record
+        assert result.is_mastered is False
+        mock_repos["diagnosis_repo"].mark_wrong_record_mastered.assert_called_once_with(
+            wrong_record_id=record_id,
+            user_id=user_id,
+            is_mastered=False,
         )
         mock_session.commit.assert_called_once()
 

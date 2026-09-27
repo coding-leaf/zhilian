@@ -10,18 +10,20 @@
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.diagnosis import get_diagnosis_service
+from app.models.practice import WrongRecord
 from app.models.user import User
 from app.schemas.diagnosis import (
     DeleteWrongRecordResponse,
     DiagnosisReportListResponse,
     DiagnosisReportResponse,
     KnowledgeMasterySummaryResponse,
+    MarkWrongRecordMasteredRequest,
     MarkWrongRecordMasteredResponse,
     UserMasteryOverviewResponse,
     WrongRecordItemResponse,
@@ -299,7 +301,7 @@ async def list_wrong_records(
     effective_limit = limit if limit is not None else page_size
     effective_offset = offset if offset is not None else (page - 1) * page_size
 
-    records = diagnosis_service.list_wrong_records(
+    result = diagnosis_service.list_wrong_records(
         user_id=current_user.id,
         material_id=material_id,
         status=status,
@@ -310,8 +312,19 @@ async def list_wrong_records(
         limit=effective_limit,
         offset=effective_offset,
     )
-    if isinstance(records, WrongRecordListResponse):
-        return records
+    if isinstance(result, WrongRecordListResponse):
+        return result
+
+    records: list[WrongRecord] = []
+    total_count: int | None = None
+    if isinstance(result, tuple) and len(result) == 2:
+        records = list(result[0])
+        total_count = int(result[1])
+    else:
+        # 兼容旧契约：Service 直接返回普通列表 (含携带 total 属性的列表容器)
+        legacy_records = cast("list[WrongRecord]", result)
+        records = list(legacy_records)
+        total_count = getattr(legacy_records, "total", None)
 
     if error_type is not None:
         records = [r for r in records if getattr(r, "error_type", None) == error_type]
@@ -320,7 +333,6 @@ async def list_wrong_records(
         r if isinstance(r, WrongRecordItemResponse) else WrongRecordItemResponse.model_validate(r)
         for r in records
     ]
-    total_count = getattr(records, "total", None)
     if total_count is None:
         total_count = len(items)
 
@@ -344,13 +356,15 @@ async def mark_wrong_record_mastered(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
+    request: Annotated[MarkWrongRecordMasteredRequest | None, Body()] = None,
 ) -> MarkWrongRecordMasteredResponse:
-    """手动将指定错题标记为已消灭/已掌握。
+    """手动标记或取消指定错题的已消灭/已掌握状态。
 
     Args:
         id: 错题记录主键 UUID。
         current_user: 当前认证登录租户用户对象。
         diagnosis_service: 学情诊断与错题联动编排服务。
+        request: 可选请求体，`is_mastered` 缺省时按 True (置为已攻克) 处理。
 
     Returns:
         MarkWrongRecordMasteredResponse: 标记掌握操作结果响应。
@@ -358,17 +372,21 @@ async def mark_wrong_record_mastered(
     Raises:
         WrongRecordNotFoundError: 错题记录不存在或无权访问 (404 / 40019)。
     """
+    target_is_mastered = (
+        request.is_mastered if request is not None and request.is_mastered is not None else True
+    )
     record = diagnosis_service.mark_wrong_record_mastered(
         user_id=current_user.id,
         record_id=id,
+        is_mastered=target_is_mastered,
     )
     if isinstance(record, MarkWrongRecordMasteredResponse):
         return record
     return MarkWrongRecordMasteredResponse(
         id=getattr(record, "id", id),
-        is_mastered=getattr(record, "is_mastered", True),
+        is_mastered=getattr(record, "is_mastered", target_is_mastered),
         mastered_at=getattr(record, "mastered_at", None),
-        message="错题已成功标记为已攻克",
+        message="错题已成功标记为已攻克" if target_is_mastered else "已取消该错题的攻克状态",
     )
 
 
