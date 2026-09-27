@@ -784,3 +784,60 @@ for f in self.repo.list_expired(user_id, before=datetime.now(UTC) - timedelta(da
 - 仓储：CRUD、归档默认隐藏、`list_expired` 阈值、批量计数、跨租户隔离。
 - 服务：重名 409、越权 404、归档/恢复、`purge_after=+7d`、**`archived_at=now-8d` 时任意列表查询物理删除课程及其资料**、聚合计数、移动（未分类↔课程、目标归档/他人 404）。
 - API：课程各端点状态码与响应契约；上传带/不带 `folder_id`；列表 `__none__` 与非法 `folder_id` 400；`PATCH /materials/{id}/folder`。
+
+---
+
+### Scenario: Course Folder Scope Generation & Practice Assembly
+
+#### 1. Scope / Trigger
+- 将「出题」与「组卷」范围从单份资料扩展到课程文件夹：`POST /questions/generate` 携带 `folder_id`、`GET /questions?folder_id=`、`POST /practices` 携带 `folder_id`。
+
+#### 2. Signatures
+- Schema：`QuestionGenerateRequest.folder_id`（可选，与 `material_id` 至少一个）；`QuestionGenerateResponse` 的 `material_id/version_id/knowledge_point_id` 均可空；`PracticeCreateRequest.folder_id`（可选，`knowledge_point_ids` 允许为空）。
+- Service：`QuestionService.generate_questions_for_folder(*, user_id, folder_id, knowledge_point_ids=None, options=None) -> MultiKnowledgePointGenerationResult`；`PracticeService.create_practice(user_id, CreatePracticeOptions(..., folder_id=None))`。
+- Repository：`QuestionRepository.list_questions(..., folder_id=...)`、`list_knowledge_points_for_folder(user_id, folder_id)`、`list_material_ids_for_folder(user_id, folder_id, *, ready_only=False)`。
+
+#### 3. Contracts
+- **归档一致性**：folder 范围出题 / 组卷 / 题目列表一律排除归档课程资料（`MaterialFolder.archived_at IS NOT NULL`）；未分类资料（`folder_id IS NULL`）不参与任何 folder 范围；单资料路径不受归档过滤影响（零回归）。
+- **范围解析**：显式 `knowledge_point_ids` 必须逐个校验其 `material_id` 属于该文件夹未归档资料，否则 `KnowledgeNotFoundError`；缺省取文件夹全部 ready 未软删除资料的考点，为空则明确 4xx（不静默成功）。
+- **跨资料单事务原子**：按 `(material_id, version_id)` 保序分组；题量先按组 `distribute_count`，再在组内按考点 `distribute_count`（均分 + 余数前置 + 每组至少 1）；逐组调用既有链路且传 `defer_commit=True`，**仅由外层在全部成功时 `commit()` 一次**，任一失败 `rollback()` + re-raise，零遗留部分题目。
+- **`defer_commit` 契约**：`generate_questions_for_knowledge_points(..., defer_commit=False)` 默认仍自提交（单资料/单批零回归）；`True` 时仅 `flush`，不 `commit`/`rollback`，交由外层。
+- **folder 组卷落库**：提供 `folder_id` 时 `material_id` 可为空且落库为空；`folder_id` 落库；`knowledge_point_ids` 存展开后的实际考点集；题量不足仍抛 `PracticeEmptyQuestionsError`（40012）。
+- **课程聚合计数口径**：`FolderRepository.last_practice_at_by_folder_ids` 必须同时覆盖「资料范围练习」（`Practice.material_id` 经 `Material.folder_id` 归属）与「课程范围练习」（`Practice.folder_id` 直接指向课程、`material_id` 为空），取两者最大 `created_at`；仅按 `material_id` join 会漏算课程范围练习（`material_id IS NULL`）。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：folder 出题逐组各自提交，第 N 组失败时前 N-1 组已入库（非原子）
+for group in groups:
+    generate(...)  # 内部 commit()
+
+# 错误2：显式考点不校验归属，可跨课程越界出题
+kp = knowledge_repo.get_by_id(kp_id, user_id)
+generate(kp)  # kp.material_id 可能不在目标文件夹
+
+# 错误3：folder 组卷回填 material_id，破坏课程范围语义
+if resolved_material_id is None:
+    resolved_material_id = scattered_questions[0].material_id  # folder 范围必须保持 None
+```
+##### Correct
+```python
+# 正确：跨组单事务原子 + 归属校验 + 归档过滤 + folder 范围 material_id 保持空
+allowed = set(question_repo.list_material_ids_for_folder(user_id, folder_id))
+for kp_id in explicit_ids:
+    kp = knowledge_repo.get_by_id(kp_id, user_id)
+    if kp is None or kp.material_id not in allowed:
+        raise KnowledgeNotFoundError(...)
+for key, cnt in zip(group_keys, distribute_count(total, len(group_keys)), strict=True):
+    generate_questions_for_knowledge_points(..., options=per_group_opts, defer_commit=True)
+self.session.commit()        # 全部成功：唯一一次提交
+# 任一失败：except → self.session.rollback(); raise
+```
+
+#### 5. Tests Required
+- 分组与题量：`(4,2)` 组分配 + 组内分配；显式跨资料考点聚合、`knowledge_point_id`/`knowledge_point_ids` 契约。
+- **原子性（真实 SQLite）**：某组抛 `MissingSourceSnippetError` → 落库计数为 0；全成功 → 单次 `commit()` 且全部落库。
+- 缺省范围：仅纳入 ready 资料考点；无 ready 资料 / 无考点 → 4xx；归档课程 → `FolderNotFoundError`；跨租户越权 → 404；显式考点越界 → `KnowledgeNotFoundError`。
+- 组卷：folder 范围 `material_id` 为空、`folder_id` 落库、缺省考点展开、题量不足 40012；单资料路径零回归。
+- 仓储：`folder_id` 过滤与 `material_id` 组合、归档排除、`list_knowledge_points_for_folder`/`list_material_ids_for_folder`。
+- 迁移 0006：`material_id` 改可空 + `folder_id` + 索引，`upgrade → downgrade → upgrade` SQLite 对称。
