@@ -6,6 +6,8 @@
 - Google 风格中文 Docstring。
 """
 
+import ast
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -16,6 +18,30 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 VALID_PRACTICE_MODES: set[str] = {"sequential", "random", "weak_points"}
 # 允许的练习来源类型白名单集合
 VALID_PRACTICE_SOURCE_TYPES: set[str] = {"normal", "weakness", "wrong_record"}
+
+
+def _normalize_persisted_user_answer(value: str) -> str:
+    """将历史 Python repr 多选题作答规范化为标准 JSON 字符串。
+
+    仅当字符串形如字符串列表的 Python repr（如 ``"['A', 'B']"``）时转换，
+    其他普通文本作答原样返回，保证跨端传输格式一致 (BUG-PRAC-016)。
+
+    Args:
+        value: 数据库存储的原始作答字符串。
+
+    Returns:
+        str: 规范化后的标准 JSON 字符串或原字符串。
+    """
+    stripped = value.strip()
+    if not (stripped.startswith("[") and stripped.endswith("]")):
+        return value
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (ValueError, SyntaxError):
+        return value
+    if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+        return json.dumps(sorted(parsed), ensure_ascii=False)
+    return value
 
 
 class PracticeCreateRequest(BaseModel):
@@ -231,6 +257,10 @@ class PracticeItemDetailResponse(BaseModel):
                 if data.get("status") == "unanswered":
                     data["status"] = "answered"
 
+            # 兼容历史 Python repr 多选作答，规范化为标准 JSON 字符串 (BUG-PRAC-016)
+            if isinstance(data.get("user_answer"), str):
+                data["user_answer"] = _normalize_persisted_user_answer(data["user_answer"])
+
             # 计算判题状态 (仅在未显式提供时)，使“待重判”不被误判为“判错”
             if data.get("grading_status") is None:
                 if data.get("is_answered") is False:
@@ -260,6 +290,11 @@ class PracticeDetailResponse(BaseModel):
     total_count: int = Field(..., ge=0, description="练习题目总数")
     question_count: int | None = Field(default=None, ge=0, description="题目总数别名")
     completed_count: int = Field(default=0, ge=0, description="已完成作答题目数")
+    time_elapsed_seconds: int = Field(
+        default=0,
+        ge=0,
+        description="练习累计已消耗秒数 (由各题作答耗时聚合)",
+    )
     total_score: float | None = Field(default=None, description="卷面最终累计得分")
     max_score: float | None = Field(default=None, description="卷面总满分分值")
     source_type: str = Field(default="normal", description="练习来源类型")
@@ -331,6 +366,20 @@ class PracticeDetailResponse(BaseModel):
                     elif getattr(item, "is_answered", False):
                         computed_completed += 1
                 data["completed_count"] = computed_completed
+
+            # 自动聚合累计耗时：未显式提供时由 items 单题耗时求和 (BUG-PRAC-015)
+            if not data.get("time_elapsed_seconds"):
+                items = data.get("items") or []
+                total_duration = 0
+                for item in items:
+                    if isinstance(item, dict):
+                        raw_duration = item.get("duration_seconds")
+                        if raw_duration is None:
+                            raw_duration = item.get("time_spent_seconds")
+                        total_duration += int(raw_duration or 0)
+                    else:
+                        total_duration += int(getattr(item, "duration_seconds", 0) or 0)
+                data["time_elapsed_seconds"] = total_duration
         return data
 
 

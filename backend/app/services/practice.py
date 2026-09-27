@@ -9,6 +9,7 @@
 """
 
 import enum
+import json
 import logging
 import random
 import time
@@ -50,6 +51,28 @@ from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_user_answer(user_answer: Any) -> Any:
+    """将非字符串作答规范化为可跨语言解析的标准 JSON 字符串。
+
+    多选题前端提交 ``string[]``，若直接 ``str()`` 会落库为 Python repr
+    （如 ``"['A', 'B']"``），违背跨端 JSON 契约；此处统一使用
+    ``json.dumps`` 序列化，标量与字符串保持原样 (BUG-PRAC-016)。
+
+    Args:
+        user_answer: 原始作答内容（字符串、列表、字典或其他标量）。
+
+    Returns:
+        Any: 规范化后的作答（字符串、JSON 字符串或 None）。
+    """
+    if user_answer is None or isinstance(user_answer, str):
+        return user_answer
+    if isinstance(user_answer, (list, tuple)):
+        return json.dumps(sorted(str(item) for item in user_answer), ensure_ascii=False)
+    if isinstance(user_answer, dict):
+        return json.dumps(user_answer, ensure_ascii=False, sort_keys=True)
+    return str(user_answer)
 
 
 class PracticeAssemblyMode(enum.StrEnum):
@@ -166,6 +189,46 @@ class PracticeService:
             logger.info("PracticeService execution completed: %s", log_payload)
         else:
             logger.error("PracticeService execution error: %s", log_payload)
+
+    def _release_lock_quietly(self, clean_key: str, user_id: uuid.UUID) -> None:
+        """尽力释放幂等锁，失败仅记录告警，绝不阻断主流程。"""
+        try:
+            self.idempotency.release_lock(clean_key, str(user_id))
+        except Exception:
+            logger.warning("Idempotency lock release degraded for user_ref=%s", user_id)
+
+    def _rebuild_persisted_submission(
+        self,
+        practice: Practice,
+        user_id: uuid.UUID,
+    ) -> PracticeSubmissionResult:
+        """从已提交的练习实体安全重建交卷结果，用于 DB 级幂等回放。
+
+        当响应快照写入失败但事务已提交（练习已 COMPLETED 且幂等键匹配）时，
+        依据数据库中的题目统计重建 ``PracticeSubmissionResult``，避免客户端
+        重试撞上 40011 (BUG-PRAC-013)。
+
+        Args:
+            practice: 已恢复的练习实体。
+            user_id: 租户用户标识。
+
+        Returns:
+            PracticeSubmissionResult: 重建的交卷结果（标记为幂等回放）。
+        """
+        total_questions = self.practice_repo.count_total_items(practice.id, user_id)
+        unanswered_count = self.practice_repo.count_unanswered_items(practice.id, user_id)
+        submitted_at = practice.submitted_at or datetime.now(UTC)
+        return PracticeSubmissionResult(
+            practice_id=practice.id,
+            task_id="",
+            status=PracticeStatus.COMPLETED.value,
+            unanswered_count=unanswered_count,
+            total_questions=total_questions,
+            submitted_at=submitted_at,
+            answered_questions=total_questions - unanswered_count,
+            uncompleted_count=unanswered_count,
+            is_idempotent_replay=True,
+        )
 
     def create_practice(
         self,
@@ -450,15 +513,10 @@ class PracticeService:
             if practice_id is None or question_id is None:
                 raise ValueError("practice_id 与 question_id 在未提供 dto 时必须传入")
             effective_duration = duration_seconds if duration_seconds > 0 else time_spent_seconds
-            formatted_answer = (
-                str(user_answer)
-                if user_answer is not None and not isinstance(user_answer, str)
-                else user_answer
-            )
             dto = SaveAnswerDTO(
                 practice_id=practice_id,
                 question_id=question_id,
-                user_answer=formatted_answer,
+                user_answer=_serialize_user_answer(user_answer),
                 duration_seconds=effective_duration,
             )
 
@@ -706,6 +764,21 @@ class PracticeService:
                 )
 
             if practice.status == PracticeStatus.COMPLETED.value:
+                # DB 级幂等兜底回放 (BUG-PRAC-013)：快照写入曾失败但事务已提交，
+                # 同一幂等键的重试不再抛 40011，而是从已提交实体安全重建结果。
+                if practice.submit_idempotency_key == clean_key:
+                    replay_result = self._rebuild_persisted_submission(practice, user_id)
+                    self._release_lock_quietly(clean_key, user_id)
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    self._log_metric(
+                        action="submit_practice_replay_db",
+                        request_id=request_id,
+                        user_id=user_id,
+                        target_id=practice.id,
+                        duration_ms=duration_ms,
+                        extra={"replayed": True, "source": "persisted_key"},
+                    )
+                    return replay_result
                 raise PracticeStatusError(
                     "练习已完成，禁止重复提交",
                     details={"status": practice.status},
@@ -768,22 +841,32 @@ class PracticeService:
                 uncompleted_count=unanswered_count,
             )
 
-            # 6. 持久化幂等响应快照
-            self.idempotency.set_result(
-                clean_key,
-                str(user_id),
-                {
-                    "practice_id": str(result.practice_id),
-                    "task_id": result.task_id,
-                    "status": result.status,
-                    "unanswered_count": result.unanswered_count,
-                    "total_questions": result.total_questions,
-                    "submitted_at": result.submitted_at.isoformat(),
-                    "answered_questions": result.answered_questions,
-                    "uncompleted_count": result.uncompleted_count,
-                },
-                ttl_seconds=86400,
-            )
+            # 6. 持久化幂等响应快照 (容错隔离：快照写入失败不得让已提交请求返回 5xx)
+            try:
+                self.idempotency.set_result(
+                    clean_key,
+                    str(user_id),
+                    {
+                        "practice_id": str(result.practice_id),
+                        "task_id": result.task_id,
+                        "status": result.status,
+                        "unanswered_count": result.unanswered_count,
+                        "total_questions": result.total_questions,
+                        "submitted_at": result.submitted_at.isoformat(),
+                        "answered_questions": result.answered_questions,
+                        "uncompleted_count": result.uncompleted_count,
+                    },
+                    ttl_seconds=86400,
+                )
+            except Exception:
+                logger.warning(
+                    "Idempotency snapshot persist degraded; relying on DB key replay "
+                    "for user_ref=%s target_id=%s",
+                    user_id,
+                    dto.practice_id,
+                )
+                # 释放处理中锁，确保同键重试可重新进入并走 DB 级回放。
+                self._release_lock_quietly(clean_key, user_id)
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             self._log_metric(

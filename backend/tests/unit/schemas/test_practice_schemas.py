@@ -461,6 +461,95 @@ def test_practice_detail_response_derives_completed_count() -> None:
     assert explicit.completed_count == 3
 
 
+def test_practice_detail_response_derives_time_elapsed_seconds() -> None:
+    """测试详情响应由 items 聚合单题耗时得到 time_elapsed_seconds (BUG-PRAC-015)."""
+    practice_id = uuid.uuid4()
+    material_id = uuid.uuid4()
+    snapshot = {"stem": "题干", "question_type": "short_answer", "answer": "参考答案"}
+
+    detail = PracticeDetailResponse.model_validate(
+        {
+            "id": practice_id,
+            "title": "累计耗时聚合测试",
+            "material_id": material_id,
+            "status": "in_progress",
+            "total_count": 3,
+            "items": [
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 1,
+                    "duration_seconds": 12,
+                    "is_answered": True,
+                    "question_snapshot": snapshot,
+                },
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 2,
+                    "time_spent_seconds": 30,
+                    "is_answered": True,
+                    "question_snapshot": snapshot,
+                },
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 3,
+                    "is_answered": False,
+                    "question_snapshot": snapshot,
+                },
+            ],
+        }
+    )
+
+    assert detail.time_elapsed_seconds == 42
+
+    # An explicit value is preserved (backward compatible).
+    explicit = PracticeDetailResponse.model_validate(
+        {
+            "id": practice_id,
+            "title": "显式耗时",
+            "material_id": material_id,
+            "status": "in_progress",
+            "total_count": 1,
+            "time_elapsed_seconds": 99,
+            "items": [
+                {
+                    "id": uuid.uuid4(),
+                    "order_index": 1,
+                    "duration_seconds": 5,
+                    "question_snapshot": snapshot,
+                }
+            ],
+        }
+    )
+    assert explicit.time_elapsed_seconds == 99
+
+
+def test_practice_item_response_normalizes_legacy_repr_answer() -> None:
+    """测试历史 Python repr 多选题作答被规范化为标准 JSON 字符串 (BUG-PRAC-016)."""
+    item_id = uuid.uuid4()
+    snapshot = {"stem": "题干", "question_type": "multiple_choice", "answer": "AB"}
+
+    legacy = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 1,
+            "user_answer": "['A', 'B']",
+            "question_snapshot": snapshot,
+        }
+    )
+    assert legacy.user_answer == '["A", "B"]'
+
+    # A plain non-list string must be untouched.
+    plain = PracticeItemDetailResponse.model_validate(
+        {
+            "id": item_id,
+            "order_index": 2,
+            "user_answer": "进程是资源分配单位",
+            "question_snapshot": snapshot,
+        }
+    )
+    assert plain.user_answer == "进程是资源分配单位"
+
+
 def test_practice_create_response() -> None:
     """测试创建练习响应模型。"""
     practice_id = uuid.uuid4()

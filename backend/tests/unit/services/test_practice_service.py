@@ -17,6 +17,7 @@ Verifies:
 8. Tenant cross-access isolation (Anti-horizontal privilege escalation)
 """
 
+import json
 import uuid
 from collections.abc import Generator
 from typing import Any
@@ -712,6 +713,107 @@ class TestPracticeServiceSubmissionAndIdempotency:
                 SubmitPracticeDTO(practice_id=practice.id, idempotency_key=new_key),
             )
         assert exc_info.value.error_code == 40011
+
+    def test_submission_survives_snapshot_write_failure_and_replays(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Verify PRAC-013: set_result failure must not 5xx and same-key retry replays."""
+        idempotency = MemoryIdempotencyAdapter()
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=idempotency, queue=queue)
+
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="快照写入降级测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+            ),
+        )
+        q0 = practice.items[0].question_id
+        assert q0 is not None
+        service.save_answer(
+            user_id,
+            SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="A"),
+        )
+
+        submit_key = str(uuid.uuid4())
+        # Inject a Redis/snapshot write outage for the first submission.
+        idempotency.set_fault_injection("set_result", RuntimeError("redis snapshot write failed"))
+
+        result = service.submit_practice(
+            user_id,
+            SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
+        )
+        # Snapshot write degraded, but the primary flow still returns success.
+        assert result.status == PracticeStatus.COMPLETED.value
+        assert result.is_idempotent_replay is False
+        assert result.practice_id == practice.id
+        assert len(queue._queue) == 1
+
+        # The transaction already persisted the idempotency key on the practice row.
+        persisted = session.get(Practice, practice.id)
+        assert persisted is not None
+        assert persisted.status == PracticeStatus.COMPLETED.value
+        assert persisted.submit_idempotency_key == submit_key
+
+        # Same-key retry must replay (not raise 40011), because the snapshot was lost.
+        replay = service.submit_practice(
+            user_id,
+            SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
+        )
+        assert replay.practice_id == practice.id
+        assert replay.status == PracticeStatus.COMPLETED.value
+        assert replay.is_idempotent_replay is True
+        assert replay.total_questions == 1
+        assert len(queue._queue) == 1
+
+        # A different key is still rejected (40011), preserving the guard.
+        with pytest.raises(PracticeStatusError) as exc_info:
+            service.submit_practice(
+                user_id,
+                SubmitPracticeDTO(practice_id=practice.id, idempotency_key=str(uuid.uuid4())),
+            )
+        assert exc_info.value.error_code == 40011
+
+    def test_save_answer_serializes_multiselect_as_json(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Verify PRAC-016: list answers are persisted as canonical JSON, not Python repr."""
+        service = PracticeService(session)
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="多选序列化测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+            ),
+        )
+        q0 = practice.items[0].question_id
+        assert q0 is not None
+
+        item = service.save_answer(
+            user_id,
+            practice_id=practice.id,
+            question_id=q0,
+            user_answer=["B", "A", "C"],
+            time_spent_seconds=5,
+        )
+
+        assert isinstance(item.user_answer, str)
+        # Canonical JSON: json.loads parses it; Python repr would raise.
+        assert json.loads(item.user_answer) == ["A", "B", "C"]
+        assert item.user_answer == '["A", "B", "C"]'
 
     def test_submission_concurrent_conflict(
         self, session: Session, test_setup: dict[str, Any]
