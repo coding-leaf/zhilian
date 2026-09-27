@@ -95,6 +95,48 @@ export function collectNodeAndDescendantIds(node: KnowledgeTreeNode): string[] {
 }
 
 /**
+ * 节点勾选状态：全选 / 半选 / 未选。
+ */
+export type KnowledgeNodeCheckStatus = 'checked' | 'indeterminate' | 'unchecked';
+
+/**
+ * 依据当前选中集合推导节点自身及其子树的勾选状态。
+ *
+ * 与「仅判断自身 ID」不同，本函数自下而上聚合整个子树：子树全选中返回
+ * `checked`，全未选返回 `unchecked`，部分选中返回 `indeterminate`（半选），
+ * 从而支持父节点复选框的正确回显。
+ *
+ * @param node 目标知识点节点。
+ * @param selectedIdSet 已选中的知识点主键集合。
+ * @returns 节点的勾选状态。
+ */
+export function getNodeCheckStatus(
+  node: KnowledgeTreeNode | null | undefined,
+  selectedIdSet: ReadonlySet<string> = new Set<string>(),
+): KnowledgeNodeCheckStatus {
+  if (!node || !node.id) {
+    return 'unchecked';
+  }
+  const subtreeIds = collectNodeAndDescendantIds(node);
+  if (subtreeIds.length === 0) {
+    return 'unchecked';
+  }
+  let selectedCount = 0;
+  for (const id of subtreeIds) {
+    if (selectedIdSet.has(id)) {
+      selectedCount += 1;
+    }
+  }
+  if (selectedCount === 0) {
+    return 'unchecked';
+  }
+  if (selectedCount === subtreeIds.length) {
+    return 'checked';
+  }
+  return 'indeterminate';
+}
+
+/**
  * 根据知识点主键列表筛选匹配的节点。
  *
  * @param nodes 知识点树或平铺节点列表。

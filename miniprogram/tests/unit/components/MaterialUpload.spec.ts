@@ -48,6 +48,29 @@ describe('MaterialUpload.vue', () => {
     expect(oversized.error).toBe('文件体积过大，请上传小于 20MB 的文件');
   });
 
+  it('enforces per-format size limits aligned with backend MAX_FILE_SIZES (MAT-005)', () => {
+    // Image formats are capped at 10MB.
+    const oversizedImage = validateMaterialFile('photo.jpg', 15 * 1024 * 1024);
+    expect(oversizedImage.valid).toBe(false);
+    expect(oversizedImage.error).toContain('10MB');
+    expect(oversizedImage.error).toContain('图片');
+
+    expect(validateMaterialFile('photo.jpeg', 10 * 1024 * 1024).valid).toBe(true);
+    expect(validateMaterialFile('photo.png', 10 * 1024 * 1024 + 1).valid).toBe(false);
+
+    // Documents keep the 20MB ceiling.
+    expect(validateMaterialFile('lecture.pdf', 15 * 1024 * 1024).valid).toBe(true);
+    expect(validateMaterialFile('notes.docx', 20 * 1024 * 1024).valid).toBe(true);
+    expect(validateMaterialFile('notes.docx', 20 * 1024 * 1024 + 1).valid).toBe(false);
+  });
+
+  it('keeps the mini-program format whitelist as a controlled subset of backend doc types (MAT-006)', () => {
+    // The mobile client intentionally narrows accepted formats to pdf/docx/images.
+    expect(validateMaterialFile('slides.pptx', 1000).valid).toBe(false);
+    expect(validateMaterialFile('notes.txt', 1000).valid).toBe(false);
+    expect(validateMaterialFile('readme.md', 1000).valid).toBe(false);
+  });
+
   it('renders initial idle state with selection buttons and zero emoji', () => {
     const wrapper = mount(MaterialUpload, {
       props: {

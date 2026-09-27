@@ -86,16 +86,69 @@ describe('KnowledgeTreeNode.vue', () => {
     expect(wrapper.emitted('toggle-select')?.[0]).toEqual(['kp-root']);
   });
 
-  it('renders checked style when node id is in selectedIds', () => {
+  it('renders checked style when the whole subtree is selected', () => {
     const wrapper = mount(KnowledgeTreeNode, {
       props: {
         node: sampleNode,
-        selectedIds: ['kp-root'],
+        selectedIds: ['kp-root', 'kp-child-1'],
       },
     });
 
     const checkbox = wrapper.find('.custom-checkbox');
     expect(checkbox.classes()).toContain('checked');
+    expect(checkbox.classes()).not.toContain('indeterminate');
+  });
+
+  it('renders indeterminate style when only part of the subtree is selected (MAT-009)', () => {
+    // Parent not selected but child selected -> half-selected (indeterminate).
+    const wrapper = mount(KnowledgeTreeNode, {
+      props: {
+        node: sampleNode,
+        selectedIds: ['kp-child-1'],
+      },
+    });
+
+    const checkbox = wrapper.find('.custom-checkbox');
+    expect(checkbox.classes()).toContain('indeterminate');
+    expect(checkbox.classes()).not.toContain('checked');
+  });
+
+  it('selects the whole subtree when toggling an indeterminate node (MAT-009)', async () => {
+    setActivePinia(createPinia());
+    const store = useMaterialStore();
+    store.selectAllKnowledge(['kp-child-1']);
+
+    const wrapper = mount(KnowledgeTreeNode, {
+      props: {
+        node: sampleNode,
+        selectedIds: store.selectedKnowledgeIds,
+      },
+    });
+
+    const checkboxArea = wrapper.find('.checkbox-hit-area');
+    await checkboxArea.trigger('tap');
+
+    expect(store.selectedKnowledgeIds).toContain('kp-root');
+    expect(store.selectedKnowledgeIds).toContain('kp-child-1');
+  });
+
+  it('clears the whole subtree when toggling a checked node', async () => {
+    setActivePinia(createPinia());
+    const store = useMaterialStore();
+    store.selectAllKnowledge(['kp-root', 'kp-child-1']);
+
+    const wrapper = mount(KnowledgeTreeNode, {
+      props: {
+        node: sampleNode,
+        selectedIds: store.selectedKnowledgeIds,
+      },
+    });
+
+    const checkboxArea = wrapper.find('.checkbox-hit-area');
+    await checkboxArea.trigger('tap');
+
+    expect(store.selectedKnowledgeIds).not.toContain('kp-root');
+    expect(store.selectedKnowledgeIds).not.toContain('kp-child-1');
   });
 
   it('emits toggle-collapse when collapse hit area is clicked', async () => {

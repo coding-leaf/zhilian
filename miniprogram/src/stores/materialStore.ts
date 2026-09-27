@@ -124,6 +124,17 @@ export const useMaterialStore = defineStore('material', () => {
     selectedKnowledgeIds.value = [];
   }
 
+  /**
+   * Clear all knowledge-related state (tree, selection, collapse map) without
+   * touching material identity. Used when entering a different material so
+   * stale考点 selection / collapse state cannot leak across materials.
+   */
+  function clearKnowledgeState(): void {
+    currentKnowledgeTree.value = [];
+    selectedKnowledgeIds.value = [];
+    knowledgeTreeCollapsedMap.value = {};
+  }
+
   function toggleNodeCollapse(id: string): void {
     knowledgeTreeCollapsedMap.value = {
       ...knowledgeTreeCollapsedMap.value,
@@ -172,6 +183,7 @@ export const useMaterialStore = defineStore('material', () => {
     toggleKnowledgeSubtree,
     selectAllKnowledge,
     clearKnowledgeSelection,
+    clearKnowledgeState,
     toggleNodeCollapse,
     reset,
     resetMaterialState,

@@ -190,7 +190,11 @@ async function loadData(reset = false): Promise<void> {
       if (reset) {
         listData.value = items;
       } else {
-        listData.value = [...listData.value, ...items];
+        // Deduplicate by id: offset drift (inserts/deletes during paging) can
+        // otherwise re-deliver an item and cause duplicate keys / rows.
+        const existingIds = new Set(listData.value.map((item) => item.id));
+        const newItems = items.filter((item) => !existingIds.has(item.id));
+        listData.value = [...listData.value, ...newItems];
       }
       for (const item of items) {
         materialStore.addMaterial(item);
@@ -276,16 +280,26 @@ onPullDownRefresh(async () => {
   uni.stopPullDownRefresh();
 });
 
-onReachBottom(async () => {
+async function handleReachBottom(): Promise<void> {
   if (listData.value.length < total.value && !loading.value) {
     page.value += 1;
     await loadData(false);
   }
-});
+}
 
+onReachBottom(handleReachBottom);
+
+// The first `onShow` fires together with the initial mount; let `onMounted`
+// own the first-screen fetch so the two lifecycles cannot double-request.
+// Subsequent `onShow` events mean the user returned to the page -> refresh.
+let hasShownOnce = false;
 onShow(() => {
   isPageVisible = true;
-  void loadData(true);
+  if (hasShownOnce) {
+    void loadData(true);
+  } else {
+    hasShownOnce = true;
+  }
 });
 
 onHide(() => {
@@ -317,6 +331,7 @@ defineExpose({
   handleCardTriggerParse,
   handleOpenUpload,
   handleUploadSuccess,
+  handleReachBottom,
   checkAndStartPolling,
   stopPolling,
 });

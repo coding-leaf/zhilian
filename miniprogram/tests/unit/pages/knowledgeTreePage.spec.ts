@@ -245,6 +245,35 @@ describe('KnowledgeTreePage (knowledge-tree/index.vue)', () => {
     expect(wrapper.text()).not.toContain('临界区是指访问临界资源的代码段吗？');
   });
 
+  it('resets stale selection and collapse state when entering a new material (MAT-008)', async () => {
+    const materialStore = useMaterialStore();
+    // Simulate residue from a previously viewed material.
+    materialStore.setKnowledgeTree(mockTreeResponse.nodes);
+    materialStore.selectAllKnowledge(['node-1', 'node-1-1', 'node-2']);
+    materialStore.toggleNodeCollapse('node-1');
+    expect(materialStore.selectedCount).toBe(3);
+
+    vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: mockTreeResponse,
+    });
+
+    mount(KnowledgeTreePage, {
+      props: {
+        materialId: 'mat_002',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(materialStore.selectedKnowledgeIds).toEqual([]);
+    expect(materialStore.selectedCount).toBe(0);
+    expect(materialStore.knowledgeTreeCollapsedMap).toEqual({});
+    // New tree is loaded and count reflects only the fresh tree.
+    expect(materialStore.currentKnowledgeTree).toHaveLength(2);
+  });
+
   it('hides descendants of a collapsed node from the flat list but keeps the node itself', async () => {
     vi.spyOn(materialApi, 'fetchKnowledgeTree').mockResolvedValue({
       code: 200,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { mount } from '@vue/test-utils';
+import { onShow } from '@dcloudio/uni-app';
 import { setActivePinia, createPinia } from 'pinia';
 import MaterialListPage from '@/subpackages/material/pages/list/index.vue';
 import { useMaterialStore } from '@/stores/materialStore';
@@ -302,6 +303,71 @@ describe('MaterialListPage (list/index.vue)', () => {
     expect(materialStore.materialsList.some((m) => m.id === 'mat_home_01')).toBe(true);
     expect(materialStore.materialsList.some((m) => m.id === 'mat_01')).toBe(true);
     expect(materialStore.materialsList.some((m) => m.id === 'mat_02')).toBe(true);
+  });
+
+  it('deduplicates items by id when appending paginated pages (MAT-010)', async () => {
+    const firstPage: MaterialItem[] = [sampleMaterials[0]];
+    const shiftedSecondPage: MaterialItem[] = [sampleMaterials[0], sampleMaterials[1]];
+    const fetchSpy = vi
+      .spyOn(materialApi, 'fetchMaterialList')
+      .mockResolvedValueOnce({
+        code: 200,
+        message: 'success',
+        data: { items: firstPage, total: 3, limit: 20, offset: 0 },
+      })
+      .mockResolvedValueOnce({
+        code: 200,
+        message: 'success',
+        data: { items: shiftedSecondPage, total: 3, limit: 20, offset: 1 },
+      });
+
+    const wrapper = mount(MaterialListPage);
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(wrapper.vm.listData).toHaveLength(1);
+
+    await wrapper.vm.handleReachBottom();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    // mat_01 appears again in page 2 (offset drift) but must not be duplicated.
+    const ids = wrapper.vm.listData.map((item) => item.id);
+    expect(ids).toEqual(['mat_01', 'mat_02']);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('issues exactly one list request on first screen load (MAT-011)', async () => {
+    const fetchSpy = vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: sampleMaterials, total: 2, limit: 20, offset: 0 },
+    });
+
+    mount(MaterialListPage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // onShow fires during setup and onMounted also fires; must collapse to a single request.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the list when returning to the page via onShow (MAT-011)', async () => {
+    const fetchSpy = vi.spyOn(materialApi, 'fetchMaterialList').mockResolvedValue({
+      code: 200,
+      message: 'success',
+      data: { items: sampleMaterials, total: 2, limit: 20, offset: 0 },
+    });
+
+    mount(MaterialListPage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const onShowMock = vi.mocked(onShow);
+    const showCallback = onShowMock.mock.calls.at(-1)?.[0] as (() => void) | undefined;
+    expect(typeof showCallback).toBe('function');
+    showCallback?.();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it('polls status when pending/parsing items exist and stops polling upon completion', async () => {

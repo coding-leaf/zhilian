@@ -197,6 +197,8 @@ function handleGoQuestionList(): void {
 function initData(id?: string): void {
   if (id && !targetMaterialId.value) {
     targetMaterialId.value = id;
+    // Reset stale考点 selection/collapse state before loading a new material.
+    materialStore.clearKnowledgeState();
     materialStore.setActiveMaterial(id);
     void loadKnowledgeTree(id);
     void loadMaterialInfo(id);

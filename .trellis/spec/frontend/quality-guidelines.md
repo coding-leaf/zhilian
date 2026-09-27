@@ -376,3 +376,18 @@ const MAX_STORAGE_BYTES = 20 * 1024;
 
 #### 4. Tests Required
 - 刷新后 `userStore.tokens` 与 storage 严格同步；重放 1 次后仍 401 → 抛 20001 且不再刷新；8000 个中文字符（~24KB，`.length` 未超）必须触发 `AppError(10001)`。
+
+### Scenario: Material File Validation, Tree Check-State & List Loading Contracts
+
+#### 1. Scope / Trigger
+- 资料上传前端校验、知识点树勾选/半选、资料列表分页与首屏加载。
+
+#### 2. Contracts
+- 文件大小上限必须与后端 `material.py:MAX_FILE_SIZES` 逐格式一致（pdf/docx 20MB、png/jpg/jpeg 10MB、txt/md 5MB），未知后缀回退 20MB；禁止单一 20MB 通吃导致前后端放行不一致。
+- 前端可见格式白名单为后端 `MaterialDocType` 的有意子集（产品设计收窄），非缺陷；变更需双端同步评估。
+- 单页重拍返回类型必须为后端 `MaterialReshootResponse`（`page_index/is_qualified/reshoot_count/parse_status/unqualified_reason`），禁止使用漂移类型（如 `page_no/status/message`）。
+- 知识点树父节点勾选态必须由选中集合推导（`checked/indeterminate/unchecked`，纯函数），切换资料前必须重置选中与折叠态。
+- 列表分页追加必须按 id 去重；首屏加载只由单一生命周期触发一次。
+
+#### 3. Tests Required
+- 15MB jpg 被拒 / 15MB pdf 通过；pptx/txt/md 被拒（收窄断言）；`getNodeCheckStatus` 叶子/混合/空输入；切换资料后选中与折叠归零；分页偏移重复数据去重；首屏仅发 1 次列表请求。

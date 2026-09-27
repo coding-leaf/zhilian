@@ -13,8 +13,12 @@
 
       <!-- 复选框触控区 (>= 88rpx) -->
       <view class="checkbox-hit-area" @tap.stop="handleToggleSelect">
-        <view class="custom-checkbox" :class="{ checked: isSelected }">
-          <wd-icon v-if="isSelected" name="check" size="24rpx" custom-class="check-icon" />
+        <view
+          class="custom-checkbox"
+          :class="{ checked: isChecked, indeterminate: isIndeterminate }"
+        >
+          <wd-icon v-if="isChecked" name="check" size="24rpx" custom-class="check-icon" />
+          <view v-else-if="isIndeterminate" class="checkbox-dash" />
         </view>
       </view>
 
@@ -46,7 +50,7 @@ import { computed } from 'vue';
 import { getActivePinia } from 'pinia';
 import { useMaterialStore } from '@/stores/materialStore';
 import type { KnowledgeTreeNode as KnowledgeNodeType } from '@/types/material';
-import { collectNodeAndDescendantIds } from '../utils/tree';
+import { collectNodeAndDescendantIds, getNodeCheckStatus } from '../utils/tree';
 
 interface Props {
   node: KnowledgeNodeType;
@@ -74,9 +78,10 @@ const hasChildren = computed<boolean>(() => {
   return Array.isArray(props.node.children) && props.node.children.length > 0;
 });
 
-const isSelected = computed<boolean>(() => {
-  return props.selectedIds.includes(props.node.id);
-});
+const checkStatus = computed(() => getNodeCheckStatus(props.node, new Set(props.selectedIds)));
+
+const isChecked = computed<boolean>(() => checkStatus.value === 'checked');
+const isIndeterminate = computed<boolean>(() => checkStatus.value === 'indeterminate');
 
 const isCollapsed = computed<boolean>(() => {
   return Boolean(props.collapsedMap[props.node.id]);
@@ -84,7 +89,8 @@ const isCollapsed = computed<boolean>(() => {
 
 function handleToggleSelect(): void {
   const ids = collectNodeAndDescendantIds(props.node);
-  const willSelect = !isSelected.value;
+  // checked -> clear the whole subtree; indeterminate/unchecked -> select all.
+  const willSelect = checkStatus.value !== 'checked';
   if (getActivePinia()) {
     const materialStore = useMaterialStore();
     materialStore.toggleKnowledgeSubtree(ids, willSelect);
@@ -153,6 +159,18 @@ function handleToggleCollapse(): void {
     background-color: $--wot-color-theme;
     border-color: $--wot-color-theme;
   }
+
+  &.indeterminate {
+    background-color: $--wot-color-theme;
+    border-color: $--wot-color-theme;
+  }
+}
+
+.checkbox-dash {
+  width: 20rpx;
+  height: 4rpx;
+  border-radius: 2rpx;
+  background-color: #ffffff;
 }
 
 :deep(.check-icon) {

@@ -139,8 +139,12 @@ describe('RetakeDrawer.vue', () => {
       message: 'success',
       data: {
         material_id: 'mat_test_1',
-        page_no: 4,
-        status: 'ready',
+        version_id: 'ver_test_1',
+        page_index: 4,
+        is_qualified: true,
+        reshoot_count: 1,
+        parse_status: 'ready',
+        unqualified_reason: null,
       },
     };
 

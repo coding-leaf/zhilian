@@ -14,7 +14,6 @@ import type {
   KnowledgeTreeResponse,
   MaterialUploadResponse,
   MaterialReshootResponse,
-  RetakePageResponse,
   MaterialParseResponse,
   MaterialOCRPagesResponse,
 } from '../types/material';
@@ -199,14 +198,14 @@ export function retakeMaterialPage(
   pageNo: number,
   file: File | Blob | string,
   idempotencyKey?: string,
-): Promise<ApiResponse<RetakePageResponse>> {
+): Promise<ApiResponse<MaterialReshootResponse>> {
   const headers: Record<string, string> = {};
   if (idempotencyKey) {
     headers['Idempotency-Key'] = idempotencyKey;
   }
   // 真机端后端契约为 multipart File+Form；非真机（测试/开发）保留 JSON 分支。
   if (isRealMiniProgramUpload() && typeof file === 'string') {
-    return uploadFile<RetakePageResponse>({
+    return uploadFile<MaterialReshootResponse>({
       url: `/api/v1/materials/${materialId}/reshoot`,
       filePath: file,
       name: 'file',
@@ -214,7 +213,7 @@ export function retakeMaterialPage(
       headers,
     });
   }
-  return request<RetakePageResponse>({
+  return request<MaterialReshootResponse>({
     url: `/api/v1/materials/${materialId}/reshoot`,
     method: 'POST',
     data: { page_index: pageNo, file },

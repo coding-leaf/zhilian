@@ -88,16 +88,6 @@ export interface PageOCRStatus {
 }
 
 /**
- * 单页重拍接口响应数据契约
- */
-export interface RetakePageResponse {
-  material_id: string;
-  page_no: number;
-  status: string;
-  message?: string;
-}
-
-/**
  * 资料上传响应 DTO
  */
 export interface MaterialUploadResponse {

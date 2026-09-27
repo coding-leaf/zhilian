@@ -111,6 +111,34 @@ describe('MaterialStore Knowledge Tree & Selection Extensions', () => {
     expect(store.knowledgeTreeCollapsedMap['node-1']).toBe(false);
   });
 
+  it('should clear only knowledge tree/selection/collapse state via clearKnowledgeState (MAT-008)', () => {
+    const store = useMaterialStore();
+    store.setMaterialsList([
+      {
+        id: 'mat_keep_01',
+        title: '保留的资料',
+        file_format: 'pdf',
+        file_size: 100,
+        source_type: 'local',
+        status: 'ready',
+        created_at: '2026-09-25T00:00:00Z',
+      },
+    ]);
+    store.setKnowledgeTree(mockTree);
+    store.selectAllKnowledge(['node-1', 'node-1-1']);
+    store.toggleNodeCollapse('node-1');
+
+    store.clearKnowledgeState();
+
+    expect(store.currentKnowledgeTree).toEqual([]);
+    expect(store.selectedKnowledgeIds).toEqual([]);
+    expect(store.knowledgeTreeCollapsedMap).toEqual({});
+    expect(store.selectedCount).toBe(0);
+    expect(store.hasLowConfidenceNode).toBe(false);
+    // Material identity/selection is preserved.
+    expect(store.materialsList.some((m) => m.id === 'mat_keep_01')).toBe(true);
+  });
+
   it('should reset all tree and selection state on store reset', () => {
     const store = useMaterialStore();
     store.setKnowledgeTree(mockTree);

@@ -7,6 +7,7 @@ import {
   validateQuestionConfig,
   computeFieldDiffs,
   collectNodeAndDescendantIds,
+  getNodeCheckStatus,
 } from '@/subpackages/material/utils/tree';
 import type { KnowledgeTreeNode } from '@/types/material';
 
@@ -102,6 +103,42 @@ describe('materialTreeUtils', () => {
     it('should collect only node id for leaf nodes without children', () => {
       const ids = collectNodeAndDescendantIds(sampleTree[1]);
       expect(ids).toEqual(['kp-2']);
+    });
+  });
+
+  describe('getNodeCheckStatus', () => {
+    it('should return unchecked when no subtree id is selected', () => {
+      const status = getNodeCheckStatus(sampleTree[0], new Set<string>());
+      expect(status).toBe('unchecked');
+    });
+
+    it('should return checked when the whole subtree is selected', () => {
+      const status = getNodeCheckStatus(
+        sampleTree[0],
+        new Set(['kp-1', 'kp-1-1', 'kp-1-1-1', 'kp-1-2']),
+      );
+      expect(status).toBe('checked');
+    });
+
+    it('should return indeterminate when only some descendants are selected', () => {
+      // Parent id not selected but a descendant is -> partial (half-selected).
+      expect(getNodeCheckStatus(sampleTree[0], new Set(['kp-1-1']))).toBe('indeterminate');
+      // Parent selected but a descendant is not -> also partial.
+      expect(getNodeCheckStatus(sampleTree[0], new Set(['kp-1', 'kp-1-1']))).toBe('indeterminate');
+    });
+
+    it('should treat leaf nodes as checked/unchecked only', () => {
+      const leaf = sampleTree[0].children?.[1];
+      expect(getNodeCheckStatus(leaf, new Set())).toBe('unchecked');
+      expect(getNodeCheckStatus(leaf, new Set(['kp-1-2']))).toBe('checked');
+      expect(getNodeCheckStatus(leaf, new Set(['kp-1']))).toBe('unchecked');
+    });
+
+    it('should handle empty or malformed nodes gracefully', () => {
+      expect(getNodeCheckStatus(null, new Set())).toBe('unchecked');
+      expect(getNodeCheckStatus({ id: '', level: 1 } as KnowledgeTreeNode, new Set(['x']))).toBe(
+        'unchecked',
+      );
     });
   });
 

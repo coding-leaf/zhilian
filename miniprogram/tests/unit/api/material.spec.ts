@@ -234,9 +234,12 @@ describe('Material API Module', () => {
       message: 'success',
       data: {
         material_id: 'mat_002',
-        page_no: 4,
-        status: 'ready',
-        message: 'Reshoot successful',
+        version_id: 'ver_002',
+        page_index: 4,
+        is_qualified: true,
+        reshoot_count: 1,
+        parse_status: 'ready',
+        unqualified_reason: null,
       },
     };
     const requestSpy = vi.spyOn(requestModule, 'request').mockResolvedValue(mockResponse);
@@ -250,7 +253,11 @@ describe('Material API Module', () => {
       data: { page_index: 4, file: 'retake-file-path' },
       headers: { 'Idempotency-Key': 'idemp-key-1' },
     });
-    expect(res).toEqual(mockResponse);
+    // Contract must match backend MaterialReshootResponse (MAT-007).
+    expect(res.data.page_index).toBe(4);
+    expect(res.data.is_qualified).toBe(true);
+    expect(res.data.reshoot_count).toBe(1);
+    expect(res.data.parse_status).toBe('ready');
   });
 
   it('should use multipart uni.uploadFile for retakeMaterialPage on real device', async () => {
