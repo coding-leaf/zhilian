@@ -500,3 +500,48 @@ return item.score >= max * 0.6 ? CORRECT : WRONG;
 - 前端：`grading_status` 优先级、`graded` 覆盖遗留 `status='unanswered'`、重批成功就地更新分数文本。
 - 夹具字段名逐字取自后端；双侧夹具同源，禁各自漂移。
 
+---
+
+### Scenario: Diagnosis Report Adaptation, Mastery Aggregation & Regression Sign
+
+#### 1. Scope / Trigger
+- 学情诊断报告展示、掌握度宏观全景、薄弱/退步知识点预警。
+
+#### 2. Signatures
+- 前端适配：`adaptDiagnosisReport(raw) -> DiagnosisReport`（`src/api/adapters/diagnosis.ts`，唯一归一化边界）。
+- 后端：`DiagnosisService.get_user_mastery_overview(user_id, material_id: uuid.UUID | None = None, ...)`。
+- 纯函数：`check_regression(current_score, previous_score, threshold) -> (is_regressed, score_delta)`。
+
+#### 3. Contracts
+- **报告字段归一（前端适配层）**：后端响应为 `weak_knowledge_points`、`score_rate`(0–1)、`mastery_before/after`(0–1)；前端内部契约为 `weak_points`、`overall_score`(0–100)、`mastery_rate`(0–100)。归一集中一处，幂等且**后端已给值优先**：`weak_points ?? weak_knowledge_points`、`overall_score ?? round(score_rate*100)`、`mastery_rate ?? round((mastery_after ?? score_rate)*100)`。消费点（store/组件）禁止各自映射。
+- **掌握度全景缺省资料**：`material_id is None` 时必须聚合该用户**全部**知识点（`list_all_by_user_id` + `list_mastery_records_by_user`），**禁止**落成 `material_id IS NULL`（`KnowledgePoint.material_id` 为 NOT NULL → 恒空）。带 `material_id` 路径零回归；租户隔离必须保留。
+- **退步符号唯一约定**：`score_delta = current_score - previous_score`（**负数 = 退步**），`is_regressed = score_delta <= -threshold`；与 `RegressedKnowledgeItemDTO`（负数=退步）及前端 `formatScoreDelta`（负数=退步）一致。排序保持“最弱优先 + 降幅最大优先”。
+
+#### 4. Validation & Error Matrix
+- 后端已提供 `weak_points`/`overall_score`/`mastery_rate` → 适配层不得覆盖（幂等）。
+- `material_id=None` → 跨资料聚合；`material_id=UUID` → 单资料（零回归）。
+- 退步集合不变：`prev-cur >= thr` ≡ `cur-prev <= -thr`；仅返回值符号翻转。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误：material_id 为 None 仍按 material_id == None 过滤（NOT NULL 列 → 恒空）
+knowledge_points = repo.list_by_material_id(material_id=None, user_id=user_id)
+# 错误：退步为正（与前端的负数约定相反）
+score_delta = round(previous_score - current_score, 4)
+```
+##### Correct
+```python
+# 正确：缺省资料聚合全部；符号统一 current - previous
+points = repo.list_all_by_user_id(user_id) if material_id is None \
+    else repo.list_by_material_id(material_id, user_id)
+score_delta = round(current_score - previous_score, 4)
+is_regressed = score_delta <= -threshold
+```
+
+#### 6. Tests Required
+- 适配层：后端形态夹具（`weak_knowledge_points`/`score_rate`/`mastery_after`，无前端字段）→ `weak_points` 非空、`overall_score`/`mastery_rate` 非零；已含前端字段时幂等。
+- 服务：`material_id=None` 聚合全部知识点且租户隔离（真实 SQLite）；带 `material_id` 零回归。
+- 算法：退步 `score_delta` 为负且 `is_regressed` 为真；提升为正且为假；排序最弱/降幅最大在前。
+- 前端 `formatScoreDelta` 保持负数=退步，退步徽章渲染正确。
+
