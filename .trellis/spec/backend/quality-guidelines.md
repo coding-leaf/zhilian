@@ -545,3 +545,54 @@ is_regressed = score_delta <= -threshold
 - 算法：退步 `score_delta` 为负且 `is_regressed` 为真；提升为正且为假；排序最弱/降幅最大在前。
 - 前端 `formatScoreDelta` 保持负数=退步，退步徽章渲染正确。
 
+---
+
+### Scenario: Wrong-Book Pagination, Mastery Toggle & Continue-Practice Contract
+
+#### 1. Scope / Trigger
+- 错题本列表分页、攻克状态切换、错题作答回显，以及“一键巩固错题”继续练习。
+
+#### 2. Signatures
+- `GET /api/v1/wrong-records` → `WrongRecordListResponse.total`（**真实总数**）。
+- `DiagnosisRepository.count_wrong_records(user_id, is_mastered=None, knowledge_point_id=None) -> int`；`DiagnosisService.list_wrong_records(...) -> tuple[list[WrongRecord], int]`。
+- `POST /api/v1/wrong-records/{id}/master`，可选体 `{"is_mastered": bool}`（缺省 True）。
+- `WrongRecordItemResponse.user_answer: str | None`（映射实体 `last_wrong_answer`）。
+- `POST /api/v1/practices`：`source_type` ∈ `{normal, weakness, wrong_record}`；`material_id` 可选。
+
+#### 3. Contracts
+- **分页 total 必须为全量计数**：列表接口 `total` 不得为 `len(items)`（当前页条数），否则前端 `hasMore = loaded < total` 在满页时恒 false、后续页永不可达。计数须与列表**同一过滤条件**（`user_id` 租户隔离 + `is_mastered` + `knowledge_point_id`）。
+- **攻克可切换**：`master` 端点接受可选 `is_mastered`；缺省 `True`（向后兼容，无 body 仍置已攻克）；`False` 时 `is_mastered=False` 且 `mastered_at=None`。
+- **作答回显**：错题 DTO 必须下发 `user_answer`（源实体 `last_wrong_answer`），覆盖 `from_attributes` ORM 解析路径。
+- **继续练习来源与资料**：`source_type='wrong_record'` 合法；`material_id` 可选，缺省时由命中题目（`Question.material_id` NOT NULL）解析，**禁止**向 NOT NULL 列写 NULL；`knowledge_point_ids` 至少 1（前端无可用知识点时禁用入口）。
+
+#### 4. Validation & Error Matrix
+- `total` = 真实全量；满页时 `hasMore` 为真。
+- `{is_mastered:false}` → false/None；无 body → true/时间戳。
+- `last_wrong_answer=None` → `user_answer=None`（正确“未作答”），不得伪造。
+- `source_type='wrong_record'` + `material_id=None` + `knowledge_point_ids≥1` → 201 创建成功。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：total 用当前页条数，满页时前端判定无更多
+total_count = len(items)
+# 错误2：master 端点无请求体，恒置已攻克（取消攻克无效）
+record.is_mastered = True
+# 错误3：继续练习要求 material_id 必填 + 合法 source_type 未含 wrong_record
+material_id: uuid.UUID = Field(...)   # 错题本页常缺 → 422
+```
+##### Correct
+```python
+# 正确：真实计数（同过滤条件）；可选攻克；可选 material 由题目解析
+total = repo.count_wrong_records(user_id, is_mastered=..., knowledge_point_id=...)
+record.is_mastered = is_mastered
+record.mastered_at = now if is_mastered else None
+resolved_material_id = options.material_id or scattered_questions[0].material_id
+```
+
+#### 6. Tests Required
+- 列表：真实 total > 页大小；租户隔离；满页 `hasMore` 为真、可翻页。
+- 攻克：无 body → true；`{is_mastered:false}` → false 且 `mastered_at=None`；`true` → true 且时间戳。
+- DTO：ORM/dict 两路径 `last_wrong_answer → user_answer`；`None` 保持 `None`。
+- 继续练习：`wrong_record` + 无 `material_id` 创建成功（201）；旧 `normal`/`weakness` 零回归。
+
