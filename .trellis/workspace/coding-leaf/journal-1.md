@@ -419,3 +419,27 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 登录请求链路加固：超时收敛与失败可诊断
+<!-- trellis-session: v=2 fp=37efd1d3352e2031 -->
+
+**Date**: 2026-09-29
+**Task**: 登录请求链路加固：超时收敛与失败可诊断
+**Branch**: `master`
+
+### Summary
+
+用户报「点击登录转圈 60 秒无报错，卡死测试」。先做根因取证而非改码：后端 /auth/login 0.11s 返 200、Postgres 健康、urlCheck 已关、localhost→127.0.0.1、系统代理关闭，但 netstat 显示开发者工具与后端 TCP 两端 ESTABLISHED 静默 140+ 秒，且库中无该次建号记录 —— 判定请求字节从未离开开发者工具网络层（环境问题，非本仓库缺陷）；异常路由 xray_tun 在 127.255.255.255/32 上装了路由（v2rayN TUN）。环境不可控，故本任务只消除其不可诊断的放大效应：request.ts 显式 15s 超时（原为平台默认 60s）、新增 utils/requestError.ts 结构化 RequestError（toast 给短结论、console 给 url/errMsg/errno/statusCode）、loginWithWechat 由裸 boolean 改为判别式 LoginOutcome、fetchProfile 去空 catch、login.vue 补 switchTab 的 fail 兜底。关键判断：全局 15s 会打断同步调 LLM 的接口，故给 generate/ask-coach/coach-ask/grading-regrade 标 90s，其余端点逐个核实后端确不在慢路径后维持默认。task verify 退出码 0（后端 1378 passed；前端 9 文件 62 用例，新增 21 零回归）。遗留：AC-6（wx.login 失败分支）因 #ifdef 在 vitest 下不生效而无法单测，需真机验；环境侧 TUN 问题未解决；发现两个 uni 构建 watcher 同时写 dist/dev 的隐患。用户将在新对话继续实测并列出其余待修问题。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6e843ae` | fix(frontend): 登录请求链路加固，超时收敛并让失败可诊断 |
+| `a30110e` | docs(spec): 新增网络层契约，并纠正规范中已失效的例外与计数 |
+| `84c22e4` | chore(task): 登记 09-29-login-request-hardening 任务与上下文清单 |
+
+### Status
+
+[OK] **Completed**
