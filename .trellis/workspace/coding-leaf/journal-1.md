@@ -288,3 +288,46 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: 学习闭环修复：前端契约重建、RQ 后台执行与并发派发竞态
+<!-- trellis-session: v=2 fp=00a15bc00ca622e3 -->
+
+**Date**: 2026-09-29
+**Task**: 学习闭环修复：前端契约重建、RQ 后台执行与并发派发竞态
+**Branch**: `codex/frontend-ui-loop-repair`
+
+### Summary
+
+接手并完成 09-28-frontend-ui-redesign-review：把 5d7a2f3 那份声称打通 AC-1~AC-7 的提交修到真正可用。接手时后端步骤 1-6 已完成且门禁全绿，前端停在半成品（22 个 type error + 4 个 lint error、仅 7 个测试）。本次补齐前端适配层与全部消费方迁移，并新发现两处并发派发竞态（判题重试、资料解析）改以数据库条件更新收敛。
+
+### Main Changes
+
+- 新增 src/api/adapters/* 作为 wire↔view 唯一归一化边界，页面与 store 只消费归一化投影；修复资料状态映射、讲义详情页非终态首屏、七题型作答、串行草稿队列、结果页分阶段判题展示、错题按课程归类与再生范围、助教真实答复与来源展示
+- 后端接入 RQ 进程外执行（此前只有入队代码没有消费者）、受控任务名注册、终态失败回写、幂等重试入口与只读运维巡检；资料上传不再自动解析，版本新增 not_started；课程助教新增证据门控与引用校验的有界图；头像改为托管上传
+- 自查发现并修复两处并发竞态：全仓 with_for_update 零命中、原实现均为先读后写，两个并发请求会凭同一陈旧读重复派发任务；新增 PracticeRepository.try_transition_status 与 MaterialRepository.try_transition_version_status，各配陈旧读回归测试
+- 规格沉淀：前端 7 份规格按真实实现重写（原文档结论与代码相反），后端新增 6 个契约 Scenario，跨层指南新增 fixture 保真与条件更新两条检查项
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `609e7f1` | feat(backend): 接入 RQ 进程外任务执行、终态失败回写与运维巡检 |
+| `15a621e` | fix(backend): 修复资料解析、判题诊断与助教闭环断点（含并发派发竞态） |
+| `2e8a45d` | feat(frontend): 重建 API 归一化层并打通作答→判题→诊断→错题闭环 |
+| `32fd0a2` | docs(spec): 纠正前端规格失配并沉淀后端闭环契约 |
+
+### Testing
+
+- [OK] task verify exit 0；后端 1365 tests / 0 failures / 0 errors、覆盖率 91.15%（junit xml 独立计数确认）；前端 lint 与 vue-tsc 无输出、7 文件 39 测试
+- [OK] 两个既有 wall-clock 计时用例（OCR 批量吞吐 100ms、mastery 20ms）在负载下偶发失败，单独重跑即过且文件未被本任务触碰，经确认按既有抖动记录
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 09-28-question-source-snippet：R3「核对页展示来源」因后端题目响应从不返回切片正文而未达成，已挂账独立子任务
+- 人工验证外部条件：微信真机全链路、真实 Redis + RQ 的 worker 消费与重试耗尽回调、真实 LLM、对象存储头像上传、PostgreSQL 迁移与巡检 SQL
+- worker 存活探测未实现；前端 tests/** 不在 tsconfig 类型检查范围内（既有配置缺口）

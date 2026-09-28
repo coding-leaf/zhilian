@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-09-28
+- **Total Sessions**: 8
+- **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~290 | Active |
+| `journal-1.md` | ~333 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-09-29 | 学习闭环修复：前端契约重建、RQ 后台执行与并发派发竞态 | `609e7f1`, `15a621e`, `2e8a45d`, `32fd0a2` | `codex/frontend-ui-loop-repair` |
 | 7 | 2026-09-28 | 全新前端架构与用户体验重构 | `b12c20e` | `master` |
 | 5 | 2026-09-28 | 父任务集成验收：课程文件夹与出题-答题闭环重构（C1-C4 全部归档） | `13f5860` | `master` |
 | 4 | 2026-09-28 | C4 前端出题→答题闭环 | `84cf0ed` | `master` |
