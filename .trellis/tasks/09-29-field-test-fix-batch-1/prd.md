@@ -15,6 +15,16 @@
 3. 「我还在已有资料解析的资料，试着生题，但是没有反馈，我也不知道题目在哪里」
 4. 「学情界面，意义不明？感觉可能要重新设计，不排除因为前面链路阻断导致我无法使用」
 5. 「我的部分，学习足迹为 0」
+6. （追加，同日实测）「`POST /questions/generate` 502：`大模型服务返回异常状态码: 400`」——
+   用户按建议把 LLM 切到 DeepSeek 官方 API 后暴露的既有兼容性缺陷（思考模式不支持强制
+   `tool_choice`），见 [09-29-fix-llm-thinking-mode](../09-29-fix-llm-thinking-mode/prd.md)。
+7. （追加，同日实测，**登记未实现**）「生题不能按批次显示归类」——`batch_id` 在后端契约与
+   接口响应中均存在，前端仅声明类型、**从未渲染**，属从未实现而非回归。
+8. （追加，同日实测，**判定为下游症状**）「选择题也要判题，不该秒出么」——
+   交卷后判题**全部异步入队**（`services/practice.py:1145` `enqueue("grading_jobs")`），
+   而 worker 在本机不可用（见子任务 2），故所有题停在「判题中」。
+   **不是「客观题判得慢」**。worker 恢复后仍存在秒级异步延迟；是否改为交卷时同步判客观题，
+   属设计决策，需单独评估。
 
 ## 任务地图
 
@@ -23,6 +33,7 @@
 | [09-29-fix-global-input](../09-29-fix-global-input/prd.md) | 需求 1 | 前端（全局输入层） | P0 | 无 |
 | [09-29-fix-parse-stuck](../09-29-fix-parse-stuck/prd.md) | 需求 2 | 后端（队列/worker）+ 前端（状态与反馈） | P0 | 无 |
 | [09-29-fix-qgen-feedback](../09-29-fix-qgen-feedback/prd.md) | 需求 3 | 前端（组卷流程反馈与结果落点） | P1 | **无**（定案后修正，见下） |
+| [09-29-fix-llm-thinking-mode](../09-29-fix-llm-thinking-mode/prd.md) | 追加需求 6（生题 502） | 后端（LLM 结构化输出） | P0 | 无 |
 | [09-29-fix-learning-stats](../09-29-fix-learning-stats/prd.md) | 需求 5 | 前后端（统计聚合）+ 前端空态 | P1 | **口径缺陷独立可复现**；parse-stuck 修好后会放大其可见度 |
 | [09-29-review-page-ia](../09-29-review-page-ia/prd.md) | 需求 4 | 产品/信息架构 | P2 | **门禁**：learning-stats 完成前不启动 |
 

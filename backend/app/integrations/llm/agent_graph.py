@@ -80,9 +80,15 @@ def call_model_node(
     effective_options = current_options
     if response_model is not None:
         tool_schema = pydantic_to_tool_schema(response_model)
-        tool_name = tool_schema["function"]["name"]
         tools = [tool_schema]
-        tool_choice: str | dict[str, Any] = {"type": "function", "function": {"name": tool_name}}
+        # 不强制指定具体函数：thinking 模式的模型拒绝一切「强制」取值。实测 DeepSeek 的
+        # deepseek-flash 与 deepseek-v4-pro 对 {"type":"function",...} 与 "required" 均返回
+        # 400 `Thinking mode does not support this tool_choice`，只有 "auto" 或不传可用——
+        # 且实测两者都会正常调用工具（tool_calls=[emit_result]），结构化输出并未削弱。
+        # 保底路径已存在：模型若不调用工具，validate_output_node 会退回纯文本/Markdown 解析
+        # （见本模块的 tool_calls 向下兼容分支），再经一次自愈重试，仍失败才抛 502。
+        # 调用方仍可通过 options.tool_choice 显式覆盖（见下方 `or tool_choice`）。
+        tool_choice: str | dict[str, Any] = "auto"
 
         if current_options is not None:
             effective_options = LLMOptions(

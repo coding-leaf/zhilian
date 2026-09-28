@@ -23,7 +23,8 @@
     "09-29-fix-parse-stuck",
     "09-29-fix-qgen-feedback",
     "09-29-fix-learning-stats",
-    "09-29-review-page-ia"
+    "09-29-review-page-ia",
+    "09-29-fix-llm-thinking-mode"
   ],
   "parent": null,
   "relatedFiles": [],
