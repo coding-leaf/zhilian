@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "条件渲染/交互模式的禁止与必需项，本次修复要在此留一条「小程序端修饰符会被丢弃」的规则"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "浮层组件的结构与 props/emits 约定"}

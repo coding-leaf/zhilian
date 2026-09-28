@@ -154,7 +154,9 @@
     />
 
     <!-- 新建课程弹窗 -->
-    <view v-if="showFolderModal" class="modal-overlay" @tap.self="closeFolderModal">
+    <view v-if="showFolderModal" class="modal-overlay">
+      <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容（含输入框）即关闭 -->
+      <view class="modal-backdrop" @tap="closeFolderModal" />
       <view class="modal-content paper-card">
         <view class="modal-header">
           <text class="modal-title">{{ folderToRename ? '重命名课程' : '新建课程文件夹' }}</text>
@@ -860,6 +862,22 @@ const goToLogin = () => {
   flex: 1;
   height: 76rpx;
   font-size: 26rpx;
+}
+
+/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
+   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
+.modal-backdrop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+}
+
+.modal-content {
+  position: relative;
+  z-index: 1;
 }
 </style>
 

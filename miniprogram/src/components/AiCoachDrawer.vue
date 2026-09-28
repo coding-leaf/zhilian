@@ -1,5 +1,7 @@
 <template>
-  <view v-if="visible" class="coach-drawer-overlay" @tap.self="closeDrawer">
+  <view v-if="visible" class="coach-drawer-overlay">
+    <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容（含输入框）即关闭 -->
+    <view class="coach-drawer-backdrop" @tap="closeDrawer" />
     <view class="coach-drawer-sheet">
       <!-- 头部 -->
       <view class="drawer-header">
@@ -388,5 +390,21 @@ const openSource = (id: string) => {
   width: 140rpx;
   height: 80rpx;
   font-size: 26rpx;
+}
+
+/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap。
+   backdrop 为绝对定位、抽屉在流内，内容必须显式提升 z-index 才不会被 backdrop 盖住。 */
+.coach-drawer-backdrop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+}
+
+.coach-drawer-sheet {
+  position: relative;
+  z-index: 1;
 }
 </style>

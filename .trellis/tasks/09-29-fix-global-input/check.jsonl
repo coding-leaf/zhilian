@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端规范索引与已知偏离"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层核对：源文件改动必须在编译产物上验证"}

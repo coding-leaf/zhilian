@@ -88,7 +88,9 @@
       </view>
     </view>
 
-    <view v-if="showCardDrawer" class="card-drawer-overlay" @tap.self="showCardDrawer = false">
+    <view v-if="showCardDrawer" class="card-drawer-overlay">
+      <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容即关闭 -->
+      <view class="card-drawer-backdrop" @tap="showCardDrawer = false" />
       <view class="card-drawer-sheet paper-card">
         <view class="drawer-title-row">
           <text class="drawer-title">答题卡索引</text>
@@ -268,4 +270,20 @@ const confirmSubmit = () => {
 
 <style lang="scss" scoped>
 @import '../../session.scss';
+
+/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
+   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
+.card-drawer-backdrop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+}
+
+.card-drawer-sheet {
+  position: relative;
+  z-index: 1;
+}
 </style>

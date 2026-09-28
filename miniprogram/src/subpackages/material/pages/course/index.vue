@@ -94,7 +94,9 @@
     </view>
 
     <!-- 知识点详情与原文切片弹窗/抽屉 -->
-    <view v-if="showPointModal" class="modal-overlay" @tap.self="closePointModal">
+    <view v-if="showPointModal" class="modal-overlay">
+      <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容即关闭 -->
+      <view class="modal-backdrop" @tap="closePointModal" />
       <view class="point-sheet paper-card">
         <view class="sheet-header">
           <view class="sheet-title-box">
@@ -773,6 +775,22 @@ const goToGeneratedQuestions = () => {
 .ask-coach-btn {
   height: 80rpx;
   font-size: 28rpx;
+}
+
+/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
+   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
+.modal-backdrop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+}
+
+.point-sheet {
+  position: relative;
+  z-index: 1;
 }
 </style>
 

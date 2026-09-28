@@ -93,19 +93,46 @@ E3 的裸页面是**一次性诊断产物**，定案后删除，不留在仓库�
 
 ## Acceptance Criteria
 
-- [ ] AC-1 实验 E1–E5 按顺序执行，每条的观测结果与判定写入 `design.md`；**至少完成到第一个给出明确结论的实验**。
-- [ ] AC-2 根因定案为**唯一一条** R，且给出「改之前失败、改之后正常」的对照证据（真机 + 开发者工具各一次）。
-- [ ] AC-3 四处输入点全部可正常输入，且**在一次完整的 `onMounted` 请求周期内不被清空**
-      （即：打开弹窗 → 输入 → 等待后端列表请求返回 → 内容仍在）。
-- [ ] AC-4 若命中 R1：`miniprogram/node_modules/vue/package.json`、`pnpm-lock.yaml`、
-      `dist/build/mp-weixin/common/vendor.js` 三处版本一致；`task verify-frontend` 全绿。
-- [ ] AC-5 若命中 R2：新增单测覆盖「有 token 的 401 不跳转 / 无 token 的 401 跳转」两条分支；
-      401 相关既有用例零回归（`tests/requestFailure.spec.ts`）。
-- [ ] AC-6 若命中 R3：移除 `backdrop-filter` 后浮层视觉与改动前肉眼一致（截图对照），
-      且 `docs/DESIGN.md` 若有相关约束则同步更新。
-- [ ] AC-7 一次性诊断产物（E3 裸页面）已删除，仓库内无残留。
-- [ ] AC-8 结论若为**环境侧**（E1 判定为真机正常），须把现象、判定依据与规避步骤写入父任务 Notes，
-      并按父任务 XAC-6 留档；本任务不做代码改动即可关闭。
+**实际路径与计划不同**：原计划的判定实验 E1–E5 **未执行**。
+按 systematic-debugging 的顺序，先做的是「把现象翻译成可观测事实」——
+用户补充的关键观测「点击输入框直接关闭页面了」把问题从「文字消失」改写为「浮层被关闭」，
+再直接检查编译产物即定案（见 `design.md`「定案证据」）。E1（真机对照）反而因为用户的
+AppID 处于游客态（微信拒绝真机预览：`游客id不允许真机`）而不可执行，但它已不必要：
+这是代码缺陷，全平台一致。
+
+- [x] AC-1 根因定案为**唯一一条**，且给出可复现的静态证据。
+      证据：`currentTarget` 在整个 `dist/build/mp-weixin` 中 **0 次出现**；
+      `'self'`/`withModifiers` 在页面产物与 `vendor.js` 中均 0 次；
+      编译器源码只映射 `capture`/`stop`/`prevent`，无 `self` 分支。见 `design.md`。
+- [x] AC-2 给出「改之前 / 改之后」的对照证据（**在编译产物层**，这是本次定案的同一手段，
+      比真机截图更可复核）：
+      | | 容器 | backdrop |
+      | --- | --- | --- |
+      | 改前 | `<view class="modal-overlay data-v-d18a8845" bindtap="{{I}}">` | 不存在 |
+      | 改后 | `<view wx:if="{{y}}" class="modal-overlay data-v-ec2aacb9">`（**无 bindtap**） | `<view class="modal-backdrop data-v-ec2aacb9" bindtap="{{z}}"/>` |
+      6 个浮层逐一核对通过（AiCoachDrawer / 工作台弹窗 / 个人中心弹窗 / GradingActionModal /
+      讲义考点弹窗 / 答题卡抽屉）。
+- [x] AC-3 相应 CSS 进入产物：`.X-backdrop{position:absolute;...;z-index:0}` 与
+      `.X-sheet|.modal-content|.point-sheet{position:relative;z-index:1}`（均已 grep 确认）。
+- [ ] AC-4 **四处输入点实机/开发者工具复测待用户执行**（工作台新建课程、AI 助教抽屉、
+      资料页助教、个人中心昵称）。**代码侧已无可再验的部分**——本仓库无组件挂载测试基建，
+      产物层证据已到顶。
+- [x] AC-5 全项目 `@tap.self` 归零（grep 命中仅剩 6 行解释性注释，无属性残留）。
+- [x] AC-6 `task verify-frontend` 全绿：eslint 无输出、`vue-tsc --noEmit` 无输出、
+      vitest **9 文件 69 用例全过**；`pnpm run build:mp-weixin` 退出码 0。
+- [x] AC-7 无一次性诊断产物残留：原计划 E3 的裸页面**未创建**（走的是产物静态定案路径）。
+- [x] AC-8 结论**不是环境侧**，故无需登记父任务 Notes；但用户「怀疑是开发者助手」的直觉
+      已被证伪，这一条本身值得留档——留档在 `design.md` 的「教训留档」段。
+
+## 顺带登记（**不在本任务实现**）
+
+| 项 | 位置 | 为何不属本任务 |
+| --- | --- | --- |
+| 全局 401 `uni.reLaunch` 销毁当前页 | `src/utils/request.ts:9-20` | 不解释本现象（点击输入框不发请求），但是真实隐患：后台轮询期间一次 401 会丢弃用户正在填的表单 |
+| 编译期 3.5.43 / 运行时 3.4.21 错配 | `package.json` / `pnpm-lock.yaml` | 已核实产物无 `v-model` 代码生成问题，与本现象无关；升级需单独立项 |
+
+两项均需在父任务收口时决定是否立项。
+
 
 ## Notes
 
