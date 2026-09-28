@@ -24,6 +24,32 @@ uv run lint-imports             # Architecture dependency boundary verification
 uv run pytest tests             # Full unit & integration test suite
 ```
 
+#### 读门禁结果：退出码会骗人，覆盖率也会骗人（2026-09-29 实测）
+
+这套门禁**不稳定地红**，且**没有任何一种单一信号足以判定通过**。三条都要知道：
+
+1. **后端全量套件会随机挂 1 条墙上时钟性能基准**，且**每轮换一条**。4 条基准硬编码绝对毫秒阈值：
+   `tests/unit/core/algorithms/test_mastery.py:704`（`elapsed < 0.02s`，20ms 跑 1000 条）、
+   `test_diagnosis.py:633`（`< 200ms`）、`test_ocr_quality.py:336`（`<= 100ms`）、
+   `test_material_chunking.py:277`（`<= 2.0s`）。全量跑时 CPU 争用下必挂其一。
+   **它们没有 pytest marker，无法用 `-m` 摘除。**
+   ⇒ 见到失败先看是不是这 4 条之一，再判断是不是回归；**单独跑一遍**即可区分
+   （每条基准单独跑都过）。改阈值或加 marker 需单独立项，不要在别的任务里顺手放水。
+2. **`cmd | tail` 的 `$?` 是 `tail` 的退出码，恒为 0**，会**伪造全绿**。
+   而本仓库 `backend/pyproject.toml:67` 的 `addopts = "-ra -q"` 已含一个 `-q`，
+   命令行再加 `-q` 就成 `-qq`，pytest **不再打印** `N passed` 汇总行——**文本输出里没有结论**。
+   正确姿势：`cmd > out.txt 2>&1; echo $?`（不接管道），要精确用例数就读 **JUnit XML**
+   的 `<testsuite tests=… failures=…>`，不要 grep 文本。
+3. **覆盖率达标 ≠ 零失败**：`--cov-fail-under` 通过时照样打印
+   `Required test coverage of 80% reached`，**即使有用例失败**（实测 91.16% 与 1 条失败并存）。
+
+**并发跑测试会让结论不可信**：多个会话/子代理同时跑后端测试会争用覆盖率数据文件，
+实测报 `coverage.exceptions.DataError: Couldn't use data file '…\.coverage.<pid>'`。
+需要并发时先隔离 `COVERAGE_FILE`，否则覆盖率数字无意义。
+
+**排查失败用例**：`.pytest_cache/v/cache/lastfailed` 会列出最近一次运行的失败用例，
+是一条不依赖汇总行、不依赖退出码的旁路证据。
+
 ---
 
 ## Forbidden Patterns

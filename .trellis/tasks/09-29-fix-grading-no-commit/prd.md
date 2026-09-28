@@ -136,10 +136,17 @@ self.session.flush()
       **实测（真实库）**：第二次判题后 `grading_records` 仍为 12（未翻倍）、`is_final` 恰为 12
       （每题一条生效记录）、`total_score` 仍为 4.0（分数不漂移）。
 - [x] AC-5 `grading.py` 内其他写库方法的提交边界已逐一核对，结论见 Notes。
-- [x] AC-6 `task verify-backend` 全绿，既有判题用例零回归。
+- [x] AC-6 `task verify-backend` 通过，既有判题用例零回归。
       **实测**：ruff format（249 files already formatted）/ ruff check（All checks passed!）/
-      mypy strict（135 文件无问题）/ lint-imports（5 contracts kept, 0 broken）/
-      pytest（真实退出码 **0**、零 `FAILED`/`ERROR`、覆盖率 **91.16%** ≥ 阈值 80%）。
+      mypy strict（135 文件无问题）/ lint-imports（5 contracts kept, 0 broken）全部退出码 **0**。
+      pytest **不是**全绿：`tests=1379 / passed=1378 / failed=1 / errors=0 / skipped=0`，退出码 **1**。
+      失败的是**墙上时钟性能基准**，且**每次换一条**（`test_mastery` 20ms 阈值实测 22.94ms、
+      `test_diagnosis`、`test_ocr_quality` 轮换命中）。
+      **判定与本改动无关**，四条依据：① 两份文件还原到 HEAD 后全量跑是 **2 条**性能失败（改动前就更红）；
+      ② 每条基准**单独跑都过**，只在全量 CPU 争用下挂；③ 每次挂的不是同一条（确定性回归会固定挂同一条）；
+      ④ 无因果路径——`lint-imports` 的「纯函数算法计算核隔离 KEPT」契约主动禁止算法层依赖 services。
+      ⚠️ **本次汇报一度据一次 `EXIT=0` 误报"门禁全绿"**，后由检查代理用 JUnit XML 读数纠正。
+      该项目 `addopts="-ra -q"` 会吞掉汇总行，**退出码是唯一可靠信号，而单次退出码本身也不可靠**（见 Notes）。
 - [ ] AC-7 端到端：worker 在跑的前提下交卷一次，开发者工具里能看到**逐题判分结果**而非永久「判题中」。
       **此条待用户确认——尚未验证，不得由我方代签。**
 
@@ -171,20 +178,34 @@ self.session.flush()
 
 ### 实测环境观察（与本次改动无关，但会误导下次判断，故留档）
 
-- **并发跑后端测试会产出两条假失败**：本次门禁与检查代理的测试并发执行时，
-  `test_migrated_schema_matches_orm_metadata` 与
-  `TestMasteryPerformanceBenchmark::test_performance_thousand_records_benchmark` 变红；
-  **同一份代码单独重跑退出码为 0、零失败**。下次见到这两条先确认是否有并发运行，
-  不要当成回归。性能基准受 CPU 争抢影响是预期内的；迁移一致性那条**同样敏感**，
-  这点反直觉，值得记住。
-- **`pytest` 汇总行会被 `-qq` 静默关掉**：项目 `backend/pyproject.toml:67` 的
-  `addopts = "-ra -q"` 已带一个 `-q`，命令行再加 `-q` 就是 `-qq`，pytest **不再打印**
-  `N passed` 汇总行。后果：无法从输出文本判断成败，**只能看退出码**；而
-  `cmd | tail` 拿到的 `$?` 是 `tail` 的退出码，恒为 0——这会伪造"全绿"。
-  正确姿势：`cmd > out.txt 2>&1; echo $?`，不要接管道。
+- **后端全量测试套件本身就不稳定地红**（**不需要并发也会红**）：4 条**墙上时钟**性能基准
+  硬编码绝对毫秒阈值——`tests/unit/core/algorithms/test_mastery.py:704`（`elapsed < 0.02s`，
+  即 20ms 跑 1000 条）、`test_diagnosis.py:633`（`< 200ms`）、`test_ocr_quality.py:336`
+  （`<= 100ms`）、`test_material_chunking.py:277`（`<= 2.0s`）。全量跑时 CPU 争用下
+  **每轮挂掉其中一条**，且**每轮换一条**。
+  - **干净 HEAD 也挂，而且挂 2 条** ⇒ 这是改动前就存在的既有状态，不是回归。
+  - 每条基准**单独跑都过** ⇒ 只在全量争用下失败。
+  - **这 4 条没有任何 pytest marker**，无法用 `-m` 干净摘除 ⇒ `task verify-backend`
+    **既不能可靠证明通过，也不能干净证明失败**。建议单独立项：加 `@pytest.mark.perf`，
+    默认 `addopts` 排除，按需单独跑。功能门禁必须是确定性的。
+- **单次退出码不可作为唯一判据（两条陷阱叠加）**：
+  1. 项目 `backend/pyproject.toml:67` 的 `addopts = "-ra -q"` 已含 `-q`，命令行再加 `-q`
+     就是 `-qq`，pytest **不再打印** `N passed` 汇总行 ⇒ 无输出文本可判读；
+  2. 而 `cmd | tail` 拿到的 `$?` 是 **`tail` 的退出码、恒为 0**，会**伪造全绿**。
+  正确姿势：`cmd > out.txt 2>&1; echo $?`，不接管道。**本次一度据一次偶然的 `EXIT=0`
+  误报"门禁全绿"，被检查代理用 JUnit XML（`<testsuite tests=1379 failures=1>`）纠正。**
+  拿精确用例数建议读 JUnit XML，而不是 grep 文本输出。
 - **覆盖率达标 ≠ 零失败**：`--cov-fail-under` 通过时照样打印
-  `Required test coverage of 80% reached`，**即使有用例失败**。
-  本次差点据此误报门禁通过，是 `pytest_cache/v/cache/lastfailed` 暴露了真相。
+  `Required test coverage of 80% reached`，**即使有用例失败**（本轮 91.16% 与 1 条失败同时存在）。
+  本次差点据此误报门禁通过，是 `pytest_cache/v/cache/lastfailed` 先暴露了真相。
+- **并发跑 pytest 会争用覆盖率数据文件**：检查代理观察到
+  `coverage.exceptions.DataError: Couldn't use data file '…\.coverage.mydream.pid'`。
+  多会话/多代理同时跑后端测试时，覆盖率结论**不可信**；要并发请先隔离 `COVERAGE_FILE`。
+- **一条未解释的瞬时失败**：本次第一次全量跑时
+  `tests/unit/models/test_migration_model_consistency.py::test_migrated_schema_matches_orm_metadata`
+  变红，此后未复现。**它不在上面那 4 条性能基准之列，我没有确认的解释**，
+  不硬套"CPU 争用"——记为瞬时、原因未定，下次若复现再查。
+- **`skipped = 0`**：全量套件零跳过，所以不存在"被静默跳过因而没验到"的区域。
 
 ### 过程留档
 
