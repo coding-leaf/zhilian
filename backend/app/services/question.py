@@ -59,11 +59,14 @@ from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
+from app.schemas.material import SourceSnippetDTO
 from app.schemas.question import (
     AskCoachResponse,
     CoachSourceResponse,
+    QuestionDetailResponse,
     ScopedCoachResponse,
 )
+from app.services.source_snippets import build_source_snippet_map
 
 logger = logging.getLogger(__name__)
 
@@ -1393,6 +1396,35 @@ class QuestionService:
         return question
 
     get_question_detail = get_question
+
+    def attach_source_snippets(
+        self,
+        items: Sequence[QuestionDetailResponse],
+        user_id: uuid.UUID,
+    ) -> None:
+        """批量为题目响应装配主来源切片投影 (就地补全 ``source_snippet``)。
+
+        出题、详情、列表与更新四条响应装配路径共用本方法；投影构造复用
+        ``build_source_snippet_map``（与练习侧同一实现），一次 ``IN`` 查询完成装配，
+        禁 N+1。切片缺失或不属于该租户时该题保持 ``None``，由前端渲染空态。
+
+        Args:
+            items: 待补全的题目响应 DTO 序列 (就地修改)。
+            user_id: 租户用户标识。
+        """
+        snippet_ids: set[uuid.UUID] = set()
+        for item in items:
+            if item.source_snippet_id is not None:
+                snippet_ids.add(item.source_snippet_id)
+        if not snippet_ids:
+            return
+
+        snippet_map: dict[uuid.UUID, SourceSnippetDTO] = build_source_snippet_map(
+            self.material_repo, snippet_ids, user_id
+        )
+        for item in items:
+            if item.source_snippet_id is not None:
+                item.source_snippet = snippet_map.get(item.source_snippet_id)
 
     def list_questions(
         self,

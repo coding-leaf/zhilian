@@ -271,8 +271,8 @@ class TestQuestionModel:
             assert reloaded.knowledge_point_id == kp_id
             assert reloaded.source_snippet_id == snip_id
             assert reloaded.knowledge_point.name == "ACID Properties"
-            assert reloaded.source_snippet is not None
-            assert reloaded.source_snippet.id == snip_id
+            assert reloaded.primary_source_snippet is not None
+            assert reloaded.primary_source_snippet.id == snip_id
 
     def test_question_soft_delete(
         self,

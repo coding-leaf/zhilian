@@ -25,6 +25,9 @@ Verifies:
 7. Atomic transaction and tenant isolation:
    - Rollback on database failure.
    - Strict multi-tenant isolation.
+8. Source snippet enrichment (原文溯源装配):
+   - attach_source_snippets: 章节/页码/正文投影、线格式字段名、无来源与跨租户空态、
+     单次批量查询（禁 N+1）。
 """
 
 import uuid
@@ -33,7 +36,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import (
@@ -64,6 +67,8 @@ from app.models.question import (
     QuestionStatus,
     QuestionType,
 )
+from app.schemas.material import SourceSnippetDTO
+from app.schemas.question import QuestionDetailResponse
 from app.services.question import (
     GenerateQuestionsOptions,
     LLMGeneratedQuestionItem,
@@ -1538,3 +1543,287 @@ class TestQuestionServiceCRUDAndAudit:
                 user_id=user_id,
                 user_prompt="test",
             )
+
+
+class TestQuestionSourceSnippetAssembly:
+    """Test suite for QuestionService 原文来源切片装配 (source_snippet)."""
+
+    @staticmethod
+    def _build_question(
+        service: QuestionService,
+        setup: dict[str, uuid.UUID],
+        tenant_id: uuid.UUID,
+        source_snippet_id: uuid.UUID | None,
+    ) -> Question:
+        """建一条带/不带来源切片的题目并返回 ORM 实体。"""
+        question = Question(
+            material_id=setup["material_id"],
+            version_id=setup["version_id"],
+            knowledge_point_id=setup["point_id"],
+            question_type=QuestionType.TRUE_FALSE.value,
+            stem="敏捷开发注重个体与互动胜过过程和工具。",
+            answer="正确",
+            difficulty=2,
+            source_snippet_id=source_snippet_id,
+        )
+        saved = service.question_repo.create_question(question, tenant_id)
+        service.session.commit()
+        return saved
+
+    @classmethod
+    def _build_question_detail(
+        cls,
+        service: QuestionService,
+        setup: dict[str, uuid.UUID],
+        tenant_id: uuid.UUID,
+        source_snippet_id: uuid.UUID | None,
+    ) -> QuestionDetailResponse:
+        """建一条题目并返回其响应 DTO (装配前 source_snippet 恒为 None)。"""
+        saved = cls._build_question(service, setup, tenant_id, source_snippet_id)
+        return QuestionDetailResponse.model_validate(saved)
+
+    @staticmethod
+    def _snippet_query_count(statements: Sequence[str]) -> int:
+        """统计捕获到的 SQL 中命中 material_snippets 的语句数。"""
+        return sum(1 for statement in statements if "material_snippets" in statement.lower())
+
+    def test_attach_fills_projection_with_wire_field_names(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """有来源切片时装配出章节/正文，且线格式字段名与前端 adapter 读取路径一致。"""
+        user_id = helper_setup["user_id"]
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        detail = self._build_question_detail(
+            service, helper_setup, user_id, helper_setup["snippet_id_1"]
+        )
+        assert detail.source_snippet is None  # 装配前为空 (纯 ORM 映射)
+
+        service.attach_source_snippets([detail], user_id=user_id)
+
+        snippet = detail.source_snippet
+        assert isinstance(snippet, SourceSnippetDTO)
+        assert snippet.id == helper_setup["snippet_id_1"]
+        assert snippet.chapter_title == "第一章 敏捷开发核心"
+        assert snippet.snippet_content.startswith("敏捷开发（Agile）以人为本")
+        # 切片无 page_index 列且 source_info 无页码 → 回退第 1 页
+        assert snippet.page_index == 1
+
+        # 前端 miniprogram/src/api/adapters/question.ts 读 source_snippet.snippet_content
+        payload = detail.model_dump(mode="json")
+        assert payload["source_snippet"]["snippet_content"] == snippet.snippet_content
+        assert payload["source_snippet"]["chapter_title"] == "第一章 敏捷开发核心"
+        assert payload["source_snippet"]["page_index"] == 1
+
+    def test_attach_reads_page_number_from_source_info(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """source_info 携带页码时按该页码装配 (回退规则的元数据分支)。"""
+        user_id = helper_setup["user_id"]
+        snippet_id = uuid.uuid4()
+        session.add(
+            MaterialSnippet(
+                id=snippet_id,
+                user_id=user_id,
+                material_id=helper_setup["material_id"],
+                version_id=helper_setup["version_id"],
+                snippet_index=9,
+                content="看板方法通过可视化工作流限制在制品。",
+                char_length=20,
+                start_offset=0,
+                end_offset=20,
+                chapter_title="第二章 精益看板",
+                source_info={"page_number": 7},
+            )
+        )
+        session.commit()
+
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        detail = self._build_question_detail(service, helper_setup, user_id, snippet_id)
+
+        service.attach_source_snippets([detail], user_id=user_id)
+
+        assert detail.source_snippet is not None
+        assert detail.source_snippet.page_index == 7
+        assert detail.source_snippet.chapter_title == "第二章 精益看板"
+
+    def test_without_source_keeps_none_and_serializes_null(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """无 source_snippet_id 的历史题目保持 None，且线格式含该键为 null。"""
+        user_id = helper_setup["user_id"]
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        detail = self._build_question_detail(service, helper_setup, user_id, None)
+
+        service.attach_source_snippets([detail], user_id=user_id)
+
+        assert detail.source_snippet is None
+        payload = detail.model_dump(mode="json")
+        assert "source_snippet" in payload
+        assert payload["source_snippet"] is None
+
+    def test_foreign_tenant_snippet_is_not_leaked(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """切片归属他人时装配为 None (租户过滤，不跨用户泄漏正文)。"""
+        user_id = helper_setup["user_id"]
+        stranger_id = uuid.uuid4()
+        foreign_material_id = uuid.uuid4()
+        foreign_version_id = uuid.uuid4()
+        foreign_snippet_id = uuid.uuid4()
+        session.add(
+            Material(
+                id=foreign_material_id,
+                user_id=stranger_id,
+                title="他人资料.pdf",
+                file_format="pdf",
+                file_size=1024,
+            )
+        )
+        session.add(
+            MaterialVersion(
+                id=foreign_version_id,
+                user_id=stranger_id,
+                material_id=foreign_material_id,
+                version_number=1,
+                storage_key="materials/foreign.pdf",
+                content_hash="hash_foreign_v1",
+            )
+        )
+        session.add(
+            MaterialSnippet(
+                id=foreign_snippet_id,
+                user_id=stranger_id,
+                material_id=foreign_material_id,
+                version_id=foreign_version_id,
+                snippet_index=0,
+                content="他人资料的切片正文，绝不应出现在本租户响应中。",
+                char_length=22,
+                start_offset=0,
+                end_offset=22,
+                chapter_title="他人章节",
+                source_info={},
+            )
+        )
+        session.commit()
+
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        detail = self._build_question_detail(service, helper_setup, user_id, foreign_snippet_id)
+
+        service.attach_source_snippets([detail], user_id=user_id)
+
+        assert detail.source_snippet is None
+
+    def test_response_mapping_does_not_read_orm_relationship(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """裸映射不得读取 ORM 关系：同名会让 from_attributes 惰性加载并给出错投影。
+
+        守的是 ``Question.primary_source_snippet`` 改名一事——若关系被改回
+        ``source_snippet``，本用例会因多出 material_snippets 查询且投影非空而失败。
+        """
+        user_id = helper_setup["user_id"]
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        saved = self._build_question(service, helper_setup, user_id, helper_setup["snippet_id_1"])
+        saved_id = saved.id  # commit 已过期属性，脱管前先取值
+        session.expunge_all()  # 清空身份映射，暴露任何惰性加载
+
+        statements: list[str] = []
+
+        def _record(
+            _conn: Any,
+            _cursor: Any,
+            statement: str,
+            _parameters: Any,
+            _context: Any,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        bind = session.get_bind()
+        event.listen(bind, "before_cursor_execute", _record)
+        try:
+            reloaded = service.question_repo.get_question_by_id(saved_id, user_id)
+            assert reloaded is not None
+            statements.clear()
+            detail = QuestionDetailResponse.model_validate(reloaded)
+        finally:
+            event.remove(bind, "before_cursor_execute", _record)
+
+        assert self._snippet_query_count(statements) == 0
+        assert detail.source_snippet is None  # 投影只能由服务层装配提供
+
+    def test_attach_batches_lookup_into_single_query(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """切片检索为单次批量查询：题目数增加不增加切片查询次数 (禁 N+1)。"""
+        user_id = helper_setup["user_id"]
+        service = QuestionService(
+            session=session,
+            llm=StubQuestionLLM(),
+            embedding=FakeEmbeddingAdapter(),
+        )
+        single = self._build_question_detail(
+            service, helper_setup, user_id, helper_setup["snippet_id_1"]
+        )
+        first = self._build_question_detail(
+            service, helper_setup, user_id, helper_setup["snippet_id_1"]
+        )
+        second = self._build_question_detail(
+            service, helper_setup, user_id, helper_setup["snippet_id_2"]
+        )
+        no_source = self._build_question_detail(service, helper_setup, user_id, None)
+
+        statements: list[str] = []
+
+        def _record(
+            _conn: Any,
+            _cursor: Any,
+            statement: str,
+            _parameters: Any,
+            _context: Any,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        bind = session.get_bind()
+        event.listen(bind, "before_cursor_execute", _record)
+        try:
+            service.attach_source_snippets([single], user_id=user_id)
+            single_question_queries = self._snippet_query_count(statements)
+
+            statements.clear()
+            service.attach_source_snippets([first, second], user_id=user_id)
+            two_question_queries = self._snippet_query_count(statements)
+
+            statements.clear()
+            service.attach_source_snippets([no_source], user_id=user_id)
+            no_source_queries = self._snippet_query_count(statements)
+        finally:
+            event.remove(bind, "before_cursor_execute", _record)
+
+        assert single_question_queries == 1
+        assert two_question_queries == 1  # 两题两条不同切片仍只查一次
+        assert no_source_queries == 0  # 无来源直接早返回，不产生查询
+        assert first.source_snippet is not None
+        assert second.source_snippet is not None
+        assert first.source_snippet.snippet_content != second.source_snippet.snippet_content

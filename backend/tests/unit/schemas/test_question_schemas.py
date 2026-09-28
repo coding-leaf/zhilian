@@ -8,11 +8,17 @@ Verifies:
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.question import QuestionGenerateRequest, QuestionGenerateResponse
+from app.schemas.material import SourceSnippetDTO
+from app.schemas.question import (
+    QuestionDetailResponse,
+    QuestionGenerateRequest,
+    QuestionGenerateResponse,
+)
 
 
 def test_question_generate_request_legacy_single_knowledge_point() -> None:
@@ -102,3 +108,54 @@ def test_question_generate_response_knowledge_point_ids_defaults_empty() -> None
     )
 
     assert response.knowledge_point_ids == []
+
+
+def _build_question_detail_response(
+    source_snippet: SourceSnippetDTO | None,
+) -> QuestionDetailResponse:
+    """构造题目详情响应；样本值用于固定跨层线格式。"""
+    snippet_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    return QuestionDetailResponse(
+        id=uuid.uuid4(),
+        material_id=uuid.uuid4(),
+        version_id=uuid.uuid4(),
+        knowledge_point_id=uuid.uuid4(),
+        source_snippet_id=snippet_id,
+        source_snippet=source_snippet,
+        status="available",
+        question_type="single_choice",
+        stem="TCP 建立连接需要几次握手？",
+        answer="A",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def test_question_detail_response_pins_source_snippet_wire_shape() -> None:
+    """固定 source_snippet 的线格式字段名与形状（前端 adapters/question.ts 按此读取）。
+
+    断言基于 Pydantic 真实序列化输出，而非手工拼接的期望字典。
+    """
+    snippet = SourceSnippetDTO(
+        id=uuid.uuid4(),
+        chapter_title="第三章 传输层",
+        page_index=12,
+        snippet_content="TCP 建立连接需要三次握手。",
+    )
+    payload = _build_question_detail_response(snippet).model_dump(mode="json")
+
+    assert payload["source_snippet"] == {
+        "id": str(snippet.id),
+        "chapter_title": "第三章 传输层",
+        "page_index": 12,
+        "snippet_content": "TCP 建立连接需要三次握手。",
+    }
+
+
+def test_question_detail_response_source_snippet_defaults_to_null() -> None:
+    """无来源时该键存在且为 null；前端据此渲染空态而不是读到 undefined。"""
+    payload = _build_question_detail_response(None).model_dump(mode="json")
+
+    assert "source_snippet" in payload
+    assert payload["source_snippet"] is None

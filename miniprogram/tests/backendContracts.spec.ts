@@ -100,13 +100,24 @@ describe('backend wire contract -> view projection', () => {
         { key: 'B', content: '窗口线性增长' },
       ],
     })
-    // 题目详情响应不含切片正文，题目侧 fixture 与断言都不得伪造 source_quote
-    expect(question.source_quote).toBeUndefined()
-    expect('source_snippet' in (generatedQuestionFixture() as any)).toBe(false)
+    // 题目的来源正文经 source_snippet 下发，断言见下方 source_quote 用例
   })
 
-  it('maps source_quote only from the real practice answer-item source_snippet', () => {
-    // 原文正文只经由练习详情响应下发（PracticeService._attach_source_snippets）
+  it('maps source_quote from the real question response source_snippet', () => {
+    // 题目侧来源正文的事实源：QuestionService.attach_source_snippets（按 source_snippet_id 批量装配）
+    const question = adaptQuestion(generatedQuestionFixture() as any)
+
+    expect(question.source_quote).toBe('慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。')
+  })
+
+  it('keeps source_quote empty when the question has no source snippet', () => {
+    // 无来源（历史数据 / 切片已删除）时后端返回 null，前端据此渲染空态
+    const question = adaptQuestion(generatedQuestionFixture({ source_snippet: null }) as any)
+
+    expect(question.source_quote).toBeUndefined()
+  })
+
+  it('maps source_quote from the real practice answer-item source_snippet', () => {
     const [result] = buildAttemptResults(adaptPractice(practiceItemWithSourceSnippetFixture as any))
 
     expect(result.sourceQuote).toBe('慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。')

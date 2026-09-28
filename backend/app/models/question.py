@@ -235,7 +235,11 @@ class Question(Base, TimestampMixin, TenantModelMixin):
         "KnowledgePoint",
         back_populates="questions",
     )
-    source_snippet: Mapped["MaterialSnippet | None"] = relationship(
+    # 注意：本关系**不可**命名为 source_snippet。响应模型 QuestionDetailResponse 的同名线格式
+    # 字段（SourceSnippetDTO 投影：chapter_title/page_index/snippet_content）会让 from_attributes
+    # 直接读取本关系实体——既产出半空投影（实体无 snippet_content 属性），又对每题多一次惰性加载
+    # 查询（列表页即 N+1）。来源投影统一由 QuestionService.attach_source_snippets 批量装配。
+    primary_source_snippet: Mapped["MaterialSnippet | None"] = relationship(
         "MaterialSnippet",
         foreign_keys=[source_snippet_id],
     )

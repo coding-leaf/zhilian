@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.question import QuestionType
+from app.schemas.material import SourceSnippetDTO
 
 
 class QuestionGenerateRequest(BaseModel):
@@ -108,6 +109,13 @@ class QuestionDetailResponse(BaseModel):
     grading_rubric: dict[str, Any] = Field(default_factory=dict, description="主观题评分细则")
     source_snippet_ids: list[dict[str, Any]] = Field(
         default_factory=list, description="多切片出题上下文列表"
+    )
+    source_snippet: SourceSnippetDTO | None = Field(
+        default=None,
+        description=(
+            "主来源切片投影 (章节/页码/正文)；由服务层按 source_snippet_id 批量装配，"
+            "无来源或切片已缺失时为 null"
+        ),
     )
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")

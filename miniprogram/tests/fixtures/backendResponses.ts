@@ -240,6 +240,14 @@ export function generatedQuestionFixture(overrides: Record<string, unknown> = {}
     difficulty: 3,
     grading_rubric: {},
     source_snippet_ids: [],
+    // 事实源：backend/app/schemas/question.py::QuestionDetailResponse.model_dump()
+    // （source_snippet 由 QuestionService.attach_source_snippets 按 source_snippet_id 批量装配）
+    source_snippet: {
+      id: 's-1',
+      chapter_title: '第三章 传输层',
+      page_index: 12,
+      snippet_content: '慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。',
+    },
     created_at: '2026-09-28T12:00:00',
     updated_at: '2026-09-28T12:00:00',
     ...overrides,

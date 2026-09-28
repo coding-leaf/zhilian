@@ -68,19 +68,30 @@ async def _resolve_delete_reason(request: Request, reason: str | None) -> str | 
 def _build_generate_response(
     result: QuestionGenerationResult | MultiKnowledgePointGenerationResult,
     knowledge_point_ids: list[uuid.UUID],
+    *,
+    question_service: QuestionService,
+    user_id: uuid.UUID,
 ) -> QuestionGenerateResponse:
     """将单/多考点生成结果统一映射为出题响应模型。
 
     Args:
         result: 单考点或多考点生成结果对象。
         knowledge_point_ids: 本次覆盖的全部知识点标识列表。
+        question_service: 题目领域编排服务 (用于批量装配来源切片投影)。
+        user_id: 租户用户标识 (装配时强制租户过滤)。
 
     Returns:
         QuestionGenerateResponse: 出题生成与门禁质检结果概要及题目明细。
     """
-    qualified_items = result.qualified_questions
-    pending_items = result.pending_questions
     check_items = result.quality_checks
+
+    qualified_questions = [
+        QuestionDetailResponse.model_validate(q) for q in result.qualified_questions
+    ]
+    pending_questions = [QuestionDetailResponse.model_validate(q) for q in result.pending_questions]
+    question_service.attach_source_snippets(
+        [*qualified_questions, *pending_questions], user_id=user_id
+    )
 
     return QuestionGenerateResponse(
         batch_id=result.batch_id,
@@ -89,11 +100,11 @@ def _build_generate_response(
         knowledge_point_id=result.knowledge_point_id,
         knowledge_point_ids=knowledge_point_ids,
         total_generated=result.total_generated,
-        qualified_count=len(qualified_items),
-        pending_count=len(pending_items),
+        qualified_count=len(qualified_questions),
+        pending_count=len(pending_questions),
         retry_count=result.retry_count,
-        qualified_questions=[QuestionDetailResponse.model_validate(q) for q in qualified_items],
-        pending_questions=[QuestionDetailResponse.model_validate(q) for q in pending_items],
+        qualified_questions=qualified_questions,
+        pending_questions=pending_questions,
         quality_checks=[QuestionQualityCheckResponse.model_validate(qc) for qc in check_items],
     )
 
@@ -145,6 +156,8 @@ async def generate_questions(
         return _build_generate_response(
             result=folder_result,
             knowledge_point_ids=list(folder_result.knowledge_point_ids),
+            question_service=question_service,
+            user_id=user.id,
         )
 
     # 多考点：走均分编排；单考点：保持既有单考点链路（向后兼容）。
@@ -163,6 +176,8 @@ async def generate_questions(
         return _build_generate_response(
             result=multi_result,
             knowledge_point_ids=list(multi_result.knowledge_point_ids),
+            question_service=question_service,
+            user_id=user.id,
         )
 
     result = question_service.generate_questions(
@@ -175,6 +190,8 @@ async def generate_questions(
     return _build_generate_response(
         result=result,
         knowledge_point_ids=[result.knowledge_point_id],
+        question_service=question_service,
+        user_id=user.id,
     )
 
 
@@ -206,7 +223,9 @@ async def get_question_detail(
         question_id=id,
         user_id=user.id,
     )
-    return QuestionDetailResponse.model_validate(question)
+    detail = QuestionDetailResponse.model_validate(question)
+    question_service.attach_source_snippets([detail], user_id=user.id)
+    return detail
 
 
 @router.post(
@@ -328,8 +347,10 @@ async def list_questions(
         limit=effective_limit,
         offset=effective_offset,
     )
+    list_items = [QuestionDetailResponse.model_validate(q) for q in items]
+    question_service.attach_source_snippets(list_items, user_id=user.id)
     return QuestionListResponse(
-        items=[QuestionDetailResponse.model_validate(q) for q in items],
+        items=list_items,
         total=total,
         limit=effective_limit,
         offset=effective_offset,
@@ -375,7 +396,9 @@ async def update_question(
         update_data=filtered_updates,
         edit_reason=edit_reason,
     )
-    return QuestionDetailResponse.model_validate(updated_question)
+    detail = QuestionDetailResponse.model_validate(updated_question)
+    question_service.attach_source_snippets([detail], user_id=user.id)
+    return detail
 
 
 @router.delete(

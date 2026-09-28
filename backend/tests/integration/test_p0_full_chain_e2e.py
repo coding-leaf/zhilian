@@ -564,6 +564,38 @@ async def test_p0_positive_full_chain(
     question_1 = gen_data["qualified_questions"][0]
     question_1_id = uuid.UUID(question_1["id"])
 
+    # 来源切片正文随出题响应真实下发（核对页来源框），不再是 id 级元数据
+    assert question_1["source_snippet_id"] is not None
+    generated_source = question_1["source_snippet"]
+    assert generated_source is not None
+    assert generated_source["id"] == question_1["source_snippet_id"]
+    assert generated_source["snippet_content"].strip() != ""
+    # 章节标题允许为空（切片未标注章节时），但字段必须存在且为字符串
+    assert isinstance(generated_source["chapter_title"], str)
+    assert generated_source["page_index"] >= 1
+
+    # 详情路径与出题路径装配同一投影
+    detail_resp = await http_client.get(
+        f"/api/v1/questions/{question_1_id}",
+        headers=headers_a,
+    )
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["source_snippet"] == generated_source
+
+    # 列表路径同样装配；无来源的题目保持 null（不伪造正文）
+    list_resp = await http_client.get(
+        f"/api/v1/questions?material_id={material_id}",
+        headers=headers_a,
+    )
+    assert list_resp.status_code == 200
+    listed_items = list_resp.json()["items"]
+    assert listed_items
+    for listed in listed_items:
+        if listed["source_snippet_id"] is None:
+            assert listed["source_snippet"] is None
+        else:
+            assert listed["source_snippet"]["snippet_content"].strip() != ""
+
     # 微调题干并留存审计日志
     edit_resp = await http_client.put(
         f"/api/v1/questions/{question_1_id}",
@@ -575,6 +607,8 @@ async def test_p0_positive_full_chain(
     )
     assert edit_resp.status_code == 200
     assert "[已审定教学用题]" in edit_resp.json()["stem"]
+    # 更新响应仍带来源，前端复用同一卡片渲染不丢来源框
+    assert edit_resp.json()["source_snippet"] == generated_source
 
     # --------------------------------------------------------------------------
     # 步骤 5: 练习与草稿 - 智能组卷、暂存作答草稿、暂停与恢复
