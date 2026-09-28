@@ -1,7 +1,7 @@
 # Quality Guidelines
 
-> **事实源**：`backend/app/services/`、`backend/app/api/v1/`、`backend/app/repositories/`、`backend/app/models/`、`backend/app/core/`、`backend/app/integrations/`、`backend/app/cli/`、`backend/pyproject.toml`、`Taskfile.yml`
-> **最后核对**：2026-09-28 @ ca062a1
+> **事实源**：`backend/app/services/`、`backend/app/api/v1/`、`backend/app/repositories/`、`backend/app/models/`、`backend/app/core/`、`backend/app/integrations/`、`backend/app/cli/`、`backend/tests/`、`backend/migrations/`、`backend/pyproject.toml`、`Taskfile.yml`
+> **最后核对**：2026-09-29 @ 90eed7f
 > **核对方式**：`rg -n "^### Scenario:|^#### 代码锚点" .trellis/spec/backend/quality-guidelines.md`，再按各 scenario 锚点 `rg` 复核
 
 > Code quality standards and verification baseline for backend development.
@@ -1417,3 +1417,75 @@ if not ok:
 - `backend/app/api/v1/questions.py`（`/coach/ask`、`/{id}/ask-coach`）
 - `backend/app/integrations/search/protocol.py`（按用户/资料限定检索）
 - `backend/tests/unit/integrations/llm/test_coach_graph.py`
+
+---
+
+### Scenario: 迁移-模型一致性闸门（Migration ↔ Model Drift Gate）
+
+#### 1. Scope / Trigger
+- 任何改动 `backend/app/models/**`（新增表、新增/改名/删除列）或新增、修改 `backend/migrations/versions/**` 的工作。
+- 任何「环境跑起来报 `psycopg.errors.UndefinedColumn` / `no such column`」的排查。
+- 触发判据：模型与迁移是两份必须手工保持一致的事实源，而二者的一致性**没有任何编译期或启动期检查**。
+
+#### 2. Contracts
+- 迁移链产物与 `Base.metadata` 的**表名集合**、每张表的**列名集合**必须完全一致。由 `backend/tests/unit/models/test_migration_model_consistency.py` 断言，随 `task verify-backend` 自动执行。
+- 断言粒度刻意**不含类型、索引、约束**：pgvector 列在 SQLite 降级为 `JSON`、UUID 等类型存在方言差异，比较类型必然产生噪音；而表/列集合已精确覆盖目标故障类别。
+- 该测试必须**完全离线**，不得经由 `migrations/env.py`：`env.py::_get_target_db_url()` 优先读 `get_settings()`（`@lru_cache`，取 `.env` 中的真实库 URL），而 `tests/conftest.py` 的网络守卫只拦非环回地址、**放行 `127.0.0.1`** —— 因此在测试里调用 `alembic.command.upgrade` 会真的连上并改动开发库，且不会被守卫拦下。
+- 迁移链必须收敛到**单一 head**：多 head / 断链意味着部分迁移永不生效，是同一类漂移的另一种成因。
+
+#### 3. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：改了模型，却没写迁移（或写了没执行）—— 跑测试全绿也照不出来
+class User(Base):
+    avatar_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+# 没有对应迁移，本地库仍是旧 schema；只有真实库上的查询会 500
+```
+```python
+# 错误2：以为 conftest 的网络守卫会挡住真库访问，于是在测试里直接跑 alembic
+from alembic import command
+command.upgrade(Config("alembic.ini"), "head")
+# env.py 优先用 get_settings() 的 .env 真库 URL；127.0.0.1 被守卫放行 → 真实改动开发库
+```
+##### Correct
+```bash
+# 正确：模型变更、迁移文件、应用到库 —— 三件事一起做完
+# 1) 写迁移（必须含可执行 downgrade，见 database-guidelines 的对称性约定）
+#    backend/migrations/versions/0010_<slug>.py
+# 2) 应用到本地库
+uv run alembic upgrade head
+# 3) 自查：库内版本应与代码 head 一致
+uv run alembic current   # 应等于 uv run alembic heads
+```
+```python
+# 正确：测试在进程内回放迁移链，不经 env.py、不碰真库
+with _migrated_connection() as connection:                   # 内存 SQLite
+    drift = _schema_drift(_production_model_schema(), _migrated_schema(inspect(connection)))
+assert drift == [], "ORM 模型与 Alembic 迁移链不一致：\n" + "\n".join(drift)
+```
+```python
+# 正确：模型侧必须按映射类的 __module__ 过滤，不能直接读全局 Base.metadata
+# —— 测试模块会把替身模型挂到同一个 Base 上（见下方 Tests Required）
+if mapper.class_.__module__.startswith("app.models."):
+    schema[table.name] = {column.name for column in table.columns}
+```
+
+#### 4. Tests Required
+`backend/tests/unit/models/test_migration_model_consistency.py`（5 个用例）：
+
+- `test_migrated_schema_matches_production_models`：主闸门 —— 干净状态下漂移列表为空（零误报）。
+- `test_migration_chain_has_single_head`：迁移链收敛到单一 head。只断言收敛性、不写死 revision，避免每加一个迁移就要改测试。
+- `test_schema_drift_detects_injected_model_column_and_table`：**反向验证** —— 注入「模型有列、迁移无列」与「模型有表、迁移无表」两种漂移必须被检出。缺这条，`_schema_drift` 退化成永真的同义反复比较也无人察觉；**一个不会失败的闸门等于没有闸门**。
+- `test_schema_drift_is_clean_for_identical_schemas`：与上条配对，证明 `_schema_drift` 是「比较」而非恒定返回内容。
+- `test_production_model_schema_excludes_test_only_models`：模型侧过滤必须「既不漏也不多」。漏 = 静默丢表（比多更危险），多 = 把非生产表当模型。
+
+**跨测试污染（本闸门最易踩的坑）**：`Base` 是全局共享的，`tests/unit/models/test_user.py::TenantDummyItem` 会把自己的 `test_tenant_items` 表注册到同一个 `Base` 上。因此「模型侧」必须按映射类的 `__module__` 过滤出 `app.models.*`，直接读 `Base.metadata` 会在全量套件里把测试替身误判为漂移 —— 单文件运行通过、全量运行失败。反向地，也不要为了造场景去 `import` 其它测试模块：全量运行时它已被 pytest 按顶层名导入，按点分路径再导入会二次执行并触发 `Table ... is already defined`。
+
+手工复核（改动模型字段时执行一次）：临时给模型加一列 → 主闸门必须失败 → `git checkout --` 撤销探针。两种漂移形态均已按此方式实测失败。
+
+#### 代码锚点
+- `backend/tests/unit/models/test_migration_model_consistency.py`
+- `backend/migrations/env.py::_get_target_db_url`（为什么测试必须绕开 `env.py`）
+- `backend/tests/conftest.py::block_external_network`（守卫放行 `127.0.0.1`，挡不住真库）
+- `backend/tests/unit/models/test_avatar_object_key_migration.py`（单条迁移的 upgrade/downgrade 对称性测试：**不覆盖**全链一致性）
+- `backend/tests/integration/test_p0_full_chain_e2e.py::db_session`（`Base.metadata.create_all()` 建表：**同样不覆盖**漂移）

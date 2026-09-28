@@ -3,7 +3,7 @@
 > 后端代码在本项目中的组织方式（以真实目录与配置为准）。
 
 > **事实源**：`backend/app/`、`backend/pyproject.toml`、`backend/alembic.ini`、`Taskfile.yml`
-> **最后核对**：2026-09-28 @ ca062a1
+> **最后核对**：2026-09-29 @ 90eed7f
 > **核对方式**：`rg "packages|layers|source_modules|testpaths|pythonpath" backend/pyproject.toml`
 
 ---
@@ -62,7 +62,7 @@ backend/
 │   └── services/                   # 业务编排（auth/material/folder/knowledge/question/practice/grading/diagnosis）
 ├── migrations/
 │   ├── env.py                      # 迁移运行环境（读取 AppSettings，兼容 asyncpg/aiosqlite DSN）
-│   └── versions/                   # 0001..0008 迁移脚本
+│   └── versions/                   # 迁移脚本（NNNN_<slug>.py；链与数量见 `uv run alembic history`）
 └── tests/
     ├── unit/                       # 单元测试（api/core/integrations/models/repositories/schemas/services/cli）
     └── integration/                # 集成/E2E（p0 全链路、真实基础设施）

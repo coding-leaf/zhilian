@@ -3,7 +3,7 @@
 > 本项目的数据库模式与约定（以真实模型、迁移与会话装配为准）。
 
 > **事实源**：`backend/app/models/*.py`、`backend/migrations/versions/*.py`、`backend/migrations/env.py`、`backend/alembic.ini`、`backend/app/api/deps/db.py`、`backend/app/container.py`
-> **最后核对**：2026-09-28 @ ca062a1
+> **最后核对**：2026-09-29 @ 90eed7f
 > **核对方式**：`rg "__tablename__|UniqueConstraint|Index|batch_alter_table" backend/app/models backend/migrations/versions`
 
 ---
@@ -29,7 +29,11 @@
 - 约束与索引集中写在 `__table_args__`：命名唯一约束用 `uq_<table>_<cols>`，索引用 `ix_<table>_<cols>`。
 - `__repr__` 必须脱敏，禁止输出用户作答、切片全文等敏感字段。
 
-已建表（`rg "__tablename__" backend/app/models`）：`users`、`materials`、`material_folders`、`material_versions`、`material_snippets`、`material_ocr_pages`、`knowledge_points`、`knowledge_point_snippets`、`questions`、`question_quality_checks`、`question_audit_logs`、`practices`、`attempt_items`、`grading_records`、`mastery_records`、`diagnosis_reports`、`wrong_records`。
+已建表清单**以命令为准，不在此手抄** —— 手抄的状态清单会随每次迁移腐化，而迁移是常态操作。查询：
+
+```bash
+rg -o '__tablename__ = "(\w+)"' -r '$1' backend/app/models
+```
 
 代码锚点：`backend/app/models/material.py::Material.__table_args__`、`backend/app/models/question.py::Question.__table_args__`、`backend/app/models/practice.py::AttemptItem.__table_args__`、`backend/app/models/practice.py::WrongRecord.__repr__`。
 
@@ -63,11 +67,14 @@
 
 - 配置：`backend/alembic.ini`（`script_location = migrations`、`version_locations = migrations/versions`）。
 - 运行环境：`backend/migrations/env.py` 经 `app.core.config.get_settings()` 读取 `db_url`，并把 `postgresql+asyncpg://` 归一为 `postgresql+psycopg://`、`sqlite+aiosqlite://` 归一为 `sqlite://`。
-- 命名：`NNNN_<slug>.py`，`revision` 与文件同名，`down_revision` 指向真实 head（当前链：`0001_material_vector` → `0002_knowledge_question` → `0003_create_practice_tables` → `0004_add_practice_mode` → `0005_create_material_folders` → `0006_practice_folder_scope` → `0007_folder_active_name_unique` → `0008_question_batch_id`）。
+- 命名：`NNNN_<slug>.py`，`revision` 与文件同名，`down_revision` 指向真实 head。**迁移链以命令为准，不在此手抄**（手抄链会随下一次迁移立即过期）：`uv run alembic history`。
+- **应用迁移（模型变更后必做）**：模型新增表/列之后，必须执行 `uv run alembic upgrade head`。Alembic **不会**在应用启动时自动执行（`app/main.py` 的 lifespan 不跑迁移），未应用即运行时 500 —— 2026-09-29 的登录故障（`psycopg.errors.UndefinedColumn: column users.avatar_object_key does not exist`）就是库停在 `0008`、代码已到 `0009` 造成的。
+- **漂移自查**：`uv run alembic current`（库内实际版本）应与 `uv run alembic heads`（代码最新修订）一致；不一致即库落后于代码。
+- **一致性闸门**：`tests/unit/models/test_migration_model_consistency.py` 已把「迁移链产物 == `Base.metadata`」变成会失败的测试（表名 + 列名集合），随 `task verify-backend` 自动执行；模型与迁移不一致时该测试失败，无需等运行时 500 才发现。
 - **SQLite 兼容**：加列/改约束用 `op.batch_alter_table(...)`；需要重建表时 `recreate="always"`。
 - **对称性**：每个 `upgrade()` 必须有可执行的 `downgrade()`；迁移单测断言 `upgrade → downgrade → upgrade` 对称。
 
-代码锚点：`backend/migrations/env.py::_get_target_db_url`、`backend/migrations/versions/0005_create_material_folders.py`、`backend/migrations/versions/0007_folder_active_name_unique.py`、`backend/migrations/versions/0008_question_batch_id.py`。
+代码锚点：`backend/migrations/env.py::_get_target_db_url`、`backend/migrations/versions/0005_create_material_folders.py`、`backend/migrations/versions/0007_folder_active_name_unique.py`、`backend/migrations/versions/0009_avatar_object_key.py`、`backend/tests/unit/models/test_migration_model_consistency.py`。
 
 ---
 
@@ -78,6 +85,8 @@
 - **N+1**：列表里逐条查版本/计数会产生与页大小成正比的查询数；用 `selectinload` 或批量分组查询。
 - **枚举以字面量持久化**：状态值必须取自 `enum.StrEnum` 成员（`PracticeStatus.IN_PROGRESS.value`），不得硬编码字符串。
 - **迁移不对称**：只写 `upgrade` 不写 `downgrade`，或 `batch_alter_table` 在 SQLite 下丢失约束。
+- **迁移未应用**：加完模型字段却忘了 `uv run alembic upgrade head`（或部署时漏跑）。测试套件用的是 `create_all` 照模型建表，**跑测试全绿也证明不了迁移生效**；这类漂移只在真实库上以 `UndefinedColumn` 运行时 500 暴露。自查见上文「漂移自查」。
+- **手抄状态清单**：把迁移链、表清单、版本号手抄进文档，会在下一次迁移时腐化（本文件第 66 行曾手抄迁移链并停在 `0008`）。文档里凡是可以由命令得出的状态，一律写命令而非写结果。
 - **绕过租户过滤**：仓储方法缺 `user_id` 条件会横向越权。
 
 代码锚点：`backend/app/repositories/knowledge.py::KnowledgeRepository.list_all_by_user_id`、`backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`、`backend/app/models/practice.py::PracticeStatus`、`backend/tests/unit/models/test_practice_migrations.py`。
