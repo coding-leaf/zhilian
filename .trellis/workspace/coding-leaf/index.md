@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~445 | Active |
+| `journal-1.md` | ~479 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-09-29 | 实测缺陷修复：输入框点即关闭、判题不落库、生题 502、浮层热区 | `b5f205a`, `78befe2`, `6c3ffcd`, `fb9788a`, `22d708f`, `6b9832c`, `d0e759b`, `eef64e6`, `a4ce6ec`, `800c475`, `7f45062`, `61c1de1`, `214cf7e` | `master` |
 | 12 | 2026-09-29 | 登录请求链路加固：超时收敛与失败可诊断 | `6e843ae`, `a30110e`, `84c22e4` | `master` |
 | 11 | 2026-09-29 | 题目响应补来源切片正文（跨域共享装配与同名关系陷阱） | `75e0d80`, `497bff7`, `853d2c2`, `3177db0` | `master` |
 | 10 | 2026-09-29 | 修复 mypy strict 的 DML rowcount 类型缺口并沉淀规范 | `03dc9f1`, `3ef2442`, `d5aa12b` | `master` |

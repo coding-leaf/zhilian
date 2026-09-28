@@ -443,3 +443,37 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 实测缺陷修复：输入框点即关闭、判题不落库、生题 502、浮层热区
+<!-- trellis-session: v=2 fp=99e8d697665ea6ba -->
+
+**Date**: 2026-09-29
+**Task**: 实测缺陷修复：输入框点即关闭、判题不落库、生题 502、浮层热区
+**Branch**: `master`
+
+### Summary
+
+按「任务关联分类、一次处理相关代码」的要求，把一次真机/开发者工具实测暴露的缺陷收敛成父任务 + 独立子任务。本次解决并验证：输入框点一下就关页面（根因是小程序编译器静默丢弃 @tap.self，修法是把关闭热区拆成独立 backdrop，用户实机确认）；判题结果不落库（三个写库方法只 flush 不 commit，而 get_session() 正常退出也不提交，导致判卷算完即丢，真实库验证 grading_records 0→12、状态 submitted→completed、总分 None→4.0，幂等重放不重复）；生题 502（DeepSeek 思考模式拒绝强制 tool_choice，改为 auto）；浮层 backdrop 无需负偏移（推翻一次被写反的几何推断，用 headless Chrome 的 elementFromPoint 实测定案）。关键教训均已入规范：门禁会随机变红且退出码与覆盖率都会骗人（cmd|tail 的 $? 是 tail 的、恒为 0）、小程序事件修饰符会在编译期消失、提交边界缺失只有跨会话用例才测得出来。学情页经实测确认两处缺陷并交回重构任务（用户已决定重构）。仍未结清：生题的端到端确认、学习足迹统计口径、题库页。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b5f205a` | chore(task): 登记实测缺陷修复批次任务树与规划产物 |
+| `78befe2` | fix(frontend): 出题核对视图可达，补齐生成反馈与结果回访 |
+| `6c3ffcd` | fix(worker): Windows 改用 SimpleWorker，解析任务不再无人消费 |
+| `fb9788a` | fix(frontend): 浮层点击热区独立成元素，修复点输入框即关闭 |
+| `22d708f` | docs(spec): 记录两条会静默失效的前端约定 |
+| `6b9832c` | fix(worker): 补上 RQ 在 Windows 上的第二处 POSIX-only 依赖 |
+| `d0e759b` | fix(llm): 不再强制 tool_choice，思考模型上结构化输出恢复可用 |
+| `eef64e6` | chore(task): 登记判题不落库任务，并写入交接状态板 |
+| `a4ce6ec` | docs(frontend): 记下 backdrop 无需负偏移，并纠正被写反的规则 |
+| `800c475` | fix(grading): 判题结果补上事务提交，修复判题完成后全部丢弃 |
+| `7f45062` | docs(task): 判题落库验收结清，并更新父任务收口状态 |
+| `61c1de1` | docs(spec): 更正门禁结论，并记录「退出码与覆盖率都会骗人」 |
+| `214cf7e` | docs(task): 结清判题端到端确认，并把学情页实测结论交回重构任务 |
+
+### Status
+
+[OK] **Completed**
