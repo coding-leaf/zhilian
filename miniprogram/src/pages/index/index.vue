@@ -1,235 +1,367 @@
 <template>
-  <view class="dashboard-page">
-    <!-- 顶部沉浸式问候栏 -->
-    <view class="dashboard-header">
-      <view class="greeting-col">
-        <text class="brand-title">智练工作台</text>
-        <text class="user-greeting">{{ greetingText }}</text>
+  <view class="index-container">
+    <!-- 顶部温润书卷 Hero Header -->
+    <view class="hero-section">
+      <view class="hero-header-row">
+        <view class="hero-tag">智练 · 自主学习平台</view>
+        <view v-if="!authStore.isLoggedIn()" class="login-trigger-btn" @tap="goToLogin">
+          <text class="login-trigger-text">快捷登录</text>
+        </view>
+        <view v-else class="user-status-pill">
+          <text class="user-status-text">已登录</text>
+        </view>
       </view>
-      <view class="auth-action-col">
-        <button v-if="!userStore.isAuthenticated" class="btn-login" @tap="handleNavigateLogin">
-          登录
-        </button>
-        <button v-else class="btn-logout" @tap="handleLogout">退出</button>
+      <text class="hero-title">深阅读，专研习</text>
+      <text class="hero-subtitle">上传一份讲义，开启针对性智能测验与精准学情诊断</text>
+    </view>
+
+    <!-- 资料快速导入入口 Card -->
+    <view class="paper-card upload-card" @tap="handleChooseFile">
+      <view class="upload-icon-wrapper">
+        <text class="upload-icon">📄</text>
+      </view>
+      <view class="upload-info">
+        <text class="upload-title">导入学习资料</text>
+        <text class="upload-desc">支持微信聊天文件、文档 (PDF/DOCX) 或图片讲义</text>
+      </view>
+      <view class="upload-action">
+        <text class="action-btn-text">选择</text>
       </view>
     </view>
 
-    <!-- 骨架屏加载态 -->
-    <view v-if="loading && !hasLoadedOnce" class="dashboard-skeleton">
-      <wd-skeleton theme="paragraph" />
+    <!-- 快捷出题与学习进度 -->
+    <view class="section-title-row">
+      <text class="section-title">我的讲义库</text>
+      <text class="section-refresh" @tap="refreshMaterials">刷新</text>
     </view>
 
-    <!-- 核心工作台内容区 -->
-    <view v-else class="dashboard-content">
-      <!-- 课程文件夹信息架构入口 -->
-      <CourseListSection
-        :folders="folderStore.folders"
-        :archived-folders="folderStore.archivedFolders"
-        :unclassified-count="folderStore.unclassifiedCount"
-        @enter="handleEnterCourse"
-        @view-unclassified="handleViewUnclassified"
-        @changed="handleCoursesChanged"
-      />
+    <!-- 讲义列表 -->
+    <view class="materials-list">
+      <view
+        v-for="item in materialStore.materialList"
+        :key="item.id"
+        class="paper-card material-card"
+        @tap="goToDetail(item)"
+      >
+        <view class="card-header">
+          <text class="material-name">{{ item.title || '无标题资料' }}</text>
+          <view :class="['status-badge', `status-${item.status.toLowerCase()}`]">
+            {{ getStatusText(item.status) }}
+          </view>
+        </view>
+        <view class="card-footer">
+          <text class="meta-date">{{ item.created_at?.slice(0, 10) || '今日' }}</text>
+          <text v-if="item.status === 'PARSED'" class="action-link">智能出题 →</text>
+        </view>
+      </view>
 
-      <!-- 快捷上传横幅（未选课程即落未分类） -->
-      <QuickUploadBar ref="quickUploadRef" @upload-success="handleUploadSuccess" />
-
-      <!-- 智能双轨：新手引导卡 或 最近学习流 -->
-      <NewbieGuideCard v-if="isNewbie" @start-first="handleStartFirst" />
-      <RecentLearningSection
-        v-else
-        :active-practice="activePractice"
-        :recent-materials="recentMaterials"
-        :loading="loading"
-        @continue-practice="handleContinuePractice"
-        @quick-quiz="handleQuickQuiz"
-        @view-material="handleViewMaterial"
-        @view-all-materials="handleViewAllMaterials"
-      />
+      <view v-if="materialStore.materialList.length === 0" class="empty-state">
+        <text class="empty-text">暂无导入资料，点击上方卡片立即体验</text>
+      </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue';
-import { onShow, onPullDownRefresh } from '@dcloudio/uni-app';
-import { useUserStore } from '@/stores/userStore';
-import { useMaterialStore } from '@/stores/materialStore';
-import { useFolderStore } from '@/stores/folderStore';
-import { usePracticeStore } from '@/stores/practiceStore';
-import { fetchMaterialList } from '@/api/material';
-import { fetchFolderList } from '@/api/folder';
-import { UNCLASSIFIED_FOLDER_ID } from '@/types/folder';
-import type { MaterialItem } from '@/types/material';
-import type { FolderItem } from '@/types/folder';
-import QuickUploadBar from '@/components/home/QuickUploadBar.vue';
-import CourseListSection from '@/components/home/CourseListSection.vue';
-import RecentLearningSection from '@/components/home/RecentLearningSection.vue';
-import NewbieGuideCard from '@/components/home/NewbieGuideCard.vue';
-import { extractLatestDraftPractice } from '@/utils/recentLearning';
+import { onMounted } from 'vue'
+import { onPullDownRefresh } from '@dcloudio/uni-app'
+import { useMaterialStore } from '@/stores/material'
+import { useAuthStore } from '@/stores/auth'
+import type { MaterialItem } from '@/types'
 
-const userStore = useUserStore();
-const materialStore = useMaterialStore();
-const folderStore = useFolderStore();
-const practiceStore = usePracticeStore();
+const materialStore = useMaterialStore()
+const authStore = useAuthStore()
 
-const loading = ref(false);
-const hasLoadedOnce = ref(false);
-const quickUploadRef = ref<InstanceType<typeof QuickUploadBar> | null>(null);
-
-const userDisplayName = computed(() => {
-  if (!userStore.isAuthenticated) {
-    return '未登录';
+onMounted(async () => {
+  if (!authStore.isLoggedIn()) {
+    await authStore.loginWithWechat()
   }
-  return userStore.profile?.nickname || '认证学员';
-});
-
-const greetingText = computed(() => {
-  if (!userStore.isAuthenticated) {
-    return '登录同步学习进度与定制复习方案';
-  }
-  return `你好，${userDisplayName.value}，今日保持高效专注`;
-});
-
-const recentMaterials = computed(() => materialStore.materialsList);
-
-const activePractice = computed(() => {
-  return extractLatestDraftPractice(practiceStore.drafts, materialStore.materialsList);
-});
-
-const isNewbie = computed(() => {
-  return materialStore.materialsList.length === 0 && !activePractice.value;
-});
-
-async function loadDashboardData(showSkeleton = true): Promise<void> {
-  if (showSkeleton) {
-    loading.value = true;
-  }
-
-  practiceStore.loadDraftFromStorage();
-
-  const [foldersRes, materialsRes, unclassifiedRes] = await Promise.allSettled([
-    fetchFolderList({ include_archived: true }),
-    fetchMaterialList({ page: 1, page_size: 5 }),
-    fetchMaterialList({ folder_id: UNCLASSIFIED_FOLDER_ID, page: 1, page_size: 1 }),
-  ]);
-
-  if (foldersRes.status === 'fulfilled' && foldersRes.value?.data?.items) {
-    folderStore.setFolderList(foldersRes.value.data.items);
-  } else if (foldersRes.status === 'rejected') {
-    // 严禁静默清空已有课程列表：保留上一份数据并显式提示可重试。
-    uni.showToast({ title: '课程列表加载失败，请下拉刷新', icon: 'none' });
-  }
-
-  if (materialsRes.status === 'fulfilled' && materialsRes.value?.data?.items) {
-    materialStore.setMaterialsList(materialsRes.value.data.items);
-  }
-
-  if (unclassifiedRes.status === 'fulfilled') {
-    folderStore.setUnclassifiedCount(unclassifiedRes.value?.data?.total ?? 0);
-  }
-
-  loading.value = false;
-  hasLoadedOnce.value = true;
-}
-
-function handleNavigateLogin(): void {
-  uni.navigateTo({
-    url: '/pages/auth/login',
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleLogout(): void {
-  userStore.logout();
-}
-
-function handleEnterCourse(folder: FolderItem): void {
-  folderStore.setCurrentFolder(folder);
-  uni.navigateTo({
-    url: `/subpackages/material/pages/course/index?folder_id=${folder.id}`,
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleViewUnclassified(): void {
-  uni.navigateTo({
-    url: `/subpackages/material/pages/list/index?folder_id=${UNCLASSIFIED_FOLDER_ID}`,
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleCoursesChanged(): void {
-  void loadDashboardData(false);
-}
-
-async function handleUploadSuccess(): Promise<void> {
-  await loadDashboardData(false);
-}
-
-function handleStartFirst(): void {
-  if (quickUploadRef.value) {
-    quickUploadRef.value.open();
-  }
-}
-
-function handleContinuePractice(practiceId: string): void {
-  uni.navigateTo({
-    url: `/subpackages/practice/pages/session/index?id=${practiceId}`,
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleQuickQuiz(mat: MaterialItem): void {
-  uni.navigateTo({
-    url: `/subpackages/material/pages/knowledge-tree/index?material_id=${mat.id}`,
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleViewMaterial(materialId: string): void {
-  uni.navigateTo({
-    url: `/subpackages/material/pages/detail/index?material_id=${materialId}`,
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-function handleViewAllMaterials(): void {
-  uni.navigateTo({
-    url: '/subpackages/material/pages/list/index',
-    fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-  });
-}
-
-onMounted(() => {
-  loadDashboardData(true);
-});
-
-onShow(() => {
-  practiceStore.loadDraftFromStorage();
-  if (hasLoadedOnce.value && !loading.value) {
-    void loadDashboardData(false);
-  }
-});
+  await materialStore.loadMaterialList()
+})
 
 onPullDownRefresh(async () => {
-  try {
-    await loadDashboardData(false);
-  } finally {
-    uni.stopPullDownRefresh();
-  }
-});
+  await materialStore.loadMaterialList()
+  uni.stopPullDownRefresh()
+})
 
-defineExpose({
-  loadDashboardData,
-  loading,
-  hasLoadedOnce,
-  isNewbie,
-  activePractice,
-  recentMaterials,
-});
+const refreshMaterials = () => {
+  materialStore.loadMaterialList()
+}
+
+const getStatusText = (status: string) => {
+  switch (status) {
+    case 'PARSED':
+      return '已解析'
+    case 'PROCESSING':
+      return '解析中'
+    case 'FAILED':
+      return '解析失败'
+    default:
+      return '待处理'
+  }
+}
+
+const handleChooseFile = () => {
+  // #ifdef MP-WEIXIN
+  const wxAny = (globalThis as any).wx || (typeof wx !== 'undefined' ? wx : null)
+  if (wxAny && wxAny.chooseMessageFile) {
+    wxAny.chooseMessageFile({
+      count: 1,
+      type: 'all',
+      success: async (res: any) => {
+        const file = res.tempFiles?.[0]
+        if (file) {
+          uni.showLoading({ title: '正在上传讲义...' })
+          try {
+            const item = await materialStore.upload(file.path, file.name)
+            uni.hideLoading()
+            uni.showToast({ title: '上传成功', icon: 'success' })
+            goToDetail(item)
+          } catch {
+            uni.hideLoading()
+          }
+        }
+      },
+      fail: () => {
+        // 允许取消
+      },
+    })
+    return
+  }
+  // #endif
+  uni.chooseImage({
+    count: 1,
+    success: async (res: any) => {
+      const path = res.tempFilePaths?.[0]
+      if (path) {
+        uni.showLoading({ title: '正在上传讲义...' })
+        try {
+          const item = await materialStore.upload(path, '学习讲义')
+          uni.hideLoading()
+          goToDetail(item)
+        } catch {
+          uni.hideLoading()
+        }
+      }
+    },
+  })
+}
+
+const goToDetail = (item: MaterialItem) => {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/course/index?id=${item.id}`,
+  })
+}
+
+const goToLogin = () => {
+  uni.navigateTo({
+    url: '/pages/auth/login',
+  })
+}
 </script>
 
-<style lang="scss" scoped>
-@import './index.scss';
+<style scoped>
+.index-container {
+  padding: 32rpx;
+  min-height: 100vh;
+}
+
+.hero-section {
+  padding: 32rpx 8rpx 48rpx 8rpx;
+}
+
+.hero-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.hero-tag {
+  display: inline-block;
+  font-size: 22rpx;
+  color: #1e3a8a;
+  background-color: rgba(30, 58, 138, 0.08);
+  padding: 6rpx 16rpx;
+  border-radius: 6rpx;
+  font-weight: 500;
+}
+
+.login-trigger-btn {
+  background: #1e3a8a;
+  padding: 8rpx 20rpx;
+  border-radius: 24rpx;
+}
+
+.login-trigger-text {
+  font-size: 22rpx;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.user-status-pill {
+  background: rgba(13, 148, 136, 0.1);
+  padding: 6rpx 16rpx;
+  border-radius: 20rpx;
+}
+
+.user-status-text {
+  font-size: 22rpx;
+  color: #0d9488;
+  font-weight: 500;
+}
+
+.hero-title {
+  display: block;
+  font-size: 44rpx;
+  font-weight: 700;
+  color: #1c1917;
+  letter-spacing: -0.5rpx;
+  margin-bottom: 12rpx;
+}
+
+.hero-subtitle {
+  display: block;
+  font-size: 26rpx;
+  color: #78716c;
+  line-height: 1.5;
+}
+
+.upload-card {
+  padding: 36rpx 32rpx;
+  display: flex;
+  align-items: center;
+  margin-bottom: 48rpx;
+}
+
+.upload-icon-wrapper {
+  font-size: 48rpx;
+  margin-right: 24rpx;
+}
+
+.upload-info {
+  flex: 1;
+}
+
+.upload-title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #1c1917;
+  margin-bottom: 6rpx;
+}
+
+.upload-desc {
+  display: block;
+  font-size: 24rpx;
+  color: #78716c;
+}
+
+.upload-action {
+  padding-left: 16rpx;
+}
+
+.action-btn-text {
+  font-size: 26rpx;
+  color: #1e3a8a;
+  font-weight: 600;
+  background: #f0f4ff;
+  padding: 10rpx 24rpx;
+  border-radius: 8rpx;
+}
+
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+  padding: 0 4rpx;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #1c1917;
+}
+
+.section-refresh {
+  font-size: 24rpx;
+  color: #78716c;
+}
+
+.material-card {
+  padding: 28rpx 32rpx;
+  margin-bottom: 20rpx;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.material-name {
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #1c1917;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 16rpx;
+}
+
+.status-badge {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+}
+
+.status-parsed {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.status-processing {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.status-failed {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.status-waiting {
+  background: #f5f5f4;
+  color: #78716c;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.meta-date {
+  font-size: 24rpx;
+  color: #a8a29e;
+}
+
+.action-link {
+  font-size: 26rpx;
+  color: #1e3a8a;
+  font-weight: 500;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 64rpx 0;
+}
+
+.empty-text {
+  font-size: 26rpx;
+  color: #a8a29e;
+}
 </style>

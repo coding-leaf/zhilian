@@ -1,7 +1,7 @@
 {
-  "name": "智练自主学习平台",
+  "name": "zhilian-miniprogram",
   "appid": "__UNI__ZHILIAN",
-  "description": "智练自主学习平台小程序客户端",
+  "description": "智练自主学习平台小程序",
   "versionName": "1.0.0",
   "versionCode": "100",
   "transformPx": false,
@@ -9,7 +9,7 @@
     "usingComponents": true
   },
   "mp-weixin": {
-    "appid": "wx6c3a2ca90c010005",
+    "appid": "touristappid",
     "setting": {
       "urlCheck": false,
       "es6": true,
@@ -17,6 +17,5 @@
       "minified": true
     },
     "usingComponents": true
-  },
-  "vueVersion": "3"
+  }
 }

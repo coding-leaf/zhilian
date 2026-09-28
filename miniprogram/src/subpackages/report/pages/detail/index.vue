@@ -1,300 +1,353 @@
 <template>
-  <view class="report-detail-page">
-    <!-- 骨架屏加载状态 -->
-    <view v-if="loading" class="skeleton-wrapper">
-      <view class="skeleton-card">
-        <view class="skeleton-line short" />
-        <view class="skeleton-line tall" />
-        <view class="skeleton-line medium" />
+  <view class="report-container">
+    <!-- 诊断总览卡片 -->
+    <view v-if="report" class="paper-card score-card">
+      <view class="score-header">
+        <text class="score-title">学情诊断完成</text>
+        <text class="score-date">{{ report.created_at?.slice(0, 10) }}</text>
       </view>
-    </view>
 
-    <!-- 异常状态 -->
-    <view v-else-if="error" class="error-state">
-      <text class="error-text">{{ error }}</text>
-      <view class="retry-btn" @tap="handleRetry">
-        <text>重新加载</text>
-      </view>
-    </view>
-
-    <!-- 报告内容主体 -->
-    <view v-else-if="currentReport" class="report-content">
-      <!-- 概览摘要卡片 -->
-      <DiagnosisSummaryCard :report="currentReport" :duration-seconds="durationSeconds" />
-
-      <!-- 薄弱知识点诊断卡片 -->
-      <WeakKnowledgeCard
-        v-if="currentReport.weak_points && currentReport.weak_points.length > 0"
-        :weak-points="currentReport.weak_points"
-      />
-
-      <!-- 逐题判题结果列表 -->
-      <view v-if="itemsError" class="items-error-state">
-        <text class="items-error-text">{{ itemsError }}</text>
-        <view class="items-retry-btn" @tap="handleRetry">
-          <text>重新加载</text>
+      <view class="score-stats-row">
+        <view class="stat-item">
+          <text class="stat-num">{{ report.score }}</text>
+          <text class="stat-label">总得分 (满分 {{ report.total_score }})</text>
+        </view>
+        <view class="stat-divider" />
+        <view class="stat-item">
+          <text class="stat-num">{{ (report.accuracy * 100).toFixed(0) }}%</text>
+          <text class="stat-label">正确率</text>
         </view>
       </view>
-      <GradingResultList
-        v-else
-        :items="items"
-        @view-snippet="handleViewSnippet"
-        @self-grade="handleOpenSelfGrade"
-        @regrade="handleOpenRegrade"
-        @view-explanation="handleViewExplanation"
-      />
+
+      <view v-if="report.next_step_suggestion" class="next-suggestion-box">
+        <text class="suggestion-tag">💡 下一步建议：</text>
+        <text class="suggestion-text">{{ report.next_step_suggestion }}</text>
+      </view>
     </view>
 
-    <!-- 空态：缺失 practiceId 或报告不存在，避免静默白屏 (BUG-DIAG-022) -->
-    <view v-else class="empty-state">
-      <text class="empty-text">暂无诊断报告数据</text>
-      <view class="empty-actions">
-        <view class="empty-btn primary back-home-btn" @tap="handleBackHome">
-          <text>返回学习中心</text>
+    <!-- 薄弱知识点清单 -->
+    <view v-if="report?.weaknesses && report.weaknesses.length" class="weakness-section">
+      <text class="section-title">需重点巩固的薄弱点</text>
+      <view
+        v-for="(w, idx) in report.weaknesses"
+        :key="idx"
+        class="paper-card weakness-card"
+      >
+        <view class="weakness-header">
+          <text class="weakness-name">{{ w.knowledge_point }}</text>
+          <text class="weakness-rate">掌握度 {{ (w.mastery_rate * 100).toFixed(0) }}%</text>
         </view>
-        <view v-if="currentPracticeId" class="empty-btn" @tap="handleRetry">
-          <text>重新加载</text>
+        <text class="weakness-reason">{{ w.reason }}</text>
+        <text class="weakness-sugg">建议：{{ w.suggestion }}</text>
+      </view>
+    </view>
+
+    <!-- 逐题解析与依据 -->
+    <view v-if="report?.details && report.details.length" class="details-section">
+      <text class="section-title">作答明细与原文核对</text>
+
+      <view
+        v-for="(d, idx) in report.details"
+        :key="idx"
+        class="paper-card detail-card"
+      >
+        <view class="d-header">
+          <text class="d-num">第 {{ idx + 1 }} 题</text>
+          <view :class="['result-tag', d.is_correct ? 'tag-correct' : 'tag-wrong']">
+            {{ d.is_correct ? '正确' : '错误' }} ({{ d.score }}分)
+          </view>
+        </view>
+
+        <text class="d-stem">{{ d.stem }}</text>
+
+        <view class="answer-compare-box">
+          <text class="ans-line">你的作答：<text class="ans-val">{{ d.user_answer || '(未作答)' }}</text></text>
+          <text class="ans-line">标准答案：<text class="ans-val ans-correct">{{ d.correct_answer }}</text></text>
+        </view>
+
+        <view v-if="d.feedback" class="feedback-box">
+          <text class="fb-title">判题分析：</text>
+          <text class="fb-text">{{ d.feedback }}</text>
+        </view>
+
+        <view v-if="d.source_quote" class="source-quote-box">
+          <text class="sq-title">📖 讲义原文对应：</text>
+          <text class="sq-text">{{ d.source_quote }}</text>
         </view>
       </view>
     </view>
 
-    <!-- 吸底一键继续练习操作栏 -->
-    <ContinuePracticeBar
-      v-if="!loading && currentReport"
-      :material-id="materialId"
-      :knowledge-point-ids="currentWeakPointIds"
-      :source-report-id="currentReport.id"
-      title="薄弱点强化练习"
-      button-text="一键强化薄弱点练习"
-    />
-
-    <!-- 原文切片溯源抽屉 -->
-    <OriginalSnippetDrawer
-      :visible="snippetDrawerVisible"
-      :snippet-content="activeSnippet?.snippet_content || ''"
-      :chapter-title="activeSnippet?.chapter_title || ''"
-      :page-index="activeSnippet?.page_index || 0"
-      :highlight-keywords="snippetKeywords"
-      @update:visible="snippetDrawerVisible = $event"
-      @close="snippetDrawerVisible = false"
-    />
-
-    <!-- 主观题自评与重判弹窗 -->
-    <SelfGradeModal
-      :visible="selfGradeVisible"
-      :attempt-item-id="activeGradeItem?.attempt_item_id || ''"
-      :stem="activeGradeItem?.question_snapshot?.stem || ''"
-      :user-answer="formatUserAnswer(activeGradeItem?.user_answer)"
-      :standard-answer="activeGradeItem?.question_snapshot?.answer || ''"
-      :max-score="activeGradeItem?.max_score ?? 5.0"
-      :current-score="activeGradeItem?.score ?? 0"
-      :rubric="
-        (activeGradeItem?.question_snapshot?.grading_rubric as Record<string, unknown>) || {}
-      "
-      @update:visible="selfGradeVisible = $event"
-      @success="onSelfGradeSuccess"
-    />
-    <RegradeModal
-      :visible="regradeVisible"
-      :attempt-item-id="activeRegradeItem?.attempt_item_id || ''"
-      :stem="activeRegradeItem?.question_snapshot?.stem || ''"
-      @update:visible="regradeVisible = $event"
-      @success="onRegradeSuccess"
-    />
+    <!-- 底部返回/再练按钮 -->
+    <view class="bottom-bar">
+      <button class="paper-btn-primary full-btn" @tap="handleBackHome">
+        完成复盘，返回工作台
+      </button>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
-/**
- * index.vue (subpackages/report/pages/detail)
- * Diagnostic Report Assembly Page.
- * Integrates summary card, weakness card, grading results, snippet drawer, and modals.
- * Complies with docs/DESIGN.md & spec ZL-135.
- * Zero-Emoji Policy enforced.
- */
+import { ref } from 'vue'
+import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
+import { useDiagnosisStore } from '@/stores/diagnosis'
+import type { DiagnosisReport } from '@/types'
 
-import { ref, computed, onMounted } from 'vue';
-import { onLoad } from '@dcloudio/uni-app';
-import { useReportStore } from '@/stores/reportStore';
-import { fetchDiagnosisReport } from '@/api/diagnosis';
-import { fetchPracticeSession } from '@/api/practice';
-import type { AttemptGradingItem, OriginalSnippet } from '@/types/report';
+const diagnosisStore = useDiagnosisStore()
+const practiceId = ref<string>('')
+const report = ref<DiagnosisReport | null>(null)
 
-import DiagnosisSummaryCard from '../../components/DiagnosisSummaryCard.vue';
-import WeakKnowledgeCard from '../../components/WeakKnowledgeCard.vue';
-import GradingResultList from '../../components/GradingResultList.vue';
-import OriginalSnippetDrawer from '../../components/OriginalSnippetDrawer.vue';
-import SelfGradeModal from '../../components/SelfGradeModal.vue';
-import RegradeModal from '../../components/RegradeModal.vue';
-import ContinuePracticeBar from '../../components/ContinuePracticeBar.vue';
-
-const props = withDefaults(defineProps<{ practiceId?: string }>(), { practiceId: '' });
-
-const reportStore = useReportStore();
-const loading = ref(true);
-const error = ref<string | null>(null);
-const itemsError = ref<string | null>(null);
-const currentPracticeId = ref(props.practiceId || '');
-const durationSeconds = ref(0);
-const materialId = ref('');
-const items = ref<AttemptGradingItem[]>([]);
-
-let isInitialLoading = false;
-let lastLoadedPracticeId = '';
-const snippetDrawerVisible = ref(false);
-const activeSnippet = ref<OriginalSnippet | null>(null);
-const snippetKeywords = ref<string[]>([]);
-const selfGradeVisible = ref(false);
-const activeGradeItem = ref<AttemptGradingItem | null>(null);
-const regradeVisible = ref(false);
-const activeRegradeItem = ref<AttemptGradingItem | null>(null);
-
-const currentReport = computed(() => reportStore.currentReport);
-const currentWeakPointIds = computed(() => {
-  return currentReport.value?.weak_points?.map((p) => p.knowledge_point_id) || [];
-});
-
-function formatUserAnswer(ans?: unknown): string {
-  if (ans === null || ans === undefined || ans === '') return '';
-  return Array.isArray(ans) ? ans.join(', ') : String(ans);
-}
-
-async function loadReportData(pid: string): Promise<void> {
-  if (!pid) return;
-  // 首屏防重：同一 practice 尚在加载中时直接短路，避免 onLoad + onMounted 双请求
-  if (isInitialLoading && lastLoadedPracticeId === pid) return;
-  isInitialLoading = true;
-  lastLoadedPracticeId = pid;
-  loading.value = true;
-  error.value = null;
-  itemsError.value = null;
+const loadDiagnosis = async () => {
+  if (!practiceId.value) return
+  uni.showLoading({ title: '加载学情中...' })
   try {
-    const [reportRes, practiceRes] = await Promise.all([
-      fetchDiagnosisReport(pid),
-      fetchPracticeSession(pid).catch(() => null),
-    ]);
-
-    if (reportRes.code === 0 && reportRes.data) {
-      reportStore.setReport(reportRes.data);
-    } else {
-      error.value = reportRes.message || '获取诊断报告失败';
-      return;
-    }
-
-    const pracData = practiceRes?.data as unknown as
-      | {
-          items?: AttemptGradingItem[];
-          material_id?: string;
-          time_elapsed_seconds?: number;
-        }
-      | undefined;
-
-    // 逐题作答项唯一数据源为 practiceRes；报告响应不含 items (BUG-GRADE-005)
-    if (practiceRes && practiceRes.code === 0 && Array.isArray(pracData?.items)) {
-      items.value = pracData.items;
-    } else {
-      items.value = [];
-      itemsError.value = '作答明细加载失败，请重试';
-    }
-
-    if (pracData?.material_id) {
-      materialId.value = pracData.material_id;
-    }
-    if (pracData?.time_elapsed_seconds) {
-      durationSeconds.value = pracData.time_elapsed_seconds;
-    }
-  } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : '网络请求异常';
+    report.value = await diagnosisStore.loadReport(practiceId.value)
+  } catch (err) {
+    console.error(err)
   } finally {
-    isInitialLoading = false;
-    loading.value = false;
+    uni.hideLoading()
   }
 }
 
-function handleRetry(): void {
-  if (currentPracticeId.value) loadReportData(currentPracticeId.value);
-}
+onLoad((options) => {
+  if (options && options.practice_id) {
+    practiceId.value = options.practice_id
+    loadDiagnosis()
+  }
+})
 
-function handleBackHome(): void {
-  uni.reLaunch({
+onPullDownRefresh(async () => {
+  await loadDiagnosis()
+  uni.stopPullDownRefresh()
+})
+
+const handleBackHome = () => {
+  uni.switchTab({
     url: '/pages/index/index',
-    fail: () => uni.showToast({ title: '返回学习中心失败', icon: 'none' }),
-  });
+  })
 }
-
-function handleViewSnippet(item: AttemptGradingItem): void {
-  activeSnippet.value = item.source_snippet || item.question_snapshot?.source_snippet || null;
-  snippetKeywords.value = [
-    ...(item.hit_keywords || item.question_snapshot?.hit_keywords || []),
-    ...(item.missing_keywords || item.question_snapshot?.missing_keywords || []),
-  ];
-  snippetDrawerVisible.value = true;
-}
-
-const handleOpenSelfGrade = (item: AttemptGradingItem) => {
-  activeGradeItem.value = item;
-  selfGradeVisible.value = true;
-};
-
-const handleOpenRegrade = (item: AttemptGradingItem) => {
-  activeRegradeItem.value = item;
-  regradeVisible.value = true;
-};
-
-function handleViewExplanation(item: AttemptGradingItem): void {
-  const qid = item.question_id || item.attempt_item_id;
-  uni.navigateTo({
-    url: `/subpackages/report/pages/explanation/index?practice_id=${currentPracticeId.value}&question_id=${qid}&order_index=${item.order_index}`,
-  });
-}
-
-function refreshReport(): void {
-  if (!currentPracticeId.value) return;
-  fetchDiagnosisReport(currentPracticeId.value)
-    .then((res) => res.code === 0 && res.data && reportStore.setReport(res.data))
-    .catch(() => {});
-}
-
-function onSelfGradeSuccess(payload: { attempt_item_id: string; score: number }): void {
-  const target = items.value.find((it) => it.attempt_item_id === payload.attempt_item_id);
-  if (target) {
-    target.score = payload.score;
-    target.status = 'graded';
-  }
-  refreshReport();
-}
-
-function onRegradeSuccess(payload: {
-  attempt_item_id: string;
-  status?: string;
-  score?: number | null;
-}): void {
-  const target = items.value.find((it) => it.attempt_item_id === payload.attempt_item_id);
-  if (target) {
-    const isSuccess = payload.status === 'success' && typeof payload.score === 'number';
-    target.score = isSuccess ? payload.score! : target.score;
-    target.status = isSuccess ? 'graded' : 'pending_regrade';
-    target.grading_status = target.status;
-  }
-  refreshReport();
-}
-
-onMounted(() => {
-  const pid = props.practiceId || currentPracticeId.value;
-  if (!pid) return void (loading.value = false);
-  currentPracticeId.value = pid;
-  if (lastLoadedPracticeId !== pid) loadReportData(pid);
-});
-
-onLoad((query?: Record<string, string>) => {
-  const pid = query?.practice_id || query?.id;
-  if (pid) {
-    currentPracticeId.value = pid;
-    loadReportData(pid);
-  }
-});
 </script>
 
-<style lang="scss" scoped>
-@import './detail.scss';
+<style scoped>
+.report-container {
+  padding: 32rpx;
+  padding-bottom: 160rpx;
+  min-height: 100vh;
+}
+
+.score-card {
+  padding: 36rpx 32rpx;
+  margin-bottom: 32rpx;
+}
+
+.score-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+}
+
+.score-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #1c1917;
+}
+
+.score-date {
+  font-size: 24rpx;
+  color: #a8a29e;
+}
+
+.score-stats-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 24rpx 0;
+  border-top: 1px solid #f5f5f4;
+  border-bottom: 1px solid #f5f5f4;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-num {
+  font-size: 44rpx;
+  font-weight: 700;
+  color: #1e3a8a;
+  display: block;
+}
+
+.stat-label {
+  font-size: 24rpx;
+  color: #78716c;
+}
+
+.stat-divider {
+  width: 1px;
+  height: 48rpx;
+  background: #e7e5e4;
+}
+
+.next-suggestion-box {
+  margin-top: 24rpx;
+  padding: 16rpx 20rpx;
+  background: #f0fdf4;
+  border-radius: 8rpx;
+}
+
+.suggestion-tag {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #166534;
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.suggestion-text {
+  font-size: 26rpx;
+  color: #15803d;
+  line-height: 1.5;
+}
+
+.section-title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #1c1917;
+  margin: 32rpx 0 20rpx 4rpx;
+}
+
+.weakness-card {
+  padding: 24rpx 28rpx;
+  margin-bottom: 16rpx;
+}
+
+.weakness-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12rpx;
+}
+
+.weakness-name {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.weakness-rate {
+  font-size: 24rpx;
+  color: #78716c;
+}
+
+.weakness-reason,
+.weakness-sugg {
+  display: block;
+  font-size: 24rpx;
+  color: #57534e;
+  line-height: 1.5;
+}
+
+.detail-card {
+  padding: 30rpx;
+  margin-bottom: 24rpx;
+}
+
+.d-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.d-num {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #1e3a8a;
+}
+
+.result-tag {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+}
+
+.tag-correct {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.tag-wrong {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.d-stem {
+  display: block;
+  font-size: 28rpx;
+  color: #1c1917;
+  line-height: 1.6;
+  margin-bottom: 20rpx;
+}
+
+.answer-compare-box {
+  background: #fafaf9;
+  padding: 16rpx 20rpx;
+  border-radius: 8rpx;
+  margin-bottom: 16rpx;
+}
+
+.ans-line {
+  display: block;
+  font-size: 24rpx;
+  color: #78716c;
+  margin-bottom: 6rpx;
+}
+
+.ans-val {
+  color: #1c1917;
+  font-weight: 500;
+}
+
+.ans-correct {
+  color: #059669;
+}
+
+.feedback-box,
+.source-quote-box {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.fb-title,
+.sq-title {
+  font-weight: 600;
+  color: #44403c;
+  display: block;
+  margin-bottom: 4rpx;
+}
+
+.fb-text {
+  color: #57534e;
+}
+
+.sq-text {
+  color: #78716c;
+}
+
+.bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 24rpx 32rpx;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid #e7e5e4;
+}
+
+.full-btn {
+  height: 88rpx;
+  font-size: 30rpx;
+}
 </style>

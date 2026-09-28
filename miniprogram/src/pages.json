@@ -9,58 +9,47 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "智练工作台"
+        "navigationBarTitleText": "智练",
+        "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/review/index",
       "style": {
-        "navigationBarTitleText": "学情与错题",
+        "navigationBarTitleText": "学情概览",
         "enablePullDownRefresh": true
       }
     },
     {
       "path": "pages/profile/index",
       "style": {
-        "navigationBarTitleText": "我的与数据安全"
+        "navigationBarTitleText": "个人中心"
       }
     },
     {
       "path": "pages/auth/login",
       "style": {
-        "navigationBarTitleText": "用户登录"
-      }
-    },
-    {
-      "path": "pages/login/index",
-      "style": {
-        "navigationBarTitleText": "用户登录"
+        "navigationBarTitleText": "登录智练"
       }
     }
   ],
   "tabBar": {
-    "color": "#64748B",
-    "selectedColor": "#2563EB",
+    "color": "#78716C",
+    "selectedColor": "#1E3A8A",
     "backgroundColor": "#FFFFFF",
     "borderStyle": "white",
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "学习",
-        "iconPath": "static/tabbar/learn.png",
-        "selectedIconPath": "static/tabbar/learn-active.png"
+        "text": "工作台"
       },
       {
         "pagePath": "pages/review/index",
-        "text": "学情与错题",
-        "iconPath": "static/tabbar/review.png",
-        "selectedIconPath": "static/tabbar/review-active.png"
+        "text": "学情"
       },
       {
         "pagePath": "pages/profile/index",
-        "text": "我的",
-        "iconPath": "static/tabbar/profile.png",
-        "selectedIconPath": "static/tabbar/profile-active.png"
+        "text": "我的"
       }
     ]
   },
@@ -71,51 +60,20 @@
         {
           "path": "pages/upload/index",
           "style": {
-            "navigationBarTitleText": "资料导入与质检"
+            "navigationBarTitleText": "导入资料"
           }
         },
         {
           "path": "pages/course/index",
           "style": {
-            "navigationBarTitleText": "课程详情",
+            "navigationBarTitleText": "资料详情",
             "enablePullDownRefresh": true
-          }
-        },
-        {
-          "path": "pages/verify/index",
-          "style": {
-            "navigationBarTitleText": "题目质检核对清单"
-          }
-        },
-        {
-          "path": "pages/list/index",
-          "style": {
-            "navigationBarTitleText": "资料列表",
-            "enablePullDownRefresh": true
-          }
-        },
-        {
-          "path": "pages/detail/index",
-          "style": {
-            "navigationBarTitleText": "资料详情"
-          }
-        },
-        {
-          "path": "pages/knowledge-tree/index",
-          "style": {
-            "navigationBarTitleText": "知识点树与出题配置"
           }
         },
         {
           "path": "pages/questions/index",
           "style": {
-            "navigationBarTitleText": "题目列表"
-          }
-        },
-        {
-          "path": "index",
-          "style": {
-            "navigationBarTitleText": "资料管理"
+            "navigationBarTitleText": "核对出题"
           }
         }
       ]
@@ -126,13 +84,8 @@
         {
           "path": "pages/session/index",
           "style": {
-            "navigationBarTitleText": "练习作答"
-          }
-        },
-        {
-          "path": "pages/transition/index",
-          "style": {
-            "navigationBarTitleText": "诊断生成中"
+            "navigationBarTitleText": "练习作答",
+            "disableScroll": false
           }
         }
       ]
@@ -143,27 +96,8 @@
         {
           "path": "pages/detail/index",
           "style": {
-            "navigationBarTitleText": "学情诊断报告",
+            "navigationBarTitleText": "诊断报告",
             "enablePullDownRefresh": true
-          }
-        },
-        {
-          "path": "pages/explanation/index",
-          "style": {
-            "navigationBarTitleText": "题目深度解析"
-          }
-        },
-        {
-          "path": "pages/wrong-book/index",
-          "style": {
-            "navigationBarTitleText": "错题本",
-            "enablePullDownRefresh": true
-          }
-        },
-        {
-          "path": "index",
-          "style": {
-            "navigationBarTitleText": "学情诊断"
           }
         }
       ]
@@ -172,7 +106,7 @@
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "智练",
-    "navigationBarBackgroundColor": "#F8FAFC",
-    "backgroundColor": "#F8FAFC"
+    "navigationBarBackgroundColor": "#F7F5F0",
+    "backgroundColor": "#F7F5F0"
   }
 }

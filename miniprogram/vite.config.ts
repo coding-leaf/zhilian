@@ -1,32 +1,20 @@
-import { resolve } from 'path';
-import { defineConfig } from 'vite';
-import uniPkg from '@dcloudio/vite-plugin-uni';
+import { defineConfig } from 'vite'
+import uniPlugin from '@dcloudio/vite-plugin-uni'
 
-// Handle CJS/ESM interop for @dcloudio/vite-plugin-uni
-const uniPkgRecord = uniPkg as unknown as { default?: { default?: unknown } | unknown };
-const uni =
-  typeof uniPkg === 'function'
-    ? uniPkg
-    : (uniPkgRecord.default as { default?: unknown })?.default || uniPkgRecord.default || uniPkg;
+// Uni-app Vite 插件兼容处理
+const uni = (uniPlugin as any).default || uniPlugin
 
-// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [uni()],
+  plugins: [
+    uni(),
+  ],
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src'),
-    },
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        api: 'modern-compiler',
-        silenceDeprecations: ['legacy-js-api', 'import'],
-      },
+      '@': '/src',
     },
   },
   server: {
-    port: 3000,
-    open: false,
+    port: 5173,
+    host: '0.0.0.0',
   },
-});
+})

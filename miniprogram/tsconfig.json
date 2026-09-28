@@ -3,42 +3,26 @@
     "target": "ESNext",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "moduleResolution": "Node",
     "strict": true,
-    "noImplicitAny": true,
-    "strictNullChecks": true,
     "jsx": "preserve",
-    "importHelpers": true,
-    "experimentalDecorators": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ESNext", "DOM"],
     "skipLibCheck": true,
-    "baseUrl": ".",
     "types": [
       "@dcloudio/types",
       "@uni-helper/uni-app-types"
     ],
     "paths": {
-      "@/*": ["src/*"]
-    },
-    "lib": ["ESNext", "DOM"]
-  },
-  "vueCompilerOptions": {
-    "target": "auto"
+      "@/*": ["./src/*"]
+    }
   },
   "include": [
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.tsx",
-    "src/**/*.vue",
-    "tests/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "unpackage"
+    "src/**/*.vue"
   ]
 }

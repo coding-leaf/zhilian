@@ -1,17 +1,13 @@
-import { createSSRApp } from 'vue';
-import App from './App.vue';
-import { pinia } from './stores';
+import { createSSRApp } from 'vue'
+import * as Pinia from 'pinia'
+import App from './App.vue'
 
-/**
- * Creates and configures the root UniApp instance.
- * Strictly registers Pinia global state container.
- */
 export function createApp() {
-  const app = createSSRApp(App);
-  app.use(pinia);
-
+  const app = createSSRApp(App)
+  const pinia = Pinia.createPinia()
+  app.use(pinia)
   return {
     app,
-    pinia,
-  };
+    Pinia,
+  }
 }

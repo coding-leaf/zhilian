@@ -1,296 +1,315 @@
 <template>
-  <view class="practice-session-page">
-    <!-- 顶部状态栏：练习标题、题量进度、实时计时器、答题卡与退出入口 -->
-    <PracticeHeader
-      :title="practiceTitle"
-      :current-index="practiceStore.currentIndex"
-      :total-questions="practiceStore.totalQuestions"
-      :elapsed-seconds="elapsedSeconds"
-      @open-sheet="handleOpenSheet"
-      @exit="handleExit"
-    />
-
-    <!-- 答题进度指示条 -->
-    <view class="progress-bar-track">
-      <view class="progress-bar-fill" :style="{ width: `${practiceStore.progressPercentage}%` }" />
-    </view>
-
-    <!-- 题目主渲染区域 -->
-    <view class="session-body">
-      <view
-        v-if="normalizedQuestion"
-        class="question-container"
-        @touchstart="handleTouchStart"
-        @touchend="handleTouchEnd"
-      >
-        <view class="question-action-bar">
-          <view
-            class="flag-btn"
-            :class="{ active: isCurrentQuestionFlagged }"
-            @tap="handleToggleFlag"
-          >
-            <text class="flag-icon">{{ isCurrentQuestionFlagged ? '★' : '☆' }}</text>
-            <text class="flag-text">{{
-              isCurrentQuestionFlagged ? '已标记疑难' : '标记疑难'
-            }}</text>
-          </view>
-        </view>
-        <QuestionRenderer
-          :question="normalizedQuestion"
-          :model-value="currentAnswer"
-          :order-index="practiceStore.currentIndex + 1"
-          @update:model-value="onAnswerChange"
+  <view class="session-container">
+    <!-- 顶部进度条与卡片导航 -->
+    <view class="progress-bar-row">
+      <view class="progress-text-box">
+        <text class="progress-num">{{ practiceStore.currentIndex + 1 }}</text>
+        <text class="progress-total">/ {{ practiceStore.questions.length }}</text>
+      </view>
+      <view class="progress-track">
+        <view
+          class="progress-fill"
+          :style="{ width: `${((practiceStore.currentIndex + 1) / practiceStore.questions.length) * 100}%` }"
         />
       </view>
-      <view v-else-if="!loading" class="empty-state">
-        <text class="state-text">暂无题目数据</text>
-      </view>
-      <view v-else class="loading-state">
-        <text class="state-text">加载中...</text>
-      </view>
-
-      <!-- 底部安全区与操作栏占位 -->
-      <view class="bottom-placeholder" />
     </view>
 
-    <!-- 底部常驻吸底操作栏 -->
-    <BottomActionBar
-      :current-index="practiceStore.currentIndex"
-      :total-count="practiceStore.totalQuestions"
-      :is-submitting="practiceStore.isSubmitting"
-      @prev="handlePrev"
-      @next="handleNext"
-      @submit="handleSubmitClick"
-    />
+    <!-- 题目卡片 -->
+    <view v-if="currentQuestion" class="paper-card question-box">
+      <view class="q-type-badge">
+        {{ getTypeText(currentQuestion.type) }}
+      </view>
 
-    <!-- 答题卡底部抽屉浮层 -->
-    <AnswerSheetDrawer
-      v-model:visible="sheetDrawerVisible"
-      :total-count="practiceStore.totalQuestions"
-      :current-index="practiceStore.currentIndex"
-      :answers="currentAnswersMap"
-      :question-ids="questionIds"
-      :flagged-ids="flaggedQuestionIds"
-      @select="handleSelectFromSheet"
-    />
+      <text class="q-stem">{{ currentQuestion.stem }}</text>
 
-    <!-- 交卷二次确认与未答题清单阻断弹窗 -->
-    <SubmitConfirmModal
-      v-model:visible="confirmModalVisible"
-      :total-count="practiceStore.totalQuestions"
-      :answered-count="practiceStore.answeredCount"
-      :unanswered-indices="unansweredIndices"
-      :submitting="practiceStore.isSubmitting"
-      @confirm="handleConfirmSubmit"
-      @locate-unanswered="handleLocateUnanswered"
-    />
+      <!-- 单选题/判断题选项 -->
+      <view
+        v-if="currentQuestion.type === 'single_choice' || currentQuestion.type === 'true_false'"
+        class="options-group"
+      >
+        <view
+          v-for="(opt, idx) in (currentQuestion.options || ['正确', '错误'])"
+          :key="idx"
+          :class="['option-btn', isSelected(currentQuestion.id, getOptionVal(idx)) ? 'selected' : '']"
+          @tap="selectSingleOption(currentQuestion.id, getOptionVal(idx))"
+        >
+          <text class="opt-label">{{ String.fromCharCode(65 + idx) }}</text>
+          <text class="opt-content">{{ opt }}</text>
+        </view>
+      </view>
+
+      <!-- 简答题/主观题文本输入 -->
+      <view v-else-if="currentQuestion.type === 'short_answer'" class="essay-box">
+        <textarea
+          class="essay-input"
+          placeholder="请输入你的作答要点..."
+          :value="practiceStore.userAnswers[currentQuestion.id] || ''"
+          @input="handleEssayInput"
+        />
+      </view>
+    </view>
+
+    <!-- 底部控制栏 -->
+    <view class="bottom-bar">
+      <button
+        class="nav-btn prev-btn"
+        :disabled="practiceStore.currentIndex === 0"
+        @tap="practiceStore.prevQuestion"
+      >
+        上一题
+      </button>
+
+      <button
+        v-if="practiceStore.currentIndex < practiceStore.questions.length - 1"
+        class="paper-btn-primary nav-btn next-btn"
+        @tap="practiceStore.nextQuestion"
+      >
+        下一题
+      </button>
+
+      <button
+        v-else
+        class="paper-btn-primary submit-btn"
+        :loading="practiceStore.isSubmitting"
+        @tap="confirmSubmit"
+      >
+        交卷
+      </button>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
-/**
- * session/index.vue
- * Practice session assembly page.
- * Reference: docs/sdlc/ZL-134/spec.md
- * Zero-Emoji Policy enforced. Lines strictly <= 300.
- */
+import { computed } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
+import { usePracticeStore } from '@/stores/practice'
 
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { onLoad, onUnload } from '@dcloudio/uni-app';
-import { usePracticeStore, type PracticeQuestion } from '../../../../stores/practiceStore';
-import { usePracticeSession } from '../../composables/usePracticeSession';
-import PracticeHeader from '../../components/PracticeHeader.vue';
-import QuestionRenderer, { type RendererQuestion } from '../../components/QuestionRenderer.vue';
-import BottomActionBar from '../../components/BottomActionBar.vue';
-import AnswerSheetDrawer from '../../components/AnswerSheetDrawer.vue';
-import SubmitConfirmModal from '../../components/SubmitConfirmModal.vue';
-import { submitPractice } from '../../../../api/practice';
-import { clearDraftFromStorage, calculateQuestionStats } from '../../utils/draft';
-import { getOrCreateSubmitKey, clearSubmitKey } from '../../utils/submitKey';
-import { AppError } from '../../../../utils/error';
-import { usePracticeSync, clearLocalDraft } from '../../../../composables/usePracticeSync';
+const practiceStore = usePracticeStore()
 
-const practiceStore = usePracticeStore();
-const {
-  practiceId,
-  practiceTitle,
-  elapsedSeconds,
-  loading,
-  stopTimer,
-  loadPractice,
-  handleAnswerChange,
-  syncPendingDrafts,
-  handleNetworkChange,
-  cleanupSession,
-} = usePracticeSession();
+onLoad(async (options) => {
+  if (options && options.practice_id) {
+    await practiceStore.initPractice(options.practice_id)
+  }
+})
 
-const { isFlagged, toggleFlag, recordAnswer, flaggedQuestionIds } = usePracticeSync(practiceId);
+const currentQuestion = computed(() => practiceStore.currentQuestion)
 
-const sheetDrawerVisible = ref<boolean>(false);
-const confirmModalVisible = ref<boolean>(false);
-const unansweredIndices = ref<number[]>([]);
-
-let touchStartX = 0;
-let touchStartY = 0;
-
-function handleTouchStart(e: TouchEvent): void {
-  if (e.touches?.[0]) {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
+const getTypeText = (type: string) => {
+  switch (type) {
+    case 'single_choice':
+      return '单选题'
+    case 'multiple_choice':
+      return '多选题'
+    case 'true_false':
+      return '判断题'
+    case 'short_answer':
+      return '简答主观题'
+    default:
+      return '测验题'
   }
 }
 
-function handleTouchEnd(e: TouchEvent): void {
-  if (!e.changedTouches?.[0]) return;
-  const deltaX = e.changedTouches[0].clientX - touchStartX;
-  const deltaY = e.changedTouches[0].clientY - touchStartY;
-  if (Math.abs(deltaX) > 60 && Math.abs(deltaY) < 50) {
-    if (deltaX < 0) {
-      handleNext();
-    } else {
-      handlePrev();
-    }
-  }
+const getOptionVal = (idx: number) => {
+  return String.fromCharCode(65 + idx)
 }
 
-const isCurrentQuestionFlagged = computed<boolean>(() => {
-  const qid = currentQuestion.value?.id;
-  return qid ? isFlagged(qid) : false;
-});
-
-function handleToggleFlag(): void {
-  const qid = currentQuestion.value?.id;
-  if (qid) toggleFlag(qid);
+const isSelected = (qId: string, val: string) => {
+  return practiceStore.userAnswers[qId] === val
 }
 
-function onAnswerChange(val: string | string[]): void {
-  const qid = currentQuestion.value?.id;
-  handleAnswerChange(val);
-  if (qid) recordAnswer(qid, val);
+const selectSingleOption = (qId: string, val: string) => {
+  practiceStore.recordAnswer(qId, val)
 }
 
-const questionIds = computed<string[]>(() => {
-  return practiceStore.questions.map((q) => q.id);
-});
-
-const currentAnswersMap = computed<Record<string, unknown>>(() => {
-  return practiceStore.currentDraft?.answers || {};
-});
-
-const currentQuestion = computed<PracticeQuestion | null>(() => {
-  return practiceStore.currentQuestion;
-});
-
-const normalizedQuestion = computed<RendererQuestion | null>(() => {
-  const q = currentQuestion.value;
-  if (!q) return null;
-  const raw = q as unknown as { question_type?: string; type?: string; difficulty?: number };
-  return {
-    id: q.id,
-    stem: q.stem,
-    question_type: raw.question_type || raw.type || '',
-    options: q.options,
-    difficulty: raw.difficulty,
-  };
-});
-
-const currentAnswer = computed<string | string[]>({
-  get: () => {
-    const qid = currentQuestion.value?.id;
-    return (qid ? (practiceStore.currentDraft?.answers[qid] as string | string[]) : '') ?? '';
-  },
-  set: (val) => onAnswerChange(val),
-});
-
-function handlePrev(): void {
-  practiceStore.prevQuestion();
-}
-function handleNext(): void {
-  practiceStore.nextQuestion();
-}
-function handleOpenSheet(): void {
-  sheetDrawerVisible.value = true;
-}
-function handleSelectFromSheet(index: number): void {
-  practiceStore.jumpToQuestion(index);
-}
-function handleLocateUnanswered(index: number): void {
-  practiceStore.jumpToQuestion(index);
+const handleEssayInput = (e: any) => {
+  if (!currentQuestion.value) return
+  practiceStore.recordAnswer(currentQuestion.value.id, e.detail.value)
 }
 
-function handleExit(): void {
+const confirmSubmit = () => {
+  const unanswered = practiceStore.unansweredCount
+  const content = unanswered > 0
+    ? `尚有 ${unanswered} 道题未作答，确认交卷并生成学情诊断？`
+    : '确认提交答卷并生成诊断报告？'
+
   uni.showModal({
-    title: '退出练习',
-    content: '当前作答进度已自动保存为草稿，确认退出吗？',
-    confirmText: '退出',
-    cancelText: '继续答题',
-    success: (res) => {
+    title: '确认交卷',
+    content,
+    confirmText: '交卷',
+    confirmColor: '#1E3A8A',
+    success: async (res) => {
       if (res.confirm) {
-        stopTimer();
-        uni.navigateBack();
+        uni.showLoading({ title: 'AI 诊断生成中...' })
+        try {
+          const report = await practiceStore.submit()
+          uni.hideLoading()
+          const pId = practiceStore.currentSession?.id
+          if (pId) {
+            // 跳转到学情报告页
+            uni.redirectTo({
+              url: `/subpackages/report/pages/detail/index?practice_id=${pId}`,
+            })
+          }
+        } catch {
+          uni.hideLoading()
+        }
       }
     },
-  });
+  })
 }
-
-function handleSubmitClick(): void {
-  const stats = calculateQuestionStats(questionIds.value, currentAnswersMap.value);
-  unansweredIndices.value = stats.unansweredIndices;
-  confirmModalVisible.value = true;
-}
-
-async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Promise<void> {
-  const targetPracticeId = practiceId.value;
-  practiceStore.isSubmitting = true;
-  try {
-    await syncPendingDrafts().catch(() => {});
-    const idempotencyKey = getOrCreateSubmitKey(targetPracticeId);
-    await submitPractice(targetPracticeId, idempotencyKey, {
-      confirm_unanswered: payload.confirm_unanswered,
-    });
-
-    clearSubmitKey(targetPracticeId);
-    clearDraftFromStorage(targetPracticeId);
-    clearLocalDraft(targetPracticeId);
-    practiceStore.clearSession(targetPracticeId);
-    confirmModalVisible.value = false;
-
-    uni.showToast({
-      title: '交卷成功',
-      icon: 'success',
-    });
-    uni.redirectTo({
-      url: `/subpackages/practice/pages/transition/index?practice_id=${targetPracticeId}`,
-    });
-  } catch (err: unknown) {
-    // A 400 means the submission is already in a terminal state, so retrying is
-    // pointless; release the key. Network/timeout errors keep it for replay.
-    if (err instanceof AppError && err.status_code === 400) {
-      clearSubmitKey(targetPracticeId);
-    }
-    const errorMsg = (err as { message?: string })?.message || '交卷失败，请重试';
-    uni.showToast({
-      title: errorMsg,
-      icon: 'none',
-    });
-  } finally {
-    practiceStore.isSubmitting = false;
-  }
-}
-
-onLoad((query) => {
-  const pid = (query?.id as string) || (query?.practice_id as string) || '';
-  if (pid) void loadPractice(pid);
-});
-
-onMounted(() => uni.onNetworkStatusChange?.(handleNetworkChange));
-onUnload(() => {
-  cleanupSession();
-  uni.offNetworkStatusChange?.(handleNetworkChange);
-});
-onBeforeUnmount(cleanupSession);
 </script>
 
-<style lang="scss" scoped>
-@import './session.scss';
+<style scoped>
+.session-container {
+  padding: 32rpx;
+  padding-bottom: 160rpx;
+  min-height: 100vh;
+}
+
+.progress-bar-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 32rpx;
+}
+
+.progress-text-box {
+  margin-right: 20rpx;
+}
+
+.progress-num {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.progress-total {
+  font-size: 24rpx;
+  color: #a8a29e;
+}
+
+.progress-track {
+  flex: 1;
+  height: 12rpx;
+  background: #e7e5e4;
+  border-radius: 6rpx;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #1e3a8a;
+  border-radius: 6rpx;
+  transition: width 0.3s ease;
+}
+
+.question-box {
+  padding: 36rpx 32rpx;
+  margin-bottom: 32rpx;
+}
+
+.q-type-badge {
+  display: inline-block;
+  font-size: 22rpx;
+  color: #1e3a8a;
+  background: rgba(30, 58, 138, 0.08);
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+  margin-bottom: 20rpx;
+}
+
+.q-stem {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #1c1917;
+  line-height: 1.6;
+  margin-bottom: 36rpx;
+}
+
+.options-group {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.option-btn {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 28rpx;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 12rpx;
+  transition: all 0.2s;
+}
+
+.option-btn.selected {
+  background: #eff6ff;
+  border-color: #1e3a8a;
+}
+
+.opt-label {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #78716c;
+  margin-right: 20rpx;
+}
+
+.option-btn.selected .opt-label {
+  color: #1e3a8a;
+}
+
+.opt-content {
+  font-size: 28rpx;
+  color: #1c1917;
+  flex: 1;
+}
+
+.essay-box {
+  margin-top: 20rpx;
+}
+
+.essay-input {
+  width: 100%;
+  height: 240rpx;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 12rpx;
+  padding: 20rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+
+.bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 20rpx;
+  padding: 24rpx 32rpx;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid #e7e5e4;
+}
+
+.nav-btn {
+  flex: 1;
+  height: 84rpx;
+  font-size: 28rpx;
+}
+
+.prev-btn {
+  background: #f5f5f4;
+  color: #44403c;
+  border-radius: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.submit-btn {
+  flex: 1;
+  height: 84rpx;
+  background: #059669;
+}
 </style>
