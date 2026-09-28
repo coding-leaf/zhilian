@@ -101,7 +101,7 @@ class TestAppSettingsDefaults:
         assert embedding.max_retries == 3
 
         queue = QueueSettings()
-        assert queue.provider == "memory"
+        assert queue.provider == "redis"
         assert queue.dead_letter_topic == "zhilian_dead_letter"
         assert queue.retry_limit == 3
         assert queue.immediate_mode is False

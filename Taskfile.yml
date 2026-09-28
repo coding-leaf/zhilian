@@ -1,6 +1,13 @@
 version: '3'
 
 tasks:
+  worker:
+    desc: Run the Redis/RQ background worker
+    dir: backend
+    env:
+      ZHILIAN_QUEUE__PROVIDER: redis
+    cmds:
+      - uv run python -m app.worker
   verify-backend:
     desc: Run all backend quality gates (ruff format/check, mypy, import-linter, pytest with 80% coverage)
     dir: backend

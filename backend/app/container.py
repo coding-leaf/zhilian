@@ -166,7 +166,11 @@ class AppContainer:
 
     def create_auth_service(self, session: Session) -> AuthService:
         """纯工厂方法：构建绑定独立 Session 的 AuthService。"""
-        return AuthService(session=session)
+        return AuthService(
+            session=session,
+            storage=self.providers.storage,
+            storage_bucket=self.settings.storage.bucket_name,
+        )
 
     def create_user_service(self, session: Session) -> AuthService:
         """纯工厂方法：构建绑定独立 Session 的用户管理服务 (AuthService 门面兼容)。"""

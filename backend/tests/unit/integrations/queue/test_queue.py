@@ -532,10 +532,10 @@ class TestQueueFactory:
         assert isinstance(adapter, MemoryQueueAdapter)
 
     def test_create_redis_adapter(self) -> None:
-        """测试分发 RedisQueueAdapter。"""
+        """生产 Redis provider 分发可消费的 RQ 适配器。"""
         mock_client = MagicMock()
         adapter = create_queue_adapter("redis", redis_client=mock_client)
-        assert isinstance(adapter, RedisQueueAdapter)
+        assert type(adapter).__name__ == "RQQueueAdapter"
 
     def test_create_unsupported_adapter(self) -> None:
         """测试传入不支持的适配器类型抛出 QueueError。"""

@@ -11,7 +11,7 @@ from typing import Any
 from app.core.errors import QueueError
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.queue.protocol import QueueProtocol
-from app.integrations.queue.redis import RedisQueueAdapter
+from app.integrations.queue.rq_adapter import RQQueueAdapter
 
 
 def create_queue_adapter(
@@ -43,7 +43,7 @@ def create_queue_adapter(
         return MemoryQueueAdapter(immediate_mode=immediate_mode)
 
     if normalized_type == "redis":
-        return RedisQueueAdapter(
+        return RQQueueAdapter(
             redis_url=redis_url,
             redis_client=redis_client,
             **kwargs,

@@ -352,6 +352,7 @@ class ProviderRegistry:
             adapter_type=settings.queue.provider,
             redis_url=queue_redis_url,
             immediate_mode=settings.queue.immediate_mode,
+            retry_limit=settings.queue.retry_limit,
         )
 
         idempotency_redis_url = (

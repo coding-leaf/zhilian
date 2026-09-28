@@ -166,7 +166,7 @@ class QueueSettings(BaseSettings):
     """
 
     provider: Literal["memory", "redis"] = Field(
-        default="memory",
+        default="redis",
         description="任务队列提供商",
     )
     dead_letter_topic: str = Field(

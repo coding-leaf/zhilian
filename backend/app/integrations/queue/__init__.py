@@ -16,10 +16,12 @@ from app.integrations.queue.protocol import (
     serialize_task_message,
 )
 from app.integrations.queue.redis import RedisQueueAdapter
+from app.integrations.queue.rq_adapter import RQQueueAdapter
 
 __all__ = [
     "MemoryQueueAdapter",
     "QueueProtocol",
+    "RQQueueAdapter",
     "RedisQueueAdapter",
     "TaskHandler",
     "TaskMessage",

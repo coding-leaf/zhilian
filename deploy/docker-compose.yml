@@ -36,6 +36,28 @@ services:
     networks:
       - zhilian-net
 
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env
+    environment:
+      ZHILIAN_QUEUE__PROVIDER: redis
+      ZHILIAN_REDIS__REDIS_URL: redis://redis:6379/0
+      ZHILIAN_DB__DB_URL: postgresql+psycopg://${ZHILIAN_DB__USER:-zhilian_app}:${ZHILIAN_DB__PASSWORD:-zhilian_secure_password_2026}@postgres:5432/${ZHILIAN_DB__NAME:-zhilian}
+      ZHILIAN_STORAGE__ENDPOINT_URL: http://minio:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - zhilian-net
+
   minio:
     image: alpine/minio:latest-release
     container_name: zhilian-minio

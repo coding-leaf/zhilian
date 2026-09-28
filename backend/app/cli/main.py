@@ -29,6 +29,7 @@ from app.cli.commands import grading as grading_commands
 from app.cli.commands import material as material_commands
 from app.cli.commands import practice as practice_commands
 from app.cli.commands import question as question_commands
+from app.cli.commands import queue as queue_commands
 from app.cli.context import CliContext
 from app.cli.errors import EXIT_RUNTIME, CliError
 from app.cli.report import Reporter
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     question_commands.register(subparsers)
     practice_commands.register(subparsers)
     grading_commands.register(subparsers)
+    queue_commands.register(subparsers)
     smoke_commands.register(subparsers)
     return parser
 
