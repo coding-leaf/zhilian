@@ -54,6 +54,19 @@ pnpm run test:unit     # vitest run
   - **检查手段**：对页面上每个条件标识符跑一次 `grep <identifier> <file>`，逐处标注读/写；**只有读没有写的分支即为死代码**。
   - **重点查 `v-else`**：它天然没有自己的标识符，最容易被整块漏掉——`v-if` 有名字可查，`v-else` 只能靠反查那个名字的**写点是否存在**。
   - **优先用返回值驱动状态切换**：`compose.generate()` 改为返回合格题数量，调用方据 `> 0` 切换视图，使「零合格题 / 失败」在类型层面就不可能被误当成「可进核对视图」（见 `useQuestionCompose.ts` 与 `tests/diagnosisAndCompose.spec.ts` 的返回值契约用例）。
+- **小程序端不得依赖 Vue 事件修饰符的语义**：`.vue` 到小程序的编译会**静默丢弃**一部分修饰符。
+  `@dcloudio/uni-mp-compiler` 只把 `capture` 映射为 `capture-bind`、`stop`/`prevent` 映射为 `catch`，
+  **没有 `self` 分支**——`@tap.self` 的产物是裸的 `bindtap`。
+  - **2026-09-29 实测踩中**：6 处浮层用 `@tap.self="close"` 实现「点外部关闭」，
+    实际等价于 `@tap="close"`，**点浮层内任意位置（含输入框）都会关闭浮层**；
+    又因项目里所有输入框都恰好位于这些浮层内，现象表现为「所有输入框都点不了、一点就关」。
+  - **正确做法**：把点击热区拆成**独立元素**（`*-backdrop`）承载关闭，内容容器**不绑 tap**；
+    并给内容加 `position: relative; z-index: 1`，否则会被绝对定位的 backdrop 盖住。
+    **不要**改用 `@tap.stop` 兜底：它依赖事件传播路径，若点击命中直接落在容器上，
+    内容上的 `catchtap` 不在路径内，挡不住。
+  - **通用手段**：凡依赖修饰符 / 指令语义的行为，改完必须到 `dist/build/mp-weixin` 里确认它
+    **真的被编译进去了**。本次定案证据就是「`currentTarget` 在整个包中 0 次出现」——
+    源码看着完全正确，产物里根本没有。
 
 ---
 
