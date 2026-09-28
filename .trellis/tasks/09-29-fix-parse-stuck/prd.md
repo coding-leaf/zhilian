@@ -35,12 +35,33 @@ AttributeError: module 'os' has no attribute 'wait4'
 所以在此之前，任何资料都不可能被异步解析——包括当天早上那 4 份（它们必然走了同步路径：
 `trigger_parse(sync=True)` 或 CLI，见 `services/material.py:1433`）。
 
-**修复**（已实施，见 `app/worker.py`）：Windows 分支改用 `rq.SimpleWorker`。
-它是唯一从 `BaseWorker` 派生的实现（MRO 实测为 `SimpleWorker → BaseWorker → object`），
-**同进程执行任务，不触碰 fork/wait4**。
-**已知代价**：同进程执行无法强杀超时任务——一个卡死的任务会阻塞整个 worker
-（POSIX 下 `Worker` 会 fork 出 work horse 并在 `timeout + 60s` 后 `kill_horse`）。
-解析流水线各外设调用自带超时，故接受此代价并在此留档。
+**修复（部分缓解已实施，但结论是平台层面的，见下）**：
+
+已实施两处针对性修复（均在 `app/worker.py`，以 `os.name == "nt"` 守卫，不影响 POSIX）：
+
+1. Windows 分支改用 `rq.SimpleWorker`（唯一从 `BaseWorker` 派生的实现，同进程执行，不触碰 `fork`/`wait4`）。
+2. 按平台把 `rq.registry.BaseRegistry.death_penalty_class` 从硬编码的
+   `UnixSignalDeathPenalty` 改回 `TimerDeathPenalty`——RQ 2.12 的 `BaseRegistry`（`registry.py:40`）
+   绕过了 `get_default_death_penalty_class()` 的平台探测，而 `clean_registries()` 构造 Registry 时
+   不传 override，于是 Windows 上一旦存在 abandoned job 就会在清理时抛
+   `AttributeError: module 'signal' has no attribute 'SIGALRM'`，异常从 `run_maintenance_tasks`
+   冒泡**把 worker 打死**，且此后每次启动都在同一处重复崩溃。
+
+**升级为平台结论：RQ 2.12 在原生 Windows 上不可用。**
+
+两处修复后，worker 从「启动即崩」推进到「启动不崩」，但**仍未达到可用状态**：实测观察到
+worker 停在启动期的注册表清理阶段（日志止于 `cleaning registries for queue: zhilian_high`，
+进程存活但 CPU 不再增长），**没有验证到端到端跑通一次解析**。
+
+已经暴露的 POSIX-only 依赖至少三处（`os.wait4`、`os.fork`、`signal.SIGALRM`），
+继续逐个打补丁是在给上游 RQ 打洞，收益递减且每处都可能引出下一处。
+
+**因此本任务的 R0 目标修订为**：不是「把 RQ 修得能在 Windows 上跑」，
+而是**让解析链路的运行环境要求变得明确且可满足**——
+worker 跑在 WSL / Linux / 容器里，Windows 只跑 API 与前端。
+
+`app/worker.py` 的两处修复**保留**：它们在 Windows 上是对的、在 POSIX 上被守卫隔离，
+且让「只想在 Windows 上试一次」的场景不至于立刻崩。但它们**不构成可用性承诺**。
 
 ### 第二层：worker 缺席时任务静默永久排队（**修复第一层后仍存在的代码缺陷**）
 

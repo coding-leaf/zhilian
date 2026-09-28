@@ -14,6 +14,25 @@ from rq.job import Job
 from app.container import AppContainer
 from app.core.config import get_settings
 
+if os.name == "nt":  # pragma: no cover - 平台分支，仅在 Windows 生效
+    # RQ 2.12 的 `BaseRegistry.death_penalty_class` 被**硬编码**为 `UnixSignalDeathPenalty`
+    # （rq/registry.py:40），绕过了 `get_default_death_penalty_class()` 的平台探测（该函数本身
+    # 是会正确判断 `hasattr(signal, 'SIGALRM')` 的）。而 `clean_registries()` 构造各 Registry 时
+    # 不传 override，于是必然取到这个硬编码值。
+    #
+    # 后果：Windows 上 registry 清理一旦遇到 abandoned job（worker 死掉时被弹出的任务），
+    # 就会在失败回调里抛 `AttributeError: module 'signal' has no attribute 'SIGALRM'`；
+    # 该异常从 `run_maintenance_tasks` 冒泡，**直接把 worker 打死**——而且此后每次启动都会在
+    # 启动清理阶段重复崩溃，因为那个 abandoned job 还在。
+    #
+    # 这里按平台改回 `TimerDeathPenalty`（基于 `threading.Timer`，无平台依赖）。改基类即可覆盖
+    # StartedJobRegistry / FinishedJobRegistry / FailedJobRegistry / DeferredJobRegistry 全部。
+    from rq.registry import BaseRegistry
+    from rq.timeouts import TimerDeathPenalty
+
+    # mypy 依据 RQ 的类型标注推断该属性为 type[UnixSignalDeathPenalty]，此处为有意的跨平台替换。
+    BaseRegistry.death_penalty_class = TimerDeathPenalty  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 # RQ 失败回调入口的模块路径；仅按受控名称注册，不反序列化任意客户端函数
