@@ -92,3 +92,65 @@
   而不是结构错误。零数据下三个 0 加三句「太棒了」，确实无法自解释。这个可能性要在复核时优先验证。
 - 学情页有 `enablePullDownRefresh`（`pages.json:16-22`），刷新手段比个人页完整——
   这条差异在复核个人页时可作对照。
+
+---
+
+## 2026-09-29 补充：用户已决定**重构**（不再是「复核」），且实测暴露两处确定缺陷
+
+### 任务性质变更
+
+用户原话：「**我也打算重构学情页面，感觉意义不明**」——从「复核后决定改不改」变成
+「**确定要改**」。故本任务应从复核型转为**重构型**：开工前先问用户想要什么样的学情页，
+不要沿用"这页本来该是什么样"的猜测。
+
+### 先决条件已解除
+
+原门禁是「等 learning-stats 修好再判断」，且学情页此前**始终是零数据状态**
+（判题结果从未落库）。现况：
+
+- 判题落库已修复并在真实库上验证（`800c475`），学情页**首次有真实数据**：
+  用户实测 8 条错题、`grading_records` 12 条、练习状态 `completed`。
+- **所以「没数据所以空白」不再是可接受的解释**，这次看到的任何空白都必须归因到实现。
+
+### 实测确认的缺陷一：接口返回的每条错题记录缺 `material_id` / `folder_id`
+
+**证据强度：用后端自己的 schema 复现，不是推断。**
+
+```python
+# 完全复刻 app/api/v1/diagnosis.py:338-339 的构造方式
+items = [WrongRecordItemResponse.model_validate(r) for r in records]
+# → 8 条，material_id 全部为 None，folder_id 全部为 None
+```
+
+- 根因位置：`app/api/v1/diagnosis.py:338-339` 拿 `WrongRecord` ORM 实体直接
+  `model_validate`；而 `material_id`/`folder_id` **不在这张表上**——它们挂在 `Material` 上，
+  要经 `KnowledgePoint` 跳一层（`wrong_records` 实际列：`id, user_id, question_id,
+  knowledge_point_id, practice_id, attempt_item_id, error_type, error_count, is_mastered,
+  last_wrong_answer, question_snapshot, first_wrong_at, mastered_at, created_at, updated_at`）。
+  schema（`schemas/diagnosis.py:403-404`）声明了这两个字段、默认 `None`，**没有任何人赋值**。
+- **同一接口内两条路径不一致**：`repositories/diagnosis.py:625` 的 `list_wrong_record_groups`
+  是**对的**（它 `outerjoin(MaterialFolder)`，故 `groups` 里 `material_id`/`folder_id` 正确）。
+  于是响应里 `groups` 说「material=24f82195, count=8」而 `items` 里每条 `material_id=None`。
+- **前端后果**：`api/adapters/wrong.ts:85-92` 的 `recordsInGroup` 用**每条记录自己的**
+  `material_id` 精确匹配 → `null === '24f82195'` 恒假 → 该组可见记录 **0 条**。
+  界面会同时显示「待攻克错题 8」（用 `items` 计数）与「当前范围内没有待巩固的错题」（用过滤结果）。
+- **重构必须处理它**：任何按课程/资料分组或过滤的界面都会踩到，与 UI 怎么画无关。
+  修法方向：在 service 层批量装配（一次查询取回各记录的 material/folder，再构造响应），
+  **不要每条记录单独查**（该层明令禁止 N+1）。
+
+### 实测确认的缺陷二：请求错误被吞，空态与故障态不可区分
+
+`pages/review/index.vue:169-171` 的 `loadWrongs` catch 里只有 `console.error`，无任何用户可见反馈。
+后果：**「后端返回 0 条」与「请求失败」在界面上完全一样**，都是那三个 0。
+这直接违反父任务的 **XAC-4（空态与故障态可区分）**。
+
+本次排查被它实际卡住过一次：用户报「数字没更新」，我无法从界面区分是缓存、是请求失败、
+还是真的没数据，最后靠用户手动下拉刷新才确认是缓存。
+
+### 一条已澄清的现象（**不是缺陷，别再去修**）
+
+用户报「学情页数字没更新」，**已确认为缓存**：该页只在 `onMounted`（`index.vue:184-186`）
+与 `onPullDownRefresh`（`:188-191`）加载，没有定时刷新、也没有 onShow 重载。
+下拉后数字即正确。**这是设计选择不是 bug**——重构时可考虑是否改为 `onShow` 重载，
+但不要以"修复缺陷"的名义改它。
+
