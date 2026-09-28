@@ -10,6 +10,7 @@ export const uniMock = {
   hideLoading: () => {},
   navigateTo: () => {},
   redirectTo: () => {},
+  reLaunch: () => {},
   switchTab: () => {},
   showModal: ({ success }: any) => success && success({ confirm: true }),
 }

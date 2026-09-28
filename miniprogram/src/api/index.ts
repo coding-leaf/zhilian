@@ -1,4 +1,5 @@
 import { request, uploadFile } from '@/utils/request'
+import { LONG_REQUEST_TIMEOUT_MS } from '@/utils/requestError'
 import type {
   LoginResult,
   UserProfile,
@@ -210,6 +211,8 @@ export function apiGenerateQuestions(params: GenerateQuestionsParams): Promise<Q
     url: '/questions/generate',
     method: 'POST',
     data: params,
+    // 后端在请求路径内同步走大模型出题 + 质检重试，15 秒默认值不够。
+    timeout: LONG_REQUEST_TIMEOUT_MS,
   }).then((result) => ({
     ...result,
     qualified_questions: (result.qualified_questions || []).map(adaptQuestion),
@@ -241,6 +244,8 @@ export function apiAskQuestionCoach(
       user_answer: userAnswer,
       grading_points: gradingPoints,
     },
+    // 助教答疑同步等大模型生成回答。
+    timeout: LONG_REQUEST_TIMEOUT_MS,
   })
 }
 
@@ -252,7 +257,13 @@ export interface ScopedCoachParams {
 }
 
 export function apiAskScopedCoach(params: ScopedCoachParams): Promise<AskCoachResponse> {
-  return request<AskCoachResponse>({ url: '/coach/ask', method: 'POST', data: params })
+  return request<AskCoachResponse>({
+    url: '/coach/ask',
+    method: 'POST',
+    data: params,
+    // 范围级助教同样同步等大模型。
+    timeout: LONG_REQUEST_TIMEOUT_MS,
+  })
 }
 
 // 6. 练习作答与交卷 API
@@ -380,6 +391,8 @@ export function apiRegradeAttempt(attemptItemId: string, reason: string): Promis
       attempt_item_id: attemptItemId,
       reason,
     },
+    // 后端 regrade_attempt 同步调大模型重判，超时需放宽。
+    timeout: LONG_REQUEST_TIMEOUT_MS,
   })
 }
 

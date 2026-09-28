@@ -20,12 +20,19 @@ const isLoading = ref<boolean>(false)
 const handleLogin = async () => {
   isLoading.value = true
   try {
-    const success = await authStore.loginWithWechat()
-    if (success) {
+    const outcome = await authStore.loginWithWechat()
+    if (outcome.ok) {
       uni.showToast({ title: '登录成功', icon: 'success' })
       setTimeout(() => {
-        uni.switchTab({ url: '/pages/index/index' })
+        uni.switchTab({
+          url: '/pages/index/index',
+          fail: () => uni.showToast({ title: '请手动打开工作台', icon: 'none' }),
+        })
       }, 500)
+    } else {
+      // request 层已按类别提示过超时/网络/后端拒绝；这里补齐 wx.login 一类
+      // 没有发出请求、request 层看不到的失败。文案相同，重复调用会被小程序合并。
+      uni.showToast({ title: outcome.message, icon: 'none' })
     }
   } finally {
     isLoading.value = false
