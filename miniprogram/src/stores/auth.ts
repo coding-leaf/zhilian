@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { UserProfile } from '@/types'
-import { apiLoginByWechat, apiGetUserProfile } from '@/api'
+import type { UserProfile, UpdateUserProfilePayload } from '@/types'
+import { apiLoginByWechat, apiGetUserProfile, apiUpdateUserProfile } from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string>(uni.getStorageSync('access_token') || '')
@@ -60,6 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  const updateProfile = async (payload: UpdateUserProfilePayload): Promise<UserProfile> => {
+    const updated = await apiUpdateUserProfile(payload)
+    user.value = updated
+    return updated
+  }
+
   return {
     token,
     user,
@@ -68,5 +74,6 @@ export const useAuthStore = defineStore('auth', () => {
     clearAuth,
     loginWithWechat,
     fetchProfile,
+    updateProfile,
   }
 })

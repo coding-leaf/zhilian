@@ -2,7 +2,7 @@ const BASE_URL = 'http://localhost:8000/api/v1'
 
 export interface RequestOptions {
   url: string
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
   data?: any
   header?: Record<string, string>
 }
@@ -20,7 +20,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
   return new Promise((resolve, reject) => {
     uni.request({
       url: fullUrl,
-      method: options.method || 'GET',
+      method: (options.method || 'GET') as any,
       data: options.data,
       header,
       success: (res) => {

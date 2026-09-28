@@ -3,16 +3,52 @@
     <!-- 顶部温润书卷 Hero Header -->
     <view class="hero-section">
       <view class="hero-header-row">
-        <view class="hero-tag">智练 · 自主学习平台</view>
+        <view class="hero-tag">智练 · 智能学研闭环</view>
         <view v-if="!authStore.isLoggedIn()" class="login-trigger-btn" @tap="goToLogin">
           <text class="login-trigger-text">快捷登录</text>
         </view>
         <view v-else class="user-status-pill">
-          <text class="user-status-text">已登录</text>
+          <text class="user-status-text">{{ authStore.user?.nickname || '学术探索者' }}</text>
         </view>
       </view>
       <text class="hero-title">深阅读，专研习</text>
-      <text class="hero-subtitle">上传一份讲义，开启针对性智能测验与精准学情诊断</text>
+      <text class="hero-subtitle">课程知识拓扑抽取 · 多题型针对性刷题 · 错题举一反三</text>
+    </view>
+
+    <!-- 课程文件夹选择与管理栏 -->
+    <view class="folders-section">
+      <view class="section-title-row">
+        <text class="section-title">我的课程</text>
+        <text class="action-text-btn" @tap="openCreateFolderModal">+ 新建课程</text>
+      </view>
+
+      <scroll-view scroll-x class="folders-scroll" :show-scrollbar="false">
+        <view class="folders-tabs">
+          <view
+            :class="['folder-tab-pill', folderStore.currentFolderId === 'all' ? 'active' : '']"
+            @tap="switchFolder('all')"
+          >
+            <text class="folder-tab-name">全部讲义</text>
+          </view>
+          <view
+            v-for="folder in folderStore.folders"
+            :key="folder.id"
+            :class="['folder-tab-pill', folderStore.currentFolderId === folder.id ? 'active' : '']"
+            @tap="switchFolder(folder.id)"
+          >
+            <text class="folder-tab-name">{{ folder.name }}</text>
+            <text v-if="folder.ready_material_count" class="folder-count-badge">
+              {{ folder.ready_material_count }}
+            </text>
+          </view>
+          <view
+            :class="['folder-tab-pill', folderStore.currentFolderId === '__none__' ? 'active' : '']"
+            @tap="switchFolder('__none__')"
+          >
+            <text class="folder-tab-name">未分类</text>
+          </view>
+        </view>
+      </scroll-view>
     </view>
 
     <!-- 资料快速导入入口 Card -->
@@ -22,20 +58,36 @@
       </view>
       <view class="upload-info">
         <text class="upload-title">导入学习资料</text>
-        <text class="upload-desc">支持微信聊天文件、文档 (PDF/DOCX) 或图片讲义</text>
+        <text class="upload-desc">
+          {{ currentFolderName ? `将导入至「${currentFolderName}」` : '支持微信聊天文档 (PDF/DOCX) 或图片讲义' }}
+        </text>
       </view>
       <view class="upload-action">
-        <text class="action-btn-text">选择</text>
+        <text class="action-btn-text">上传</text>
       </view>
     </view>
 
-    <!-- 快捷出题与学习进度 -->
-    <view class="section-title-row">
-      <text class="section-title">我的讲义库</text>
-      <text class="section-refresh" @tap="refreshMaterials">刷新</text>
+    <!-- 课程快捷刷题入口 (如果当前课程有就绪考点) -->
+    <view
+      v-if="activeFolderDetail && activeFolderDetail.knowledge_point_count > 0"
+      class="paper-card course-quick-practice"
+      @tap="goToCourseGenerate"
+    >
+      <view class="cqp-info">
+        <text class="cqp-title">🎯 课程全景刷题</text>
+        <text class="cqp-desc">当前课程涵盖 {{ activeFolderDetail.knowledge_point_count }} 个核心考点，点击自选知识点组卷</text>
+      </view>
+      <text class="cqp-arrow">→</text>
     </view>
 
     <!-- 讲义列表 -->
+    <view class="section-title-row">
+      <text class="section-title">课程讲义库</text>
+      <view class="title-right">
+        <text class="section-refresh" @tap="refreshMaterials">刷新</text>
+      </view>
+    </view>
+
     <view class="materials-list">
       <view
         v-for="item in materialStore.materialList"
@@ -49,43 +101,176 @@
             {{ getStatusText(item.status) }}
           </view>
         </view>
+
+        <view class="card-body">
+          <text class="meta-date">上传：{{ item.created_at?.slice(0, 10) || '今日' }}</text>
+          <text v-if="item.page_count" class="meta-page">{{ item.page_count }} 页</text>
+          <text v-if="item.key_points_count" class="meta-points">{{ item.key_points_count }} 考点</text>
+        </view>
+
         <view class="card-footer">
-          <text class="meta-date">{{ item.created_at?.slice(0, 10) || '今日' }}</text>
-          <text v-if="item.status === 'PARSED'" class="action-link">智能出题 →</text>
+          <!-- 状态为 WAITING 或 FAILED 时允许手动触发解析 -->
+          <button
+            v-if="item.status === 'WAITING' || item.status === 'FAILED'"
+            class="manual-parse-btn"
+            @tap.stop="handleManualParse(item)"
+          >
+            {{ item.status === 'FAILED' ? '重试解析' : '开始解析' }}
+          </button>
+
+          <view v-else-if="item.status === 'PROCESSING'" class="processing-hint">
+            <text class="spinner-icon">⌛</text>
+            <text class="hint-text">正在抽取考点拓扑...</text>
+          </view>
+
+          <!-- 已解析状态：知识树学习与出题入口 -->
+          <view v-else-if="item.status === 'PARSED'" class="ready-actions">
+            <text class="action-link-study" @tap.stop="goToDetail(item)">知识图谱 →</text>
+            <text class="action-link-practice" @tap.stop="goToQuestions(item)">智能出题 →</text>
+          </view>
         </view>
       </view>
 
       <view v-if="materialStore.materialList.length === 0" class="empty-state">
-        <text class="empty-text">暂无导入资料，点击上方卡片立即体验</text>
+        <text class="empty-text">当前分类下暂无讲义，点击上方卡片导入</text>
+      </view>
+    </view>
+
+    <!-- 课程全局悬浮助教入口 -->
+    <view class="floating-coach-btn" @tap="openGlobalCoach">
+      <text class="coach-btn-icon">💡</text>
+      <text class="coach-btn-text">AI助教</text>
+    </view>
+
+    <!-- AI 助教抽屉 -->
+    <AiCoachDrawer
+      v-model:visible="showCoachDrawer"
+      title="课程随身助教"
+      :context-text="coachContextText"
+    />
+
+    <!-- 新建课程弹窗 -->
+    <view v-if="showFolderModal" class="modal-overlay" @tap.self="closeFolderModal">
+      <view class="modal-content paper-card">
+        <view class="modal-header">
+          <text class="modal-title">新建课程文件夹</text>
+          <text class="modal-close" @tap="closeFolderModal">✕</text>
+        </view>
+        <view class="modal-body">
+          <input
+            v-model="newFolderName"
+            class="folder-input"
+            :maxlength="30"
+            placeholder="例如：概率论与数理统计、操作系统"
+          />
+        </view>
+        <view class="modal-footer">
+          <button class="modal-cancel-btn" @tap="closeFolderModal">取消</button>
+          <button
+            class="paper-btn-primary modal-confirm-btn"
+            :loading="isCreatingFolder"
+            @tap="handleCreateFolder"
+          >
+            创建
+          </button>
+        </view>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { onPullDownRefresh } from '@dcloudio/uni-app'
 import { useMaterialStore } from '@/stores/material'
 import { useAuthStore } from '@/stores/auth'
+import { useFolderStore } from '@/stores/folder'
+import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import type { MaterialItem } from '@/types'
 
 const materialStore = useMaterialStore()
 const authStore = useAuthStore()
+const folderStore = useFolderStore()
+
+const showFolderModal = ref(false)
+const newFolderName = ref('')
+const isCreatingFolder = ref(false)
+const showCoachDrawer = ref(false)
+
+const currentFolderName = computed(() => {
+  if (folderStore.currentFolderId === 'all') return ''
+  if (folderStore.currentFolderId === '__none__') return '未分类'
+  const target = folderStore.folders.find((f) => f.id === folderStore.currentFolderId)
+  return target?.name || ''
+})
+
+const activeFolderDetail = computed(() => {
+  if (folderStore.currentFolderId === 'all' || folderStore.currentFolderId === '__none__') return null
+  return folderStore.folders.find((f) => f.id === folderStore.currentFolderId) || null
+})
+
+const coachContextText = computed(() => {
+  if (activeFolderDetail.value) {
+    return `当前聚焦课程「${activeFolderDetail.value.name}」，涵盖 ${activeFolderDetail.value.knowledge_point_count} 个考点与 ${activeFolderDetail.value.ready_material_count} 份就绪资料。`
+  }
+  return '当前处于智练全景工作台，你可以随时询问学习方法、考点定义或复习建议。'
+})
 
 onMounted(async () => {
   if (!authStore.isLoggedIn()) {
     await authStore.loginWithWechat()
   }
-  await materialStore.loadMaterialList()
+  await Promise.all([
+    folderStore.loadFolders(),
+    materialStore.loadMaterialList(folderStore.currentFolderId),
+  ])
 })
 
 onPullDownRefresh(async () => {
-  await materialStore.loadMaterialList()
+  await Promise.all([
+    folderStore.loadFolders(),
+    materialStore.loadMaterialList(folderStore.currentFolderId),
+  ])
   uni.stopPullDownRefresh()
 })
 
+const switchFolder = async (folderId: string) => {
+  folderStore.setCurrentFolderId(folderId)
+  uni.showLoading({ title: '加载资料...' })
+  await materialStore.loadMaterialList(folderId)
+  uni.hideLoading()
+}
+
 const refreshMaterials = () => {
-  materialStore.loadMaterialList()
+  materialStore.loadMaterialList(folderStore.currentFolderId)
+}
+
+const openCreateFolderModal = () => {
+  newFolderName.value = ''
+  showFolderModal.value = true
+}
+
+const closeFolderModal = () => {
+  showFolderModal.value = false
+}
+
+const handleCreateFolder = async () => {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    uni.showToast({ title: '请输入课程名称', icon: 'none' })
+    return
+  }
+  isCreatingFolder.value = true
+  try {
+    const f = await folderStore.createFolder(name)
+    uni.showToast({ title: '创建成功', icon: 'success' })
+    closeFolderModal()
+    await switchFolder(f.id)
+  } catch (err: any) {
+    uni.showToast({ title: err?.message || '创建失败', icon: 'none' })
+  } finally {
+    isCreatingFolder.value = false
+  }
 }
 
 const getStatusText = (status: string) => {
@@ -95,13 +280,31 @@ const getStatusText = (status: string) => {
     case 'PROCESSING':
       return '解析中'
     case 'FAILED':
-      return '解析失败'
+      return '失败'
     default:
-      return '待处理'
+      return '待解析'
+  }
+}
+
+const handleManualParse = async (item: MaterialItem) => {
+  uni.showLoading({ title: '启动流水线...' })
+  try {
+    await materialStore.triggerParse(item.id)
+    uni.hideLoading()
+    uni.showToast({ title: '流水线已启动', icon: 'success' })
+    // 启动轮询
+    materialStore.pollMaterialStatus(item.id).catch(() => {})
+  } catch (err: any) {
+    uni.hideLoading()
+    uni.showToast({ title: err?.message || '触发失败', icon: 'none' })
   }
 }
 
 const handleChooseFile = () => {
+  const targetFolderId = folderStore.currentFolderId === 'all' || folderStore.currentFolderId === '__none__'
+    ? undefined
+    : folderStore.currentFolderId
+
   // #ifdef MP-WEIXIN
   const wxAny = (globalThis as any).wx || (typeof wx !== 'undefined' ? wx : null)
   if (wxAny && wxAny.chooseMessageFile) {
@@ -113,7 +316,7 @@ const handleChooseFile = () => {
         if (file) {
           uni.showLoading({ title: '正在上传讲义...' })
           try {
-            const item = await materialStore.upload(file.path, file.name)
+            const item = await materialStore.upload(file.path, file.name, targetFolderId)
             uni.hideLoading()
             uni.showToast({ title: '上传成功', icon: 'success' })
             goToDetail(item)
@@ -122,13 +325,12 @@ const handleChooseFile = () => {
           }
         }
       },
-      fail: () => {
-        // 允许取消
-      },
+      fail: () => {},
     })
     return
   }
   // #endif
+
   uni.chooseImage({
     count: 1,
     success: async (res: any) => {
@@ -136,7 +338,7 @@ const handleChooseFile = () => {
       if (path) {
         uni.showLoading({ title: '正在上传讲义...' })
         try {
-          const item = await materialStore.upload(path, '学习讲义')
+          const item = await materialStore.upload(path, '学习讲义', targetFolderId)
           uni.hideLoading()
           goToDetail(item)
         } catch {
@@ -153,6 +355,23 @@ const goToDetail = (item: MaterialItem) => {
   })
 }
 
+const goToQuestions = (item: MaterialItem) => {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/questions/index?material_id=${item.id}`,
+  })
+}
+
+const goToCourseGenerate = () => {
+  if (!activeFolderDetail.value) return
+  uni.navigateTo({
+    url: `/subpackages/material/pages/questions/index?folder_id=${activeFolderDetail.value.id}`,
+  })
+}
+
+const openGlobalCoach = () => {
+  showCoachDrawer.value = true
+}
+
 const goToLogin = () => {
   uni.navigateTo({
     url: '/pages/auth/login',
@@ -163,11 +382,12 @@ const goToLogin = () => {
 <style scoped>
 .index-container {
   padding: 32rpx;
+  padding-bottom: 140rpx;
   min-height: 100vh;
 }
 
 .hero-section {
-  padding: 32rpx 8rpx 48rpx 8rpx;
+  padding: 24rpx 8rpx 36rpx 8rpx;
 }
 
 .hero-header-row {
@@ -222,16 +442,92 @@ const goToLogin = () => {
 
 .hero-subtitle {
   display: block;
-  font-size: 26rpx;
+  font-size: 24rpx;
   color: #78716c;
   line-height: 1.5;
 }
 
+/* 课程文件夹栏 */
+.folders-section {
+  margin-bottom: 32rpx;
+}
+
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding: 0 4rpx;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #1c1917;
+}
+
+.action-text-btn {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #1e3a8a;
+}
+
+.folders-scroll {
+  white-space: nowrap;
+  width: 100%;
+}
+
+.folders-tabs {
+  display: inline-flex;
+  gap: 16rpx;
+  padding: 4rpx 0;
+}
+
+.folder-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 12rpx 24rpx;
+  background: #f5f5f4;
+  border-radius: 24rpx;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.folder-tab-pill.active {
+  background: #1e3a8a;
+  border-color: #1e3a8a;
+}
+
+.folder-tab-name {
+  font-size: 26rpx;
+  color: #44403c;
+  font-weight: 500;
+}
+
+.folder-tab-pill.active .folder-tab-name {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.folder-count-badge {
+  font-size: 20rpx;
+  background: rgba(0, 0, 0, 0.08);
+  padding: 2rpx 10rpx;
+  border-radius: 12rpx;
+  color: #78716c;
+}
+
+.folder-tab-pill.active .folder-count-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
 .upload-card {
-  padding: 36rpx 32rpx;
+  padding: 32rpx 28rpx;
   display: flex;
   align-items: center;
-  margin-bottom: 48rpx;
+  margin-bottom: 32rpx;
 }
 
 .upload-icon-wrapper {
@@ -245,7 +541,7 @@ const goToLogin = () => {
 
 .upload-title {
   display: block;
-  font-size: 32rpx;
+  font-size: 30rpx;
   font-weight: 600;
   color: #1c1917;
   margin-bottom: 6rpx;
@@ -253,7 +549,7 @@ const goToLogin = () => {
 
 .upload-desc {
   display: block;
-  font-size: 24rpx;
+  font-size: 22rpx;
   color: #78716c;
 }
 
@@ -265,23 +561,40 @@ const goToLogin = () => {
   font-size: 26rpx;
   color: #1e3a8a;
   font-weight: 600;
-  background: #f0f4ff;
+  background: #eff6ff;
   padding: 10rpx 24rpx;
   border-radius: 8rpx;
 }
 
-.section-title-row {
+/* 课程全局快捷刷题卡片 */
+.course-quick-practice {
+  padding: 28rpx 32rpx;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+  border: 1px solid #bfdbfe;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 24rpx;
-  padding: 0 4rpx;
+  justify-content: space-between;
+  margin-bottom: 32rpx;
 }
 
-.section-title {
+.cqp-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #1e3a8a;
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.cqp-desc {
+  font-size: 22rpx;
+  color: #3b82f6;
+  display: block;
+}
+
+.cqp-arrow {
   font-size: 32rpx;
-  font-weight: 600;
-  color: #1c1917;
+  color: #1e3a8a;
+  font-weight: 700;
 }
 
 .section-refresh {
@@ -290,20 +603,20 @@ const goToLogin = () => {
 }
 
 .material-card {
-  padding: 28rpx 32rpx;
-  margin-bottom: 20rpx;
+  padding: 28rpx 30rpx;
+  margin-bottom: 24rpx;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16rpx;
+  margin-bottom: 14rpx;
 }
 
 .material-name {
   font-size: 30rpx;
-  font-weight: 500;
+  font-weight: 600;
   color: #1c1917;
   flex: 1;
   overflow: hidden;
@@ -338,21 +651,65 @@ const goToLogin = () => {
   color: #78716c;
 }
 
-.card-footer {
+.card-body {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  gap: 20rpx;
+  margin-bottom: 16rpx;
 }
 
-.meta-date {
-  font-size: 24rpx;
+.meta-date,
+.meta-page,
+.meta-points {
+  font-size: 22rpx;
   color: #a8a29e;
 }
 
-.action-link {
+.card-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px dashed #f5f5f4;
+  padding-top: 16rpx;
+}
+
+.manual-parse-btn {
+  font-size: 24rpx;
+  color: #ffffff;
+  background: #1e3a8a;
+  padding: 6rpx 20rpx;
+  border-radius: 8rpx;
+}
+
+.processing-hint {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.spinner-icon {
+  font-size: 24rpx;
+}
+
+.hint-text {
+  font-size: 24rpx;
+  color: #d97706;
+}
+
+.ready-actions {
+  display: flex;
+  gap: 24rpx;
+}
+
+.action-link-study {
+  font-size: 26rpx;
+  color: #0d9488;
+  font-weight: 500;
+}
+
+.action-link-practice {
   font-size: 26rpx;
   color: #1e3a8a;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .empty-state {
@@ -364,4 +721,105 @@ const goToLogin = () => {
   font-size: 26rpx;
   color: #a8a29e;
 }
+
+/* 全局悬浮 AI 助教挂件 */
+.floating-coach-btn {
+  position: fixed;
+  right: 32rpx;
+  bottom: 160rpx;
+  background: #1e3a8a;
+  box-shadow: 0 6rpx 20rpx rgba(30, 58, 138, 0.35);
+  border-radius: 40rpx;
+  padding: 14rpx 24rpx;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  z-index: 100;
+}
+
+.coach-btn-icon {
+  font-size: 28rpx;
+}
+
+.coach-btn-text {
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: 600;
+}
+
+/* 弹窗 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32rpx;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 600rpx;
+  padding: 36rpx 32rpx;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+}
+
+.modal-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #1c1917;
+}
+
+.modal-close {
+  font-size: 32rpx;
+  color: #a8a29e;
+  padding: 8rpx;
+}
+
+.folder-input {
+  width: 100%;
+  height: 80rpx;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 8rpx;
+  padding: 0 20rpx;
+  font-size: 28rpx;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 32rpx;
+}
+
+.modal-cancel-btn {
+  flex: 1;
+  height: 76rpx;
+  font-size: 26rpx;
+  background: #f5f5f4;
+  color: #57534e;
+  border-radius: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-confirm-btn {
+  flex: 1;
+  height: 76rpx;
+  font-size: 26rpx;
+}
 </style>
+
