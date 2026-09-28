@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "本任务的唯一权威依据：「Transactions & Session Lifecycle」段已写明 get_session() 正常退出不提交、Service 层负责 commit、defer_commit 仅由最外层提交；Common Mistakes 的「Commit 边界错位」是本次缺陷的判据。改动必须对齐这段既有约定，不得另创事务模式"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Testing Requirements 与门禁命令；且「Scenario: Deterministic Half-Up Score Rounding & Grade-Record Transaction Safety」覆盖了判题记录的失效/生效顺序，本任务要在同一位置补齐它缺失的「提交边界」维度，不要另起一个重复场景"}

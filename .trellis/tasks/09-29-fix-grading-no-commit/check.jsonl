@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对提交点位置是否落在 service 层最外层、是否误引入 defer_commit 语义、是否动了 get_session() 或仓储的 commit 边界"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对新增用例是否满足 Testing Requirements，以及是否与既有「Grade-Record Transaction Safety」场景重复或冲突"}

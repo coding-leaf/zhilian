@@ -14,10 +14,11 @@ Verifies:
 
 import uuid
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import (
@@ -33,6 +34,7 @@ from app.models.material import Material
 from app.models.practice import (
     AttemptItem,
     GradingChannel,
+    GradingRecord,
     GradingStatus,
     Practice,
     PracticeStatus,
@@ -64,8 +66,7 @@ def fake_llm() -> FakeLLMAdapter:
     return FakeLLMAdapter()
 
 
-@pytest.fixture
-def setup_practice_env(session: Session) -> dict[str, Any]:
+def _build_practice_env(session: Session) -> dict[str, Any]:
     """Creates a sample completed practice with various types of questions."""
     user_id = uuid.uuid4()
     material_id = uuid.uuid4()
@@ -195,6 +196,12 @@ def setup_practice_env(session: Session) -> dict[str, Any]:
     }
 
 
+@pytest.fixture
+def setup_practice_env(session: Session) -> dict[str, Any]:
+    """Creates a sample completed practice with various types of questions."""
+    return _build_practice_env(session)
+
+
 class TestGradingService:
     """Test suite for GradingService."""
 
@@ -225,6 +232,56 @@ class TestGradingService:
             assert record.channel == GradingChannel.OFFLINE.value
             assert record.status == GradingStatus.SUCCESS.value
             assert record.is_final is True
+
+    def test_grade_practice_commits_across_session_boundary(self, tmp_path: Path) -> None:
+        """判题结果必须跨越会话边界存活 (提交边界回归, GRADE-017)。
+
+        既有判题用例全部与实现共享同一会话, `flush()` 即可让断言通过;
+        `AppContainer.get_session()` 正常退出既不提交也不回滚只 close,
+        因此"服务端漏 commit"只会在会话关闭后才暴露 (生产表现为:
+        worker 报 Job OK、耗时正常, 但 grading_records 零行)。
+        本用例以文件型 SQLite 复现 "写 -> 关会话 -> 开新会话查" 这一唯一可观测边界。
+
+        文件型而非 :memory: 的理由是稳健性: 内存库遇到连接变动会连库带表整个消失,
+        用例会以 `no such table` 这种错误理由变红 —— 假红比不红更坏。
+        断言只走新会话查询, 不读 `summary.records` (读返回的 ORM 载荷正是既有盲区本身)。
+        """
+        engine = create_engine(f"sqlite:///{tmp_path / 'grading.db'}")
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(bind=engine)
+
+        with factory() as writer:  # 会话 1: 写
+            env = _build_practice_env(writer)
+            # 只留 4 道客观题, 不触发 LLM
+            writer.delete(env["item_sub"])
+            writer.flush()
+            # 造的数据本身必须先落库, 否则分不清是造数没落还是判题没落
+            writer.commit()
+            practice_id: uuid.UUID = env["practice"].id
+            user_id: uuid.UUID = env["user_id"]
+
+            summary = GradingService(session=writer).grade_practice(
+                user_id=user_id, practice_id=practice_id
+            )
+            assert summary.status == PracticeStatus.COMPLETED.value
+
+        # writer 已关闭; 修复前未提交的事务在此被丢弃。
+
+        with factory() as reader:  # 会话 2: 查
+            records = (
+                reader.execute(
+                    select(GradingRecord).where(GradingRecord.practice_id == practice_id)
+                )
+                .scalars()
+                .all()
+            )
+            assert len(records) == 4
+
+            practice = reader.get(Practice, practice_id)
+            assert practice is not None
+            assert practice.status == PracticeStatus.COMPLETED.value
+            assert practice.total_score == 10.0  # 2 + 3 + 2 + 3, 与既有用例同一算例
+            assert practice.max_score == 10.0
 
     def test_unanswered_items_graded_zero(
         self, session: Session, setup_practice_env: dict[str, Any]

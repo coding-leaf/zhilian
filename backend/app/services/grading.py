@@ -291,7 +291,21 @@ class GradingService:
             if not practice.completed_at:
                 practice.completed_at = datetime.now(UTC)
 
-        self.session.flush()
+        # 事务边界：整卷判题结果在此一次性提交。
+        #
+        # 本方法已是 service 层最外层（worker / API / CLI 三条调用路径都只提供
+        # `AppContainer.get_session()` 产出的裸会话，见 container.py::get_session——正常退出
+        # **不**自动 commit，只 close）。因此提交责任在这里；漏掉的表现是：
+        # 判题全部算完、任务报 `Job OK`、`grading_records` 却为 0。
+        #
+        # 不要改为让 get_session() 自动提交：那会改变全项目事务语义（含刻意只读、
+        # 以及依赖异常回滚的调用点）。见 .trellis/spec/backend/database-guidelines.md
+        # 「Transactions & Session Lifecycle」。
+        #
+        # 提交粒度刻意取整卷一次（非逐题）：逐题提交会引入「部分完成」这一现有状态机
+        # 不认识的中间态；整卷提交的中途崩溃恢复路径已由 RQ 重试 +
+        # handle_job_terminal_failure → mark_grading_failed 覆盖。
+        self.session.commit()
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
@@ -726,7 +740,10 @@ class GradingService:
             else:
                 practice.status = PracticeStatus.PARTIALLY_GRADED.value
 
-        self.session.flush()
+        # 事务边界：自评结果在此提交。理由同 grade_practice —— 调用方
+        # AppContainer.get_session() 正常退出不提交；漏掉的表现是用户点一下自评
+        # 界面毫无变化：记录与总分随会话关闭一并丢弃。
+        self.session.commit()
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
@@ -917,7 +934,10 @@ class GradingService:
             else:
                 practice.status = PracticeStatus.PARTIALLY_GRADED.value
 
-        self.session.flush()
+        # 事务边界：重判结果在此提交。理由同 grade_practice —— 调用方
+        # AppContainer.get_session() 正常退出不提交；漏掉的表现是重判消耗了大模型
+        # 配额却什么都没留下。
+        self.session.commit()
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
