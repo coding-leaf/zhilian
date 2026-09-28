@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移约定与将被修订的 Migrations 章节；含手抄迁移链/表清单的腐化点"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁命令定义与 ### Scenario 格式模板，R4 需沿用其结构"}
+{"file": ".trellis/spec/backend/index.md", "reason": "规范索引的『事实源 / 最后核对』维护规则，R3 需同步"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "tests 目录分层与放置约定，R1 测试落位依据"}
