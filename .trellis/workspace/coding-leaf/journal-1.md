@@ -236,3 +236,55 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 全新前端架构与用户体验重构 (v2 原生三 Tab 闭环与 AI 助教/离线防丢)
+<!-- trellis-session: v=2 fp=09-28-new-frontend-v2-architecture -->
+
+**Date**: 2026-09-28
+**Task**: 全新前端架构与用户体验重构
+**Branch**: `master`
+
+### Summary
+
+根据用户旅程垂直切片 J1~J8，全新构建 Uni-App (Vue 3 + TS) 小程序端架构，打通全链路闭环并完成体验增强：
+1. 建立学术科技蓝调设计系统 `theme.scss`，重构原生三 Tab 架构（学习工作台、学情与错题、我的与数据治理）。
+2. J1~J3 闭环：构建多图网格画廊质检（支持最多 9 张图片、单页即时重拍替换）与出题核验清单（讲义原文出处引证展开、AI 质检建议、增删改题目与一键开练）。
+3. J4 作答引擎与 UX 增强：实现毫秒级 Storage 秒存与 800ms 防抖同步的离线防丢引擎 `usePracticeSync`，支持滑屏手势切题、标记疑难、答题卡抽屉与未作答拦截。
+4. J5~J6 报告与 UX 增强：三阶段动效过渡态、学情雷达与薄弱点一键强化练习；深度解析详情页支持讲义出处原文展开、采分点视觉对齐、AI 复核与自评打分双通道纠错，以及内置【追问 AI 助教】抽屉式对话。
+5. J7 错题攻克：按题型、时间段、课程多维筛选，支持购物车多选勾选特定错题并一键组卷（全栈协同支持后端 `question_ids` 组卷）。
+6. J8 数据治理：学习资产卡片、课程归档箱管理，以及双重二次确认的高危账号注销物理擦除。
+7. 后端协同扩展：`POST /api/v1/practices` 扩展支持 `question_ids` 精准组卷，新增 `POST /api/v1/questions/{id}/ask-coach` AI 助教答疑接口。
+8. 验证全绿：后端 Pytest 91 passed，前端 Vitest 76 files / 668 passed，Type-Check 与 Lint 零报错，单文件 <= 300 行与零 Emoji 规范严格执行。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (Pending Commit) | feat(v2): 全新前端架构重构与 J1-J8 体验闭环（含三 Tab 底座、AI 追问与离线防丢） |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 7: 全新前端架构与用户体验重构
+<!-- trellis-session: v=2 fp=10ff8404e0c19505 -->
+
+**Date**: 2026-09-28
+**Task**: 全新前端架构与用户体验重构
+**Branch**: `master`
+
+### Summary
+
+推倒旧前端，全新构建原生三Tab规范底座（学习工作台、学情错题看板、我的与数据治理）。闭环J1-J8用户旅程：9图画廊OCR质检单页即时重拍替换、出题质检清单与讲义原文引证；J4作答引擎与毫秒级Storage离线防丢系统；J5/J6三阶段过渡动效、自评与AI复核双通道纠错，以及内置追问AI助教对话能力；J7错题多选购物车与后端question_ids精准组卷；J8学习资产总览与物理彻底抹除。全端668项测试通过，全栈门禁全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b12c20e` | feat(v2): 全新前端架构重构与 J1-J8 体验闭环（含三 Tab 底座、AI 追问与离线防丢） |
+
+### Status
+
+[OK] **Completed**
