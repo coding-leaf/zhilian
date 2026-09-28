@@ -160,8 +160,8 @@ type guard / normalizer / adapter，再添加第 3 个读取方。契约的归�
       「Backend↔Frontend Response Field-Name Contract Pinning」。
 - [ ] **核对字段存在性而非只有字段名**：契约 fixture 必须按**具体端点**的响应模型取材，
       不得跨端点搬运字段，更不得手工补一个服务端从不返回的字段——那样断言在生产恒不成立、
-      测试却恒绿（假通过）。同一实体不同响应模型的字段可以不同：题目响应**不含**切片正文，
-      练习作答项**含**。见「Contract Fixture Fidelity」。
+      测试却恒绿（假通过）。同一实体不同响应模型的字段可以不同：题目响应只有 `analysis`
+      **没有** `explanation`，而练习快照 `QuestionSnapshotDTO` 两者都有。见「Contract Fixture Fidelity」。
 - [ ] 检查消费方复用了共享的 adapter / 归一化投影，而不是在本地断言 payload 字段。
 - [ ] 检查派生状态指回源标识（`id` / `version_id`），而不是自造第二游标。
 - [ ] 长耗时任务的状态机取值，后端与前端保持一致（例如

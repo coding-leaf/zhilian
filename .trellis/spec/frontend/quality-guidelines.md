@@ -309,11 +309,11 @@ currentReport.value = await apiTriggerDiagnosis(practiceId);
 - `items[].question_snapshot` 是练习卷面的**唯一**题面来源；禁止引用不存在的 `data.items` / `question.stem` 之类的漂移字段。
 - 诊断报告只消费后端真实字段；禁止假定 `details` / `score` / `accuracy` / `weaknesses`。
 - 错题题干只来自后端下发的 `question_snapshot`（`wrongSnapshotStem` 缺失时返回 `'题干快照缺失'`）。
-- `source_quote` 的正文只经由**练习详情响应**下发（`PracticeService._attach_source_snippets`）；题目详情响应不含切片正文，测试 fixture 与断言都不得伪造（`tests/backendContracts.spec.ts` 显式断言 `source_quote` 为 `undefined`）。
+- `source_quote` 的正文由两侧的下发路径提供：练习详情响应（`PracticeService._attach_source_snippets`）与题目响应（`QuestionService.attach_source_snippets`），二者都装配 `source_snippet{chapter_title, page_index, snippet_content}`。无来源或切片已删除时后端返回 `null`，断言 `source_quote` 为 `undefined`（空态）；**不得**靠手工补字段让断言通过。
 - 资料状态大小写归一：后端可能返回 `'READY'`，`adaptMaterial` 统一降为小写状态机取值，未知值回退 `'pending'`。
 
 #### 3. Tests Required
-- `tests/apiContracts.spec.ts`（3 例）+ `tests/backendContracts.spec.ts`（15 例）覆盖三条主链路 + 错题分组 + 出题规划。
+- `tests/apiContracts.spec.ts` + `tests/backendContracts.spec.ts` 覆盖三条主链路 + 错题分组 + 出题规划 + 题目/练习两侧的来源正文映射（含无来源空态）。用例数用 `pnpm run test:unit` 的实时结果，不在文档里手抄。
 
 #### 代码锚点
 - `miniprogram/src/api/adapters/practice.ts::adaptPractice`

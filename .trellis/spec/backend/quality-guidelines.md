@@ -1,7 +1,7 @@
 # Quality Guidelines
 
 > **事实源**：`backend/app/services/`、`backend/app/api/v1/`、`backend/app/repositories/`、`backend/app/models/`、`backend/app/core/`、`backend/app/integrations/`、`backend/app/cli/`、`backend/tests/`、`backend/migrations/`、`backend/pyproject.toml`、`Taskfile.yml`
-> **最后核对**：2026-09-29 @ 90eed7f
+> **最后核对**：2026-09-29 @ c6e1003
 > **核对方式**：`rg -n "^### Scenario:|^#### 代码锚点" .trellis/spec/backend/quality-guidelines.md`，再按各 scenario 锚点 `rg` 复核
 
 > Code quality standards and verification baseline for backend development.
@@ -1234,32 +1234,81 @@ except Exception:
 
 ---
 
-### Scenario: Practice Source-Snippet Enrichment on Both Read Paths
+### Scenario: Source-Snippet Enrichment Across Practice and Question Domains
 
 #### 1. Scope / Trigger
-- 结果页原文依据需要逐题切片内容；创建练习的响应与查询详情的响应必须形状一致。
+- 结果页原文依据（练习作答项）与核对页来源框（题目）都需逐题切片正文；同一实体的创建/查询/列表/更新路径响应必须形状一致。
 
 #### 2. Signatures
-- `PracticeService._build_source_snippet_map(items, user_id)`（唯一装配实现）。
-- `PracticeService._attach_source_snippets(detail, user_id)`（详情路径）、`_attach_source_snippets_to_items(practice, user_id)`（创建路径）。
+- `app/services/source_snippets.py::build_source_snippet_map(material_repo, snippet_ids, user_id)`（**跨域唯一装配实现**：投影构造 + 页码回退规则只在此处）。
+- `PracticeService._build_source_snippet_map(items, user_id)`（练习侧只负责「从快照提取切片主键」，随后委托上者）、`_attach_source_snippets(detail, user_id)`（详情路径）、`_attach_source_snippets_to_items(practice, user_id)`（创建路径）。
+- `QuestionService.attach_source_snippets(items, user_id)`（题目侧批量为 `QuestionDetailResponse` 就地补全 `source_snippet`）。
 - `MaterialRepository.list_snippets_by_ids(snippet_ids, user_id)`（批量 + 租户过滤）。
 
 #### 3. Contracts
-- 原文装配**只有一个实现**，创建与查询两条路径复用；禁止各写一份。
-- 装配必须批量按 `source_snippet_id` 关联（单查询、按 `user_id` 过滤），禁 N+1、禁跨用户泄漏；切片缺失时 DTO 为 `None`，前端渲染空态。
+- 原文装配**只有一个实现**（`build_source_snippet_map`）：题目/练习两域、创建/查询/列表/更新各路径全部复用；任一侧不得另写投影或页码回退逻辑。
+- 装配必须批量按 `source_snippet_id` 关联（单查询、按 `user_id` 过滤），禁 N+1、禁跨用户泄漏；切片缺失时投影为 `None`，前端渲染空态。
+- 装配点覆盖：题目 `POST /questions/generate`（qualified + pending）、`GET /questions/{id}`、`GET /questions`、`PUT /questions/{id}`；练习创建与详情。题目列表同样装配（该端点本就返回题干/答案/解析全量字段，一条切片正文属同量级），代价是每响应一次批量查询。
+- 两侧共用**同一个 DTO 类**：`app/schemas/material.py::SourceSnippetDTO`（切片属资料域）。禁止同形异构副本，否则前后端与两个业务域会出现多份会漂移的来源模型。
 - 回填快照时**必须拷贝 dict**（`snapshot = dict(snapshot)`）再写入，禁止原地修改 ORM 的 JSON 列对象——否则瞬时装配数据会随会话提交被持久化进快照。
 - 创建路径**不得**改写已落库的快照 JSON，也不得因此改变 service 的返回类型（既有调用方依赖 `Practice` ORM）。
 
 #### 4. Tests Required
-- 创建练习的响应中作答项带完整 `source_snippet`（`snippet_content`/`chapter_title`/`page_index`），与查询详情路径一致。
-- 快照副本内同样可读到 `source_snippet`；**断言落库的 JSON 未被瞬时装配污染**。
-- 切片缺失 → `None` 空态；批量查询次数常数级。
+- 练习：创建练习的响应中作答项带完整 `source_snippet`（`snippet_content`/`chapter_title`/`page_index`），与查询详情路径一致。
+- 练习：快照副本内同样可读到 `source_snippet`；**断言落库的 JSON 未被瞬时装配污染**。
+- 题目：出题/详情/列表/更新四条路径的响应都带 `source_snippet`，形状为 `{id, chapter_title, page_index, snippet_content}`；无 `source_snippet_id` 的历史题目为 `null` 且键存在。
+- 题目：切片属他人时装配结果为 `None`（租户隔离，不泄漏他人正文）。
+- 题目：**裸 `model_validate(question)` 不得读取 ORM 关系**（`material_snippets` 查询数为 `0`），见下一条 Scenario。
+- 两侧：切片缺失 → `None` 空态；批量查询次数常数级（题目数增加不增加切片查询）。
 
 #### 代码锚点
-- `backend/app/services/practice.py::PracticeService._build_source_snippet_map`
+- `backend/app/services/source_snippets.py::build_source_snippet_map`
+- `backend/app/services/question.py::QuestionService.attach_source_snippets`
 - `backend/app/services/practice.py::PracticeService._attach_source_snippets_to_items`
+- `backend/app/schemas/material.py::SourceSnippetDTO`（两侧共用）
 - `backend/app/schemas/practice.py::PracticeItemDetailResponse`（before-validator 回填快照副本）
 - `backend/app/repositories/material.py::MaterialRepository.list_snippets_by_ids`
+
+---
+
+### Scenario: Response Field Names Must Not Collide with ORM Relationships
+
+#### 1. Scope / Trigger
+- `QuestionDetailResponse` 新增 `source_snippet` 字段（`SourceSnippetDTO` 投影）时，与 ORM 关系 `Question.source_snippet`（指向 `MaterialSnippet` 实体）**同名**。凡 `from_attributes=True` 的响应模型新增字段，都要先查模型侧是否有同名属性/关系。
+
+#### 2. Contracts
+- `from_attributes` 的字段名会直接 `getattr` 到 ORM 实体的同名属性，**关系也算**。同名时映射读到的是实体本身，后果是双重的：
+  - **投影错误且静默**：实体没有 `snippet_content` 属性（真名 `content`），字段落空串；`page_index` 落默认值 1；
+  - **每题一次惰性加载**：一页 20 条即多 20 次 `material_snippets` 查询（N+1），且服务层装配形同虚设。
+- 处置：ORM 关系改名（`Question.primary_source_snippet`），把线格式名称留给响应投影；投影只能由服务层批量装配提供。
+- 判别：`rg -n "source_snippet" backend/app/models/question.py` —— 模型侧不得再出现与响应字段同名的关系。
+
+#### 3. Tests Required
+- **裸映射零查询**：`expunge_all()` 后 `model_validate(question)` 期间 `material_snippets` 查询数必须为 `0`，且 `source_snippet is None`（守关系改名不被回退）。
+- 装配后的内容与批量查询次数（常数级）另有用例。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```python
+# 模型侧：关系与线格式字段同名
+source_snippet: Mapped["MaterialSnippet | None"] = relationship("MaterialSnippet", foreign_keys=[source_snippet_id])
+# 响应侧
+source_snippet: SourceSnippetDTO | None = Field(default=None)
+# → from_attributes 直接读关系实体：内容空串 + 每题一次惰性加载
+```
+##### Correct
+```python
+# 模型侧：关系改名，避开线格式字段名
+primary_source_snippet: Mapped["MaterialSnippet | None"] = relationship("MaterialSnippet", foreign_keys=[source_snippet_id])
+# 响应侧：线格式名保持不变，投影由 QuestionService.attach_source_snippets 批量装配
+source_snippet: SourceSnippetDTO | None = Field(default=None)
+```
+
+#### 代码锚点
+- `backend/app/models/question.py::Question.primary_source_snippet`
+- `backend/app/schemas/question.py::QuestionDetailResponse`
+- `backend/app/services/question.py::QuestionService.attach_source_snippets`
+- `backend/tests/unit/services/test_question_service.py::TestQuestionSourceSnippetAssembly.test_response_mapping_does_not_read_orm_relationship`
 
 ---
 
@@ -1271,33 +1320,37 @@ except Exception:
 #### 2. Contracts
 - fixture 的字段名与**字段存在性**都必须逐字取自后端响应模型的真实序列化结果；**手工补一个服务端不返回的字段，会让断言在生产永不成立却测试恒绿**。
 - 字段存在性判定要以响应模型为准：模型没有该字段时，前端读取恒为 `undefined`，绑定静默渲染为空——测试若自造字段则该缺陷永远发现不了。
-- 同一实体的不同响应模型可能字段不同（例如题目：`QuestionDetailResponse` 只有 `source_snippet_id` 与 `{snippet_id, similarity, index}` 元数据，**不含切片正文**；而练习作答项的 `PracticeItemDetailResponse` 经装配**含** `source_snippet{chapter_title, page_index, snippet_content}`）。fixture 必须按**具体端点**取材，不得跨端点搬运字段。
+- 同一实体的不同响应模型可能字段不同（例如**题目**：`QuestionDetailResponse` 只有 `analysis`，**没有** `explanation`；而练习快照 `QuestionSnapshotDTO` 同时有 `analysis` 与 `explanation`。前端 adapter 的 `explanation ?? analysis` 只在快照侧回退命中）。fixture 必须按**具体端点**取材，不得跨端点搬运字段。
 
 #### 3. Wrong vs Correct
 ##### Wrong
 ```typescript
-// 错误：题目 fixture 里手工塞了服务端从不返回的 source_snippet
-const generatedQuestionFixture = () => ({ ..., source_snippet: { snippet_content: '...' } })
-expect(adaptQuestion(raw).source_quote).toBe('...')   // 生产恒为 undefined → 假通过
+// 错误：给题目 fixture 手工补一个 QuestionDetailResponse 从不返回的字段
+const generatedQuestionFixture = () => ({ ..., explanation: '服务端不返回该字段' })
+expect(adaptQuestion(raw).explanation).toBe('服务端不返回该字段')   // 生产恒为 undefined → 假通过
 ```
 ##### Correct
 ```typescript
-// 正确：题目侧按真实契约断言"无正文"，原文溯源断言改挂在真实返回正文的练习侧
-expect(adaptQuestion(raw).source_quote).toBeUndefined()
-expect('source_snippet' in raw).toBe(false)
+// 正确：按具体端点的响应模型取材，字段存在性一并断言
+// 题目侧来源正文真的会下发（QuestionService.attach_source_snippets）
+expect(adaptQuestion(realQuestionFixture).source_quote).toBe('慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。')
+// 无来源时后端返回 null，前端渲染空态
+expect(adaptQuestion({ ...realQuestionFixture, source_snippet: null }).source_quote).toBeUndefined()
+// 仅在快照侧存在的字段不得搬到题目侧
+expect('explanation' in realQuestionFixture).toBe(false)
 expect(buildAttemptResults(adaptPractice(realItemFixture))[0].sourceQuote).toBe('...')
 ```
 
 #### 4. Tests Required
-- 题目侧：断言不存在 `source_snippet` 且 `source_quote` 为 `undefined`（守假通过回归）。
+- 题目侧：按真实响应断言 `source_quote` 命中 `source_snippet.snippet_content`；无来源（`source_snippet: null`）时断言 `undefined`（守空态）。**禁止**靠手工补字段让断言通过。
 - 练习侧：用真实练习 fixture 断言 `source_quote` 正确映射。
-- fixture 新增/修订后，必须能回答「这个字段由哪个响应模型的哪个字段产生」。
+- fixture 新增/修订后，必须能回答「这个字段由哪个响应模型的哪个字段产生」。后端样本以 `model_dump(mode="json")` 的真实输出为准（见 `backend/tests/unit/schemas/test_question_schemas.py` 的字段名固定用例）。
 
 #### 代码锚点
 - `miniprogram/tests/fixtures/backendResponses.ts`
 - `miniprogram/tests/backendContracts.spec.ts`
-- `backend/app/schemas/question.py::QuestionDetailResponse`（无切片正文）
-- `backend/app/schemas/practice.py::SourceSnippetDTO`、`PracticeItemDetailResponse.source_snippet`
+- `backend/app/schemas/question.py::QuestionDetailResponse`（含 `source_snippet`；无 `explanation`）
+- `backend/app/schemas/material.py::SourceSnippetDTO`、`backend/app/schemas/practice.py::QuestionSnapshotDTO`（含 `explanation`）
 
 ---
 
