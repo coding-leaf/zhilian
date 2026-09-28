@@ -14,6 +14,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.material import SourceSnippetDTO
+
 # 允许的组卷模式白名单集合
 VALID_PRACTICE_MODES: set[str] = {"sequential", "random", "weak_points"}
 # 允许的练习来源类型白名单集合
@@ -136,20 +138,6 @@ class PracticeCreateRequest(BaseModel):
         ):
             self.question_count = len(self.question_ids)
         return self
-
-
-class SourceSnippetDTO(BaseModel):
-    """题目来源切片摘要数据传输对象模型。
-
-    承载原文溯源抽屉渲染所需的最小切片信息 (章节/页码/正文)。
-    """
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID | str | None = Field(default=None, description="切片主键标识")
-    chapter_title: str = Field(default="", description="所属章节标题")
-    page_index: int = Field(default=1, ge=1, description="所在页码 (从 1 起算)")
-    snippet_content: str = Field(default="", description="切片纯文本内容")
 
 
 def _pick_final_grading_record(records: Any) -> Any:

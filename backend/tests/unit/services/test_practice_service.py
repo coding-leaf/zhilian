@@ -46,7 +46,8 @@ from app.models.practice import (
     WrongRecord,
 )
 from app.models.question import Question, QuestionStatus, QuestionType
-from app.schemas.practice import PracticeDetailResponse, SourceSnippetDTO
+from app.schemas.material import SourceSnippetDTO
+from app.schemas.practice import PracticeDetailResponse
 from app.services.grading import GradingService
 from app.services.practice import (
     CreatePracticeOptions,

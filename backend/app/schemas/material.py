@@ -223,3 +223,20 @@ class MaterialFolderMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = Field(
         default=None, description="目标课程文件夹标识 (NULL=未分类)"
     )
+
+
+class SourceSnippetDTO(BaseModel):
+    """原文来源切片投影数据传输对象模型。
+
+    承载原文溯源渲染所需的最小切片信息 (章节/页码/正文)。切片属资料域，故本模型
+    定义在此，由练习侧 (``PracticeItemDetailResponse``) 与题目侧
+    (``QuestionDetailResponse``) 共同引用**同一个类**——禁止各自另立同形异构的副本，
+    否则前后端与两个业务域会出现多份会漂移的来源模型。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID | str | None = Field(default=None, description="切片主键标识")
+    chapter_title: str = Field(default="", description="所属章节标题")
+    page_index: int = Field(default=1, ge=1, description="所在页码 (从 1 起算)")
+    snippet_content: str = Field(default="", description="切片纯文本内容")

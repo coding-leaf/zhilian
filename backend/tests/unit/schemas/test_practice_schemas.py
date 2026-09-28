@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from app.schemas.material import SourceSnippetDTO
 from app.schemas.practice import (
     AttemptItemDetailResponse,
     PracticeCreateRequest,
@@ -36,7 +37,6 @@ from app.schemas.practice import (
     QuestionSnapshotDTO,
     SaveAnswerRequest,
     SaveAnswerResponse,
-    SourceSnippetDTO,
     SubmitPracticeResponse,
 )
 

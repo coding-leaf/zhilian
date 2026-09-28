@@ -39,7 +39,6 @@ from app.integrations.idempotency.protocol import (
 )
 from app.integrations.queue.factory import create_queue_adapter
 from app.integrations.queue.protocol import QueueProtocol
-from app.models.material import MaterialSnippet
 from app.models.practice import (
     AttemptItem,
     MasteryRecord,
@@ -55,12 +54,13 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
+from app.schemas.material import SourceSnippetDTO
 from app.schemas.practice import (
     PracticeDetailResponse,
     PracticeItemDetailResponse,
     QuestionSnapshotDTO,
-    SourceSnippetDTO,
 )
+from app.services.source_snippets import build_source_snippet_map
 
 logger = logging.getLogger(__name__)
 
@@ -694,26 +694,6 @@ class PracticeService:
         except (ValueError, TypeError):
             return None
 
-    @staticmethod
-    def _resolve_snippet_page_index(snippet: MaterialSnippet) -> int:
-        """解析切片页码 (优先映射列，回退 source_info 元数据)。
-
-        Args:
-            snippet: 切片 ORM 实体。
-
-        Returns:
-            int: 从 1 起算的页码。
-        """
-        page_index = getattr(snippet, "page_index", None)
-        if isinstance(page_index, int) and page_index >= 1:
-            return page_index
-        source_info = getattr(snippet, "source_info", None)
-        if isinstance(source_info, dict):
-            candidate = source_info.get("page_number", source_info.get("page_index"))
-            if isinstance(candidate, int) and candidate >= 1:
-                return candidate
-        return 1
-
     def _build_source_snippet_map(
         self,
         items: Sequence[PracticeItemDetailResponse | AttemptItem],
@@ -721,8 +701,9 @@ class PracticeService:
     ) -> dict[uuid.UUID, SourceSnippetDTO]:
         """按快照 ``source_snippet_id`` 批量装载原文切片投影。
 
-        这是练习原文溯源的**唯一**装配实现：查询详情路径与创建练习路径都复用
-        本方法，避免两处各自拼装导致响应形状漂移。
+        本方法只负责练习域特有的「从快照提取切片主键」；投影构造与页码回退规则
+        委托 ``build_source_snippet_map``（题目侧共用同一实现），保证两侧来源模型不会漂移。
+        查询详情路径与创建练习路径都复用本方法。
 
         Args:
             items: 作答项详情 DTO 或 ORM 作答项实体序列。
@@ -736,18 +717,8 @@ class PracticeService:
             snippet_id = self._snapshot_source_snippet_id(item)
             if snippet_id is not None:
                 snippet_ids.add(snippet_id)
-        if not snippet_ids:
-            return {}
 
-        return {
-            snippet.id: SourceSnippetDTO(
-                id=snippet.id,
-                chapter_title=snippet.chapter_title or "",
-                page_index=self._resolve_snippet_page_index(snippet),
-                snippet_content=snippet.content or "",
-            )
-            for snippet in self.material_repo.list_snippets_by_ids(sorted(snippet_ids), user_id)
-        }
+        return build_source_snippet_map(self.material_repo, snippet_ids, user_id)
 
     def _attach_source_snippets(
         self,
