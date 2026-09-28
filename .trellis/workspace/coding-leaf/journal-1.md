@@ -354,3 +354,35 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 修复 mypy strict 的 DML rowcount 类型缺口并沉淀规范
+<!-- trellis-session: v=2 fp=71042cac7a51e46b -->
+
+**Date**: 2026-09-29
+**Task**: 修复 mypy strict 的 DML rowcount 类型缺口并沉淀规范
+**Branch**: `master`
+
+### Summary
+
+排查 backend mypy strict 的 4 条报错（MaterialRepository.try_transition_version_status 与 PracticeRepository.try_transition_status 上的 attr-defined + no-any-return）。根因是上游类型标注缺口：SQLAlchemy 2.0.54 的 Session.execute 只有 TypedReturnsRows[_T] -> Result[_T] 与 Executable -> Result[Any] 两个重载，Update/Delete 不是 TypedReturnsRows 子类故落到后者，静态类型 Result[Any] 上不存在 rowcount（2.0.38 尚有 execute(UpdateBase) -> CursorResult[Any]，2.0.54 已移除）。用 reveal_type 实测排除了 execution_options 这一诱因，用运行时探针确认返回对象确为 CursorResult，故按仓库既有 7 处的 isinstance(result, CursorResult) 兜底写法修复，CAS 赢/输两态返回值不变。同步把约定沉淀进 .trellis/spec/backend/database-guidelines.md：Query Patterns 增补「条件更新（CAS）读影响行数」，Common Mistakes 记录症状、判别命令、版本依据与 Wrong/Correct 对照，并更新事实源、核对方式与 index 索引行。
+
+### Main Changes
+
+- 修复仓储层两个 CAS 方法读取 DML 影响行数的方式，并把该约定写进后端数据库规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `03dc9f1` | fix(backend): CAS 状态跃迁经 CursorResult 兜底读 rowcount |
+| `3ef2442` | docs(spec): 沉淀 DML rowcount 兜底约定与类型缺口根因 |
+| `d5aa12b` | chore(task): 登记 09-29-cas-rowcount-typing 任务与上下文清单 |
+
+### Testing
+
+- [OK] task verify 全绿：ruff format/check、mypy 134 files、import-linter 5 contracts kept、pytest 1370 passed（覆盖率 91.15%）、前端 vitest 39 passed
+
+### Status
+
+[OK] **Completed**

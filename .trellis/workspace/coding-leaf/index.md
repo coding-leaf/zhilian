@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~356 | Active |
+| `journal-1.md` | ~388 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-09-29 | 修复 mypy strict 的 DML rowcount 类型缺口并沉淀规范 | `03dc9f1`, `3ef2442`, `d5aa12b` | `master` |
 | 9 | 2026-09-29 | 迁移-模型一致性闸门与规范防腐 | `91d5623`, `a109685` | `master` |
 | 8 | 2026-09-29 | 学习闭环修复：前端契约重建、RQ 后台执行与并发派发竞态 | `609e7f1`, `15a621e`, `2e8a45d`, `32fd0a2` | `codex/frontend-ui-loop-repair` |
 | 7 | 2026-09-28 | 全新前端架构与用户体验重构 | `b12c20e` | `master` |
