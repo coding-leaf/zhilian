@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "§Scenario Contract Fixture Fidelity：fixture 必须取自真实序列化样本"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对题目侧是否复用同一装配实现而非另写一份"}

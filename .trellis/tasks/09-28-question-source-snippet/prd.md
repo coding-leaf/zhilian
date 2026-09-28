@@ -27,11 +27,21 @@
 
 ## Acceptance Criteria
 
-- [ ] AC-1：`POST /questions/generate` 与 `GET /questions/{id}` 的响应真实包含来源对象（章节 / 页码 / 正文），有 `source_snippet_id` 的题目返回正确内容。
-- [ ] AC-2：无来源切片的历史题目仍可正常序列化与展示，前端给出准确空态，不伪造来源。
-- [ ] AC-3：关联切片为批量查询，无 N+1；`GET /questions` 列表等高频路径不受负面影响（或明确说明取舍）。
-- [ ] AC-4：前端出题核对页能展示来源正文，且**作答前仍不展示标准答案与解析**（保持 PRD R3 的另一半约束）。
-- [ ] AC-5：契约测试使用真实序列化样本，覆盖有/无来源两态；`task verify` 全绿（既有 wall-clock 计时用例的负载抖动除外，需在证据中注明）。
+- [x] AC-1：`POST /questions/generate` 与 `GET /questions/{id}` 的响应真实包含来源对象（章节 / 页码 / 正文），有 `source_snippet_id` 的题目返回正确内容。
+      *证据*：`tests/integration/test_p0_full_chain_e2e.py` 端到端断言 generate/detail/list/update 四条路径的 `source_snippet` 内容一致且 `snippet_content` 非空；`tests/unit/services/test_question_service.py::TestQuestionSourceSnippetAssembly` 覆盖投影内容与字段名。
+- [x] AC-2：无来源切片的历史题目仍可正常序列化与展示，前端给出准确空态，不伪造来源。
+      *证据*：字段可空默认 `null`；服务用例 `test_without_source_keeps_none_and_serializes_null` + schema 用例 `test_question_detail_response_source_snippet_defaults_to_null`；前端用例 `keeps source_quote empty when the question has no source snippet`；E2E 断言无来源项保持 `null`。
+- [x] AC-3：关联切片为批量查询，无 N+1；`GET /questions` 列表等高频路径不受负面影响（或明确说明取舍）。
+      *证据*：装配走 `MaterialRepository.list_snippets_by_ids` 单次 `IN` 查询（用例断言 1 题与 2 题均为 1 次、无来源为 0 次）；列表路径同样装配，**取舍已在 design.md §3.3 与规范中写明**（该端点本就返回题干/答案/解析全量字段，代价是每响应一次批量查询）。另修掉实施中发现的惰性加载 N+1（见 design.md §3.6）。
+- [x] AC-4：前端出题核对页能展示来源正文，且**作答前仍不展示标准答案与解析**（保持 PRD R3 的另一半约束）。
+      *证据*：后端接通后 `adapters/question.ts` 的 `source_quote` 有值（前端用例断言真实正文）；`QuestionPreviewCard.vue` 仅有题干/选项/来源三类节点，**不含答案与解析**。说明：未在微信真机上跑一遍，验证止于单测与代码路径。
+- [x] AC-5：契约测试使用真实序列化样本，覆盖有/无来源两态；`task verify` 全绿（既有 wall-clock 计时用例的负载抖动除外，需在证据中注明）。
+      *证据*：前端 fixture 的 `source_snippet` 取值由后端 `model_dump()` 真实输出生成并注明事实源；`task verify` 退出码 0（后端 1378 passed / 覆盖率 91.16%，前端 41 passed），无负载抖动豁免项。
+
+## 交付结果补充（超出 PRD 的发现）
+
+- 实施中新写的装配用例当场暴露一处**真实缺陷**：ORM 关系 `Question.source_snippet` 与响应字段同名，`from_attributes` 会读到实体本身 —— 既给出半空投影（正文空串），又对每题多一次惰性加载（列表页 N+1）。已把关系改名 `primary_source_snippet` 并加「裸映射零查询」回归用例，细节见 `design.md` §3.6。
+- 装配实现按规范「原文装配只有一个实现」抽为跨域共享模块 `app/services/source_snippets.py`，练习侧改为委托，未新增第二份投影逻辑。
 
 ## Out of Scope
 
