@@ -1,0 +1,55 @@
+[
+  {
+    "command": [
+      "python",
+      "-c",
+      "import sys; from app.main import app; print(sys.version); print(type(app).__name__)"
+    ],
+    "code": 0,
+    "seconds": 7.92,
+    "stdout": "3.12.13 (main, Jul 23 2026, 14:44:57) [MSC v.1944 64 bit (AMD64)]\nFastAPI\n",
+    "stderr": "warning: Using incompatible environment (`D:\\code\\Workspace\\zhilian\\.trellis\\.runtime\\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)\n"
+  },
+  {
+    "command": [
+      "ruff",
+      "format",
+      "--check",
+      "."
+    ],
+    "code": 0,
+    "seconds": 0.47,
+    "stdout": "238 files already formatted\n",
+    "stderr": "warning: Using incompatible environment (`D:\\code\\Workspace\\zhilian\\.trellis\\.runtime\\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)\n"
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "."
+    ],
+    "code": 1,
+    "seconds": 0.12,
+    "stdout": "SIM102 Use a single `if` statement instead of nested `if` statements\n   --> app\\schemas\\practice.py:134:9\n    |\n132 |       def _sync_question_count_with_ids(self) -> \"PracticeCreateRequest\":\n133 |           \"\"\"当指定 question_ids 且 question_count 缺省或大于题目数时，自动同步为实际题量。\"\"\"\n134 | /         if self.question_ids:\n135 | |             if self.question_count == 10 or self.question_count > len(self.question_ids):\n    | |_________________________________________________________________________________________^\n136 |                   self.question_count = len(self.question_ids)\n137 |           return self\n    |\nhelp: Combine `if` statements using `and`\n\nI001 [*] Import block is un-sorted or un-formatted\n    --> tests\\unit\\services\\test_question_service.py:1423:9\n     |\n1421 |       ) -> None:\n1422 |           \"\"\"Verify QuestionService.ask_coach returns structured AI response and raises on 404.\"\"\"\n1423 | /         from app.schemas.question import AskCoachResponse\n1424 | |         from unittest.mock import MagicMock\n     | |___________________________________________^\n1425 |\n1426 |           user_id = helper_setup[\"user_id\"]\n     |\nhelp: Organize imports\n     |\n1422 |         \"\"\"Verify QuestionService.ask_coach returns structured AI response and raises on 404.\"\"\"\n     -         from app.schemas.question import AskCoachResponse\n1423 |         from unittest.mock import MagicMock\n1424 |\n1425 +         from app.schemas.question import AskCoachResponse\n1426 +\n1427 |         user_id = helper_setup[\"user_id\"]\n     |\n\nFound 2 errors.\n[*] 1 fixable with the `--fix` option.\n",
+    "stderr": "warning: Using incompatible environment (`D:\\code\\Workspace\\zhilian\\.trellis\\.runtime\\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)\n"
+  },
+  {
+    "command": [
+      "mypy",
+      "app"
+    ],
+    "code": 0,
+    "seconds": 2.48,
+    "stdout": "Success: no issues found in 130 source files\n",
+    "stderr": "warning: Using incompatible environment (`D:\\code\\Workspace\\zhilian\\.trellis\\.runtime\\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)\n"
+  },
+  {
+    "command": [
+      "lint-imports"
+    ],
+    "code": 0,
+    "seconds": 0.83,
+    "stdout": "\n╔══╗─────────▶╔╗ ╔╗      ╔╗◀───┐\n╚╣╠╝◀─────┐  ╔╝╚╗║║────▶╔╝╚╗   │\n ║║   ╔══╦══╦╩╗╔╝║║  ╔╦═╩╗╔╝╔═╦══╗\n ║║╔══╣╔╗║╔╗║╔╣║ ║║ ╔╬╣╔╗║║ ║│║╔═╝\n╔╣╠╣║║║╚╝║╚╝║║║╚╗║╚═╝║║║║║╚╗║═╣║\n╚══╩╩╩╣╔═╩══╩╝╚═╝╚═══╩╩╝╚╩═╩╩═╩╝\n  └──▶║║                    ▲ \n      ╚╝────────────────────┘\n\n\n---------\nContracts\n---------\n\nAnalyzed 175 files, 892 dependencies.\n-------------------------------------\n\n五层单向架构依赖契约 KEPT\n仓储层禁止外部框架与业务层 KEPT\n纯函数算法计算核隔离 KEPT\n适配层禁止依赖业务服务与路由 KEPT\n核心基础模块禁止反向依赖上层业务 KEPT\n\nContracts: 5 kept, 0 broken.\n",
+    "stderr": "warning: Using incompatible environment (`D:\\code\\Workspace\\zhilian\\.trellis\\.runtime\\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)\n"
+  }
+]

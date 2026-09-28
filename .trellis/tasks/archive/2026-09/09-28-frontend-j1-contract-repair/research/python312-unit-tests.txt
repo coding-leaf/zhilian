@@ -1,0 +1,60 @@
+........................................................................ [  5%]
+........................................................................ [ 10%]
+........................................................................ [ 16%]
+..
+warning: Using incompatible environment (`D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe`) due to `--no-sync` (The project environment's Python version does not satisfy the request: `Python 3.13`)
+Timeout (0:01:00)!
+Thread 0x000060bc (most recent call first):
+  File "D:\computerRequirements\uv\python\cpython-3.12-windows-x86_64-none\Lib\selectors.py", line 314 in _select
+  File "D:\computerRequirements\uv\python\cpython-3.12-windows-x86_64-none\Lib\selectors.py", line 323 in select
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\psycopg\waiting.py", line 141 in wait_conn
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\psycopg\connection.py", line 109 in connect
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\engine\default.py", line 630 in connect
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\engine\create.py", line 667 in connect
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 896 in __connect
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 674 in __init__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 389 in _create_connection
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\impl.py", line 176 in _do_get
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 712 in checkout
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 1290 in _checkout
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\pool\base.py", line 448 in connect
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\engine\base.py", line 3319 in raw_connection
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\engine\base.py", line 144 in __init__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\sqlalchemy\engine\base.py", line 3295 in connect
+  File "D:\code\Workspace\zhilian\backend\app\cli\context.py", line 310 in _probe_database
+  File "D:\code\Workspace\zhilian\backend\app\cli\context.py", line 164 in probe_infra
+  File "D:\code\Workspace\zhilian\backend\app\cli\commands\doctor.py", line 65 in handle
+  File "D:\code\Workspace\zhilian\backend\app\cli\main.py", line 131 in main
+  File "D:\code\Workspace\zhilian\backend\tests\unit\cli\test_doctor.py", line 104 in test_doctor_output_redacts_secrets
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\python.py", line 167 in pytest_pyfunc_call
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\python.py", line 1707 in runtest
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 184 in pytest_runtest_call
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 250 in <lambda>
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 361 in from_call
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 249 in call_and_report
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 139 in runtestprotocol
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\runner.py", line 118 in pytest_runtest_protocol
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\main.py", line 408 in pytest_runtestloop
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\main.py", line 384 in _main
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\main.py", line 330 in wrap_session
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\main.py", line 377 in pytest_cmdline_main
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_callers.py", line 121 in _multicall
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_manager.py", line 120 in _hookexec
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\pluggy\_hooks.py", line 512 in __call__
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\config\__init__.py", line 229 in _main
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Lib\site-packages\_pytest\config\__init__.py", line 253 in _console_main
+  File "D:\code\Workspace\zhilian\.trellis\.runtime\python312-probe\Scripts\pytest.exe\__main__.py", line 10 in <module>
+  File "<frozen runpy>", line 88 in _run_code
+  File "<frozen runpy>", line 198 in _run_module_as_main
