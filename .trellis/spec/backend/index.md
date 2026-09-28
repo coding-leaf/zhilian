@@ -16,7 +16,7 @@
 | Guide | 覆盖范围 | 事实源 | 最后核对 |
 | --- | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | 模块组织与文件布局、分层边界 | `backend/app/**`、`backend/pyproject.toml` | 2026-09-29 |
-| [Database Guidelines](./database-guidelines.md) | ORM 模式、查询、迁移、迁移一致性闸门 | `backend/app/models/**`、`backend/migrations/versions/**`、`backend/alembic.ini`、`backend/tests/unit/models/**` | 2026-09-29 |
+| [Database Guidelines](./database-guidelines.md) | ORM 模式、查询、DML 影响行数、迁移、迁移一致性闸门 | `backend/app/models/**`、`backend/app/repositories/**`、`backend/migrations/versions/**`、`backend/alembic.ini`、`backend/tests/unit/models/**` | 2026-09-29 |
 | [Error Handling](./error-handling.md) | 异常类型与处理策略 | `backend/app/core/errors.py`、`backend/app/api/**`、`backend/app/cli/errors.py` | 2026-09-28 |
 | [Quality Guidelines](./quality-guidelines.md) | 代码标准、禁止模式、质量门禁 | `backend/app/**`、`backend/tests/**`、`backend/migrations/**`、`backend/pyproject.toml` | 2026-09-29 |
 | [Logging Guidelines](./logging-guidelines.md) | 结构化日志与日志级别 | `backend/app/core/config.py`、`backend/app/**` | 2026-09-28 |

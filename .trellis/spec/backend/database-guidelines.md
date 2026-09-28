@@ -2,9 +2,9 @@
 
 > 本项目的数据库模式与约定（以真实模型、迁移与会话装配为准）。
 
-> **事实源**：`backend/app/models/*.py`、`backend/migrations/versions/*.py`、`backend/migrations/env.py`、`backend/alembic.ini`、`backend/app/api/deps/db.py`、`backend/app/container.py`
-> **最后核对**：2026-09-29 @ 90eed7f
-> **核对方式**：`rg "__tablename__|UniqueConstraint|Index|batch_alter_table" backend/app/models backend/migrations/versions`
+> **事实源**：`backend/app/models/*.py`、`backend/app/repositories/*.py`、`backend/migrations/versions/*.py`、`backend/migrations/env.py`、`backend/alembic.ini`、`backend/app/api/deps/db.py`、`backend/app/container.py`
+> **最后核对**：2026-09-29 @ c1d329d
+> **核对方式**：`rg "__tablename__|UniqueConstraint|Index|batch_alter_table" backend/app/models backend/migrations/versions`；`rg -n "isinstance\(result, CursorResult\)" backend/app/repositories`
 
 ---
 
@@ -46,9 +46,10 @@ rg -o '__tablename__ = "(\w+)"' -r '$1' backend/app/models
 - **批量预加载，禁止 N+1**：列表装配关联数据时用 `selectinload`（如列表装配版本用 `selectinload(Material.versions)`），或用一次分组查询批量取计数（`count_*_by_folder_ids`）。
 - **过滤下推 SQL**：错题多维过滤（`error_type` 等值、`question_snapshot["question_type"].as_string()`、`material_id` 经 `KnowledgePoint` JOIN）都在 DB 层完成，`list` 与 `count` 共享同一 WHERE；禁止内存 `limit=1000` 截断。
 - **批量写**：批量创建只 `add` + `flush()`，由外层统一 `commit()`，以保证跨实体单事务原子（见 quality-guidelines 的 Multi-Knowledge-Point / Course Folder Scope 场景）。
+- **条件更新（CAS）读影响行数**：并发条件更新 —— `update(...).where(id, user_id, from_status).values(to_status)` —— 判定「本次调用是否赢得跃迁」时，结果行数必须经 `isinstance(result, CursorResult)` 兜底后再读 `.rowcount`。原因：SQLAlchemy 2.0.54 的 `Session.execute` 重载只有 `TypedReturnsRows[_T] -> Result[_T]` 与 `Executable -> Result[Any]`，`Update`/`Delete` 不是 `TypedReturnsRows` 子类，只能落到后者，静态类型 `Result[Any]` 上**不存在** `rowcount`；而运行时返回的确实 `isinstance(..., CursorResult)` 为真，故兜底不改变行为，只消除类型缺口。版本依据与判别命令见 Common Mistakes。
 - 分页统一返回 `(items, total)`，`total` 必须为同过滤条件的真实全量计数。
 
-代码锚点：`backend/app/repositories/material.py::MaterialRepository.list_materials`、`backend/app/repositories/diagnosis.py::DiagnosisRepository.list_wrong_records`、`backend/app/repositories/diagnosis.py::DiagnosisRepository.count_wrong_records`、`backend/app/repositories/folder.py::FolderRepository.count_materials_by_folder_ids`、`backend/app/repositories/question.py::QuestionRepository.batch_create_questions`。
+代码锚点：`backend/app/repositories/material.py::MaterialRepository.list_materials`、`backend/app/repositories/diagnosis.py::DiagnosisRepository.list_wrong_records`、`backend/app/repositories/diagnosis.py::DiagnosisRepository.count_wrong_records`、`backend/app/repositories/folder.py::FolderRepository.count_materials_by_folder_ids`、`backend/app/repositories/question.py::QuestionRepository.batch_create_questions`、`backend/app/repositories/material.py::MaterialRepository.try_transition_version_status`、`backend/app/repositories/practice.py::PracticeRepository.try_transition_status`。
 
 ---
 
@@ -88,5 +89,23 @@ rg -o '__tablename__ = "(\w+)"' -r '$1' backend/app/models
 - **迁移未应用**：加完模型字段却忘了 `uv run alembic upgrade head`（或部署时漏跑）。测试套件用的是 `create_all` 照模型建表，**跑测试全绿也证明不了迁移生效**；这类漂移只在真实库上以 `UndefinedColumn` 运行时 500 暴露。自查见上文「漂移自查」。
 - **手抄状态清单**：把迁移链、表清单、版本号手抄进文档，会在下一次迁移时腐化（本文件第 66 行曾手抄迁移链并停在 `0008`）。文档里凡是可以由命令得出的状态，一律写命令而非写结果。
 - **绕过租户过滤**：仓储方法缺 `user_id` 条件会横向越权。
+- **直接在 `Session.execute()` 结果上取 `.rowcount`**：症状是 mypy strict 报 `[attr-defined] "Result[Any]" has no attribute "rowcount"`，并因属性访问报错后退化为 `Any`、再被 `warn_return_any` 捕获而连带报 `[no-any-return]`。**这不是运行时缺陷** —— 运行时返回对象确为 `CursorResult`，`.rowcount` 真实可用；缺口只在上游类型标注。判别命令：`rg "CursorResult" .venv/Lib/site-packages/sqlalchemy/orm/session.py` —— SQLAlchemy **2.0.38 存在** `execute(statement: UpdateBase) -> CursorResult[Any]` 重载，**2.0.54 已移除**（`Session.execute` 只剩 `TypedReturnsRows[_T] -> Result[_T]` 与 `Executable -> Result[Any]`），所以过去能过门禁的 `.rowcount` 现在会失败。
 
-代码锚点：`backend/app/repositories/knowledge.py::KnowledgeRepository.list_all_by_user_id`、`backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`、`backend/app/models/practice.py::PracticeStatus`、`backend/tests/unit/models/test_practice_migrations.py`。
+Wrong / Correct 对照（CAS 跃迁判定，返回「本次调用是否赢得跃迁」）：
+
+```python
+# Wrong —— mypy strict 报 attr-defined + no-any-return
+result = self.session.execute(stmt)
+self.session.flush()
+return result.rowcount == 1
+
+# Correct —— 仓库既有写法，兜底后读真实行数
+result = self.session.execute(stmt)
+self.session.flush()
+count = result.rowcount if isinstance(result, CursorResult) else 0
+return count == 1
+```
+
+注：`.execution_options(synchronize_session="fetch")` **不是**诱因 —— 加不加它，`Session.execute` 的静态类型都是 `Result[Any]`（已用 `reveal_type` 实测）。新增 DML 语句后若门禁报该错误，先按上面对照补兜底，不要改成 `cast()`：`cast()` 只让类型检查闭嘴，运行时毫不知情，一旦返回对象不是 `CursorResult` 就直接抛 `AttributeError`；而 isinstance 兜底在同样情形下回落为 `count = 0`（判定为「未赢得跃迁」），方向安全且与既有站点一致。本仓库运行时该兜底分支不会触发（实测恒为 `CursorResult`）。
+
+代码锚点：`backend/app/repositories/knowledge.py::KnowledgeRepository.list_all_by_user_id`、`backend/app/repositories/material.py::MaterialRepository.try_transition_version_status`、`backend/app/repositories/practice.py::PracticeRepository.try_transition_status`、`backend/app/repositories/grading.py::GradingRepository.update_final_flag`、`backend/app/repositories/user.py::UserRepository.soft_delete_user`、`backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`、`backend/app/models/practice.py::PracticeStatus`、`backend/tests/unit/models/test_practice_migrations.py`。
