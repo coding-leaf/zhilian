@@ -331,3 +331,26 @@
 - 09-28-question-source-snippet：R3「核对页展示来源」因后端题目响应从不返回切片正文而未达成，已挂账独立子任务
 - 人工验证外部条件：微信真机全链路、真实 Redis + RQ 的 worker 消费与重试耗尽回调、真实 LLM、对象存储头像上传、PostgreSQL 迁移与巡检 SQL
 - worker 存活探测未实现；前端 tests/** 不在 tsconfig 类型检查范围内（既有配置缺口）
+
+
+## Session 9: 迁移-模型一致性闸门与规范防腐
+<!-- trellis-session: v=2 fp=bbdc99ec515f9f7f -->
+
+**Date**: 2026-09-29
+**Task**: 迁移-模型一致性闸门与规范防腐
+**Branch**: `master`
+
+### Summary
+
+排查小程序登录 500：库 alembic 版本停在 0008 而代码已到 0009，SQLAlchemy 按模型生成的 SELECT 含 users.avatar_object_key 而该列不存在。以 uv run alembic upgrade head 修复，验证全库逐表逐列漂移比对为空且 /api/v1/auth/login 返回 200。根因是三层盲区：集成测试用 create_all 照模型建表、迁移测试只做单条 upgrade/downgrade 对称性、规范写了迁移约定却无执行者且其手抄迁移链自身已停在 0008。故新增离线一致性闸门测试（内存 SQLite 回放迁移链比对 Base.metadata 表/列集合，5 用例含反向验证与污染守卫），并修订 backend spec：补应用迁移 runbook 与漂移自查、把迁移链与表清单改为命令指路、新增 Scenario 沉淀两条不可从代码推导的认知（create_all 与单条迁移测试都测不出全链漂移；Base 全局共享致测试替身污染模型侧集合，单文件跑通过而全量失败）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `91d5623` | test(backend): 新增迁移-模型一致性闸门，拦截模型/迁移漂移 |
+| `a109685` | docs(spec): 补迁移应用 runbook 并移除会腐化的手抄迁移链与表清单 |
+
+### Status
+
+[OK] **Completed**
