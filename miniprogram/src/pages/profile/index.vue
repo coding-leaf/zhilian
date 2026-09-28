@@ -2,7 +2,7 @@
   <view class="profile-container">
     <!-- 用户信息卡片 -->
     <view class="paper-card profile-card">
-      <view class="avatar-box" @tap="openEditModal">
+      <view class="avatar-box" @tap="chooseAvatar">
         <image
           v-if="authStore.user?.avatar_url"
           class="avatar-image"
@@ -77,12 +77,8 @@
             />
           </view>
           <view class="form-item">
-            <text class="form-label">头像链接 (URL)</text>
-            <input
-              v-model="editAvatarUrl"
-              class="form-input"
-              placeholder="请输入头像图片地址或保持默认"
-            />
+            <text class="form-label">头像</text>
+            <button class="avatar-select-btn" :loading="isUploadingAvatar" @tap="chooseAvatar">选择图片</button>
           </view>
         </view>
         <view class="modal-footer">
@@ -104,14 +100,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useFolderStore } from '@/stores/folder'
+import { uploadFile } from '@/utils/request'
 
 const authStore = useAuthStore()
 const folderStore = useFolderStore()
 
 const showEditModal = ref(false)
 const editNickname = ref('')
-const editAvatarUrl = ref('')
 const isSaving = ref(false)
+const isUploadingAvatar = ref(false)
 
 const readyMaterialCount = computed(() => {
   return folderStore.folders.reduce((acc, f) => acc + (f.ready_material_count || 0), 0)
@@ -136,8 +133,30 @@ const openEditModal = () => {
     return
   }
   editNickname.value = authStore.user?.nickname || ''
-  editAvatarUrl.value = authStore.user?.avatar_url || ''
   showEditModal.value = true
+}
+
+const chooseAvatar = () => {
+  if (!authStore.isLoggedIn()) return goToLogin()
+  uni.chooseImage({
+    count: 1,
+    sizeType: ['compressed'],
+    sourceType: ['album', 'camera'],
+    success: async ({ tempFilePaths }) => {
+      const path = tempFilePaths[0]
+      if (!path) return
+      isUploadingAvatar.value = true
+      try {
+        const profile = await uploadFile<{ avatar_url: string }>(path, 'file', undefined, '/users/me/avatar')
+        authStore.user = { ...authStore.user!, avatar_url: profile.avatar_url }
+        uni.showToast({ title: '头像已更新', icon: 'success' })
+      } catch {
+        uni.showToast({ title: '头像上传失败，原头像已保留', icon: 'none' })
+      } finally {
+        isUploadingAvatar.value = false
+      }
+    },
+  })
 }
 
 const closeEditModal = () => {
@@ -153,7 +172,6 @@ const handleSaveProfile = async () => {
   try {
     await authStore.updateProfile({
       nickname: editNickname.value.trim(),
-      avatar_url: editAvatarUrl.value.trim() || undefined,
     })
     uni.showToast({ title: '修改成功', icon: 'success' })
     closeEditModal()
@@ -167,6 +185,7 @@ const handleSaveProfile = async () => {
 const goToLogin = () => {
   uni.navigateTo({
     url: '/pages/auth/login',
+    fail: () => uni.showToast({ title: '打开登录页失败', icon: 'none' }),
   })
 }
 
@@ -382,6 +401,16 @@ const handleLogout = () => {
   border-radius: 8rpx;
   padding: 0 16rpx;
   font-size: 26rpx;
+}
+
+.avatar-select-btn {
+  height: 68rpx;
+  margin: 0;
+  padding: 0 20rpx;
+  font-size: 24rpx;
+  color: #245c51;
+  background: #eef7f4;
+  border-radius: 8rpx;
 }
 
 .modal-footer {

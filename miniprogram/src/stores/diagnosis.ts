@@ -1,40 +1,57 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { DiagnosisReport } from '@/types'
-import { apiGetDiagnosisReport, apiTriggerDiagnosis } from '@/api'
+import { apiGetPracticeSession, apiTriggerDiagnosis } from '@/api'
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export const useDiagnosisStore = defineStore('diagnosis', () => {
   const currentReport = ref<DiagnosisReport | null>(null)
   const isLoading = ref<boolean>(false)
+  /** 全卷尚未判完，正式诊断还不存在（结果页显示“判题中”）。 */
+  const isPending = ref<boolean>(false)
 
-  // 获取诊断报告（若未生成则触发并轮询）
-  const loadReport = async (practiceId: string, maxAttempts = 10): Promise<DiagnosisReport> => {
+  /**
+   * 正式诊断只在全卷真正判完（completed_at 落库 + status=completed）后请求。
+   * 未判完时返回 null，由结果页展示逐题判题进度，不展示伪造的零分报告。
+   */
+  const loadReport = async (
+    practiceId: string,
+    maxAttempts = 15,
+    intervalMs = 2000,
+  ): Promise<DiagnosisReport | null> => {
     isLoading.value = true
+    isPending.value = false
     try {
-      for (let i = 0; i < maxAttempts; i++) {
-        try {
-          const report = await apiGetDiagnosisReport(practiceId)
-          if (report && report.details && report.details.length > 0) {
-            currentReport.value = report
-            return report
-          }
-        } catch {
-          // 首次未生成，尝试触发一次
-          if (i === 0) {
-            await apiTriggerDiagnosis(practiceId).catch(() => {})
-          }
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const session = await apiGetPracticeSession(practiceId)
+        const fullyGraded = Boolean(session.completed_at) && session.status === 'completed'
+        if (fullyGraded) {
+          // 后端不会在判题完成时自动生成报告；确认全卷判完后按幂等语义触发生成/取回
+          const report = await apiTriggerDiagnosis(practiceId)
+          currentReport.value = report
+          isPending.value = false
+          return report
         }
-        await new Promise((r) => setTimeout(r, 1500))
+        isPending.value = true
+        await sleep(intervalMs)
       }
-      throw new Error('学情报告生成中，请下拉刷新')
+      return null
     } finally {
       isLoading.value = false
     }
   }
 
+  const reset = () => {
+    currentReport.value = null
+    isPending.value = false
+  }
+
   return {
     currentReport,
     isLoading,
+    isPending,
     loadReport,
+    reset,
   }
 })

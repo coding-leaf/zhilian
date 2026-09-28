@@ -1,4 +1,17 @@
-const BASE_URL = 'http://localhost:8000/api/v1'
+export const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
+
+function handleUnauthorized(): void {
+  uni.removeStorageSync('access_token')
+  void import('@/stores/auth').then(({ useAuthStore }) => {
+    const auth = useAuthStore()
+    auth.clearAuth()
+  })
+  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+  uni.reLaunch({
+    url: '/pages/auth/login',
+    fail: () => uni.showToast({ title: '请手动打开登录页', icon: 'none' }),
+  })
+}
 
 export interface RequestOptions {
   url: string
@@ -15,7 +28,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
     ...options.header,
   }
 
-  const fullUrl = options.url.startsWith('http') ? options.url : `${BASE_URL}${options.url}`
+  const fullUrl = options.url.startsWith('http') ? options.url : `${API_BASE_URL}${options.url}`
 
   return new Promise((resolve, reject) => {
     uni.request({
@@ -33,12 +46,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
             resolve(body as T)
           }
         } else if (res.statusCode === 401) {
-          uni.removeStorageSync('access_token')
-          uni.showToast({
-            title: '登录已过期，请重新登录',
-            icon: 'none',
-          })
-          uni.navigateTo({ url: '/pages/auth/login' })
+          handleUnauthorized()
           reject(new Error('Unauthorized'))
         } else {
           const errData = res.data as any
@@ -61,7 +69,12 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
   })
 }
 
-export function uploadFile<T = any>(filePath: string, name: string = 'file', formData?: Record<string, any>): Promise<T> {
+export function uploadFile<T = any>(
+  filePath: string,
+  name: string = 'file',
+  formData?: Record<string, any>,
+  endpoint: string = '/materials/upload'
+): Promise<T> {
   const token = uni.getStorageSync('access_token')
   const header: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -69,7 +82,7 @@ export function uploadFile<T = any>(filePath: string, name: string = 'file', for
 
   return new Promise((resolve, reject) => {
     uni.uploadFile({
-      url: `${BASE_URL}/materials/upload`,
+      url: `${API_BASE_URL}${endpoint}`,
       filePath,
       name,
       formData,
@@ -86,6 +99,9 @@ export function uploadFile<T = any>(filePath: string, name: string = 'file', for
           } catch {
             resolve(res.data as any)
           }
+        } else if (res.statusCode === 401) {
+          handleUnauthorized()
+          reject(new Error('Unauthorized'))
         } else {
           uni.showToast({
             title: '上传失败，请重试',

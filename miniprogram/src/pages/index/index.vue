@@ -49,6 +49,10 @@
           </view>
         </view>
       </scroll-view>
+      <view v-if="activeFolderDetail" class="folder-actions">
+        <text class="folder-action" @tap="openRenameFolder">重命名课程</text>
+        <text class="folder-action folder-action-danger" @tap="confirmArchiveFolder">归档课程</text>
+      </view>
     </view>
 
     <!-- 资料快速导入入口 Card -->
@@ -97,8 +101,8 @@
       >
         <view class="card-header">
           <text class="material-name">{{ item.title || '无标题资料' }}</text>
-          <view :class="['status-badge', `status-${item.status.toLowerCase()}`]">
-            {{ getStatusText(item.status) }}
+          <view :class="['status-badge', `status-${item.status}`]">
+            {{ getStatusText(item) }}
           </view>
         </view>
 
@@ -109,22 +113,21 @@
         </view>
 
         <view class="card-footer">
-          <!-- 状态为 WAITING 或 FAILED 时允许手动触发解析 -->
           <button
-            v-if="item.status === 'WAITING' || item.status === 'FAILED'"
+            v-if="canStartMaterialParse(item) || item.status === 'failed'"
             class="manual-parse-btn"
             @tap.stop="handleManualParse(item)"
           >
-            {{ item.status === 'FAILED' ? '重试解析' : '开始解析' }}
+            {{ item.status === 'failed' ? '重试解析' : '开始解析' }}
           </button>
 
-          <view v-else-if="item.status === 'PROCESSING'" class="processing-hint">
+          <view v-else-if="isMaterialParsing(item)" class="processing-hint">
             <text class="spinner-icon">⌛</text>
             <text class="hint-text">正在抽取考点拓扑...</text>
           </view>
 
           <!-- 已解析状态：知识树学习与出题入口 -->
-          <view v-else-if="item.status === 'PARSED'" class="ready-actions">
+          <view v-else-if="item.status === 'ready'" class="ready-actions">
             <text class="action-link-study" @tap.stop="goToDetail(item)">知识图谱 →</text>
             <text class="action-link-practice" @tap.stop="goToQuestions(item)">智能出题 →</text>
           </view>
@@ -147,13 +150,14 @@
       v-model:visible="showCoachDrawer"
       title="课程随身助教"
       :context-text="coachContextText"
+      :folder-id="activeFolderDetail?.id"
     />
 
     <!-- 新建课程弹窗 -->
     <view v-if="showFolderModal" class="modal-overlay" @tap.self="closeFolderModal">
       <view class="modal-content paper-card">
         <view class="modal-header">
-          <text class="modal-title">新建课程文件夹</text>
+          <text class="modal-title">{{ folderToRename ? '重命名课程' : '新建课程文件夹' }}</text>
           <text class="modal-close" @tap="closeFolderModal">✕</text>
         </view>
         <view class="modal-body">
@@ -161,7 +165,7 @@
             v-model="newFolderName"
             class="folder-input"
             :maxlength="30"
-            placeholder="例如：概率论与数理统计、操作系统"
+            :placeholder="folderToRename?.name || '例如：概率论与数理统计、操作系统'"
           />
         </view>
         <view class="modal-footer">
@@ -171,7 +175,7 @@
             :loading="isCreatingFolder"
             @tap="handleCreateFolder"
           >
-            创建
+            {{ folderToRename ? '保存' : '创建' }}
           </button>
         </view>
       </view>
@@ -186,6 +190,7 @@ import { useMaterialStore } from '@/stores/material'
 import { useAuthStore } from '@/stores/auth'
 import { useFolderStore } from '@/stores/folder'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
+import { canStartMaterialParse, isMaterialParsing, materialStatusText as getStatusText } from '@/utils/materialState'
 import type { MaterialItem } from '@/types'
 
 const materialStore = useMaterialStore()
@@ -194,6 +199,7 @@ const folderStore = useFolderStore()
 
 const showFolderModal = ref(false)
 const newFolderName = ref('')
+const folderToRename = ref<{ id: string; name: string } | null>(null)
 const isCreatingFolder = ref(false)
 const showCoachDrawer = ref(false)
 
@@ -246,6 +252,7 @@ const refreshMaterials = () => {
 }
 
 const openCreateFolderModal = () => {
+  folderToRename.value = null
   newFolderName.value = ''
   showFolderModal.value = true
 }
@@ -262,8 +269,10 @@ const handleCreateFolder = async () => {
   }
   isCreatingFolder.value = true
   try {
-    const f = await folderStore.createFolder(name)
-    uni.showToast({ title: '创建成功', icon: 'success' })
+    const f = folderToRename.value
+      ? await folderStore.renameFolder(folderToRename.value.id, name)
+      : await folderStore.createFolder(name)
+    uni.showToast({ title: folderToRename.value ? '课程已重命名' : '创建成功', icon: 'success' })
     closeFolderModal()
     await switchFolder(f.id)
   } catch (err: any) {
@@ -273,20 +282,31 @@ const handleCreateFolder = async () => {
   }
 }
 
-const getStatusText = (status: string) => {
-  switch (status) {
-    case 'PARSED':
-      return '已解析'
-    case 'PROCESSING':
-      return '解析中'
-    case 'FAILED':
-      return '失败'
-    default:
-      return '待解析'
-  }
+const openRenameFolder = () => {
+  if (!activeFolderDetail.value) return
+  folderToRename.value = { id: activeFolderDetail.value.id, name: activeFolderDetail.value.name }
+  newFolderName.value = activeFolderDetail.value.name
+  showFolderModal.value = true
+}
+
+const confirmArchiveFolder = () => {
+  if (!activeFolderDetail.value) return
+  const folder = activeFolderDetail.value
+  uni.showModal({
+    title: '归档课程',
+    content: `归档「${folder.name}」？课程资料仍会保留。`,
+    confirmColor: '#b91c1c',
+    success: async ({ confirm }) => {
+      if (!confirm) return
+      await folderStore.archiveFolder(folder.id)
+      await materialStore.loadMaterialList('all')
+      uni.showToast({ title: '课程已归档', icon: 'success' })
+    },
+  })
 }
 
 const handleManualParse = async (item: MaterialItem) => {
+  if (!canStartMaterialParse(item) && item.status !== 'failed') return
   uni.showLoading({ title: '启动流水线...' })
   try {
     await materialStore.triggerParse(item.id)
@@ -352,12 +372,14 @@ const handleChooseFile = () => {
 const goToDetail = (item: MaterialItem) => {
   uni.navigateTo({
     url: `/subpackages/material/pages/course/index?id=${item.id}`,
+    fail: () => uni.showToast({ title: '打开讲义失败，请重试', icon: 'none' }),
   })
 }
 
 const goToQuestions = (item: MaterialItem) => {
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?material_id=${item.id}`,
+    fail: () => uni.showToast({ title: '打开出题页失败，请重试', icon: 'none' }),
   })
 }
 
@@ -365,6 +387,7 @@ const goToCourseGenerate = () => {
   if (!activeFolderDetail.value) return
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?folder_id=${activeFolderDetail.value.id}`,
+    fail: () => uni.showToast({ title: '打开出题页失败，请重试', icon: 'none' }),
   })
 }
 
@@ -375,6 +398,7 @@ const openGlobalCoach = () => {
 const goToLogin = () => {
   uni.navigateTo({
     url: '/pages/auth/login',
+    fail: () => uni.showToast({ title: '打开登录页失败', icon: 'none' }),
   })
 }
 </script>
@@ -481,6 +505,22 @@ const goToLogin = () => {
   display: inline-flex;
   gap: 16rpx;
   padding: 4rpx 0;
+}
+
+.folder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 28rpx;
+  padding: 14rpx 4rpx 0;
+}
+
+.folder-action {
+  color: #245c51;
+  font-size: 23rpx;
+}
+
+.folder-action-danger {
+  color: #b91c1c;
 }
 
 .folder-tab-pill {
@@ -631,12 +671,12 @@ const goToLogin = () => {
   border-radius: 6rpx;
 }
 
-.status-parsed {
+.status-ready {
   background: #ecfdf5;
   color: #059669;
 }
 
-.status-processing {
+.status-parsing {
   background: #fffbeb;
   color: #d97706;
 }
@@ -646,7 +686,7 @@ const goToLogin = () => {
   color: #dc2626;
 }
 
-.status-waiting {
+.status-pending {
   background: #f5f5f4;
   color: #78716c;
 }

@@ -1,15 +1,12 @@
 <template>
   <view class="review-container">
-    <!-- 头部掌握度与学情统计 -->
     <view class="paper-card summary-card">
-      <view class="summary-header">
-        <text class="title">学情全景与错题巩固</text>
-        <text class="subtitle">艾宾浩斯抗遗忘追踪 · 错题举一反三闭环</text>
-      </view>
+      <text class="title">学情全景与错题巩固</text>
+      <text class="subtitle">按课程归类错题 · 举一反三巩固闭环</text>
 
       <view class="stats-row">
         <view class="stat-col">
-          <text class="stat-num">{{ wrongRecords.length }}</text>
+          <text class="stat-num">{{ pendingCount }}</text>
           <text class="stat-lbl">待攻克错题</text>
         </view>
         <view class="stat-divider" />
@@ -17,337 +14,239 @@
           <text class="stat-num mastered-num">{{ masteredCount }}</text>
           <text class="stat-lbl">已消灭错题</text>
         </view>
+        <view class="stat-divider" />
+        <view class="stat-col">
+          <text class="stat-num material-num">{{ groupOptions.length }}</text>
+          <text class="stat-lbl">归属范围</text>
+        </view>
       </view>
     </view>
 
-    <!-- 一键针对性组卷行动卡 -->
-    <view v-if="unmasteredKpIds.length > 0" class="paper-card action-card">
-      <view class="action-info">
-        <text class="action-title">🚀 错题薄弱点举一反三</text>
-        <text class="action-desc">聚合了 {{ unmasteredKpIds.length }} 个薄弱知识点，点击一键由 AI 再生题目巩固测验</text>
+    <template v-if="practices.length">
+      <view class="section-title-row">
+        <text class="section-title">我的练习</text>
+        <text class="section-refresh" @tap="loadPractices">刷新</text>
       </view>
-      <button
-        class="paper-btn-primary quick-gen-btn"
-        :loading="isGenerating"
-        @tap="handleBatchRegenerate"
-      >
+      <PracticeEntryCard
+        v-for="practice in practices"
+        :key="practice.id"
+        :practice="practice"
+        @open="openPractice"
+      />
+    </template>
+
+    <view class="section-title-row">
+      <text class="section-title">错题巩固</text>
+      <text class="section-refresh" @tap="loadWrongs">刷新</text>
+    </view>
+
+    <view v-if="groupOptions.length" class="group-scroll">
+      <scroll-view scroll-x class="group-scroll" :show-scrollbar="false">
+        <view class="group-tabs">
+          <view
+            v-for="option in groupOptions"
+            :key="option.key"
+            :class="['group-chip', selectedGroupKey === option.key ? 'active' : '']"
+            @tap="selectGroup(option.key)"
+          >
+            <text class="group-chip-text">{{ option.label }}</text>
+            <text class="group-chip-count">{{ option.count }}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view v-if="needsGroupChoice" class="paper-card">
+      <text class="action-desc">错题涉及多个课程，请先选择要巩固的课程或资料范围。</text>
+    </view>
+
+    <view v-if="activeGroup && activeKpIds.length > 0 && activeScopeReady" class="paper-card action-card">
+      <view class="action-info">
+        <text class="action-title">错题薄弱点举一反三</text>
+        <text class="action-desc">
+          汇总「{{ activeGroup.label }}」下 {{ activeKpIds.length }} 个薄弱考点，可一键再生题目巩固。
+        </text>
+      </view>
+      <button class="paper-btn-primary quick-gen-btn" :loading="isGenerating" @tap="handleBatchRegenerate">
         立即巩固
       </button>
     </view>
 
-    <!-- 错题本列表 -->
-    <view class="section-title-row">
-      <text class="section-title">错题记录本</text>
-      <text class="section-refresh" @tap="loadWrongs">刷新</text>
+    <view v-if="activeGroup && !activeScopeReady" class="paper-card">
+      <text class="action-desc">该范围内的资料尚未归属课程，暂时无法再生题，请先将资料归入课程。</text>
     </view>
 
     <view class="wrong-list">
-      <view
-        v-for="item in wrongRecords"
-        :key="item.id"
-        class="paper-card wrong-item-card"
-      >
-        <view class="item-header">
-          <view class="kp-tag">
-            <text class="kp-text">{{ item.knowledge_point_name || '核心考点' }}</text>
-          </view>
-          <view :class="['mastered-badge', item.is_mastered ? 'is-mastered' : 'unmastered']">
-            {{ item.is_mastered ? '已攻克' : '待巩固' }}
-          </view>
-        </view>
-
-        <text class="item-stem">{{ item.question?.stem || '错题题目快照' }}</text>
-
-        <view class="item-footer">
-          <text class="item-date">记录于：{{ item.created_at?.slice(0, 10) || '近期' }}</text>
-          <button
-            class="single-gen-btn"
-            @tap="handleSingleKpPractice(item.knowledge_point_id)"
-          >
-            针对本考点出题 →
-          </button>
-        </view>
-      </view>
-
-      <view v-if="wrongRecords.length === 0" class="empty-state">
-        <text class="empty-text">太棒了！当前没有错题记录，继续保持！</text>
+      <WrongRecordCard
+        v-for="record in visibleRecords"
+        :key="record.id"
+        :record="record"
+        @practice="handleSingleKpPractice"
+      />
+      <view v-if="visibleRecords.length === 0" class="empty-state">
+        <text class="empty-text">
+          {{ isLoadingWrongs ? '正在加载错题...' : '太棒了！当前范围内没有待巩固的错题。' }}
+        </text>
       </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { onPullDownRefresh } from '@dcloudio/uni-app'
 import { apiListWrongRecords } from '@/api'
+import {
+  buildWrongGroupOptions,
+  recordsInGroup,
+  resolveRegenerateScope,
+  type WrongGroupOption,
+} from '@/api/adapters/wrong'
 import { usePracticeStore } from '@/stores/practice'
-import type { WrongRecordItem } from '@/types'
+import type { PracticeSummary, WrongRecordItem } from '@/types'
+import WrongRecordCard from './components/WrongRecordCard.vue'
+import PracticeEntryCard from './components/PracticeEntryCard.vue'
+import {
+  groupKnowledgePointIds,
+  hasScope,
+  isResumeable,
+  recordRegenerateScope,
+} from './reviewView'
 
 const practiceStore = usePracticeStore()
+
 const wrongRecords = ref<WrongRecordItem[]>([])
+const groupOptions = ref<WrongGroupOption[]>([])
+const selectedGroupKey = ref('')
+const practices = ref<PracticeSummary[]>([])
+const isLoadingWrongs = ref(false)
 const isGenerating = ref(false)
 
-const masteredCount = computed(() => {
-  return wrongRecords.value.filter((r) => r.is_mastered).length
+const PAGE_SIZE = 50
+const MAX_PAGES = 6
+
+const masteredCount = computed(() => wrongRecords.value.filter((item) => item.is_mastered).length)
+const pendingCount = computed(() => wrongRecords.value.filter((item) => !item.is_mastered).length)
+
+const activeGroup = computed<WrongGroupOption | null>(() => {
+  return groupOptions.value.find((option) => option.key === selectedGroupKey.value) || null
 })
 
-const unmasteredKpIds = computed(() => {
-  const ids = new Set<string>()
-  for (const r of wrongRecords.value) {
-    if (!r.is_mastered && r.knowledge_point_id) {
-      ids.add(r.knowledge_point_id)
-    }
-  }
-  return Array.from(ids)
+const needsGroupChoice = computed(() => groupOptions.value.length > 1 && !activeGroup.value)
+
+const visibleRecords = computed(() => {
+  if (!activeGroup.value) return wrongRecords.value
+  return recordsInGroup(wrongRecords.value, activeGroup.value)
+})
+
+const activeKpIds = computed(() => groupKnowledgePointIds(visibleRecords.value, activeGroup.value))
+
+const activeScopeReady = computed(() => {
+  const scope = resolveRegenerateScope(activeGroup.value)
+  return Boolean(scope && hasScope(scope))
 })
 
 const loadWrongs = async () => {
+  isLoadingWrongs.value = true
   try {
-    const res = await apiListWrongRecords({ page_size: 50 })
-    wrongRecords.value = res.items || []
-  } catch (err) {
-    console.error('Failed to load wrong records', err)
+    const collected: WrongRecordItem[] = []
+    let total = 0
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const res = await apiListWrongRecords({ page, page_size: PAGE_SIZE })
+      collected.push(...(res.items || []))
+      total = res.total ?? collected.length
+      if (page === 1) {
+        groupOptions.value = buildWrongGroupOptions(res.groups || [])
+      }
+      if (collected.length >= total) break
+    }
+    wrongRecords.value = collected
+    if (groupOptions.value.length === 1) {
+      selectedGroupKey.value = groupOptions.value[0].key
+    } else if (!groupOptions.value.some((option) => option.key === selectedGroupKey.value)) {
+      selectedGroupKey.value = ''
+    }
+  } catch (error) {
+    console.error('Failed to load wrong records', error)
+  } finally {
+    isLoadingWrongs.value = false
   }
 }
 
-onMounted(() => {
-  loadWrongs()
+const loadPractices = async () => {
+  try {
+    practices.value = await practiceStore.loadPractices(undefined, 10)
+  } catch (error) {
+    console.error('Failed to load practices', error)
+  }
+}
+
+onMounted(async () => {
+  await Promise.all([loadWrongs(), loadPractices()])
 })
 
 onPullDownRefresh(async () => {
-  await loadWrongs()
+  await Promise.all([loadWrongs(), loadPractices()])
   uni.stopPullDownRefresh()
 })
 
-const handleBatchRegenerate = async () => {
-  const kpIds = unmasteredKpIds.value
-  if (kpIds.length === 0) return
+const selectGroup = (key: string) => {
+  selectedGroupKey.value = key
+}
+
+const navigateToSession = (practiceId: string) => {
+  uni.navigateTo({
+    url: `/subpackages/practice/pages/session/index?practice_id=${practiceId}`,
+    fail: () => uni.showToast({ title: '打开练习失败，请重试', icon: 'none' }),
+  })
+}
+
+const openPractice = (practice: PracticeSummary) => {
+  if (isResumeable(practice)) {
+    navigateToSession(practice.id)
+    return
+  }
+  uni.navigateTo({
+    url: `/subpackages/report/pages/detail/index?practice_id=${practice.id}`,
+    fail: () => uni.showToast({ title: '打开结果页失败，请重试', icon: 'none' }),
+  })
+}
+
+const runRegenerate = async (kpIds: string[], scope: { folderId?: string; materialId?: string }) => {
   isGenerating.value = true
-  uni.showLoading({ title: 'AI 举一反三组卷中...' })
+  uni.showLoading({ title: '生成中...' })
   try {
-    const session = await practiceStore.regenerateFromWrongPoints(kpIds)
+    const { session, coverage } = await practiceStore.regenerateFromWrongPoints(kpIds, scope)
     uni.hideLoading()
-    uni.navigateTo({
-      url: `/subpackages/practice/pages/session/index?practice_id=${session.id}`,
-    })
-  } catch (err: any) {
+    if (coverage.missing.length > 0) {
+      uni.showToast({ title: `仍有 ${coverage.missing.length} 个考点未覆盖`, icon: 'none' })
+    }
+    navigateToSession(session.id)
+  } catch (error: any) {
     uni.hideLoading()
-    uni.showToast({ title: err?.message || '生成失败', icon: 'none' })
+    uni.showToast({ title: error?.message || '生成失败', icon: 'none' })
   } finally {
     isGenerating.value = false
   }
 }
 
-const handleSingleKpPractice = async (kpId?: string) => {
-  if (!kpId) return
-  uni.showLoading({ title: 'AI 出题中...' })
-  try {
-    const session = await practiceStore.regenerateFromWrongPoints([kpId])
-    uni.hideLoading()
-    uni.navigateTo({
-      url: `/subpackages/practice/pages/session/index?practice_id=${session.id}`,
-    })
-  } catch (err: any) {
-    uni.hideLoading()
-    uni.showToast({ title: err?.message || '出题失败', icon: 'none' })
+const handleBatchRegenerate = async () => {
+  const scope = resolveRegenerateScope(activeGroup.value)
+  if (!scope || !activeKpIds.value.length) return
+  await runRegenerate(activeKpIds.value, scope)
+}
+
+const handleSingleKpPractice = async (record: WrongRecordItem) => {
+  if (!record.knowledge_point_id) return
+  const scope = recordRegenerateScope(record)
+  if (!hasScope(scope)) {
+    uni.showToast({ title: '该错题所属资料未归属课程，暂时无法出题', icon: 'none' })
+    return
   }
+  await runRegenerate([record.knowledge_point_id], scope)
 }
 </script>
 
-<style scoped>
-.review-container {
-  padding: 32rpx;
-  min-height: 100vh;
-}
-
-.summary-card {
-  padding: 36rpx 32rpx;
-  margin-bottom: 28rpx;
-}
-
-.title {
-  display: block;
-  font-size: 36rpx;
-  font-weight: 700;
-  color: #1c1917;
-  margin-bottom: 8rpx;
-}
-
-.subtitle {
-  font-size: 24rpx;
-  color: #78716c;
-  display: block;
-  margin-bottom: 24rpx;
-}
-
-.stats-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  padding-top: 20rpx;
-  border-top: 1px solid #f5f5f4;
-}
-
-.stat-col {
-  text-align: center;
-}
-
-.stat-num {
-  font-size: 44rpx;
-  font-weight: 700;
-  color: #b91c1c;
-  display: block;
-}
-
-.mastered-num {
-  color: #059669;
-}
-
-.stat-lbl {
-  font-size: 24rpx;
-  color: #78716c;
-  margin-top: 4rpx;
-}
-
-.stat-divider {
-  width: 1px;
-  height: 48rpx;
-  background: #e7e5e4;
-}
-
-.action-card {
-  padding: 28rpx 32rpx;
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
-  border: 1px solid #bfdbfe;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 32rpx;
-}
-
-.action-info {
-  flex: 1;
-  margin-right: 16rpx;
-}
-
-.action-title {
-  font-size: 28rpx;
-  font-weight: 700;
-  color: #1e3a8a;
-  display: block;
-  margin-bottom: 6rpx;
-}
-
-.action-desc {
-  font-size: 22rpx;
-  color: #3b82f6;
-  line-height: 1.4;
-  display: block;
-}
-
-.quick-gen-btn {
-  height: 72rpx;
-  font-size: 26rpx;
-  padding: 0 24rpx;
-}
-
-.section-title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20rpx;
-  padding: 0 4rpx;
-}
-
-.section-title {
-  font-size: 32rpx;
-  font-weight: 700;
-  color: #1c1917;
-}
-
-.section-refresh {
-  font-size: 24rpx;
-  color: #78716c;
-}
-
-.wrong-item-card {
-  padding: 28rpx 30rpx;
-  margin-bottom: 20rpx;
-}
-
-.item-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12rpx;
-}
-
-.kp-tag {
-  background: rgba(30, 58, 138, 0.08);
-  padding: 4rpx 14rpx;
-  border-radius: 6rpx;
-}
-
-.kp-text {
-  font-size: 22rpx;
-  color: #1e3a8a;
-  font-weight: 600;
-}
-
-.mastered-badge {
-  font-size: 20rpx;
-  padding: 2rpx 10rpx;
-  border-radius: 4rpx;
-}
-
-.is-mastered {
-  background: #ecfdf5;
-  color: #059669;
-}
-
-.unmastered {
-  background: #fef2f2;
-  color: #dc2626;
-}
-
-.item-stem {
-  display: block;
-  font-size: 28rpx;
-  color: #1c1917;
-  line-height: 1.5;
-  margin-bottom: 16rpx;
-}
-
-.item-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-top: 1px dashed #f5f5f4;
-  padding-top: 14rpx;
-}
-
-.item-date {
-  font-size: 22rpx;
-  color: #a8a29e;
-}
-
-.single-gen-btn {
-  font-size: 24rpx;
-  color: #1e3a8a;
-  background: transparent;
-  padding: 0;
-  margin: 0;
-  line-height: 1;
-}
-
-.empty-state {
-  text-align: center;
-  padding: 80rpx 0;
-}
-
-.empty-text {
-  font-size: 26rpx;
-  color: #a8a29e;
-}
+<style lang="scss" scoped>
+@import './review.scss';
 </style>
-

@@ -31,6 +31,25 @@
               <text class="next-prompt-label">💡 启发延伸：</text>
               <text class="next-prompt-text">{{ msg.prompt }}</text>
             </view>
+            <view v-if="msg.suggestions?.length" class="suggestions-list">
+              <text
+                v-for="suggestion in msg.suggestions"
+                :key="suggestion"
+                class="suggestion-item"
+                @tap="inputQuery = suggestion"
+              >
+                {{ suggestion }}
+              </text>
+            </view>
+            <view v-if="msg.sources?.length" class="sources-list">
+              <text class="sources-title">参考资料</text>
+              <view v-for="source in msg.sources" :key="source.snippet_id" class="source-item">
+                <text class="source-link" @tap="openSource(source.material_id)">
+                  {{ source.chapter_title || '打开来源讲义' }} ↗
+                </text>
+                <text class="source-excerpt">{{ source.excerpt }}</text>
+              </view>
+            </view>
           </view>
         </view>
 
@@ -64,12 +83,15 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { apiAskQuestionCoach } from '@/api'
+import { apiAskQuestionCoach, apiAskScopedCoach } from '@/api'
+import type { CoachSource } from '@/types'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   prompt?: string
+  suggestions?: string[]
+  sources?: CoachSource[]
 }
 
 const props = defineProps<{
@@ -79,6 +101,9 @@ const props = defineProps<{
   contextText?: string
   userAnswer?: string
   gradingPoints?: string[]
+  folderId?: string
+  materialId?: string
+  knowledgePointId?: string
 }>()
 
 const emit = defineEmits<{
@@ -87,12 +112,7 @@ const emit = defineEmits<{
 
 const inputQuery = ref('')
 const isThinking = ref(false)
-const messageList = ref<ChatMessage[]>([
-  {
-    role: 'assistant',
-    content: '你好！我是你的专属 AI 助教。关于本题或考点，如果有任何不理解的步骤、易混淆概念或思路疑问，欢迎随时提问！',
-  },
-])
+const messageList = ref<ChatMessage[]>([])
 
 const closeDrawer = () => {
   emit('update:visible', false)
@@ -117,17 +137,23 @@ const handleSend = async () => {
         props.userAnswer,
         props.gradingPoints
       )
-      messageList.value.push({
-        role: 'assistant',
-        content: res.coach_reply,
-        prompt: res.next_thought_prompt,
-      })
+      messageList.value.push({ role: 'assistant', content: res.reply, suggestions: res.suggestions })
     } else {
-      // 课程/知识点级通用启发答疑
+      if (!props.folderId && !props.materialId && !props.knowledgePointId) {
+        messageList.value.push({ role: 'assistant', content: '请先选择一门课程或打开一份讲义，再向助教提问。' })
+        return
+      }
+      const response = await apiAskScopedCoach({
+        ...(props.folderId ? { folder_id: props.folderId } : {}),
+        ...(props.materialId ? { material_id: props.materialId } : {}),
+        ...(props.knowledgePointId ? { knowledge_point_id: props.knowledgePointId } : {}),
+        user_prompt: q,
+      })
       messageList.value.push({
         role: 'assistant',
-        content: `结合当前资料上下文，知识点“${props.contextText || '核心考点'}”重点考查对其内涵与应用边界的理解。针对你的疑问：“${q}”，建议重点对比概念定义与反例。`,
-        prompt: '试着思考：在什么极端条件下该结论不再成立？',
+        content: response.reply,
+        suggestions: response.suggestions,
+        sources: response.sources,
       })
     }
   } catch (err: any) {
@@ -138,6 +164,13 @@ const handleSend = async () => {
   } finally {
     isThinking.value = false
   }
+}
+
+const openSource = (id: string) => {
+  uni.navigateTo({
+    url: `/subpackages/material/pages/course/index?id=${id}`,
+    fail: () => uni.showToast({ title: '打开来源讲义失败', icon: 'none' }),
+  })
 }
 </script>
 
@@ -301,6 +334,36 @@ const handleSend = async () => {
   font-size: 24rpx;
   color: #a8a29e;
   font-style: italic;
+}
+
+.suggestions-list,
+.sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+  margin-top: 16rpx;
+}
+
+.suggestion-item {
+  color: #176b62;
+  font-size: 23rpx;
+  padding: 10rpx 12rpx;
+  background: #eef7f4;
+  border-radius: 8rpx;
+}
+
+.sources-title,
+.source-link {
+  color: #245c51;
+  font-size: 22rpx;
+  font-weight: 600;
+}
+
+.source-excerpt {
+  display: block;
+  color: #57534e;
+  font-size: 22rpx;
+  margin-top: 6rpx;
 }
 
 .drawer-footer {

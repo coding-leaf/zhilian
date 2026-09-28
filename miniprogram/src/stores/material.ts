@@ -48,17 +48,22 @@ export const useMaterialStore = defineStore('material', () => {
     return apiTriggerMaterialParse(materialId)
   }
 
-  // 3. 轮询资料解析状态
+  // 3. 单次拉取资料详情（不做终态判定，非终态也返回，供详情页直接渲染）
+  const fetchMaterialDetail = async (id: string): Promise<MaterialItem> => {
+    const item = await apiGetMaterialDetail(id)
+    currentMaterial.value = item
+    const idx = materialList.value.findIndex((m) => m.id === id)
+    if (idx !== -1) {
+      materialList.value[idx] = item
+    }
+    return item
+  }
+
+  // 4. 轮询资料解析状态
   const pollMaterialStatus = async (id: string, maxAttempts = 20, interval = 1500): Promise<MaterialItem> => {
     for (let i = 0; i < maxAttempts; i++) {
-      const item = await apiGetMaterialDetail(id)
-      currentMaterial.value = item
-      // 更新列表中对应的项
-      const idx = materialList.value.findIndex((m) => m.id === id)
-      if (idx !== -1) {
-        materialList.value[idx] = item
-      }
-      if (item.status === 'PARSED' || item.status === 'FAILED') {
+      const item = await fetchMaterialDetail(id)
+      if (['ready', 'failed', 'retake_required'].includes(item.status)) {
         return item
       }
       await new Promise((r) => setTimeout(r, interval))
@@ -66,7 +71,7 @@ export const useMaterialStore = defineStore('material', () => {
     throw new Error('资料解析超时，请稍后刷新')
   }
 
-  // 4. 获取资料列表（支持课程筛选）
+  // 5. 获取资料列表（支持课程筛选）
   const loadMaterialList = async (folderId?: string, status?: string) => {
     try {
       const list = await apiGetMaterialList({
@@ -147,6 +152,7 @@ export const useMaterialStore = defineStore('material', () => {
     activeSnippets,
     upload,
     triggerParse,
+    fetchMaterialDetail,
     pollMaterialStatus,
     loadMaterialList,
     loadKnowledgeTree,

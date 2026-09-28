@@ -1,0 +1,5 @@
+export * from './material'
+export * from './question'
+export * from './practice'
+export * from './diagnosis'
+export * from './wrong'

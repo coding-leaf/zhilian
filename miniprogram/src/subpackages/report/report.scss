@@ -1,0 +1,416 @@
+.report-container {
+  padding: 32rpx;
+  padding-bottom: 180rpx;
+  min-height: 100vh;
+}
+
+.paper-card {
+  margin-bottom: 24rpx;
+}
+
+.score-card {
+  padding: 36rpx 32rpx;
+}
+
+.score-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+}
+
+.score-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  color: #1c1917;
+}
+
+.score-date {
+  font-size: 24rpx;
+  color: #a8a29e;
+}
+
+.score-stats-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 24rpx 0;
+  border-top: 1px solid #f5f5f4;
+  border-bottom: 1px solid #f5f5f4;
+}
+
+.stat-item {
+  text-align: center;
+  flex: 1;
+}
+
+.stat-num {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: #1e3a8a;
+  display: block;
+}
+
+.wrong-stat {
+  color: #b91c1c;
+}
+
+.pending-stat {
+  color: #d97706;
+}
+
+.stat-label {
+  font-size: 22rpx;
+  color: #78716c;
+}
+
+.stat-divider {
+  width: 1px;
+  height: 48rpx;
+  background: #e7e5e4;
+}
+
+.pending-notice {
+  margin-top: 20rpx;
+  padding: 16rpx 20rpx;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8rpx;
+}
+
+.pending-notice-text {
+  font-size: 24rpx;
+  color: #b45309;
+  line-height: 1.5;
+}
+
+.next-suggestion-box {
+  margin-top: 24rpx;
+  padding: 16rpx 20rpx;
+  background: #f0fdf4;
+  border-radius: 8rpx;
+}
+
+.suggestion-tag {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #166534;
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.suggestion-text {
+  font-size: 26rpx;
+  color: #15803d;
+  line-height: 1.5;
+}
+
+.adaptive-card {
+  padding: 28rpx 32rpx;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+  border: 1px solid #fed7aa;
+}
+
+.adaptive-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #c2410c;
+  display: block;
+  margin-bottom: 8rpx;
+}
+
+.adaptive-desc {
+  font-size: 24rpx;
+  color: #9a3412;
+  line-height: 1.5;
+  display: block;
+  margin-bottom: 16rpx;
+}
+
+.adaptive-btn {
+  height: 76rpx;
+  font-size: 26rpx;
+  background: #ea580c;
+}
+
+.section-title {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #1c1917;
+  margin: 32rpx 0 20rpx 4rpx;
+}
+
+.weakness-card {
+  padding: 24rpx 28rpx;
+  margin-bottom: 16rpx;
+}
+
+.weakness-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12rpx;
+}
+
+.weakness-name {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.weakness-rate {
+  font-size: 24rpx;
+  color: #78716c;
+}
+
+.weakness-reason,
+.weakness-sugg {
+  display: block;
+  font-size: 24rpx;
+  color: #57534e;
+  line-height: 1.5;
+}
+
+.detail-card {
+  padding: 30rpx;
+  margin-bottom: 24rpx;
+}
+
+.d-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.d-num {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #1e3a8a;
+}
+
+.result-tag {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+}
+
+.tag-correct {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.tag-wrong {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.tag-pending {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.tag-unanswered {
+  background: #f5f5f4;
+  color: #78716c;
+}
+
+.d-stem {
+  display: block;
+  font-size: 28rpx;
+  color: #1c1917;
+  line-height: 1.6;
+  margin-bottom: 20rpx;
+}
+
+.answer-compare-box {
+  background: #fafaf9;
+  padding: 16rpx 20rpx;
+  border-radius: 8rpx;
+  margin-bottom: 16rpx;
+}
+
+.ans-line {
+  display: block;
+  font-size: 24rpx;
+  color: #78716c;
+  margin-bottom: 6rpx;
+}
+
+.ans-val {
+  color: #1c1917;
+  font-weight: 500;
+}
+
+.ans-correct {
+  color: #059669;
+}
+
+.feedback-box,
+.source-quote-box,
+.kp-hit-box,
+.kp-miss-box {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.fb-title,
+.sq-title,
+.hit-title,
+.miss-title {
+  font-weight: 600;
+  color: #44403c;
+  display: block;
+  margin-bottom: 4rpx;
+}
+
+.hit-title { color: #15803d; }
+.miss-title { color: #b91c1c; }
+
+.hit-item {
+  color: #166534;
+  display: block;
+}
+
+.miss-item {
+  color: #991b1b;
+  display: block;
+}
+
+.fb-text { color: #57534e; }
+.sq-text { color: #78716c; }
+
+.card-actions-row {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 20rpx;
+  padding-top: 16rpx;
+  border-top: 1px dashed #e7e5e4;
+}
+
+.regrade-action-btn,
+.coach-action-btn {
+  flex: 1;
+  height: 64rpx;
+  font-size: 24rpx;
+  border-radius: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.regrade-action-btn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.coach-action-btn {
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 24rpx 32rpx;
+  background: rgba(255, 255, 255, 0.95);
+  border-top: 1px solid #e7e5e4;
+}
+
+.full-btn {
+  height: 88rpx;
+  font-size: 30rpx;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32rpx;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 620rpx;
+  padding: 36rpx 32rpx;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+
+.modal-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #1c1917;
+}
+
+.modal-close {
+  font-size: 32rpx;
+  color: #a8a29e;
+  padding: 8rpx;
+}
+
+.form-tips {
+  display: block;
+  font-size: 24rpx;
+  color: #78716c;
+  line-height: 1.5;
+  margin-bottom: 16rpx;
+}
+
+.form-textarea,
+.form-input {
+  width: 100%;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 8rpx;
+  padding: 16rpx;
+  font-size: 26rpx;
+  box-sizing: border-box;
+}
+
+.form-textarea {
+  height: 180rpx;
+}
+
+.form-input {
+  height: 80rpx;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 24rpx;
+}
+
+.modal-cancel-btn {
+  flex: 1;
+  height: 76rpx;
+  font-size: 26rpx;
+  background: #f5f5f4;
+  color: #57534e;
+  border-radius: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-confirm-btn {
+  flex: 1;
+  height: 76rpx;
+  font-size: 26rpx;
+}

@@ -13,12 +13,43 @@ import type {
   PointSourceListResult,
   QuestionItem,
   PracticeSession,
+  PracticeListResult,
+  PracticeSummary,
   DiagnosisReport,
   RegradeResponse,
   SelfEvaluateResponse,
   AskCoachResponse,
   WrongRecordListResult,
+  QuestionType,
+  AttemptResult,
 } from '@/types'
+import {
+  adaptDiagnosisReport,
+  adaptMaterial,
+  adaptPractice,
+  adaptQuestion,
+  buildAttemptResults,
+  type WireDiagnosisReport,
+  type WirePracticeDetail,
+  type WireQuestion,
+} from './adapters'
+
+export {
+  adaptDiagnosisReport,
+  adaptMaterial,
+  adaptPractice,
+  adaptQuestion,
+  buildAttemptResults,
+  computeKnowledgeCoverage,
+  dedupeQuestions,
+  isSubjectiveType,
+  needsGradingRetry,
+  planGenerationBatches,
+  questionTypeLabel,
+  MAX_QUESTION_BATCH,
+} from './adapters'
+export type { AttemptResult } from '@/types'
+export type { CoverageResult, GenerationBatch } from './adapters'
 
 // 1. 认证与用户 API
 export function apiLoginByWechat(code: string): Promise<LoginResult> {
@@ -86,19 +117,19 @@ export function apiGetFolderKnowledgePoints(folderId: string): Promise<FolderKno
 export function apiUploadMaterial(
   filePath: string,
   title?: string,
-  folderId?: string
+  folderId?: string,
 ): Promise<MaterialItem> {
   const formData: Record<string, string> = {}
   if (title) formData.title = title
   if (folderId) formData.folder_id = folderId
-  return uploadFile<MaterialItem>(filePath, 'file', formData)
+  return uploadFile<MaterialItem>(filePath, 'file', formData).then(adaptMaterial)
 }
 
 export function apiGetMaterialDetail(id: string): Promise<MaterialItem> {
   return request<MaterialItem>({
     url: `/materials/${id}`,
     method: 'GET',
-  })
+  }).then(adaptMaterial)
 }
 
 export function apiGetMaterialList(params?: { folder_id?: string; status?: string }): Promise<MaterialItem[]> {
@@ -113,9 +144,9 @@ export function apiGetMaterialList(params?: { folder_id?: string; status?: strin
     method: 'GET',
   }).then((res) => {
     if (res && 'items' in res) {
-      return res.items
+      return res.items.map(adaptMaterial)
     }
-    return (res as MaterialItem[]) || []
+    return ((res as MaterialItem[]) || []).map(adaptMaterial)
   })
 }
 
@@ -158,7 +189,7 @@ export interface GenerateQuestionsParams {
   knowledge_point_ids?: string[]
   count?: number
   difficulty?: number
-  question_types?: string[]
+  question_types?: QuestionType[]
   max_retries?: number
 }
 
@@ -172,20 +203,27 @@ export interface QuestionGenerateResult {
 }
 
 export function apiGenerateQuestions(params: GenerateQuestionsParams): Promise<QuestionGenerateResult> {
-  return request<QuestionGenerateResult>({
+  return request<Omit<QuestionGenerateResult, 'qualified_questions' | 'pending_questions'> & {
+    qualified_questions: WireQuestion[]
+    pending_questions: WireQuestion[]
+  }>({
     url: '/questions/generate',
     method: 'POST',
     data: params,
-  })
+  }).then((result) => ({
+    ...result,
+    qualified_questions: (result.qualified_questions || []).map(adaptQuestion),
+    pending_questions: (result.pending_questions || []).map(adaptQuestion),
+  }))
 }
 
 export function apiGetQuestionsByMaterial(materialId: string): Promise<QuestionItem[]> {
-  return request<{ items: QuestionItem[] } | QuestionItem[]>({
+  return request<{ items: WireQuestion[] } | WireQuestion[]>({
     url: `/questions?material_id=${materialId}`,
     method: 'GET',
   }).then((res) => {
-    if (res && 'items' in res) return res.items
-    return (res as QuestionItem[]) || []
+    if (res && 'items' in res) return res.items.map(adaptQuestion)
+    return ((res as WireQuestion[]) || []).map(adaptQuestion)
   })
 }
 
@@ -193,7 +231,7 @@ export function apiAskQuestionCoach(
   questionId: string,
   userPrompt: string,
   userAnswer?: string,
-  gradingPoints?: string[]
+  gradingPoints?: string[],
 ): Promise<AskCoachResponse> {
   return request<AskCoachResponse>({
     url: `/questions/${questionId}/ask-coach`,
@@ -206,6 +244,17 @@ export function apiAskQuestionCoach(
   })
 }
 
+export interface ScopedCoachParams {
+  folder_id?: string
+  material_id?: string
+  knowledge_point_id?: string
+  user_prompt: string
+}
+
+export function apiAskScopedCoach(params: ScopedCoachParams): Promise<AskCoachResponse> {
+  return request<AskCoachResponse>({ url: '/coach/ask', method: 'POST', data: params })
+}
+
 // 6. 练习作答与交卷 API
 export interface CreatePracticeParams {
   title?: string
@@ -214,7 +263,7 @@ export interface CreatePracticeParams {
   knowledge_point_ids?: string[]
   question_ids?: string[]
   question_count?: number
-  question_types?: string[]
+  question_types?: QuestionType[]
   difficulty?: number
   mode?: string
   source_type?: string
@@ -222,28 +271,45 @@ export interface CreatePracticeParams {
 }
 
 export function apiCreatePractice(params: CreatePracticeParams | string, questionIds?: string[]): Promise<PracticeSession> {
-  const payload = typeof params === 'string'
+  const payload: CreatePracticeParams = typeof params === 'string'
     ? { material_id: params, question_ids: questionIds }
     : params
-  return request<PracticeSession>({
+  return request<{ id: string }>({
     url: '/practices',
     method: 'POST',
     data: payload,
-  })
+  }).then((created) => apiGetPracticeSession(created.id))
 }
 
 export function apiGetPracticeSession(practiceId: string): Promise<PracticeSession> {
-  return request<PracticeSession>({
+  return request<WirePracticeDetail>({
     url: `/practices/${practiceId}`,
     method: 'GET',
-  })
+  }).then(adaptPractice)
 }
+
+export function apiListPractices(params?: {
+  status?: string
+  material_id?: string
+  offset?: number
+  limit?: number
+}): Promise<PracticeListResult> {
+  const queryParts: string[] = []
+  if (params?.status) queryParts.push(`status=${encodeURIComponent(params.status)}`)
+  if (params?.material_id) queryParts.push(`material_id=${encodeURIComponent(params.material_id)}`)
+  if (params?.offset !== undefined) queryParts.push(`offset=${params.offset}`)
+  if (params?.limit !== undefined) queryParts.push(`limit=${params.limit}`)
+  const qs = queryParts.length ? `?${queryParts.join('&')}` : ''
+  return request<PracticeListResult>({ url: `/practices${qs}`, method: 'GET' })
+}
+
+export type { PracticeSummary }
 
 export function apiSavePracticeDraft(
   practiceId: string,
   questionId: string,
-  userAnswer: any,
-  timeSpentSeconds = 0
+  userAnswer: unknown,
+  timeSpentSeconds = 0,
 ): Promise<{ success: boolean }> {
   return request({
     url: `/practices/${practiceId}/answers`,
@@ -258,15 +324,9 @@ export function apiSavePracticeDraft(
 
 export function apiSubmitPractice(
   practiceId: string,
-  confirmUnanswered = true
+  confirmUnanswered = true,
+  idempotencyKey = practiceId,
 ): Promise<{ practice_id: string; status: string; task_id?: string }> {
-  // 生成客户端幂等键 (UUIDv4 格式)
-  const idempotencyKey = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
-    return v.toString(16)
-  })
-
   return request({
     url: `/practices/${practiceId}/submit`,
     method: 'POST',
@@ -279,12 +339,26 @@ export function apiSubmitPractice(
   })
 }
 
+/**
+ * 主动重试未完成的整卷判题。
+ * 后端仅在练习处于 `partially_graded`（待重判/判题任务终态失败）时受理，
+ * 重复触发会被状态锁拒绝，不会重复派发判题任务。
+ */
+export function apiRetryPracticeGrading(
+  practiceId: string,
+): Promise<{ practice_id: string; status: string; message: string }> {
+  return request({
+    url: `/practices/${practiceId}/regrade`,
+    method: 'POST',
+  })
+}
+
 // 7. 判题与复查 API
 export function apiSelfEvaluate(
   attemptItemId: string,
   score: number,
   feedback?: string,
-  isCorrect?: boolean
+  isCorrect?: boolean,
 ): Promise<SelfEvaluateResponse> {
   return request<SelfEvaluateResponse>({
     url: '/grading/self-evaluate',
@@ -311,20 +385,22 @@ export function apiRegradeAttempt(attemptItemId: string, reason: string): Promis
 
 // 8. 诊断报告与错题 API
 export function apiTriggerDiagnosis(practiceId: string): Promise<DiagnosisReport> {
-  return request<DiagnosisReport>({
+  return request<WireDiagnosisReport>({
     url: `/practices/${practiceId}/diagnosis`,
     method: 'POST',
-  })
+  }).then(adaptDiagnosisReport)
 }
 
 export function apiGetDiagnosisReport(practiceId: string): Promise<DiagnosisReport> {
-  return request<DiagnosisReport>({
+  return request<WireDiagnosisReport>({
     url: `/practices/${practiceId}/diagnosis`,
     method: 'GET',
-  })
+  }).then(adaptDiagnosisReport)
 }
 
 export function apiListWrongRecords(params?: {
+  folder_id?: string
+  unclassified?: boolean
   material_id?: string
   knowledge_point_id?: string
   is_mastered?: boolean
@@ -332,6 +408,8 @@ export function apiListWrongRecords(params?: {
   page_size?: number
 }): Promise<WrongRecordListResult> {
   const queryParts: string[] = []
+  if (params?.folder_id) queryParts.push(`folder_id=${encodeURIComponent(params.folder_id)}`)
+  if (params?.unclassified !== undefined) queryParts.push(`unclassified=${params.unclassified}`)
   if (params?.material_id) queryParts.push(`material_id=${encodeURIComponent(params.material_id)}`)
   if (params?.knowledge_point_id) queryParts.push(`knowledge_point_id=${encodeURIComponent(params.knowledge_point_id)}`)
   if (params?.is_mastered !== undefined) queryParts.push(`is_mastered=${params.is_mastered}`)

@@ -4,8 +4,8 @@
     <view v-if="material" class="paper-card detail-card">
       <view class="detail-header">
         <text class="title">{{ material.title }}</text>
-        <view :class="['badge', `badge-${material.status.toLowerCase()}`]">
-          {{ getStatusText(material.status) }}
+        <view :class="['badge', `badge-${material.status}`]">
+          {{ getStatusText(material) }}
         </view>
       </view>
 
@@ -16,28 +16,32 @@
       </view>
 
       <!-- 状态对应提示 -->
-      <view v-if="material.status === 'WAITING'" class="status-box waiting-box">
+      <view v-if="canStartParse" class="status-box waiting-box">
         <text class="status-tips">讲义已上传，尚未开始解析。点击下方按钮手动启动解析流水线。</text>
         <button class="paper-btn-primary parse-btn" @tap="handleStartParse">开始解析</button>
       </view>
 
-      <view v-else-if="material.status === 'PROCESSING'" class="status-box loading-box">
+      <view v-else-if="isParsing" class="status-box loading-box">
         <text class="loading-spinner">⌛</text>
-        <text class="loading-tips">智能解析中，正在提取关键知识点与切片...</text>
+        <text class="loading-tips">{{ parseProgressText }}</text>
       </view>
 
-      <view v-else-if="material.status === 'FAILED'" class="status-box error-box">
+      <view v-else-if="material.status === 'failed'" class="status-box error-box">
         <text class="error-tips">解析失败：{{ material.error_message || '文档内容异常或排队超时' }}</text>
         <button class="retry-btn" @tap="handleStartParse">重试解析</button>
       </view>
 
-      <view v-else-if="material.status === 'PARSED'" class="status-box ready-box">
+      <view v-else-if="material.status === 'retake_required'" class="status-box error-box">
+        <text class="error-tips">{{ material.error_message || '图片文字不够清晰，请重新拍摄后上传。' }}</text>
+      </view>
+
+      <view v-else-if="material.status === 'ready'" class="status-box ready-box">
         <text class="ready-tips">✓ 讲义解析已就绪，已构建完整考点树与证据溯源切片。</text>
       </view>
     </view>
 
     <!-- 知识树层级与知识点列表 (解析成功后展示) -->
-    <view v-if="material?.status === 'PARSED'" class="knowledge-tree-section">
+    <view v-if="material?.status === 'ready'" class="knowledge-tree-section">
       <view class="section-title-row">
         <text class="section-title">知识点拓扑图谱</text>
         <text class="section-subtitle">点击知识点查看深入讲解与教材原文切片</text>
@@ -72,7 +76,7 @@
     </view>
 
     <!-- 底部出题与复习操作栏 -->
-    <view v-if="material?.status === 'PARSED'" class="bottom-action-bar">
+    <view v-if="material?.status === 'ready'" class="bottom-action-bar">
       <button class="action-coach-btn" @tap="openMaterialCoach">
         💡 讲义助教
       </button>
@@ -97,8 +101,9 @@
           <view class="point-section">
             <text class="sec-label">📘 知识点定义与深入解析</text>
             <text class="sec-content">
-              {{ selectedPoint?.description || '暂无详细讲解，可点击下方按钮由 AI 助教启发式答疑。' }}
+              {{ selectedPointDetail?.description || '该知识点暂无定义说明。' }}
             </text>
+            <text v-if="selectedPoint" class="hierarchy-text">层级：{{ pointHierarchy }}</text>
           </view>
 
           <!-- 原文切片溯源 Snippets -->
@@ -121,7 +126,7 @@
               </view>
             </view>
             <view v-else class="empty-snippets">
-              <text class="empty-snippets-text">当前考点由全局讲义语义归纳，无单一独立切片。</text>
+              <text class="empty-snippets-text">{{ snippetLoadFailed ? '原文切片加载失败，请稍后重试。' : '此知识点暂无可展示的原文切片。' }}</text>
             </view>
           </view>
         </scroll-view>
@@ -139,6 +144,8 @@
       v-model:visible="showCoach"
       :title="coachTitle"
       :context-text="coachContext"
+      :material-id="materialId"
+      :knowledge-point-id="coachPointId"
     />
   </view>
 </template>
@@ -148,6 +155,7 @@ import { ref, computed } from 'vue'
 import { onLoad, onPullDownRefresh } from '@dcloudio/uni-app'
 import { useMaterialStore } from '@/stores/material'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
+import { canStartMaterialParse, isMaterialParsing, materialStatusText as getStatusText } from '@/utils/materialState'
 import type { MaterialItem, KnowledgeTreeNode, KnowledgeSnippet } from '@/types'
 
 const materialStore = useMaterialStore()
@@ -159,6 +167,30 @@ const showPointModal = ref(false)
 const selectedPoint = ref<KnowledgeTreeNode | null>(null)
 const pointSnippets = ref<KnowledgeSnippet[]>([])
 const isLoadingSnippets = ref(false)
+const snippetLoadFailed = ref(false)
+const selectedPointDetail = computed(() => materialStore.activeKnowledgePoint)
+const coachPointId = ref<string | undefined>()
+const canStartParse = computed(() => canStartMaterialParse(material.value))
+const isParsing = computed(() => isMaterialParsing(material.value))
+const parseProgressText = computed(() => {
+  const progress = material.value?.progress_percentage
+  return typeof progress === 'number'
+    ? `正在提取知识点与原文切片，已完成 ${Math.round(progress)}%...`
+    : '智能解析中，正在提取关键知识点与切片...'
+})
+const pointHierarchy = computed(() => {
+  const point = selectedPointDetail.value
+  if (!point) return ''
+  const names = [point.name]
+  let parentId = point.parent_id
+  while (parentId) {
+    const parent = knowledgeNodes.value.find((node) => node.id === parentId)
+    if (!parent) break
+    names.unshift(parent.name)
+    parentId = parent.parent_id
+  }
+  return names.join(' / ')
+})
 
 const showCoach = ref(false)
 const coachTitle = ref('讲义专属助教')
@@ -167,8 +199,8 @@ const coachContext = ref('')
 const loadDetail = async () => {
   if (!materialId.value) return
   try {
-    material.value = await materialStore.pollMaterialStatus(materialId.value, 1)
-    if (material.value.status === 'PARSED') {
+    material.value = await materialStore.fetchMaterialDetail(materialId.value)
+    if (material.value.status === 'ready') {
       const tree = await materialStore.loadKnowledgeTree(materialId.value)
       if (tree && tree.nodes) {
         knowledgeNodes.value = flattenTree(tree.nodes)
@@ -194,23 +226,28 @@ const flattenTree = (nodes: KnowledgeTreeNode[]): KnowledgeTreeNode[] => {
   return result
 }
 
+// 等待解析推进：命中终态或超时后都保留最新一次轮询到的资料状态
+const syncParseProgress = async () => {
+  if (!materialId.value) return
+  try {
+    material.value = await materialStore.pollMaterialStatus(materialId.value)
+  } catch {
+    material.value = materialStore.currentMaterial
+  }
+  if (material.value?.status === 'ready') {
+    const tree = await materialStore.loadKnowledgeTree(materialId.value)
+    if (tree && tree.nodes) {
+      knowledgeNodes.value = flattenTree(tree.nodes)
+    }
+  }
+}
+
 onLoad(async (options) => {
   if (options && options.id) {
     materialId.value = options.id
     await loadDetail()
-    // 若处理中则轮询
-    if (material.value?.status === 'PROCESSING' || material.value?.status === 'WAITING') {
-      try {
-        material.value = await materialStore.pollMaterialStatus(materialId.value)
-        if (material.value.status === 'PARSED') {
-          const tree = await materialStore.loadKnowledgeTree(materialId.value)
-          if (tree && tree.nodes) {
-            knowledgeNodes.value = flattenTree(tree.nodes)
-          }
-        }
-      } catch {
-        // 超时
-      }
+    if (material.value && isMaterialParsing(material.value)) {
+      await syncParseProgress()
     }
   }
 })
@@ -220,19 +257,6 @@ onPullDownRefresh(async () => {
   uni.stopPullDownRefresh()
 })
 
-const getStatusText = (status: string) => {
-  switch (status) {
-    case 'PARSED':
-      return '已完成'
-    case 'PROCESSING':
-      return '解析中'
-    case 'FAILED':
-      return '解析失败'
-    default:
-      return '待解析'
-  }
-}
-
 const handleStartParse = async () => {
   if (!materialId.value) return
   uni.showLoading({ title: '启动流水线...' })
@@ -240,13 +264,7 @@ const handleStartParse = async () => {
     await materialStore.triggerParse(materialId.value)
     uni.hideLoading()
     uni.showToast({ title: '开始解析', icon: 'success' })
-    material.value = await materialStore.pollMaterialStatus(materialId.value)
-    if (material.value.status === 'PARSED') {
-      const tree = await materialStore.loadKnowledgeTree(materialId.value)
-      if (tree && tree.nodes) {
-        knowledgeNodes.value = flattenTree(tree.nodes)
-      }
-    }
+    await syncParseProgress()
   } catch (err: any) {
     uni.hideLoading()
     uni.showToast({ title: err?.message || '解析启动失败', icon: 'none' })
@@ -257,13 +275,17 @@ const openPointDetail = async (node: KnowledgeTreeNode) => {
   selectedPoint.value = node
   showPointModal.value = true
   pointSnippets.value = []
+  snippetLoadFailed.value = false
   isLoadingSnippets.value = true
-
-  const res = await materialStore.loadKnowledgePointWithSnippets(node.id)
-  if (res && res.snippets) {
-    pointSnippets.value = res.snippets.snippets || []
+  try {
+    const res = await materialStore.loadKnowledgePointWithSnippets(node.id)
+    if (res?.snippets) pointSnippets.value = res.snippets.snippets || []
+    else snippetLoadFailed.value = true
+  } catch {
+    snippetLoadFailed.value = true
+  } finally {
+    isLoadingSnippets.value = false
   }
-  isLoadingSnippets.value = false
 }
 
 const closePointModal = () => {
@@ -274,6 +296,7 @@ const askAboutPoint = () => {
   if (!selectedPoint.value) return
   coachTitle.value = `考点答疑: ${selectedPoint.value.name}`
   coachContext.value = `当前知识点：${selectedPoint.value.name}。概要：${selectedPoint.value.description || '无'}`
+  coachPointId.value = selectedPoint.value.id
   closePointModal()
   showCoach.value = true
 }
@@ -281,6 +304,7 @@ const askAboutPoint = () => {
 const openMaterialCoach = () => {
   coachTitle.value = `讲义助教: ${material.value?.title || '讲义答疑'}`
   coachContext.value = `当前讲义包含 ${knowledgeNodes.value.length} 个核心考点，涵盖知识树已建立。`
+  coachPointId.value = undefined
   showCoach.value = true
 }
 
@@ -288,6 +312,7 @@ const goToQuestionConfig = () => {
   if (!materialId.value) return
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?material_id=${materialId.value}`,
+    fail: () => uni.showToast({ title: '打开出题页失败，请重试', icon: 'none' }),
   })
 }
 </script>
@@ -327,12 +352,12 @@ const goToQuestionConfig = () => {
   white-space: nowrap;
 }
 
-.badge-parsed {
+.badge-ready {
   background: #ecfdf5;
   color: #059669;
 }
 
-.badge-processing {
+.badge-parsing {
   background: #fffbeb;
   color: #d97706;
 }
@@ -342,7 +367,7 @@ const goToQuestionConfig = () => {
   color: #dc2626;
 }
 
-.badge-waiting {
+.badge-pending {
   background: #f5f5f4;
   color: #78716c;
 }
@@ -351,6 +376,13 @@ const goToQuestionConfig = () => {
   border-top: 1px solid #f5f5f4;
   padding-top: 20rpx;
   margin-bottom: 24rpx;
+}
+
+.hierarchy-text {
+  display: block;
+  margin-top: 14rpx;
+  color: #78716c;
+  font-size: 23rpx;
 }
 
 .meta-item {
