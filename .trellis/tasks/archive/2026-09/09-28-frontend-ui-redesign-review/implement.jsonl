@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"后端分层与规范入口"}
+{"file":".trellis/spec/frontend/index.md","reason":"小程序架构与现有 J1 契约核对"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"跨层状态与响应字段对齐"}
+{"file":".trellis/tasks/09-28-frontend-ui-redesign-review/research/repair-contracts.md","reason":"已确认的缺陷、状态和 worker/助教边界"}

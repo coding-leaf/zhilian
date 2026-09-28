@@ -1,0 +1,28 @@
+{
+  "id": "frontend-ui-redesign-review",
+  "name": "frontend-ui-redesign-review",
+  "title": "审查前端UI重构与学习闭环提交",
+  "description": "对照归档需求审查 5d7a2f3 的功能闭环、契约和验证证据，形成缺陷及修复建议",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-28",
+  "completedAt": "2026-09-29",
+  "branch": "codex/frontend-ui-loop-repair",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-28-question-source-snippet"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

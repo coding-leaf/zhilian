@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对：25 个 scenario 是否全部有裁决、保留项是否附真实可 grep 的代码锚点"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核对：16 个 scenario 是否全部有裁决、保留项是否附真实可 grep 的代码锚点"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对：无重复标题、无本仓库不存在的 Trellis 包路径、已本地化"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对：已移除 Trellis 模板注册内容并改为本项目示例"}
-{"file": ".trellis/spec/backend/index.md", "reason": "核对：文件清单与目录实际内容一致、无 To fill、语言声明已修正"}
-{"file": ".trellis/spec/frontend/index.md", "reason": "核对：文件清单与目录实际内容一致、无 To fill、语言声明已修正"}
-{"file": ".trellis/spec/guides/index.md", "reason": "核对：列出的 guide 与目录实际内容一致"}
-{"file": "docs/DESIGN.md", "reason": "核对：frontend spec 中引用的设计参数与 DESIGN.md 一致，未臆造数值"}

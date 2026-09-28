@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端主目标：25 个 scenario 契约需逐条对照 backend/app 代码核对并补代码锚点"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端主目标：16 个 scenario 契约需逐条对照 miniprogram/src 代码核对并补代码锚点"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "待本地化：含三段逐字重复与 Trellis 包内部章节，需改写为 backend↔miniprogram 跨层指南"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "待本地化：删除 Trellis 模板注册小节，改以本项目 composables/utils/stores 为例"}
-{"file": ".trellis/spec/backend/index.md", "reason": "待修正：状态列仍标 To fill、语言声明与事实不符，需列真实文件与最后核对日期"}
-{"file": ".trellis/spec/frontend/index.md", "reason": "待修正：状态列仍标 To fill、语言声明与事实不符，需列真实文件与最后核对日期"}
-{"file": ".trellis/spec/guides/index.md", "reason": "待修正：guides 描述与用途需随本地化结果更新"}
-{"file": "docs/DESIGN.md", "reason": "前端设计参数唯一事实源，重写 frontend 各 spec 时作为量化标准依据"}
