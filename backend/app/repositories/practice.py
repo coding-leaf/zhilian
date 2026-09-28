@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import PracticeNotFoundError
@@ -205,7 +206,8 @@ class PracticeRepository:
         )
         result = self.session.execute(stmt)
         self.session.flush()
-        return result.rowcount == 1
+        count = result.rowcount if isinstance(result, CursorResult) else 0
+        return count == 1
 
     # ==========================================
     # AttemptItem 作答项操作

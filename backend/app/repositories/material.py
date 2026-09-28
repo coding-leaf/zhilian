@@ -616,7 +616,8 @@ class MaterialRepository:
         )
         result = self.session.execute(stmt)
         self.session.flush()
-        return result.rowcount == 1
+        count = result.rowcount if isinstance(result, CursorResult) else 0
+        return count == 1
 
     # ==========================================
     # MaterialSnippet 切片表操作
