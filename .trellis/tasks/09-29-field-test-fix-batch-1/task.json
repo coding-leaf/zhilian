@@ -1,0 +1,32 @@
+{
+  "id": "field-test-fix-batch-1",
+  "name": "field-test-fix-batch-1",
+  "title": "实测缺陷修复批次（第一批）",
+  "description": "实测反馈的 5 类功能缺陷：输入框全局失效、资料解析卡死且不可恢复、出题无反馈、学习数据链路空、学情页信息架构待复核。本任务为父任务，负责任务地图与跨子任务验收，不直接实现。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-29-fix-global-input",
+    "09-29-fix-parse-stuck",
+    "09-29-fix-qgen-feedback",
+    "09-29-fix-learning-stats",
+    "09-29-review-page-ia"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
