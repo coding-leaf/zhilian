@@ -386,3 +386,36 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: 题目响应补来源切片正文（跨域共享装配与同名关系陷阱）
+<!-- trellis-session: v=2 fp=c7476b0e90e8d111 -->
+
+**Date**: 2026-09-29
+**Task**: 题目响应补来源切片正文（跨域共享装配与同名关系陷阱）
+**Branch**: `master`
+
+### Summary
+
+核对页来源框恒空的根因是 QuestionDetailResponse 从不返回切片正文（只有 source_snippet_id 与 id 级元数据）。按规范「原文装配只有一个实现」先把 SourceSnippetDTO 迁到资料域、把投影与页码回退抽成 app/services/source_snippets.py::build_source_snippet_map（练习侧改为委托，不新增第二份逻辑），再给题目响应加可空 source_snippet，由 QuestionService.attach_source_snippets 按 source_snippet_id 去重后单次 IN 查询装配，覆盖出题/详情/列表/更新四条路径（列表同样装配属明示取舍）。实施中新写的装配用例当场暴露一处真缺陷：ORM 关系 Question.source_snippet 与响应字段同名，from_attributes 会读关系实体 —— 投影落成空正文（实体属性名是 content），且每题多一次 material_snippets 惰性加载（列表 20 条即 20 次）。实测确认后把关系改名 primary_source_snippet，并加「裸映射零查询」回归用例守住改名不被回退；E2E 补四条路径的真实响应断言。前端零组件改动，只把契约 fixture 换成后端 model_dump() 真实样本、断言从「题目侧无正文」翻转为真实正文 + 无来源空态。规范同步：来源装配 Scenario 扩为两域共享、新增「响应字段名不得与 ORM 关系同名」Scenario、重写已失效的 Contract Fixture Fidelity 例子与前端 source_quote 说明。
+
+### Main Changes
+
+- 题目响应新增可空 source_snippet 投影并按四条路径批量装配；装配实现抽为跨域共享模块；ORM 关系改名消除与响应字段同名导致的错投影与惰性加载 N+1；前端契约断言翻转
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `75e0d80` | refactor(backend): 来源切片装配抽为跨域共享实现 |
+| `497bff7` | feat(backend): 题目响应补来源正文，并消除同名关系的惰性加载 |
+| `853d2c2` | docs(spec): 来源装配扩为两域共享，并记录响应字段与 ORM 关系同名陷阱 |
+| `3177db0` | chore(task): 补齐 09-28-question-source-snippet 的设计与验收结论 |
+
+### Testing
+
+- [OK] task verify 退出码 0：mypy 135 files、ruff、import-linter 5 契约、后端 1378 passed（覆盖率 91.16%）、前端 vitest 41 passed
+
+### Status
+
+[OK] **Completed**

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~388 | Active |
+| `journal-1.md` | ~421 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-09-29 | 题目响应补来源切片正文（跨域共享装配与同名关系陷阱） | `75e0d80`, `497bff7`, `853d2c2`, `3177db0` | `master` |
 | 10 | 2026-09-29 | 修复 mypy strict 的 DML rowcount 类型缺口并沉淀规范 | `03dc9f1`, `3ef2442`, `d5aa12b` | `master` |
 | 9 | 2026-09-29 | 迁移-模型一致性闸门与规范防腐 | `91d5623`, `a109685` | `master` |
 | 8 | 2026-09-29 | 学习闭环修复：前端契约重建、RQ 后台执行与并发派发竞态 | `609e7f1`, `15a621e`, `2e8a45d`, `32fd0a2` | `codex/frontend-ui-loop-repair` |
