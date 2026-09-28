@@ -1,8 +1,8 @@
 # State Management
 
-> **事实源**：`miniprogram/src/stores/*`、`miniprogram/src/subpackages/**/pages/*`（页面本地状态）
-> **最后核对**：2026-09-28 @ ca062a1
-> **核对方式**：`rg "defineStore|createPinia|addMaterial|setMaterialsList" miniprogram/src`
+> **事实源**：`miniprogram/src/stores/{auth,material,folder,practice,diagnosis}.ts`、`miniprogram/src/pages/**`（页面本地状态）
+> **最后核对**：2026-09-29
+> **核对方式**：`rg "defineStore|createPinia|const .* = ref\(|computed\(" miniprogram/src`
 
 > How state is managed in this project. 本项目用 **Pinia**（Composition API 风格）承载全局状态，页面本地状态用 `ref`。
 
@@ -10,18 +10,38 @@
 
 ## Overview
 
-- 状态容器为 Pinia，注册入口与统一导出在 `src/stores/index.ts`：`export const pinia = createPinia()`，并 `export *` 全部 store。
-- 全局状态**收敛为 5 个域 store**（`index.ts` 注释明确「exactly 5 stores」）：`user`、`material`、`folder`、`practice`、`report`。
-- 每个 store 用 **setup 风格** `defineStore('<id>', () => { ... })`：`ref` 为 state、`computed` 为 getters、普通函数为 actions，末尾以对象统一 return。
-- store 实现文件为 `xxxStore.ts`，另有 `xxx.ts` 薄再导出（`user/material/practice/report` 有；`folder` 无）。
-- **铁律：Store 不发网络请求**（各 store 头部注释「pure state mutation without direct network API calls」）。网络由页面/组件/composable 经 `src/api/*` 发起，再把结果注入 store。
-  - 已知例外：`userStore.hydrateProfile()` 会调用 `fetchUserProfile()` 做鉴权静默水合；这是刻意的鉴权例外，需与「store 不发请求」的其余部分区分理解。
+- 状态容器为 Pinia。**没有 `src/stores/index.ts`**：`pinia` 实例在 `main.ts` 内 `Pinia.createPinia()` 创建并 `app.use(pinia)`，各 store 直接从 `@/stores/<domain>` 具名导入。
+- 全局状态收敛为 **5 个域 store**：`auth` / `material` / `folder` / `practice` / `diagnosis`。
+- 每个 store 都是 **setup 风格** `defineStore('<id>', () => { ... })`：`ref` 即 state、`computed` 即 getters、普通/异步函数即 actions，末尾以对象统一 return。
+- 文件命名就是 `<domain>.ts`（`auth.ts` / `material.ts` / `folder.ts` / `practice.ts` / `diagnosis.ts`），导出 `useXxxStore`。**没有 `xxxStore.ts` + `xxx.ts` 薄再导出的双层结构**。
+- **store 直接调用 `@/api`**：这不是例外而是既定做法——`authStore.fetchProfile` → `apiGetUserProfile`、`materialStore.upload` → `apiUploadMaterial`、`folderStore.loadFolders` → `apiListFolders`、`practiceStore.submit` → `apiSubmitPractice`、`diagnosisStore.loadReport` → `apiGetPracticeSession` + `apiTriggerDiagnosis`。store 承担编排职责（含 loading 标志、错误兜底、状态重置）。
+- 网络层与 store **不互相 import**：`request.ts` 需要清会话时用动态 `import('@/stores/auth')` 延迟加载（`handleUnauthorized`），避免循环依赖。
 
 **代码锚点**
-- `miniprogram/src/stores/index.ts::pinia`
-- `miniprogram/src/stores/userStore.ts::hydrateProfile`
-- `miniprogram/src/stores/material.ts`（薄再导出）
-- `miniprogram/src/stores/folderStore.ts::useFolderStore`
+- `miniprogram/src/main.ts::createApp`（`Pinia.createPinia()`）
+- `miniprogram/src/utils/request.ts::handleUnauthorized`（动态 import store）
+- `miniprogram/src/stores/auth.ts::useAuthStore`
+- `miniprogram/src/stores/practice.ts::usePracticeStore`
+
+---
+
+## Store Inventory
+
+| Store | State（`ref`） | Getters（`computed`） | Actions |
+|---|---|---|---|
+| `auth` | `token`（初值取 `uni.getStorageSync('access_token')`）、`user` | 无（`isLoggedIn()` 是**函数**不是 getter） | `setToken` / `clearAuth` / `loginWithWechat` / `fetchProfile` / `updateProfile` |
+| `material` | `currentMaterial`、`materialList`、`questions`、`isUploading`、`isGenerating`、`currentKnowledgeTree`、`activeKnowledgePoint`、`activeSnippets` | 无 | `upload` / `triggerParse` / `fetchMaterialDetail` / `pollMaterialStatus` / `loadMaterialList` / `loadKnowledgeTree` / `loadKnowledgePointWithSnippets` / `generateQuestions` / `loadQuestions` |
+| `folder` | `folders`、`currentFolderId`（`'all'` \| `'__none__'` \| 真实 id）、`currentFolderKnowledgePoints`、`isLoading` | 无 | `loadFolders` / `createFolder` / `renameFolder` / `archiveFolder` / `loadFolderKnowledgePoints` / `setCurrentFolderId` |
+| `practice` | `currentSession`、`currentIndex`、`userAnswers`、`isSubmitting`、`isSavingDrafts`、`draftFailures`、`latestDiagnosis` | `questions`、`attemptResults`、`currentQuestion`、`answeredCount`、`unansweredCount` | `initPractice` / `refreshSession` / `recordAnswer` / `flushDrafts` / `retryDraft` / `retryAllDrafts` / `submit` / `requestRegrade` / `retryGrading` / `selfEvaluate` / `regenerateFromWrongPoints` / `loadPractices` / `askCoach` / `nextQuestion` / `prevQuestion` / `jumpTo` |
+| `diagnosis` | `currentReport`、`isLoading`、`isPending` | 无 | `loadReport` / `reset` |
+
+- **`practiceStore.latestDiagnosis` 是死状态**：声明并 return 了，但全仓库无任何写入或读取点（`rg "latestDiagnosis" src tests` 只命中声明与 return）。新增诊断相关状态前请先确认是否该复用它。
+- `materialStore` / `folderStore` / `diagnosisStore` 目前**没有 getter**；筛选/派生逻辑要么写成页面 `computed`，要么抽成 `src/**/utils/*.ts` 纯函数（后者是本仓库的主流做法）。
+
+**代码锚点**
+- `miniprogram/src/stores/practice.ts::latestDiagnosis`（死状态）
+- `miniprogram/src/stores/auth.ts::isLoggedIn`（函数而非 getter）
+- `miniprogram/src/pages/index/index.vue::activeFolderDetail`（页面派生 `computed`）
 
 ---
 
@@ -29,21 +49,20 @@
 
 | 类别 | 载体 | 示例 |
 |---|---|---|
-| 全局域状态 | Pinia store | `materialStore.materials`、`folderStore.folders`、`reportStore.currentReport`、`practiceStore.drafts` |
-| 派生状态 | Pinia getter（`computed`） | `materialStore.unclassifiedMaterials`、`reportStore.masteryTier`、`practiceStore.progressPercentage` |
-| 页面本地状态 | 页面内 `ref` | 列表页 `listData`、`page`、`loading`；题目页 `listData`、`total`、`activeBatchId` |
-| UI 瞬时状态 | 组件内 `ref` | 抽屉 `visible`、`submitting`、`moveVisible` |
-| 会话缓存 | Storage（白名单 3 键） | `auth_tokens`、`practice_drafts`、`user_settings` |
+| 全局域状态 | Pinia store | `materialStore.materialList`、`folderStore.folders`、`practiceStore.currentSession` |
+| 派生状态 | Pinia getter（`computed`） | `practiceStore.questions` / `attemptResults` / `answeredCount` / `unansweredCount` |
+| 页面本地状态 | 页面内 `ref` | `pages/index/index.vue` 的 `showFolderModal` / `folderToRename`；`questions/index.vue` 的 `isConfigMode` / `isLoadingKp` |
+| UI 瞬时状态 | 组件内 `ref` | `AiCoachDrawer` 的 `inputQuery` / `isThinking` / `messageList`；`GradingActionModal` 的 `reason` / `scoreInput` |
+| 跨页保留的筛选 | `folderStore.currentFolderId` | 工作台课程筛选（`'all'` / `'__none__'` / 课程 id） |
+| 会话缓存 | Storage（裸 key，无白名单类型） | `'access_token'`、`practice_draft_<userId>_<practiceId>`、`practice_submit_key_<practiceId>` |
 
-- **Page-local 分页数据与全局概览切片隔离**：二级列表页维护自己的 `listData`，仅对全局 `materialStore` 做增量 `addMaterial`，**禁止**用分页结果全量覆盖首页概览。首页概览只由 `setMaterialsList`（5 条精简视图）填充。
-- `materialStore` 同时提供 `setMaterials`/`setMaterialsList`（全量替换）、`addMaterial`（按 id upsert）、`appendMaterialsList`（追加）、`removeMaterial`/`updateMaterialFolder`（本地剔除/改归属，不发请求）。
+- **`folderStore.archiveFolder` 顺带重置筛选**：归档当前选中课程后，`currentFolderId` 回落 `'all'`。
+- **`materialStore.loadMaterialList(folderId)` 做别名清洗**：`folderId === 'all'` 时改传 `undefined`（即不带 `folder_id` 参数）。
 
 **代码锚点**
-- `miniprogram/src/subpackages/material/pages/list/index.vue::listData`
-- `miniprogram/src/subpackages/material/pages/list/index.vue::loadData`
-- `miniprogram/src/stores/materialStore.ts::addMaterial`
-- `miniprogram/src/stores/materialStore.ts::unclassifiedMaterials`
-- `miniprogram/src/pages/index/index.vue::recentMaterials`
+- `miniprogram/src/stores/folder.ts::archiveFolder`
+- `miniprogram/src/stores/material.ts::loadMaterialList`
+- `miniprogram/src/stores/practice.ts::getStorageKey`
 
 ---
 
@@ -51,60 +70,59 @@
 
 提升到全局 store 的判据：
 
-- **跨页面共享**：首页、列表页、详情页都读的资料集合 / 课程列表。
-- **需要跨页保留的会话**：`practiceStore.sessionId`/`questions`/`drafts` 在练习页与报告页、首页「继续练习」之间共享。
-- **报告与错题本**：`reportStore.currentReport`/`wrongRecords` 在报告详情页与错题本页共享。
+- **跨页面/跨步骤共享**：课程列表（工作台 ↔ 课程页）、资料列表（工作台 ↔ 课程页）、当前练习会话（出题页 → 作答页 → 结果页 ↔ 学情页）。
+- **需要跨页保活的进行中会话**：`practiceStore.currentSession` / `userAnswers` / `draftFailures`，供作答页、结果页、学情页「继续作答」共用。
+- **需要跨页保留的筛选**：`folderStore.currentFolderId`。
 
 保持页面本地（不进全局）：
 
-- 分页游标、`loading`、`activeTab`、抽屉开关、表单草稿等**仅本页生命周期有意义**的状态。
-- 筛选条件若需跨页保留则进 store（`reportStore.wrongFilters`），否则留在页面。
+- 分页游标、`loading`、`activeTab`、弹窗开关、表单草稿等仅本页生命周期有意义的状态。
 
 写入约定：
 
-- 状态变更优先走 store action（`setXxx`/`addXxx`/`toggleXxx`/`reset`），便于测试与追踪。
-- 已存在的直接赋值先例：练习页对 `practiceStore.isSubmitting` 直接赋值（`session/index.vue`），属于可直接 `ref` 语义的简单标志位；新增复杂状态仍应走 action。
+- 状态变更优先走 store action（`setToken` / `clearAuth` / `archiveFolder` / `setCurrentFolderId` / `recordAnswer`…），便于测试与追踪。
+- **页面直接给 store 的 `ref` 赋值在既有代码中存在**，属可接受的写法：`pages/profile/index.vue::chooseAvatar` 里 `authStore.user = { ...authStore.user!, avatar_url: profile.avatar_url }`（上传头像后只补一个字段，不必为此加 action）。
+- **测试里直接赋 `store.currentSession`** 是 `tests/practice.spec.ts` 的既定模式（`setActivePinia(createPinia())` 后手工构造会话）。
 
 **代码锚点**
-- `miniprogram/src/stores/practiceStore.ts::initSession`
-- `miniprogram/src/stores/reportStore.ts::setReport`
-- `miniprogram/src/stores/reportStore.ts::setWrongFilters`
-- `miniprogram/src/subpackages/practice/pages/session/index.vue`（`practiceStore.isSubmitting = true`）
+- `miniprogram/src/stores/practice.ts::initPractice`
+- `miniprogram/src/stores/folder.ts::setCurrentFolderId`
+- `miniprogram/src/pages/profile/index.vue::chooseAvatar`
+- `miniprogram/tests/practice.spec.ts`（`store.currentSession = {...}`）
 
 ---
 
 ## Server State
 
-store 中的服务端数据是**前端缓存**，由页面拉取后注入；不引入 react-query/SWR 类库，缓存一致性靠显式刷新与增量合并保证。
+store 中的服务端数据是**前端缓存**，由页面或 store 自身拉取后注入；不引入 react-query/SWR 类库，一致性靠显式刷新与重置保证。
 
-- **注入方式**：页面 `loadXxx()` 调 API → 成功后 `store.setXxx(...)` / `store.addXxx(...)`。
-- **增量合并**：`materialStore.addMaterial` 按 id upsert（存在则替换、否则 `unshift`）；列表页追加分页时按 id 去重后再 `append`。
+- **注入方式**：`loadXxx()` 调 API → 成功后写 store。全量替换与增量 upsert 并存：`materialStore.materialList` 在 `upload` 里 `unshift`、在 `fetchMaterialDetail` 里按 id 就地替换、在 `loadMaterialList` 里整体替换。
 - **重置语义**：切换上下文必须重置，避免旧数据残留。
-  - `reportStore.setReport(null/无 weak_points)` 会把 `weakPoints` 重置为 `[]`。
-  - `materialStore.clearKnowledgeState()` 切换资料前清空知识树、选中集与折叠态。
-  - `practiceStore.clearSession(id)` 删除指定草稿并清空会话，但保留其他练习草稿。
-- **令牌同步**：`userStore` 通过 `setTokenRefreshListener` 订阅请求层的静默刷新结果，刷新成功后同步内存 `tokens`；`request.ts` 不 import store，避免循环依赖。
-- **鉴权失效**：`hydrateProfile` 捕获 401/20001 时 `clearTokens()` + `clearProfile()`，回退未登录态。
+  - `diagnosisStore.reset()` 清空 `currentReport` 与 `isPending`。
+  - `practiceStore.initPractice()` 开头 `draftQueue.reset()`，并按「本地草稿优先、服务端 `user_answers` 其次」重建 `userAnswers`。
+  - `practiceStore.regenerateFromWrongPoints()` 成功后重置 `currentIndex` / `userAnswers` 并 `draftQueue.reset()`。
+  - `folderStore.archiveFolder()` 从 `folders` 中剔除并重置 `currentFolderId`。
+- **幂等**：`practiceStore.submit()` 的提交键在请求前落盘、成功后清理；`diagnosisStore.loadReport` 用 `POST /practices/{id}/diagnosis` 触发/取回（后端按幂等语义处理重复触发）。
+- **鉴权失效**：`request.ts::handleUnauthorized` 清 `access_token` 并调用 `authStore.clearAuth()`（`token = ''`、`user = null`、`uni.removeStorageSync('access_token')`），回退未登录态；`authStore.fetchProfile` 自身失败时静默 catch，等待统一拦截处理。
 
 **代码锚点**
-- `miniprogram/src/stores/userStore.ts::setTokenRefreshListener`
-- `miniprogram/src/stores/reportStore.ts::setReport`
-- `miniprogram/src/stores/materialStore.ts::clearKnowledgeState`
-- `miniprogram/src/stores/practiceStore.ts::clearSession`
-- `miniprogram/src/utils/request.ts::setTokenRefreshListener`
+- `miniprogram/src/stores/diagnosis.ts::reset`
+- `miniprogram/src/stores/practice.ts::initPractice`
+- `miniprogram/src/stores/auth.ts::clearAuth`
+- `miniprogram/src/utils/request.ts::handleUnauthorized`
 
 ---
 
 ## Common Mistakes
 
-- **用二级列表的分页结果全量覆盖全局 Store**：会冲空首页的 5 条概览切片。列表页必须维护本地 `listData`，只对全局做 `addMaterial` 增量。
-- **在 store 内发网络请求**：除 `userStore.hydrateProfile` 这一鉴权例外，其余 store 不得直连 API；网络经页面/composable → `src/api/*`。
-- **切换资料不重置知识树状态**：进入新资料前必须 `clearKnowledgeState()`，否则旧的选中/折叠态跨资料泄漏。
-- **`setReport` 不清理旧 `weak_points`**：新报告无 `weak_points` 时必须重置为 `[]`，否则残留上一份报告的薄弱点。
-- **越过 store 直接改共享数组**：应从 store 返回的 action 变更，保持响应式与可测性。
+- **不要以为 store 不能发请求**：本仓库的 store 就是编排层，5 个 store 都直连 `@/api`。真正要避免的是「在 `<script setup>` 里散落请求逻辑却不管 loading / 错误 / 状态重置」。
+- **不要在 store 里 import `request.ts` 去绕开 `@/api`**：网络出口经 `src/api/index.ts`，那里才有 adapter 归一化。
+- **不要忘记 `draftQueue.reset()`**：切换练习（`initPractice`）或再生题（`regenerateFromWrongPoints`）时必须重置队列，否则上一练习的待写草稿会串到新练习。
+- **不要在未全卷判完时写 `currentReport`**：`diagnosisStore` 的 `isPending` 语义就是「报告还不存在」，伪造零分报告会在结果页渲染出全错的假象。
+- **不要用 `practiceStore.latestDiagnosis`**：它是死状态，诊断报告的数据源是 `diagnosisStore.currentReport`。
+- **不要假设存在 `stores/index.ts`**：没有聚合入口，从 `@/stores/<domain>` 直接导入。
 
 **代码锚点**
-- `miniprogram/src/stores/materialStore.ts::clearKnowledgeState`
-- `miniprogram/src/stores/reportStore.ts::setReport`
-- `miniprogram/src/subpackages/material/pages/list/index.vue::loadData`
-- `miniprogram/src/stores/folderStore.ts`（头部「Store 内严禁发网络请求」注释）
+- `miniprogram/src/stores/practice.ts::initPractice`
+- `miniprogram/src/stores/diagnosis.ts::isPending`
+- `miniprogram/src/stores/material.ts`（store 直连 `@/api` 的先例）

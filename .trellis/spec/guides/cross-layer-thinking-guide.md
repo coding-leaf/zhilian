@@ -154,14 +154,25 @@ type guard / normalizer / adapter，再添加第 3 个读取方。契约的归�
 - [ ] 验证每条边界的错误处理（后端异常 → HTTP 状态码 → 前端提示）。
 - [ ] 检查数据能完整往返（round-trip 不丢字段）。
 - [ ] **逐一比对字段名**：把 `backend/app/schemas/*` 的响应模型与
-      `miniprogram/src/types/*` 及每个前端绑定对齐；名称漂移会静默渲染
-      `undefined`，且两侧测试可能同时通过。
+      `miniprogram/src/types/index.ts`（`Wire*` 类型）及每个前端绑定对齐；
+      名称漂移会静默渲染 `undefined`，且两侧测试可能同时通过。
       见 `.trellis/spec/backend/quality-guidelines.md` 的
       「Backend↔Frontend Response Field-Name Contract Pinning」。
+- [ ] **核对字段存在性而非只有字段名**：契约 fixture 必须按**具体端点**的响应模型取材，
+      不得跨端点搬运字段，更不得手工补一个服务端从不返回的字段——那样断言在生产恒不成立、
+      测试却恒绿（假通过）。同一实体不同响应模型的字段可以不同：题目响应**不含**切片正文，
+      练习作答项**含**。见「Contract Fixture Fidelity」。
 - [ ] 检查消费方复用了共享的 adapter / 归一化投影，而不是在本地断言 payload 字段。
 - [ ] 检查派生状态指回源标识（`id` / `version_id`），而不是自造第二游标。
 - [ ] 长耗时任务的状态机取值，后端与前端保持一致（例如
       `parse_status`、练习交卷 `status` 的终态集合）。
+- [ ] **需要"只派发一次"的动作，其状态跃迁走数据库条件更新而不是先读后写**：
+      解析派发、判题重试这类「用户命令 → 改状态 → 入队」的路径，若用「先读状态、再判断、
+      再写」，两个并发请求会凭同一次陈旧读双双通过校验、重复入队或重复执行。
+      见 `MaterialRepository.try_transition_version_status` 与
+      `PracticeRepository.try_transition_status`。
+- [ ] **等待任务完成的前端轮询要问「谁写终态」**：若后台任务失败后没人回写业务状态，
+      记录会永久停在"进行中"且用户无提示无恢复入口。派发链路必须有终态失败回写与主动重试入口。
 
 ---
 

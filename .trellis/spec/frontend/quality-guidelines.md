@@ -1,9 +1,9 @@
 # Quality Guidelines
 
-> **事实源**：`miniprogram/src/**`、`miniprogram/tests/**`、`miniprogram/vite.config.ts`、`miniprogram/.eslintrc.cjs`
-> **最后核对**：2026-09-28 @ ca062a1
-> **核对方式**：`rg "useMaterialPolling|usePracticeSession|setReport|MAX_FILE_SIZES" miniprogram/src miniprogram/tests`
-> 本文档 16 个 scenario 已于上述提交逐条对照代码核对，审计台账见 `.trellis/tasks/09-28-refresh-trellis-spec/audit-frontend.md`。
+> **事实源**：`miniprogram/src/**`、`miniprogram/tests/**`、`miniprogram/.eslintrc.cjs`、`miniprogram/package.json`、`miniprogram/vitest.config.ts`、`miniprogram/tsconfig.json`
+> **最后核对**：2026-09-29
+> **核对方式**：逐条对照代码锚点 + 实跑 `pnpm run lint` / `pnpm run type-check` / `pnpm run test:unit`
+> 本文档所述约定均已对照上述代码核实；与现状不符的历史承诺已在文末「已知偏离」中如实列出。
 
 > Code quality standards and verification baseline for frontend development.
 
@@ -11,769 +11,575 @@
 
 ## Overview
 
-Frontend quality standards for the UniApp / Vue 3 mini-program are enforced via ESLint, Prettier, vue-tsc, and Vitest.
+Frontend quality standards for the UniApp / Vue 3 mini-program are enforced via ESLint, vue-tsc, and Vitest.
 All frontend commands must be run within the `miniprogram/` directory using `pnpm`.
 
 ### Quality Gate Commands
 
 ```bash
 cd miniprogram
-pnpm run lint          # ESLint + Prettier rules check
-pnpm run type-check    # vue-tsc type checking across all Vue components and TS files
-pnpm run test:unit     # Vitest unit test suite
+pnpm run lint          # eslint . --ext .vue,.js,.ts
+pnpm run type-check    # vue-tsc --noEmit（仅 src/**，见 tsconfig.include）
+pnpm run test:unit     # vitest run
 ```
+
+等价入口：仓库根 `Taskfile.yml` 的 `task verify-frontend`（依次跑上述三条）/ `task test-frontend` / `task format`（`pnpm run lint --fix`）。
+
+**2026-09-29 实测**：三条门禁全绿；Vitest 输出 `Test Files 7 passed (7)` / `Tests 39 passed (39)`。
 
 ---
 
 ## Forbidden Patterns
 
-- **No `any` Usage**:
-  - `@typescript-eslint/no-explicit-any` is configured to `error`. Explicit `any` is strictly forbidden. Use `unknown`, generics, or proper domain interfaces.
-- **Direct Global Mutation**:
-  - Do not mutate global state outside of Pinia stores.
-- **Unscoped / Inline Secret Keys**:
-  - API keys, secrets, or environment credentials must never be committed into frontend source code.
+按 `.eslintrc.cjs` 的**真实配置**描述（不是理想态）：
+
+- **显式 `any` 是允许的**：`@typescript-eslint/no-explicit-any` 配置为 **`off`**。当前 `src/**` 有 28 处 `any`，主要是 `catch (error: any)` 与 uni 回调参数（`success: async (res: any)`）。**不要**在规范或 review 里把 `any` 说成被禁止——它不会被门禁拦下。
+- **未使用变量是允许的**：`@typescript-eslint/no-unused-vars` 为 **`off`**；`@typescript-eslint/ban-types` 同为 `off`。
+- **直接改全局状态而不经 store**：页面/组件对全局状态一律经 `useXxxStore()` 的 action 或 `ref` 赋值（store 内 `ref` 是响应式的，如 `authStore.user = {...}`），不在模块级维护可变的跨页单例。
+- **内联密钥**：API key / secret 不得进前端源码。`API_BASE_URL` 经 `(import.meta as any).env?.VITE_API_BASE_URL` 读取，默认 `http://localhost:8000/api/v1`。
+- **静默吞错**：主流程失败必须 toast；`catch { console.error(...) }` 只允许出现在非关键路径（如 `materialStore.loadKnowledgeTree`、`pages/review/index.vue::loadWrongs`），且不得让用户以为操作成功。
 
 ---
 
 ## Required Patterns
 
-- **Strict Type Annotations**:
-  - Component props, emits, and store actions must be strictly typed using TypeScript interfaces or types.
-  - Pinia stores must declare typed state, getters, and actions.
-- **Prettier Code Formatting**:
-  - Code must adhere to Prettier rules integrated into ESLint (`prettier/prettier: error`).
-- **Component File Size Control**:
-  - Keep components modular and concise. `max-lines` is set to 500 lines (warning threshold) to encourage decomposition into reusable subcomponents or composables.
+- **显式类型化的公开边界**：组件 props/emits、store action、`src/api/*` 的导出函数必须显式类型化（`any` 虽为 `off`，但门禁依赖 `vue-tsc --strict` 通过）。
+- **网络出口唯一**：所有 HTTP 调用经 `src/utils/request.ts` 的 `request` / `uploadFile`，或经 `src/api/*` 封装。页面可以直接调 `@/api`，但没有页面自行 `uni.request`。
+- **跳转必须带 `fail` 兜底**：全仓库 12 处 `uni.navigateTo` / `uni.redirectTo` **全部**带 `fail` 提示；`request.ts` 的 `uni.reLaunch` 与报告页的 `uni.switchTab` 同样带 `fail`。已知例外：`pages/auth/login.vue::handleLogin` 登录成功后的 `uni.switchTab` 未带 `fail`。
+- **可选 query 参数由 API 函数条件拼装**：API 函数内用 `queryParts.push(...)` + `encodeURIComponent` 组装，**真值才拼接**（如 `if (params?.folder_id) queryParts.push(...)`；分页用 `!== undefined` 判断以放行 `0`）。`request.ts` 本身**不做** GET data 清洗，它把 `options.data` 原样交给 `uni.request`。
+- **未判题不得计零分或答错**：`score` / `isCorrect` 保持 `null`，UI 渲染「判题中 / 待重判 / 未作答」。
+- **正式诊断必须有门禁**：未全卷判完不得请求/展示诊断报告。
 
 ---
 
 ## Testing Requirements
 
-- **Test Framework**: Vitest with `@vue/test-utils`.
-- **Test Locations**: All tests live under `miniprogram/tests/unit/`.
-- **Coverage & Pass Rate**: 100% test pass rate required. No regressions allowed.
-- **Mocking**: UniApp APIs (`uni.*`) and network requests must be properly mocked in unit tests using Vitest vi mocks.
+- **框架**：Vitest + `happy-dom` 环境 + `globals: true`，setup 文件 `tests/setup.ts`（`vitest.config.ts`）。
+- **位置**：`miniprogram/tests/` 平铺（**没有** `tests/unit/` 子目录层级）；后端契约样本在 `tests/fixtures/backendResponses.ts`，注释钉死事实源为 `backend/app/schemas/{practice,diagnosis,question}.py`。
+- **当前规模**：7 个 spec 文件 / 39 个用例 —— `apiContracts`(3)、`backendContracts`(15)、`diagnosisAndCompose`(5)、`draftQueue`(4)、`materialState`(2)、`practice`(2)、`practiceStore`(8)。
+- **`uni` 全局 mock**：`tests/setup.ts` 注入内存版 `uniMock`（`Map` 支撑的 `getStorageSync`/`setStorageSync`/`removeStorageSync`/`clearStorageSync`，以及 `showToast`/`showLoading`/`hideLoading`/`navigateTo`/`redirectTo`/`switchTab`/`showModal`）。
+- **网络 mock**：用 `vi.hoisted` + `vi.mock('@/utils/request', ...)` 替换 `request` / `uploadFile`，测试内按 `options.url` 匹配响应（`tests/practiceStore.spec.ts`、`tests/diagnosisAndCompose.spec.ts`）。
+- **Store 测试用 `setActivePinia(createPinia())`**（`beforeEach`）。
+- **只测纯函数、适配器与 store**：当前**没有任何组件挂载测试**；`@vue/test-utils` 虽在 `devDependencies` 中，但 `rg "test-utils|mount(" tests/` 无命中。需要验证组件行为时，优先把逻辑下移到纯函数（`reportView.ts` / `reviewView.ts` / `adapters/*`）再测。
+- **通过率**：门禁要求 100% 通过，不允许回归；**没有覆盖率阈值**（`vitest` 未配 coverage，与后端 `--cov-fail-under=80` 不同）。
+- **测试文件不受类型门禁约束**：`tsconfig.include` 只覆盖 `src/**`，`vue-tsc` 不检查 `tests/**`。新增测试请自行保持类型正确，不要指望门禁兜住。
 
 ---
 
-## Architectural Contracts & Composables Patterns
+## 契约 Scenario
 
-### Scenario: Long Polling with Adaptive Exponential Backoff
+### Scenario: 草稿串行写入队列（同题串行 + 失败可见 + 交卷前 flush）
 
 #### 1. Scope / Trigger
-- 资料解析、报告生成等长耗时异步任务的前端轮询检测。
+- 练习作答的每一次改动（单选/多选/填空/简答/判断题）。
 
 #### 2. Signatures
 ```typescript
-// miniprogram/src/subpackages/material/composables/useMaterialPolling.ts
-export function useMaterialPolling(
-  materialId: Ref<string> | string,
-  options?: UseMaterialPollingOptions,
-): { status; materialData; material; isPolling; error; startPolling; stopPolling };
-
-interface UseMaterialPollingOptions {
-  interval?: number;         // 默认 1500ms
-  backoffFactor?: number;    // 默认 1.5
-  maxInterval?: number;      // 默认 8000ms
-  maxTimeout?: number;       // 默认 180000ms (3分钟熔断保护)
-  immediate?: boolean;       // 默认 true
-  onStatusChange?: (status: MaterialStatus) => void;
-  onComplete?: (data: MaterialItem) => void;
-  onError?: (err: unknown) => void;
-  onTimeout?: () => void;
+// miniprogram/src/utils/draftQueue.ts
+export interface DraftQueue {
+  enqueue(questionId: string, answer: unknown): void;
+  flush(): Promise<boolean>;          // false = 仍有失败未恢复
+  retry(questionId: string): Promise<void>;
+  retryAll(): Promise<void>;
+  reset(): void;
+  hasFailures(): boolean;
+  state(): DraftQueueState;           // { isPending, failures: { questionId, error }[] }
 }
-// 列表版：useMaterialListPolling({ items, isPageVisible, onItemUpdated })
+export function createDraftQueue(
+  save: (questionId: string, answer: unknown) => Promise<void>,
+  onChange?: (state: DraftQueueState) => void,
+): DraftQueue;
 ```
 
 #### 3. Contracts
-- 严禁使用固定无退避的 `setInterval` 长期轮询。
-- 必须基于 `setTimeout` 调度并支持动态退避递增：$t_{next} = \min(t \times \text{factor}, t_{max})$。
-- 必须包含超时熔断保护（默认 3 分钟），超时后必须主动释放定时器并提示用户，防止单页面无线挂起。
-- 在页面卸载 (`onUnmounted`) 或命中终态（`READY`, `FAILED`, `COMPLETED`, `RETAKE_REQUIRED`）时必须即刻停帧清除定时器。
+- **同题串行**：同一 `questionId` 同时在飞的写入最多 1 个（`workers: Map<string, Promise<void>>`）；写入期间的新输入只覆盖 `latest` 的**最后值**，不排队堆积。
+- **跨题并行**：不同题目各自起 worker，互不阻塞、互不串数据。
+- **退出瞬间窗口必须封死**：worker 的 `finally` 里若发现 `latest` 又有新值，要立刻重新 `startWorker`，否则那次输入会被漏派发。
+- **`flush()` 反复收敛**：在「等待在途 worker」与「把等待期间新入队的题目继续派发」之间循环，直到两者都为空（上限 1000 轮防死循环），返回 `failures.size === 0`。
+- **失败可见**：写入失败进 `failures`，经 `onChange` 冒泡到 `practiceStore.draftFailures`，由会话页顶部横幅展示并给出「重试」按钮（`retryAllDrafts`）。不静默吞错。
+- **交卷前必须 flush 成功**：`practiceStore.submit()` 先 `await draftQueue.flush()`，返回 `false` 时抛 `Error('仍有作答未保存成功，请检查网络后重试')` 并**不提交**。
 
-#### 4. Wrong vs Correct
+#### 4. Validation & Error Matrix
+- 同题快速连续输入 `A → AB → ABC` → 实际落库为 `A`、`ABC`（首值与最后值；中间值被合并掉）。
+- 不同题目并发 → 都落库，无交叉污染。
+- 写入失败 → `hasFailures()` 为真，`flush()` 返回 `false`；`retry(questionId)` 用**最后一次作答**重发。
+- 交卷时仍有失败 → 提交被阻断，错误信息上抛给 `uni.showToast`。
+
+#### 5. Wrong vs Correct
 ##### Wrong
 ```typescript
-// 错误做法：固定死循环轮询，无超时与退避，导致客户端卡顿与服务端压力激增
-const timer = setInterval(async () => {
-  await fetchDetail();
-}, 2000);
-```
-##### Correct
-```typescript
-// 正确做法：自适应退避与超时熔断保护
-const scheduleNext = (currentInterval: number) => {
-  if (Date.now() - startTime > maxTimeoutMs) {
-    stopPolling();
-    onTimeout?.();
-    return;
-  }
-  timer = setTimeout(async () => {
-    await pollAction();
-    scheduleNext(Math.min(currentInterval * backoffFactor, maxInterval));
-  }, currentInterval);
+// 错误：每次输入直接发请求 —— 快速输入乱序到达，后到的旧值覆盖新值
+const handleInput = (qid: string, value: string) => {
+  void apiSavePracticeDraft(practiceId, qid, value);
 };
-```
-
-#### 代码锚点
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::useMaterialPolling`
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::scheduleNext`
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::isTerminalStatus`
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::handleTimeout`
-- `miniprogram/src/subpackages/material/composables/useMaterialListPolling.ts::useMaterialListPolling`
-- `miniprogram/tests/unit/composables/useMaterialPolling.spec.ts`
-
----
-
-### Scenario: User Auth State Hydration & Page Isolation
-
-#### 1. Scope / Trigger
-- 小程序启动 (`onLaunch`)、切前台 (`onShow`) 以及二级列表页与首页交互时的数据隔离与鉴权保护。
-
-#### 2. Signatures
-```typescript
-interface UserStoreActions {
-  initFromStorage: () => void;
-  hydrateProfile: () => Promise<void>;
-  logout: () => void;
-}
-```
-
-#### 3. Contracts
-- **鉴权静默水合**:
-  - 本地存储白名单 (`auth_tokens`) 恢复令牌后，必须在 `onLaunch` 与 `onShow` 时异步触发 `hydrateProfile()` 校验令牌有效性并拉取真实用户画像。
-  - 若服务端返回 401 或凭据过期，必须彻底清理本地令牌并重置用户画像，平滑回退至未登录态，严禁伪造虚假 Token。
-- **列表页与全局 Store 隔离**:
-  - 二级列表页应管理自身的分页展示数据集 (`listData`)，禁止用局部筛选/分页结果全量覆盖全局首页的概览切片。
-  - 全局 Store 仅接收增量注入 (`addMaterial`)，防止因单页重置导致全局或返回首页时资料丢失。
-  - 列表页与工作台首页均应在 `onShow` 阶段触发安全刷新，避免页面栈回退时呈现空白。
-
-#### 4. Wrong vs Correct
-##### Wrong
-```typescript
-// 错误做法：二级列表页在加载全部或分页时粗暴覆盖全局 Store，导致首页资料被污染或冲空
-function loadData(items: MaterialItem[]) {
-  materialStore.setMaterialsList(items); // 破坏了首页原本的 5 条精简视图
-}
+// 错误：交卷不等草稿 —— 用户刚输入的答案还没落库就交卷
+await apiSubmitPractice(practiceId, true, key);
 ```
 ##### Correct
 ```typescript
-// 正确做法：列表页维护独立展示状态，仅对全局缓存执行增量更新
-const listData = ref<MaterialItem[]>([]);
-function loadData(items: MaterialItem[]) {
-  listData.value = items;
-  items.forEach((item) => materialStore.addMaterial(item));
-}
+// 正确：内存 + 本地 storage 先落，再入队串行写后台
+practiceStore.recordAnswer(qid, value);
+// 正确：交卷前 flush，失败即阻断
+const saved = await draftQueue.flush();
+if (!saved) throw new Error('仍有作答未保存成功，请检查网络后重试');
 ```
 
+#### 6. Tests Required
+- `tests/draftQueue.spec.ts`：同题快速输入合并、跨题并行不串、失败可见且可重试、flush 期间新入队不被漏掉。
+- `tests/practiceStore.spec.ts`：交卷前 flush 且刷新会话；草稿保存失败时阻断提交并上抛失败；同一提交重试复用稳定 `Idempotency-Key`。
+
 #### 代码锚点
-- `miniprogram/src/App.vue::onLaunch`
-- `miniprogram/src/App.vue::onShow`
-- `miniprogram/src/stores/userStore.ts::initFromStorage`
-- `miniprogram/src/stores/userStore.ts::hydrateProfile`
-- `miniprogram/src/stores/userStore.ts::logout`
-- `miniprogram/src/stores/materialStore.ts::addMaterial`
-- `miniprogram/src/subpackages/material/pages/list/index.vue::listData`
+- `miniprogram/src/utils/draftQueue.ts::createDraftQueue`
+- `miniprogram/src/utils/draftQueue.ts::flush`
+- `miniprogram/src/utils/draftQueue.ts::startWorker`
+- `miniprogram/src/stores/practice.ts::recordAnswer`
+- `miniprogram/src/stores/practice.ts::submit`
+- `miniprogram/src/subpackages/practice/pages/session/index.vue::.draft-banner`
+- `miniprogram/tests/draftQueue.spec.ts`
+- `miniprogram/tests/practiceStore.spec.ts`
 
 ---
 
-### Scenario: Material Status Filter & Parse Progress Contract
+### Scenario: 草稿本地持久化按「用户 + 练习」隔离
 
 #### 1. Scope / Trigger
-- 资料列表状态筛选（全部 / 解析中 / 待重拍 / 已完成）与解析进度展示。历史缺陷：`all` 标签误传 `status=undefined` 被后端当作有效过滤条件，导致「全部」返回空。
-
-#### 2. Signatures
-```typescript
-// GET /api/v1/materials?status=<value>&page=&page_size=
-// POST /api/v1/materials/{material_id}/parse   -> 手动触发/重新调度解析
-interface MaterialItem {
-  status: MaterialStatus;
-  parse_status?: string | null;        // queued/parsing_doc/ocr_processing/extracting_knowledge/embedding_generation/ready/failed
-  progress_percentage?: number | null; // 0-100
-}
-```
-
-#### 3. Contracts
-- **空参数必须清洗为“不过滤”**：前端 `request` 层与后端路由层双向清洗 `undefined`/`null`/空串/占位符（`all`/`undefined`/`null`）；后端未识别状态归一化为 `None`，禁止落成 `status == ''` 这类恒假条件。
-- **状态语义映射（后端 Service 统一解析）**：
-  - `parsing` → `[pending, parsing]`（多状态聚合）
-  - `ready` / `completed` → `[ready]`
-  - `retake_required` → `[retake_required]`（资料主表**存在**该状态 `MaterialStatus.RETAKE_REQUIRED`，后端按单值过滤；API 层 `valid_statuses` 接纳 `retake_required` / `completed` 两个前端别名）
-  - 其余合法状态 → 单值过滤
-- **解析进度装配禁止 N+1**：列表装配 `parse_status`/`progress_percentage` 时，必须通过 `selectinload(Material.versions)` 等批量方式预加载版本，查询数须为常数级（与 page_size 无关），严禁在 item 循环内逐条查版本表。
-- **版本选择语义**：优先 `current_version_id` 命中；否则取 `version_number` 最大者（`Material.versions` 已按 `version_number desc` 排序，`versions[0]` 即最新）。
-
-#### 4. Wrong vs Correct
-##### Wrong
-```python
-# 错误做法：列表逐条查询版本表，page_size=20 时最多 40 次额外查询（N+1）
-for item in items:
-    version = self.repo.get_latest_version(item.id, user_id)
-    item.parse_status = version.parse_status
-```
-##### Correct
-```python
-# 正确做法：仓储批量预加载版本集合，Service 内存内挑选目标版本（固定 1 次额外查询）
-stmt = stmt.options(selectinload(Material.versions))
-# ...
-version = self._pick_loaded_version(item)  # versions[0] 即最新，或命中 current_version_id
-```
-
-#### 代码锚点
-- `miniprogram/src/api/material.ts::fetchMaterialList`（空参数清洗）
-- `miniprogram/src/utils/request.ts::request`（GET data 清洗 `undefined/null/''`）
-- `miniprogram/src/types/material.ts::MaterialItem`（`parse_status` / `progress_percentage`）
-- `miniprogram/src/subpackages/material/pages/list/index.vue::currentStatus`
-- `miniprogram/src/subpackages/material/components/MaterialCard.vue::PARSE_STEP_LABELS`
-- `backend/app/services/material.py::MaterialService._resolve_status_filter`
-- `backend/app/api/v1/materials.py`（`cleaned_status` / `valid_statuses`）
-- `backend/app/repositories/material.py`（`selectinload(Material.versions)`）
-- `backend/app/services/material.py::MaterialService._pick_loaded_version`
-
----
-
-### Scenario: Material Subpackage Navigation Param Contract
-
-#### 1. Scope / Trigger
-- 资料分包内页面间跳转（`list` / `detail` / `knowledge-tree` / `questions` / `practice` / `report`）与生成成功后的跳转。
+- 换账号或切换练习后，上一账号/上一练习的本地草稿不得被复用到新会话。
 
 #### 2. Contracts
-- **主键参数名统一为 `material_id`**（snake_case，与后端查询参数一致）；接收页必须兼容 `materialId` / `id` 兜底解析，禁止只认一种导致「跳过去却空白」。
-- 所有 `uni.navigateTo` 必须带 `fail` 兜底提示，禁止静默无响应（用户会以为「原地不动」）。
-- 生成成功后跳转目标统一：`/subpackages/material/pages/questions/index?material_id=<id>`。
-- 页面数据源：二级列表页使用**页面本地 `listData`**，`onShow` 安全刷新；禁止用分页结果全量覆盖全局 Store。
+- 本地草稿 key 为 `practice_draft_${resolveUserId()}_${practiceId}`，`resolveUserId()` 取 `useAuthStore().user?.id`，取不到时回退 `'anonymous'`（`try/catch` 包裹，store 未初始化也不抛）。
+- 幂等键 key 为 `practice_submit_key_${practiceId}`，与用户无关。
+- 初始化练习时**优先恢复本地草稿**，其次才用服务端 `session.user_answers`；两者都为空则空作答。
+- 交卷成功后同时清 `practice_draft_*` 与 `practice_submit_key_*`。
+
+#### 3. Tests Required
+- `tests/practiceStore.spec.ts`：本地草稿按用户隔离，只恢复当前用户的草稿。
+
+#### 代码锚点
+- `miniprogram/src/stores/practice.ts::getStorageKey`
+- `miniprogram/src/stores/practice.ts::resolveUserId`
+- `miniprogram/src/stores/practice.ts::initPractice`
+
+---
+
+### Scenario: 交卷幂等键稳定性
+
+#### 1. Scope / Trigger
+- 交卷请求 `POST /practices/{id}/submit` 的网络重试、用户重复点击、App 重启后重试。
+
+#### 2. Signatures
+```typescript
+// miniprogram/src/api/index.ts
+export function apiSubmitPractice(
+  practiceId: string,
+  confirmUnanswered = true,
+  idempotencyKey = practiceId,
+): Promise<{ practice_id: string; status: string; task_id?: string }>;
+```
+请求头携带 `Idempotency-Key`。
+
+#### 3. Contracts
+- 同一练习的同一轮提交必须复用**同一个** key：`submit()` 先读 `practice_submit_key_<id>`，读不到才用 `randomKey()`（`Date.now().toString(36)` + `Math.random().toString(36).slice(2, 10)`）生成并**立即落盘**，然后才发请求。
+- 只有在「提交 + 拉取会话」都成功后，才 `removeStorageSync` 掉草稿 key 与 submit key。
+- key 落盘必须发生在请求之前，否则 App 重启后生成新 key，重试不再幂等。
+
+#### 4. Tests Required
+- `tests/practiceStore.spec.ts`：同一提交重试时 `Idempotency-Key` 保持不变。
+
+#### 代码锚点
+- `miniprogram/src/stores/practice.ts::submit`
+- `miniprogram/src/stores/practice.ts::getSubmitKeyStorage`
+- `miniprogram/src/api/index.ts::apiSubmitPractice`
+
+---
+
+### Scenario: 正式诊断必须等全卷判完（不得伪造零分报告）
+
+#### 1. Scope / Trigger
+- 结果页 / 报告页首屏加载、判题轮询、「判题中」态展示。
+
+#### 2. Signatures
+```typescript
+// miniprogram/src/stores/diagnosis.ts
+const loadReport = async (
+  practiceId: string,
+  maxAttempts = 15,
+  intervalMs = 2000,
+): Promise<DiagnosisReport | null>;   // null = 尚未判完
+
+// miniprogram/src/api/adapters/practice.ts
+export function summarizeProgress(session: PracticeSession | null): PracticeProgress;
+// PracticeProgress: { total, graded, grading, pendingRegrade, unanswered, fullyGraded }
+```
+
+#### 3. Contracts
+- **触发时序**：交卷 → `uni.redirectTo` 结果页 → 结果页逐题渲染判题进度 → 全卷判完才请求诊断。**不存在**「交卷后直达诊断报告」的路径。
+- **两个全判口径并存，各自使用**：
+  - `diagnosisStore.loadReport` 的判定是 `Boolean(session.completed_at) && session.status === 'completed'`；命中才调 `POST /practices/{id}/diagnosis` 取回/生成正式报告，否则置 `isPending = true`、`currentReport` 保持 `null`。
+  - `summarizeProgress().fullyGraded` 更严格：`completed_at` 非空 **且** `grading === 0` **且** `pendingRegrade === 0` **且** 有题目；结果页的 UI 门禁用它。
+- **未判完必须可视化**：`ReportSummaryCard` 在 `!isFullyGraded` 时渲染「全卷仍在判题中，正式学情诊断将在全部题目判完后自动生成。待判题目不计入错题与得分统计。」，得分率显示 `—`。
+- **轮询终止条件**：结果页 `pollGrading` 最多 20 轮、每轮 2.5s，命中 `fullyGraded` **或** `needsRetry` 即 break（避免无效等待后仍无提示）；`onUnload` 必须 `clearTimeout`。
+- **失败/缺失**：`loadReport` 用尽 `maxAttempts` 仍返回 `null`，不抛错、不伪造报告。
+
+#### 4. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：交卷后直接 POST /diagnosis 并渲染报告 —— 判题未完成时会渲染出零分/全错
+await submitPractice(id);
+const report = await triggerDiagnosis(id);
+render(report);
+```
+##### Correct
+```typescript
+// 正确：先确认全卷判完，再触发/取回正式报告
+const fullyGraded = Boolean(session.completed_at) && session.status === 'completed';
+if (!fullyGraded) {
+  isPending.value = true;
+  await sleep(intervalMs);
+  continue;
+}
+currentReport.value = await apiTriggerDiagnosis(practiceId);
+```
+
+#### 5. Tests Required
+- `tests/diagnosisAndCompose.spec.ts`：未判完时 `loadReport` 返回 `null`、`isPending` 为真、`currentReport` 仍为 `null`，且**不发出**任何 `/practices/*/diagnosis` 请求；`completed_at` 落库后才拉取正式报告。
+- `tests/backendContracts.spec.ts`：`fullyGraded` 只在 `completed_at` 落库后为真。
+
+#### 代码锚点
+- `miniprogram/src/stores/diagnosis.ts::loadReport`
+- `miniprogram/src/api/adapters/practice.ts::summarizeProgress`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::pollGrading`
+- `miniprogram/src/subpackages/report/components/ReportSummaryCard.vue`（`.pending-notice`）
+- `miniprogram/tests/diagnosisAndCompose.spec.ts`
+
+---
+
+### Scenario: 未判定题目不得显示为零分或答错
+
+#### 1. Scope / Trigger
+- 逐题结果卡片的判题状态与分数展示。
+
+#### 2. Contracts
+- `resolveGradingStatus(item)` 的优先级：`!is_answered → 'unanswered'`；`grading_status === 'pending_regrade' → 'pending_regrade'`；`grading_status === 'graded' → 'graded'`；有 `score` 数字 → `'graded'`；否则 → `'grading'`。
+- `isCorrect` 只在 `gradingStatus === 'graded' && typeof score === 'number'` 时计算（`score >= maxScore`），其余情况一律 `null`。
+- `score` 只在 `typeof item.score === 'number'` 时取值，否则 `null`（不得回退成 `0`）。
+- `isPending = gradingStatus === 'grading' || gradingStatus === 'pending_regrade'`。
+- UI 文案由 `resolveResultBadge` 统一映射：`未作答` / `判题中` / `待重判` / `正确 x/y` / `错误 x/y`；`isCorrect === null` 一律落「判题中」。
+- 得分/错题统计不得把 pending 项算进去：报告页 `wrongCount` 在未全判时用 `results.filter(r => r.isCorrect === false).length`，全判后才用后端 `report.wrong_count`。
+
+#### 3. Tests Required
+- `tests/backendContracts.spec.ts`：pending 项 `score === null`、`isCorrect === null`、`isPending === true`；未作答项 `gradingStatus === 'unanswered'`；`summarizeProgress` 统计为 `{ total: 3, graded: 1, pendingRegrade: 1, unanswered: 1, fullyGraded: false }`。
+
+#### 代码锚点
+- `miniprogram/src/api/adapters/practice.ts::resolveGradingStatus`
+- `miniprogram/src/api/adapters/practice.ts::buildAttemptResults`
+- `miniprogram/src/subpackages/report/utils/reportView.ts::resolveResultBadge`
+- `miniprogram/src/subpackages/report/components/AttemptResultCard.vue`（待重判/判题中分支）
+
+---
+
+### Scenario: 判题重试入口只在 `partially_graded` 出现
+
+#### 1. Scope / Trigger
+- 主观题 LLM 超时降级为待重判，或判题任务终态失败被后端回写为待重判。
+
+#### 2. Contracts
+- `needsGradingRetry(session)` 等价于 `session?.status === 'partially_graded'`。
+- **`submitted`（判题进行中）不提供重试入口**，避免重复派发判题任务。
+- 结果页的 `needsRetry = needsGradingRetry(session) && !fullyGraded`：已全判完则不显示。
+- `retryGrading(practiceId)` 调 `POST /practices/{id}/regrade` 后必须 `refreshSession` 读回真实状态；无进行中练习时抛 `Error('当前没有可重试判题的练习')`。
+
+#### 3. Tests Required
+- `tests/backendContracts.spec.ts`：`partially_graded` 为真、`submitted` / `completed` 为假。
+- `tests/practiceStore.spec.ts`：重试会重新派发判题并刷新会话；无活跃练习时拒绝重试。
+
+#### 代码锚点
+- `miniprogram/src/api/adapters/practice.ts::needsGradingRetry`
+- `miniprogram/src/api/index.ts::apiRetryPracticeGrading`
+- `miniprogram/src/stores/practice.ts::retryGrading`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::handleRetryGrading`
+
+---
+
+### Scenario: 后端 wire 契约归一化单点
+
+#### 1. Scope / Trigger
+- 任何消费后端 JSON 的页面 / 组件 / store。
+
+#### 2. Contracts
+- `items[].question_snapshot` 是练习卷面的**唯一**题面来源；禁止引用不存在的 `data.items` / `question.stem` 之类的漂移字段。
+- 诊断报告只消费后端真实字段；禁止假定 `details` / `score` / `accuracy` / `weaknesses`。
+- 错题题干只来自后端下发的 `question_snapshot`（`wrongSnapshotStem` 缺失时返回 `'题干快照缺失'`）。
+- `source_quote` 的正文只经由**练习详情响应**下发（`PracticeService._attach_source_snippets`）；题目详情响应不含切片正文，测试 fixture 与断言都不得伪造（`tests/backendContracts.spec.ts` 显式断言 `source_quote` 为 `undefined`）。
+- 资料状态大小写归一：后端可能返回 `'READY'`，`adaptMaterial` 统一降为小写状态机取值，未知值回退 `'pending'`。
+
+#### 3. Tests Required
+- `tests/apiContracts.spec.ts`（3 例）+ `tests/backendContracts.spec.ts`（15 例）覆盖三条主链路 + 错题分组 + 出题规划。
+
+#### 代码锚点
+- `miniprogram/src/api/adapters/practice.ts::adaptPractice`
+- `miniprogram/src/api/adapters/question.ts::adaptQuestion`
+- `miniprogram/src/api/adapters/diagnosis.ts::adaptDiagnosisReport`
+- `miniprogram/src/api/adapters/wrong.ts::wrongSnapshotStem`
+- `miniprogram/tests/fixtures/backendResponses.ts`
+
+---
+
+### Scenario: 多考点出题必须真覆盖，且遵守单批上限
+
+#### 1. Scope / Trigger
+- 勾选多个考点出题、剔除/重生成题目后的「开始作答」门禁。
+
+#### 2. Signatures
+```typescript
+export const MAX_QUESTION_BATCH = 20;
+export function planGenerationBatches(
+  knowledgePointIds: string[],
+  desiredCount: number,
+): GenerationBatch[];                       // { knowledgePointIds, count }[]
+export function computeKnowledgeCoverage(
+  questions: Array<Pick<QuestionItem, 'knowledge_point_id'>>,
+  selectedKnowledgePointIds: string[],
+): CoverageResult;                          // { covered, missing, ratio }
+```
+
+#### 3. Contracts
+- **目标题量取上界**：`target = max(uniqueKpCount, desiredCount)`，即「覆盖全部已选考点」优先于用户指定题量；UI 必须把题量调整**预先披露**（`generationNotice` / 计划题量提示），不静默加量。
+- **分批**：按 `MAX_QUESTION_BATCH = 20` 切块；每批 `count` 取 `min(20, max(chunk.length, share))`，保证每批考点数不超过题数。
+- **覆盖以题目快照为准**：`computeKnowledgeCoverage` 只认题目实际携带的 `knowledge_point_id`；`missing.length > 0` 时 `canStart` 为假，必须先 `fillCoverageGap()` 补齐或调整考点。
+- **剔题后重算**：`remainingQuestions` 变化会驱动 `coverage` / `canStart` / `generationNotice` 重算；剔除到覆盖缺口时开始按钮自动禁用。
+- **失败/空结果不推进状态**：生成 0 道合格题时 toast 并保持原状态，不清空既有题目。
+
+#### 4. Tests Required
+- `tests/backendContracts.spec.ts`：每个已选考点都被覆盖且单批不超 20；目标题量被抬到考点数；覆盖不足时报缺口而非假定成功。
+- `tests/diagnosisAndCompose.spec.ts`：计划题量抬升；剔除造成缺口时阻断开始；补齐只对缺失考点生成。
+
+#### 代码锚点
+- `miniprogram/src/api/adapters/question.ts::planGenerationBatches`
+- `miniprogram/src/api/adapters/question.ts::computeKnowledgeCoverage`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::canStart`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleStartPractice`
+
+---
+
+### Scenario: 错题再生题范围必须单一归属
+
+#### 1. Scope / Trigger
+- 学情页按课程/资料分组巩固错题、报告页「错题针对性生题」。
+
+#### 2. Contracts
+- 分组枚举来自后端 `groups`（覆盖完整错题本而非当前分页第一页）：一个完整课程（`folder_id`）或一份未分类资料（`material_id`），两者互斥。
+- `resolveRegenerateScope(option)` 必须且只能解析出 `{ folderId }` 或 `{ materialId }`；两者皆无时返回 `null`。
+- `practiceStore.regenerateFromWrongPoints` 的三道守卫：知识点为空 → `'未提供错题知识点'`；scope 为空 → `'缺少课程或资料范围，无法再生题'`；两者同时给出 → `'再生题范围只能指定一个课程或一份资料'`。
+- 生成结果为空 → `'未生成可用题目，请稍后重试'`，不落空练习。
+- 客户端的 `recordsInGroup` 按 `folder_id` / `material_id` 精确匹配，不得把跨课程错题混进同一分组。
+- 报告页的 scope 来自练习详情自身（`resolveSessionScope`：`folder_id` 优先，其次 `material_id`），不让页面猜归属。
 
 #### 3. Wrong vs Correct
 ##### Wrong
 ```typescript
-// 错误：同一资料主键在不同页面用不同参数名，接收页解析失败 → 空白/原地不动
-uni.navigateTo({ url: `/subpackages/material/pages/detail/index?id=${id}` });        // 发送 id
-// detail 页只读 query.material_id → undefined → 不加载
+// 错误：把多个课程的错题汇总成一次再生题 —— 归属错误的学习记录
+await regenerate(allKpIdsFromAllCourses, { folderId: firstCourseId });
 ```
 ##### Correct
 ```typescript
-// 正确：统一 material_id，接收页兼容兜底，且带 fail 提示
-uni.navigateTo({
-  url: `/subpackages/material/pages/questions/index?material_id=${id}`,
-  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-});
-// 接收页：initPage(q?.material_id || q?.materialId || q?.id || props.id)
+// 正确：先选分组，再按该分组的单一归属再生
+const scope = resolveRegenerateScope(activeGroup);       // 唯一归属或 null
+if (!scope || !activeKpIds.length) return;
+await practiceStore.regenerateFromWrongPoints(activeKpIds, scope);
 ```
 
 #### 4. Tests Required
-- 页面单测覆盖参数解析：`material_id` / `materialId` / `id` 三种入参均能正确加载。
+- `tests/backendContracts.spec.ts`：分组为一个课程 + 一个未分类资料；再生范围恰好落一个课程或一个未分类资料；按分组过滤不混课程。
+- `tests/practiceStore.spec.ts`：再生前必须恰有一个课程或资料范围；在单一范围内再生并回报覆盖率。
 
 #### 代码锚点
-- `miniprogram/src/subpackages/material/utils/questionGeneration.ts::QUESTION_PAGE_PATH`
-- `miniprogram/src/subpackages/material/utils/questionGeneration.ts::navigateToQuestionPage`
-- `miniprogram/src/subpackages/material/pages/questions/index.vue::initPage`
-- `miniprogram/src/subpackages/material/composables/useMaterialCardActions.ts::handleCardClick`
-- `miniprogram/src/subpackages/material/pages/list/index.vue::listData`
-- `miniprogram/tests/unit/pages/questionList.spec.ts`
+- `miniprogram/src/api/adapters/wrong.ts::buildWrongGroupOptions`
+- `miniprogram/src/api/adapters/wrong.ts::resolveRegenerateScope`
+- `miniprogram/src/api/adapters/wrong.ts::recordsInGroup`
+- `miniprogram/src/stores/practice.ts::regenerateFromWrongPoints`
+- `miniprogram/src/subpackages/report/utils/reportView.ts::resolveSessionScope`
+- `miniprogram/src/pages/review/index.vue::handleBatchRegenerate`
 
 ---
 
-### Scenario: WeChat Mini-Program 禁止递归组件，深层树用扁平化渲染
+### Scenario: 资料解析状态机与手动解析门禁
 
 #### 1. Scope / Trigger
-- 微信小程序 (`mp-weixin`) 端渲染任意深度层级数据（知识点树、目录、组织树等）。
-- 历史缺陷：`KnowledgeTreeNode.vue` 在模板中递归调用自身 + 自引用导入，页面整页崩溃 `TypeError: Cannot read properties of undefined (reading 'children')`，并伴随 `Setting data field "uP" to undefined is invalid`。
+- 资料上传后手动触发解析、解析中展示、终态判定。
 
 #### 2. Signatures
 ```typescript
-// miniprogram/src/subpackages/material/utils/tree.ts
-export interface KnowledgeTreeRow {
-  node: KnowledgeTreeNode;
-  depth: number; // 根为 1
-}
-export function flattenVisibleTree(
-  nodes: KnowledgeTreeNode[],
-  collapsedMap?: Record<string, boolean>,
-): KnowledgeTreeRow[];
+// miniprogram/src/utils/materialState.ts
+export function canStartMaterialParse(material: MaterialState): boolean;
+export function isMaterialParsing(material: MaterialState): boolean;
+export function materialStatusText(material: MaterialState): string;
+// MaterialState = Pick<MaterialItem, 'status' | 'parse_status'> | null | undefined
 ```
 
 #### 3. Contracts
-- **禁止组件模板递归自渲染**：不得在组件内 `import` 自身，也不得在模板中递归 `<Self v-for="child in node.children">`。
-- uni-app mp-weixin 通过单一 `u-p`/`uP` 字符串 + 模块级 `propsCaches` 透传 props（`common/vendor.js` 的 `renderProps` / `findComponentPropsData`）；递归自引用组件会使该链路丢失 props，子组件 `props.node` 变为 `undefined`，计算属性首抛 `reading 'children'`。
-- **深层树渲染路径**：数据仍是嵌套树 → 用纯函数 `flattenVisibleTree` 前序展开为「可见行（`node` + `depth`），折叠节点的子孙被裁剪」→ 页面**单层** `v-for` 渲染行组件，`level` 传渲染 `depth`。
-- 折叠/级联语义：行组件持有完整 `node`（含 `children`），级联勾选继续用 `collectNodeAndDescendantIds` + `toggleKnowledgeSubtree`；「全选/覆盖率」基于全量 `flattenKnowledgeTree`，与折叠状态无关。
-- **勾选态 O(N) 预算**：页面必须用 `buildCheckStatusMap(nodes, selectedSet)`（单次自下而上遍历，O(N)）预计算 `nodeId -> checked/indeterminate/unchecked` 并作为 prop 下传，行组件只读映射；**禁止**逐行调用 `getNodeCheckStatus` 重走整棵子树并新建 Set（近似 O(N²)，大树/全选时卡顿）。`getNodeCheckStatus` 保留为单节点兜底（直接挂载行组件的场景）。
-- **加载三态**：树页区分 loading / empty / error（错误态提供「重新加载」）；`loadKnowledgeTree` 失败置 `loadError=true`，成功复位。
-
-#### 4. Validation & Error Matrix
-- `nodes` 非数组 / `null` -> `flattenVisibleTree` 返回 `[]`，不抛错。
-- 节点项为 `null`/`undefined`/无 `id` -> 跳过该行，不抛错。
-- 折叠节点 `collapsedMap[id] === true` -> 该节点自身保留、其子孙不进入结果。
-
-#### 5. Wrong vs Correct
-##### Wrong
-```vue
-<!-- 禁止：组件递归自引用，mp-weixin 下 props 透传丢失 → 整页崩溃 -->
-<script setup lang="ts">
-import KnowledgeTreeNode from './KnowledgeTreeNode.vue'; // 自引用导入
-</script>
-<template>
-  <KnowledgeTreeNode v-for="child in node.children" :node="child" />
-</template>
-```
-##### Correct
-```vue
-<!-- 页面：纯函数扁平化 + 单层 v-for -->
-<script setup lang="ts">
-import { computed } from 'vue';
-import { flattenVisibleTree } from '../../utils/tree';
-const visibleRows = computed(() =>
-  flattenVisibleTree(materialStore.currentKnowledgeTree, materialStore.knowledgeTreeCollapsedMap),
-);
-</script>
-<template>
-  <KnowledgeTreeNode
-    v-for="row in visibleRows"
-    :key="row.node.id"
-    :node="row.node"
-    :level="row.depth"
-  />
-</template>
-```
-
-#### 6. Tests Required
-- 纯函数单测：默认全展开的 `id`/`depth` 序列、折叠根节点仅保留自身、折叠中间节点仅裁剪其子树、空/`null`/畸形输入不抛错。
-- 页面单测断言：折叠后子孙文本消失且节点自身保留；折叠态下「全选」仍覆盖整棵树。
-- 编译产物断言：组件 `.json` 的 `usingComponents` 不含自引用键；组件 `.js` 不含自引用模块加载器。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/material/utils/tree.ts::flattenVisibleTree`
-- `miniprogram/src/subpackages/material/utils/tree.ts::KnowledgeTreeRow`
-- `miniprogram/src/subpackages/material/utils/tree.ts::collectNodeAndDescendantIds`
-- `miniprogram/src/subpackages/material/utils/tree.ts::buildCheckStatusMap`
-- `miniprogram/src/subpackages/material/utils/tree.ts::getNodeCheckStatus`
-- `miniprogram/src/stores/materialStore.ts::toggleKnowledgeSubtree`
-- `miniprogram/src/subpackages/material/components/KnowledgeTreeNode.vue::handleToggleSelect`
-- `miniprogram/src/subpackages/material/pages/knowledge-tree/index.vue::loadKnowledgeTree`
-- `miniprogram/tests/unit/materialTreeUtils.spec.ts`
-- `miniprogram/tests/unit/pages/knowledgeTreePage.spec.ts`
-
----
-
-### Scenario: Submit Idempotency Key Persistence & Degraded Storage Writes
-
-#### 1. Scope / Trigger
-- 任何「客户端生成幂等键、服务端据此去重」的提交/上传（练习交卷、资料上传等），以及任何向 `uni.setStorageSync` 写入可能超限的本地草稿。
-
-#### 2. Signatures
-```typescript
-// miniprogram/src/subpackages/practice/utils/submitKey.ts
-export function getOrCreateSubmitKey(practiceId: string): string;
-export function clearSubmitKey(practiceId: string): void;
-
-// miniprogram/src/utils/storage.ts
-const MAX_STORAGE_BYTES = 20 * 1024; // setItem 超限抛 AppError(10001)
-```
-
-#### 3. Contracts
-- **幂等键每次业务会话只生成一次并持久化**：`getOrCreateSubmitKey` 必须落盘（不得只在内存/仅在已有草稿时落盘）。零作答直接交卷（`confirm_unanswered`）同样要先持久化，否则 App 重启后生成新键，重试不再幂等。
-- **清理时机**：仅在「确认成功」或「明确不可重试的业务终态」后 `clearSubmitKey`；网络超时/未知错误**必须保留**同一 key 供重试。
-- **写入必须可降级**：所有可能超限的 Storage 写入（保存草稿、**清理草稿**、写幂等键）都必须 try/catch；`AppError(10001)` 不得向上传播打断主流程。
-- **降级不得产生副作用**：写入失败后，store 内状态必须保留，且**远端同步调度（`setTimeout`/`saveAnswerDraft`）仍须注册**——写入失败只应影响本地备份，不应导致该次作答既未备份也未同步。
-- **成功路径尤其危险**：交卷成功后的本地清理（`clearDraftFromStorage`）若因超限抛错，会被外层 catch 误判为交卷失败，形成「后端已成功 → 前端卡死」死结；必须包 try/catch。
-
-#### 4. Validation & Error Matrix
-- 已有幂等键 + 重试 → 复用同一 key。
-- 成功/明确终态 → 清理 key。
-- Storage 写超限（>20KB）→ 捕获并降级，不抛出；主流程继续。
-- 清理草稿失败（成功路径）→ 捕获并降级，交卷仍视为成功并跳转。
-
-#### 5. Wrong vs Correct
-##### Wrong
-```typescript
-// 错误：每次交卷新建 key，且仅在有草稿时落盘 —— 零作答交卷 App 重启后非幂等
-const key = generateIdempotencyKey();
-await submitPractice(id, key);
-
-// 错误：成功路径清理无保护，超限抛错被外层当作交卷失败
-function onSuccess() { clearDraftFromStorage(id); redirectToReport(); }
-```
-##### Correct
-```typescript
-// 正确：每会话一次并持久化（含零作答），成功/终态后清理
-const key = getOrCreateSubmitKey(id);
-await submitPractice(id, key);
-if (succeededOrTerminal) clearSubmitKey(id);
-
-// 正确：清理同样降级，不阻断成功跳转
-function onSuccess() {
-  try { clearDraftFromStorage(id); } catch (err) { reportWarning(err); }
-  redirectToReport();
-}
-```
-
-#### 6. Tests Required
-- 同一 practiceId 两次 `getOrCreateSubmitKey` 返回相同值，且**无草稿时也已落盘**。
-- `clearSubmitKey` 后重新生成新 key。
-- `storage.setItem` 抛 `AppError(10001)` 时：不抛出、store 作答保留、`saveAnswerDraft` 仍被调度（spy 断言）。
-- 交卷成功路径的 `clearDraftFromStorage` 抛错时：不阻断跳转，仍判定成功。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/practice/utils/submitKey.ts::getOrCreateSubmitKey`
-- `miniprogram/src/subpackages/practice/utils/submitKey.ts::clearSubmitKey`
-- `miniprogram/src/utils/storage.ts::validateStoragePayload`（超限抛 `AppError(10001)`）
-- `miniprogram/src/subpackages/practice/utils/draft.ts::saveDraftToStorage`（try/catch 降级）
-- `miniprogram/src/subpackages/practice/utils/draft.ts::clearDraftFromStorage`（try/catch 降级）
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::syncSingleDraft`（身份令牌）
-- `miniprogram/src/subpackages/practice/pages/session/index.vue::handleConfirmSubmit`
-- `miniprogram/tests/unit/practice/submitKey.spec.ts`
-
-
-
-
-### Scenario: Auth Token Refresh State Sync & Bounded 401 Retry
-
-#### 1. Scope / Trigger
-- 前端 `utils/request.ts` 的 401 静默刷新与重放，以及本地存储写入的大小门禁。
-
-#### 2. Signatures
-```typescript
-// utils/request.ts
-export function setTokenRefreshListener(listener: (tokens: AuthTokens) => void): void;
-// types/common.ts
-interface RequestOptions { _retryCount?: number }
-// utils/storage.ts
-const MAX_STORAGE_BYTES = 20 * 1024;
-```
-
-#### 3. Contracts
-- 刷新成功后除写 `storage.auth_tokens` 外，必须经解耦订阅回调同步内存态（`userStore.tokens`）；`request.ts` 禁止直接 import store（避免循环依赖）。
-- 401 重放必须携带 `_retryCount`，超过上限（1 次）直接抛 `AppError(20001)` 并清理会话+重定向，禁止无界刷新循环导致 Promise 挂起。
-- `executeRefreshToken` 的刷新请求必须携带显式 `timeout`（15s），避免刷新永久挂起拖住整条待重放请求队列。
-- storage 大小校验必须按 UTF-8 实际字节数（`TextEncoder`，缺失时手写回退），禁止用 `String.length`。
+- **主状态机**：`pending | parsing | ready | failed | retake_required`（`MaterialStatus`，与 `backend/app/models/material.py` 对齐）。
+- **门禁**：`canStartMaterialParse` 要求 `status === 'pending'` **且** `parse_status` 为空或 `'not_started'`——已排队（`queued`）的资料不得重复触发。
+- **进行中判定**：`isMaterialParsing` 先短路终态（`ready` / `failed` / `retake_required` 一律为假），否则 `status === 'parsing'` 或 `parse_status ∈ {queued, parsing_doc, ocr_processing, extracting_knowledge, auditing_knowledge, embedding_generation}`。
+- **文案**：`queued → '排队中'`，其余进行中 → `'解析中'`；终态映射为 `'已解析' / '解析失败' / '需要重拍'`，默认 `'待解析'`。
+- **轮询**：`materialStore.pollMaterialStatus(id, maxAttempts = 20, interval = 1500)`，命中 `ready` / `failed` / `retake_required` 即返回，超时抛 `'资料解析超时，请稍后刷新'`。**没有自适应退避，也没有 3 分钟熔断**——间隔固定 1500ms、最多 20 次。
+- **触发点**：工作台卡片与课程详情页均可在 `canStartMaterialParse` 或 `status === 'failed'` 时按钮触发 `POST /materials/{id}/parse`。
 
 #### 4. Tests Required
-- 刷新后 `userStore.tokens` 与 storage 严格同步；重放 1 次后仍 401 → 抛 20001 且不再刷新；8000 个中文字符（~24KB，`.length` 未超）必须触发 `AppError(10001)`。
+- `tests/materialState.spec.ts`：新上传可触发、已排队不可重复触发且判定为进行中；OCR / 知识抽取等阶段判定为进行中；`failed` 短路为终态；`retake_required` 文案正确。
 
 #### 代码锚点
-- `miniprogram/src/utils/request.ts::setTokenRefreshListener`
-- `miniprogram/src/utils/request.ts::handle401Error`
-- `miniprogram/src/utils/request.ts::executeRefreshToken`（`TOKEN_REFRESH_TIMEOUT_MS`）
-- `miniprogram/src/utils/request.ts::MAX_AUTH_RETRY_COUNT`
-- `miniprogram/src/types/common.ts::RequestOptions`（`_retryCount`）
-- `miniprogram/src/utils/storage.ts::calculateUtf8Bytes`（`TextEncoder`）
-- `miniprogram/src/stores/userStore.ts::setTokenRefreshListener`
-- `miniprogram/tests/unit/utils/request.spec.ts`
-- `miniprogram/tests/unit/utils/storage.spec.ts`
-
-### Scenario: Material File Validation, Tree Check-State & List Loading Contracts
-
-#### 1. Scope / Trigger
-- 资料上传前端校验、知识点树勾选/半选、资料列表分页与首屏加载。
-
-#### 2. Contracts
-- 文件大小上限必须与后端 `material.py:MAX_FILE_SIZES` 逐格式一致（pdf/docx 20MB、png/jpg/jpeg 10MB、txt/md 5MB），未知后缀回退 20MB；禁止单一 20MB 通吃导致前后端放行不一致。
-- 前端可见格式白名单为后端 `MaterialDocType` 的有意子集（产品设计收窄），非缺陷；变更需双端同步评估。
-- 单页重拍返回类型必须为后端 `MaterialReshootResponse`（`page_index/is_qualified/reshoot_count/parse_status/unqualified_reason`），禁止使用漂移类型（如 `page_no/status/message`）。
-- 知识点树父节点勾选态必须由选中集合推导（`checked/indeterminate/unchecked`，纯函数），切换资料前必须重置选中与折叠态。
-- 列表分页追加必须按 id 去重；首屏加载只由单一生命周期触发一次。
-
-#### 3. Tests Required
-- 15MB jpg 被拒 / 15MB pdf 通过；pptx/txt/md 被拒（收窄断言）；`getNodeCheckStatus` 叶子/混合/空输入；切换资料后选中与折叠归零；分页偏移重复数据去重；首屏仅发 1 次列表请求。
-
-#### 代码锚点
-- `miniprogram/src/utils/file.ts::MAX_FILE_SIZES`
-- `miniprogram/src/utils/file.ts::validateMaterialFile`
-- `miniprogram/src/types/material.ts::MaterialReshootResponse`
-- `miniprogram/src/api/materialUpload.ts::retakeMaterialPage`
-- `miniprogram/src/subpackages/material/utils/tree.ts::getNodeCheckStatus`
-- `miniprogram/src/stores/materialStore.ts::clearKnowledgeState`
-- `miniprogram/src/subpackages/material/pages/list/index.vue::loadData`（按 id 去重）
-- `miniprogram/src/subpackages/material/pages/list/index.vue::onMounted`（首屏单次触发）
-- `backend/app/services/material.py::MAX_FILE_SIZES`
-
-### Scenario: Question Config Bound, Deletion Reason Query & Quality-Check Type Alignment
-
-#### 1. Scope / Trigger
-- 出题数量配置、题目删除请求、质检记录消费。
-
-#### 2. Contracts
-- 出题数量上限与后端逐字一致（1–20）：`validateQuestionConfig` 上限、`clampCount` 截断、提示文案、`+` 按钮禁用条件全部对齐 20，禁止残留 50。
-- `deleteQuestion(id, reason)` 必须把 `reason` 作为 **query** 拼接（`?reason=`），DELETE 不携带 body data。
-- `QuestionQualityCheck` 字段名必须为后端 `QuestionQualityCheckResponse` 逐字（`check_type/is_passed/reason/similarity_score/check_metadata`）；旧别名仅可保留为**可选**废弃字段。
-- 列表删除成功后必须重置到第 1 页重新拉取，避免 offset 前移跳题。
-
-#### 3. Tests Required
-- 21/50 被拒、1 与 20 通过；25/99 clamp 到 20；删除 URL 含 `?reason=` 且无 body；删除后重新请求 page=1。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/material/utils/tree.ts::validateQuestionConfig`
-- `miniprogram/src/subpackages/material/components/QuestionConfigDrawer.vue::clampCount`
-- `miniprogram/src/api/question.ts::deleteQuestion`
-- `miniprogram/src/types/question.ts::QuestionQualityCheck`
-- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleDeleteQuestion`
-- `backend/app/schemas/question.py::QuestionQualityCheckResponse`
-
-### Scenario: Practice Draft Lifecycle & Status Mapping
-
-#### 1. Scope / Trigger
-- 交卷后本地草稿清理、`practice_drafts` 单一 schema、前后端练习状态映射。
-
-#### 2. Contracts
-- `StorageDataMap['practice_drafts']` 唯一契约为 `Record<string, PracticeDraftRecord>`；禁止 `as unknown as Record<string, never>` 之类强转。
-- 交卷成功后必须同时清 Storage **与** store 内存 `drafts`，`extractLatestDraftPractice` 不得再提取已交卷练习；清理不得影响其他练习草稿。
-- `adaptStatus` 必须覆盖后端全量状态（含 `timeout→submitted`、`paused`、`partially_graded`），未知值回退 `in_progress`。
-
-#### 3. Tests Required
-- `clearSession(id)` 删除目标 draft 且保留兄弟 draft；`adaptStatus('timeout')==='submitted'`；旧结构（仅 `answers`）读取不抛错。
-
-#### 代码锚点
-- `miniprogram/src/types/storage.ts::StorageDataMap`
-- `miniprogram/src/stores/practiceStore.ts::clearSession`
-- `miniprogram/src/stores/practiceStore.ts::removeDraft`
-- `miniprogram/src/api/adapters/practice.ts::adaptStatus`
-- `miniprogram/src/subpackages/practice/types/draft.ts::PracticeDraftRecord`
-- `miniprogram/src/utils/recentLearning.ts::extractLatestDraftPractice`
-- `miniprogram/tests/unit/practice/draftUtils.spec.ts`
-
-### Scenario: Practice Session Teardown Flush, Subjective Fallback & Pause/Resume
-
-#### 1. Scope / Trigger
-- 练习会话卸载、题型渲染兜底、暂停/恢复。
-
-#### 2. Contracts
-- 会话卸载/清理前必须 flush 待同步草稿；flush 的完成回调必须以**身份令牌**判定是否仍为当前 pending 项，禁止用 questionId 判等（否则新作答会被旧同步的回调误标记已同步而丢失）。
-- 题型渲染必须为 `term_explanation`/`case_analysis` 及未知主观题型提供文本输入兜底；客观题分支不得受影响；标签映射补全。
-- 单题耗时必须取真实时间差（设上限），禁止常量；累计耗时读取后端 `time_elapsed_seconds` 起步。
-- `pausePractice`/`resumePractice` 契约与后端逐字一致（`POST /practices/{id}/pause|resume`）。
-
-#### 3. Tests Required
-- 卸载 flush 触发且有 pending 不丢（竞态用例：旧同步回调不得清掉新作答）；`term_explanation`/`case_analysis` 渲染输入框与标签；真实耗时非常量；pause/resume 发对应 POST。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::flushPendingDraft`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::takeQuestionElapsedSeconds`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pendingSync`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pauseSession`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::resumeSession`
-- `miniprogram/src/subpackages/practice/components/QuestionRenderer.vue::subjectivePlaceholder`
-- `miniprogram/src/api/practice.ts::pausePractice`
-- `miniprogram/src/api/practice.ts::resumePractice`
-- `miniprogram/tests/unit/practice/practiceSessionFlushRace.spec.ts`
-
-### Scenario: Report Detail Loading Guard, Subjective Regrade & Snippet/Keyword Reading
-
-#### 1. Scope / Trigger
-- 报告详情页首屏加载、主观题自评/重判入口、要点与原文渲染。
-
-#### 2. Contracts
-- 报告详情首屏只允许一次加载（并发锁 + 已加载 practiceId 守卫），返回刷新不得被永久阻断，切换 practiceId 必须重新加载。
-- 逐题数据唯一来源为 `practiceRes.data.items`，禁止引用不存在的 `repData.items` 死分支；加载失败展示可重试错误态。
-- `canSelfGrade` 的主观题集合须与后端 `SUBJECTIVE_QUESTION_TYPES` 一致（含 `term_explanation`/`case_analysis`）；客观题不受影响。
-- 重判入口要求 `is_answered === true` 且 `user_answer` 非空，未作答不得展示（避免后端 403）。
-- 要点读顶层或 `question_snapshot` 任一；原文按后端字段渲染，缺失显示空态。
-
-#### 3. Tests Required
-- 首屏单次加载与切换 pid 重载；主观题入口覆盖三类、客观题不显示；未作答题隐藏重判；要点双层来源；切片空态。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/report/pages/detail/index.vue::loadReportData`（并发锁 + `lastLoadedPracticeId`）
-- `miniprogram/src/subpackages/report/components/GradingResultList.vue::canSelfGrade`
-- `miniprogram/src/subpackages/report/components/GradingResultList.vue::canRegrade`
-- `miniprogram/src/subpackages/report/components/GradingResultList.vue::SUBJECTIVE_QUESTION_TYPES`
-- `miniprogram/src/subpackages/report/pages/detail/index.vue::handleViewSnippet`
-- `miniprogram/src/subpackages/report/pages/detail/index.vue::empty-state`
-- `backend/app/core/algorithms/grading.py::SUBJECTIVE_QUESTION_TYPES`
-- `miniprogram/tests/unit/report/reportDetailPage.spec.ts`
-
-### Scenario: Wrong-Book Filter Enum Alignment & Reset Single-Trigger
-
-#### 1. Scope / Trigger
-- 错题筛选错误类型/题型枚举、重置筛选、删除错题响应字段消费。
-
-#### 2. Contracts
-- 错误类型筛选项必须发送后端权威枚举（`incomplete_expression`/`question_misreading`），并向下兼容旧简写（`incomplete`/`deviation`）。
-- 题型取值必须与后端 `QuestionType` 逐字一致（如 `fill_in_blank`，禁止 `fill_in_the_blank`）；所有消费点（筛选栏、卡片标签）统一。
-- 重置筛选只允许单通道触发（`filter-change`），禁止同时 `emit('reset')` 与 `emitChange()` 造成父组件双请求。
-- `deleteWrongRecord` 读取 `removed` 字段（`removed: boolean; success?: boolean`）。
-
-#### 3. Tests Required
-- 标准+旧枚举均可识别；`fill_in_blank` 渲染「填空题」；点击重置父组件仅 1 次 `loadData`；删除响应解构 `removed === true`。
-
-#### 代码锚点
-- `miniprogram/src/subpackages/report/utils/wrongBookFormat.ts::getErrorTypeInfo`
-- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::errorTypeOptions`
-- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::questionTypeOptions`
-- `miniprogram/src/subpackages/report/components/WrongRecordFilterBar.vue::handleReset`
-- `miniprogram/src/types/question.ts::QuestionType`
-- `miniprogram/src/api/diagnosis.ts::deleteWrongRecord`
-- `miniprogram/src/types/report.ts::DeleteWrongRecordResult`（`removed: boolean`）
-- `miniprogram/tests/unit/report/wrongBookPage.spec.ts`
-
-### Scenario: Report Reset, Draft Metadata & Continue-Practice Idempotency Header
-
-#### 1. Scope / Trigger
-- 报告状态重置、练习草稿元数据、继续练习幂等头、报告页空态。
-
-#### 2. Contracts
-- `setReport` 必须在新报告无 `weak_points`（缺失/null/空）时把 `weakPoints` 重置为 `[]`，禁止残留旧报告数据。
-- `initSession` 生成的草稿必须写入 `total_count`（及可选 `title`/`material_id`），`extractLatestDraftPractice` 消费真实值。
-- 继续练习请求头必须是 `Idempotency-Key`（与后端逐字一致）。
-- 报告详情页在非 loading、非 error 且无 `currentReport` 时必须渲染空态（`.empty-state` + 操作按钮），不得白屏；空态不得遮蔽 loading/error 分支。
-
-#### 3. Tests Required
-- 空/无 `weak_points` 报告切换后无残留；草稿含 `total_count`/`title`/`material_id` 并被展示；`continuePractice` 头为 `Idempotency-Key`；无 pid/空报告渲染 `.empty-state` 且不发起请求。
-
-#### 代码锚点
-- `miniprogram/src/stores/reportStore.ts::setReport`
-- `miniprogram/src/stores/practiceStore.ts::initSession`
-- `miniprogram/src/api/diagnosis.ts::continuePractice`
-- `miniprogram/src/utils/recentLearning.ts::extractLatestDraftPractice`
-- `miniprogram/src/subpackages/report/pages/detail/index.vue`（`.empty-state` / `empty-actions`）
-- `miniprogram/tests/unit/stores/report.spec.ts`
-- `miniprogram/tests/unit/report/continuePracticeBar.spec.ts`
-
-### Scenario: Course IA Navigation, Unclassified & Archive Contracts
-
-#### 1. Scope / Trigger
-- 控制台课程列表入口、课程详情页、未分类资料列表、课程归档/恢复与资料移动课程。
-
-#### 2. Signatures
-```typescript
-// src/types/folder.ts
-export const UNCLASSIFIED_FOLDER_ID = '__none__';
-export interface FolderItem {
-  id: string; name: string; is_archived: boolean;
-  archived_at?: string | null; purge_after?: string | null;
-  material_count: number; ready_material_count: number;
-  knowledge_point_count: number; question_count: number;
-  last_practice_at?: string | null; created_at: string; updated_at?: string;
-}
-// src/api/folder.ts
-fetchFolderList({ include_archived }); fetchFolderDetail(id);
-createFolder({ name }); renameFolder(id, { name });
-archiveFolder(id); restoreFolder(id);
-// src/api/material.ts
-moveMaterialFolder(materialId, folderId: string | null); // PATCH /materials/{id}/folder
-uploadMaterial(file, title, idem, sourceType, onProgress, folderId?);
-```
-
-#### 3. Contracts
-- **字段名与后端逐字一致**：消费 `FolderDetailResponse` 的 `is_archived` / `purge_after` / `material_count` / `ready_material_count` / `knowledge_point_count` / `question_count` / `last_practice_at`；禁止自造 `archived`/`materials_count` 等漂移名（渲染 `undefined` 静默失败）。
-- **导航参数统一 `material_id`**：资料分包内跳转一律 `?material_id=<id>`；接收页必须兼容 `material_id` / `materialId` / `id` 兜底。课程相关跳转用 `folder_id`（未分类传 `__none__`）。所有 `uni.navigateTo` 必带 `fail` 兜底提示。
-- **未分类入口门禁**：控制台「未分类」入口仅在 `folder_id IS NULL` 的资料存在时渲染；未选课程上传即落未分类（不阻断）。
-- **Store 不发请求**：`folderStore` 仅承载 `folders`/`archivedFolders`/`unclassifiedCount`/`currentFolder` 状态与增删改 action；网络调用一律经 `src/api/folder.ts` 由组件触发。
-- **归档反悔时间**：归档项展示 `purge_after - now` 剩余时间，使用纯函数 `formatPurgeRemaining(purgeAfter, now)`（缺省/非法/过期 → `已过期`）。
-- **控制台去总分卡**：移除 `MasteryDashboardBar` 总分展示，但保留 `fetchMasteryOverview` API 能力（报告页仍可用），不得删除后端能力。
-- **列表页隔离**：二级列表页维护本地 `listData`，仅对全局 `materialStore` 做增量 `addMaterial`；移动/删除后本地剔除并 `updateMaterialFolder`，禁止分页结果全量覆盖首页概览切片。
-
-#### 4. Wrong vs Correct
-##### Wrong
-```typescript
-// 错误：控制台首屏仍是总分卡；未分类入口恒显；导航只认一种参数名
-uni.navigateTo({ url: `/subpackages/material/pages/detail/index?id=${id}` }); // 无 fail 兜底
-```
-##### Correct
-```typescript
-// 正确：课程列表入口 + 条件渲染未分类 + 统一 material_id 且带 fail
-uni.navigateTo({
-  url: `/subpackages/material/pages/detail/index?material_id=${id}`,
-  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
-});
-```
-
-#### 5. Tests Required
-- `formatPurgeRemaining` 边界（已过期/剩余天/剩余小时/剩余分钟/非法）。
-- `folderStore` 增删改、归档拆分、`reset`；`materialStore.removeMaterial`/`updateMaterialFolder`/`unclassifiedMaterials`。
-- 控制台断言**不再渲染** `MasteryDashboardBar`、课程列表入口与未分类门禁；课程详情页 `folder_id` 解析与移动；列表页 `folder_id=__none__` 过滤与移动剔除。
-
-#### 代码锚点
-- `miniprogram/src/types/folder.ts::UNCLASSIFIED_FOLDER_ID`
-- `miniprogram/src/types/folder.ts::FolderItem`
-- `miniprogram/src/api/folder.ts::fetchFolderList`
-- `miniprogram/src/api/folder.ts::archiveFolder`
-- `miniprogram/src/api/material.ts::moveMaterialFolder`
-- `miniprogram/src/stores/folderStore.ts::setFolderList`
-- `miniprogram/src/utils/purgeTime.ts::formatPurgeRemaining`
-- `miniprogram/src/components/home/CourseListSection.vue::hasUnclassified`
-- `miniprogram/src/pages/index/index.vue::handleViewUnclassified`
-- `miniprogram/src/api/diagnosis.ts::fetchMasteryOverview`（能力保留，控制台不再引用）
-- `miniprogram/tests/unit/pages/index.spec.ts`（断言不渲染 `MasteryDashboardBar`）
+- `miniprogram/src/utils/materialState.ts::canStartMaterialParse`
+- `miniprogram/src/utils/materialState.ts::isMaterialParsing`
+- `miniprogram/src/utils/materialState.ts::materialStatusText`
+- `miniprogram/src/stores/material.ts::pollMaterialStatus`
+- `miniprogram/src/subpackages/material/pages/course/index.vue::syncParseProgress`
 
 ---
 
-### Scenario: Course-Scope Generate -> Question List -> Start Practice Loop Contract
+### Scenario: 跨页导航参数契约
 
 #### 1. Scope / Trigger
-- 课程详情「智能出题」、课程范围题目列表与「开始答题」组卷跳转（出题 -> 答题闭环）。
+- 所有 `uni.navigateTo` / `uni.redirectTo` 的目标页参数。
 
-#### 2. Signatures
-```typescript
-// src/types/question.ts
-interface QuestionGenerateRequest {
-  material_id?: string; folder_id?: string; count?: number;
-  difficulty?: number; question_types?: QuestionType[];
-}
-interface QuestionListQueryParams { material_id?: string; folder_id?: string; page?: number; page_size?: number; }
-interface QuestionGenerateResponse {
-  material_id?: string; version_id?: string; knowledge_point_id?: string;
-  qualified_questions: QuestionItem[];
-}
-// src/types/practice.ts
-interface CreatePracticePayload {
-  title: string; material_id?: string; folder_id?: string;
-  knowledge_point_ids?: string[]; question_count?: number;
-  question_types?: QuestionType[]; mode?: 'sequential' | 'random' | 'weak_points';
-}
-interface PracticeSession {
-  id: string; title: string; material_id?: string; folder_id?: string | null;
-  status: PracticeStatus; questions: PracticeQuestionItem[];
-}
-```
+#### 2. 真实契约（逐条核对代码得出）
 
-#### 3. Contracts
-- **范围二选一**：`material_id` 与 `folder_id` 至少提供其一；课程范围传 `folder_id` 且 `material_id` 可省。空值一律清洗（`undefined`/`null`）为「不过滤」，禁止落成恒假条件。
-- **可空字段容错**：后端 `QuestionGenerateResponse` 的 `material_id`/`version_id`/`knowledge_point_id` 与 `PracticeSession.material_id` 放开为可空，前端类型同步可选，消费处用 `?? ''`/`?? null` 兜底，禁止渲染 `undefined`。
-- **课程出题（考点可选）**：`CourseGenerateDrawer` 通过 `CourseKnowledgePointPicker`（`GET /folders/{id}/knowledge-points`，按资料分组）选择本次必出考点；选中时提交 `knowledge_point_ids`，未选时缺省取课程全部考点。生成中允许关闭抽屉（不锁死用户，禁止以 toast 阻塞 `handleClose`）；空结果/失败保留抽屉可重试；成功 `emit('success', folderId)` 由课程页跳题目列表（`folder_id`）。单资料 `QuestionConfigDrawer` 同样允许生成中关闭。
-- **批次分类**：题目列表按 `batch_id` 分组（`utils/questionBatch.ts` 的 `groupQuestionsByBatch`），点击分组头经 `GET /questions?batch_id=` 按批次过滤；无 `batch_id` 的历史题目归入「历史题目」组。
-- **开始答题**：题目列表课程范围且有题时展示吸底 `PracticeStartBar`，点击 `createPractice({ title, folder_id, question_count: Math.min(total, 20), question_types, mode: 'sequential' })` -> `practiceStore.initSession(id, questions || [], { title, folder_id })` -> `uni.navigateTo('/subpackages/practice/pages/session/index?id=<id>')`（带 `fail`）。`total === 0` 时隐藏/禁用。
-- **零回归**：未传 `folder_id` 时保持既有 `material_id` 出题/组卷/列表行为；`QuestionConfigDrawer` 知识树出题逻辑不改。
-- **导航契约**：课程范围跳转统一 `folder_id`，资料范围统一 `material_id`；接收页（questions）兼容 `material_id`/`materialId`/`id` 与 `folder_id`/`folderId`；所有 `uni.navigateTo` 带 `fail` 兜底。
+| 目标页 | 参数名 | 发送方 | 接收方解析 |
+| --- | --- | --- | --- |
+| `subpackages/material/pages/course/index` | `id`（= materialId） | `pages/index/index::goToDetail`、`AiCoachDrawer::openSource` | `options.id`（无兜底，缺则整页不加载） |
+| `subpackages/material/pages/questions/index` | `material_id` **或** `folder_id` | `pages/index/index::goToQuestions` / `::goToCourseGenerate`、`course/index::goToQuestionConfig` | 先 `options.folder_id`，否则 `options.material_id` |
+| `subpackages/practice/pages/session/index` | `practice_id` | `pages/review/index::navigateToSession`、`questions/index::handleStartPractice`、`report/detail::handleAdaptivePractice` | `options.practice_id`（缺失 toast「缺少练习标识」） |
+| `subpackages/report/pages/detail/index` | `practice_id` | `pages/review/index::openPractice`、`session/index::confirmSubmit`（`redirectTo`） | `options.practice_id`（缺失置 `loadError`） |
+| `pages/auth/login` | 无 | `pages/index/index::goToLogin`、`pages/profile/index::goToLogin`、`request.ts::handleUnauthorized`（`reLaunch`） | — |
 
-#### 4. Wrong vs Correct
+- **参数名不统一是现状，不是错误**：课程/资料详情页用裸 `id`，出题页用 `material_id` / `folder_id`，练习与报告页统一 `practice_id`。规范只要求「发送方与接收方逐字对齐」+「接收页对缺失参数给出显式提示」，**不要求**统一成 `material_id`。
+- 出题页的 `folder_id` 与 `material_id` 互斥：`onLoad` 用 `if (options?.folder_id) … else if (options?.material_id) …`；`handleStartPractice` 提交时同样保证 `folder_id` 存在则不传 `material_id`。
+- 所有跳转必须带 `fail` 提示。
+
+#### 3. Wrong vs Correct
 ##### Wrong
 ```typescript
-// 错误：课程范围仍强依赖 material_id；createPractice 无调用点（死代码）；导航无 fail
-await generateQuestions({ material_id: materialId, knowledge_point_ids: ids });
+// 错误：给 course 页发 material_id —— 接收页只读 options.id，页面整片空白
+uni.navigateTo({ url: `/subpackages/material/pages/course/index?material_id=${id}` });
+// 错误：改参数名却不改接收页，且无 fail 兜底 —— 用户看到「原地不动」
+uni.navigateTo({ url: `/subpackages/material/pages/questions/index?id=${id}` });
 ```
 ##### Correct
 ```typescript
-// 正确：folder 范围透传 folder_id；题目列表组卷并跳转；导航带 fail
-await generateQuestions({ folder_id: folderId, count, difficulty, question_types });
-const res = await createPractice({
-  title: '课程练习', folder_id: folderId,
-  question_count: Math.min(total, 20), question_types, mode: 'sequential',
-});
-practiceStore.initSession(res.data.id, res.data.questions || [], {
-  title: res.data.title, folder_id: folderId,
+// 正确：发送方与接收方逐字对齐，且带 fail 兜底
+uni.navigateTo({
+  url: `/subpackages/material/pages/course/index?id=${item.id}`,
+  fail: () => uni.showToast({ title: '打开讲义失败，请重试', icon: 'none' }),
 });
 uni.navigateTo({
-  url: `/subpackages/practice/pages/session/index?id=${res.data.id}`,
-  fail: () => uni.showToast({ title: '页面打开失败', icon: 'none' }),
+  url: `/subpackages/material/pages/questions/index?material_id=${item.id}`,
+  fail: () => uni.showToast({ title: '打开出题页失败，请重试', icon: 'none' }),
 });
 ```
 
-#### 5. Tests Required
-- `CourseGenerateDrawer`：默认值（题量/题型/难度）、提交 payload 含 `folder_id`、成功 `success` emit、空结果/网络/业务错误保留可重试、提交禁用防重。
-- `questions/index`：`folder_id` 解析与 `material_id` 兜底、空态范围引导（去出题/去知识树）、`createPractice` 接线（payload + 跳转 `id`）、`total===0` 禁用。
-- 单资料路径零回归（既有 `material_id` 列表/出题断言保持）。
+#### 4. Tests Required
+- 当前**没有**页面参数解析的单测（`tests/` 下无页面级 spec）。改动导航契约时请人工核对上表的两端，或补纯函数化的参数解析后再测。
 
 #### 代码锚点
-- `miniprogram/src/types/question.ts::QuestionGenerateRequest`（`material_id?` / `folder_id?`）
-- `miniprogram/src/types/question.ts::QuestionGenerateResponse`
-- `miniprogram/src/types/practice.ts::CreatePracticePayload`
-- `miniprogram/src/types/practice.ts::PracticeSession`
-- `miniprogram/src/subpackages/material/utils/questionBatch.ts::groupQuestionsByBatch`
-- `miniprogram/src/components/course/CourseGenerateDrawer.vue::handleSubmit`
-- `miniprogram/src/components/course/CourseKnowledgePointPicker.vue::loadPoints`
-- `miniprogram/src/components/course/PracticeStartBar.vue::isDisabled`
-- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleStartPractice`
-- `miniprogram/src/subpackages/material/pages/course/index.vue::handleGenerateSuccess`
-- `miniprogram/tests/unit/components/CourseGenerateDrawer.spec.ts`
-- `miniprogram/tests/unit/pages/questionList.spec.ts`
+- `miniprogram/src/subpackages/material/pages/course/index.vue::onLoad`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::onLoad`
+- `miniprogram/src/subpackages/practice/pages/session/index.vue::onLoad`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::onLoad`
+
+---
+
+### Scenario: 网络层错误处理与 401 收敛
+
+#### 1. Scope / Trigger
+- 所有 HTTP 调用。
+
+#### 2. Contracts
+- `request<T>` **解包** `{ code, message, data }` 信封后返回 `data`；若响应体不是信封形状则原样返回。
+- 2xx → resolve；`401` → `handleUnauthorized()`（清 `access_token`、动态 import `useAuthStore().clearAuth()`、toast「登录已过期，请重新登录」、`reLaunch` 登录页并带 `fail`）后 reject `Error('Unauthorized')`。
+- 其他非 2xx → toast `errData.detail || errData.message || '请求失败 (statusCode)'` 并 reject。
+- 网络失败（`fail`）→ toast「网络连接异常，请重试」并 reject。
+- `uploadFile` 走同构分支：202 → `JSON.parse(res.data)` 解包 `data`；解析失败则 resolve 原始字符串；401 同上；其他非 2xx → toast「上传失败，请重试」。
+- **没有 token 刷新、没有重试计数、没有请求超时设置**：`RequestOptions` 只有 `url` / `method?` / `data?` / `header?`（无 `_retryCount`）；`request.ts` 内不存在 `setTokenRefreshListener` / `executeRefreshToken` / `MAX_AUTH_RETRY_COUNT`。
+- 存令牌只用一个裸 key：`uni.getStorageSync('access_token')`。
+
+#### 3. Tests Required
+- 当前无 `request.ts` 的单测；`tests/practiceStore.spec.ts` / `tests/diagnosisAndCompose.spec.ts` 通过 mock 掉整个 `@/utils/request` 模块来隔离网络层。
+
+#### 代码锚点
+- `miniprogram/src/utils/request.ts::request`
+- `miniprogram/src/utils/request.ts::handleUnauthorized`
+- `miniprogram/src/utils/request.ts::uploadFile`
+- `miniprogram/src/utils/request.ts::RequestOptions`
+
+---
+
+## 已知偏离（如实记录，勿美化）
+
+### 1. 单文件 ≤ 300 行约定与当前超标文件
+
+`docs/DESIGN.md` 第 6 节硬性约定：任何单 `.vue` 文件不得超过 **300 行**。现状（2026-09-29 实测 `wc -l`）：
+
+**违反该条约定的 `.vue` 文件（5 个）**
+
+| 文件 | 行数 | 超出 | 备注 |
+| --- | --- | --- | --- |
+| `src/pages/index/index.vue` | 865 | +565 | 模板 + 脚本 + 内联样式全在一个文件 |
+| `src/subpackages/material/pages/course/index.vue` | 728 | +428 | 含知识树、考点弹窗、助教挂载 |
+| `src/pages/profile/index.vue` | 440 | +140 | |
+| `src/components/AiCoachDrawer.vue` | 392 | +92 | |
+| `src/subpackages/report/pages/detail/index.vue` | 343 | +43 | |
+
+**不受该条约定约束、但同属「单文件过大」的 `.ts` 文件（3 个）**
+
+| 文件 | 行数 | 备注 |
+| --- | --- | --- |
+| `src/types/index.ts` | 441 | 类型单文件集中是刻意约定（见 `type-safety.md`），但已到需要按域拆分的体量 |
+| `src/api/index.ts` | 424 | API 函数 + `GenerateQuestionsParams` / `CreatePracticeParams` 等接口全在一个文件 |
+| `src/stores/practice.ts` | 302 | 会话 / 作答 / 草稿队列 / 交卷 / 再生题 / 判题重试全在一个 store |
+
+其中 `pages/index/index.vue`、`subpackages/material/pages/course/index.vue`、`components/AiCoachDrawer.vue`、`api/index.ts` 在 `5d7a2f3` 之前就已超标，不是本次引入。**新代码应遵守 300 行约定**；拆分这些文件属待办项，不要在规范里写成「已拆分」。
+
+### 2. ESLint 实际配置（与历史文档描述不同）
+
+`.eslintrc.cjs` 的真实内容：
+
+```javascript
+module.exports = {
+  root: true,
+  env: { browser: true, es2021: true, node: true },
+  extends: ['eslint:recommended', 'plugin:vue/vue3-recommended', 'plugin:@typescript-eslint/recommended'],
+  parser: 'vue-eslint-parser',
+  parserOptions: { parser: '@typescript-eslint/parser', ecmaVersion: 'latest', sourceType: 'module' },
+  plugins: ['vue', '@typescript-eslint'],
+  rules: {
+    'vue/multi-word-component-names': 'off',
+    'vue/singleline-html-element-content-newline': 'off',
+    'vue/max-attributes-per-line': 'off',
+    'vue/html-self-closing': 'off',
+    '@typescript-eslint/no-explicit-any': 'off',
+    '@typescript-eslint/no-unused-vars': 'off',
+    '@typescript-eslint/ban-types': 'off',
+  },
+  globals: { uni: 'readonly', wx: 'readonly' },
+};
+```
+
+- **`max-lines` 未配置**：不存在 500 行兜底阈值，行数只由 `docs/DESIGN.md` 的 300 行约定（人工）约束。
+- **`prettier/prettier` 未配置**：`eslint-plugin-prettier` 与 `eslint-config-prettier` 装在 `devDependencies` 里，但既未进 `plugins` 也未进 `extends`，**格式规则不在门禁内**。
+- `.eslintignore` 只忽略 `dist` / `node_modules` / `*.local`。
+- `uni` / `wx` 声明为 `readonly` 全局；`wx` 另有 `src/env.d.ts::declare const wx: any` 的三方声明（`pages/index/index.vue` 里实际用 `(globalThis as any).wx` 取用，以规避 `#ifdef MP-WEIXIN` 之外的引用）。
+
+### 3. 零表情包原则与现状不符
+
+见 `component-guidelines.md` 的 Accessibility 一节；6 个文件共 19 行含 Unicode Emoji / 符号字符（合计 20 个字符）。`docs/DESIGN.md` 第 1 节要求「全系统严禁 Unicode Emoji」，当前**未落地**。
+
+### 4. 设计 token 与裸 Hex
+
+`docs/DESIGN.md` 第 2 节「禁止在业务组件中使用未经本规范收敛的裸 Hex 色值」。现状：`src/**` 内联 Hex 约 361 处，`var(--color-*)` 仅 5 处（全在 `App.vue`）；`src/uni.scss`、`src/styles/theme.scss` 均**不存在**。
+
+### 5. 组件挂载测试缺失
+
+`@vue/test-utils` 是 `devDependencies` 之一，但 `tests/` 下没有任何 `mount()` 调用；7 个 spec 全部是纯函数 / 适配器 / store 级测试。改动页面与组件行为时，请优先把逻辑抽到可测的纯函数（现有先例：`reportView.ts`、`reviewView.ts`、`api/adapters/*`、`utils/materialState.ts`、`utils/draftQueue.ts`）。
+
+### 6. 占位页
+
+`src/subpackages/material/pages/upload/index.vue` 是 32 行的静态占位页（`<script setup lang="ts">` 为空），已在 `pages.json` 注册但无实际功能；真实上传入口在工作台 `pages/index/index.vue::handleChooseFile`。

@@ -90,15 +90,21 @@ material.status = MaterialStatus.PENDING.value
 ```
 ##### Correct
 ```python
-# 正确做法：统一经仓储重置状态并清空错误信息与失败阶段（reset_errors 内部置 None），重置为排队解析
-repo.update_version_status(
-    version_id=version.id, user_id=user_id,
-    status=ParseStatus.QUEUED.value, reset_errors=True,
-)
-repo.update_material_status(
+# 正确做法：以条件更新原子地把 failed 跃迁为 queued，并清空错误信息与失败阶段
+# （reset_errors 内部置 None）。派发必须是原子的，见下方 not_started Scenario。
+if not self.repo.try_transition_version_status(
+    version.id, material_id,
+    from_status=ParseStatus.FAILED.value,
+    to_status=ParseStatus.QUEUED.value,
+    reset_errors=True,
+):
+    raise MaterialInvalidError("解析重试已在处理中，请勿重复提交")
+self.repo.update_material_status(
     material_id=material_id, user_id=user_id,
     status=MaterialStatus.PENDING.value, current_version_id=version.id,
 )
+self.session.commit()
+self._enqueue_parse(material_id, version.id, user_id)   # 失败 → 回写 FAILED 且可见
 ```
 
 #### 代码锚点
@@ -1004,3 +1010,410 @@ self.session.commit()        # 全部成功：唯一一次提交
 - `backend/app/repositories/question.py::QuestionRepository.list_knowledge_points_for_folder`
 - `backend/app/repositories/folder.py::FolderRepository.last_practice_at_by_folder_ids`
 - `backend/app/models/question.py::Question.batch_id`
+
+---
+
+### Scenario: Upload-Only Persistence & User-Triggered Material Parsing (`not_started`)
+
+#### 1. Scope / Trigger
+- 资料上传后的解析调度语义：上传只落库，解析必须由用户显式启动（`POST /materials/{id}/parse`）；失败后走 `POST /materials/{id}/retry`。
+
+#### 2. Signatures
+- `ParseStatus`（版本级）新增 `NOT_STARTED = "not_started"`，完整取值：`not_started | queued | parsing_doc | ocr_processing | extracting_knowledge | auditing_knowledge | embedding_generation | ready | failed`。
+- 资料主状态 `MaterialStatus`：`pending | parsing | ready | failed | retake_required`。
+- `POST /api/v1/materials/{id}/parse` -> 首次启动解析；`POST /api/v1/materials/{id}/retry` -> 失败重试（既有语义，仍重置为 `QUEUED`）。
+
+#### 3. Contracts
+- **上传零调度**：`POST /materials/upload` 只持久化资料与版本，**不得**入队解析，**也不得**注册 `BackgroundTasks`；新版本初始 `parse_status = NOT_STARTED`。历史上这段逻辑同时存在于 service 入队与路由后台任务两处，改动时必须两条都关闭。
+- **派发必须原子**：解析入口（`/parse` 与 `/retry`）都是「用户命令 → 置 `QUEUED` → 入队」，状态跃迁必须走数据库条件更新 `MaterialRepository.try_transition_version_status(version_id, material_id, *, from_status, to_status, reset_errors=False) -> bool`。**禁止先读后写**：两个并发请求会凭同一次陈旧读各自入队一次，同一版本被两个 worker 同时解析——`parse_material_pipeline` 只在 `READY` 时早退，非 READY 的并发任务会各自跑完整 OCR/LLM 并重复写切片。CAS 未命中说明该版本已被其他请求推进，本次直接返回、**不**重复派发。
+- **在途状态直接返回**：`trigger_parse` 命中 `queued/parsing_doc/ocr_processing/extracting_knowledge/auditing_knowledge/embedding_generation/ready` 时按既有语义直接返回，不重复调度。
+- **`retry` 语义**：仅 `failed` 可重试；重置为 `QUEUED` 并清空 `error_message`/`failed_stage`（`reset_errors=True`）。CAS 未命中 → `MaterialInvalidError`（并发重试已被处理）。
+- **入队失败可见**：`_enqueue_parse` 抛错必须回写版本 `FAILED` + `failed_stage="queue_dispatch"` + 提示文案，并把资料置 `FAILED`，不得静默停在 `queued`。
+- **旧数据兼容**：已存在 `queued` 记录维持原语义，不批量取消、不改写。
+- **前端状态映射**必须覆盖全部主状态与细化 `parse_status`，`ready` 才允许进入知识树与组卷；`not_started` 显示「待解析」并提供「开始解析」入口（不得显示为「排队中」）。
+
+#### 4. Validation & Error Matrix
+- 上传成功 → 版本 `not_started`、资料 `pending`、**队列为空**。
+- `parse` 命中 `not_started`/`failed` → `queued` + 入队一次。
+- `parse` 命中 `parsing`/`ready` → 拒绝（不重复调度）。
+- 入队失败 → 版本回写 `failed`（而非停留 `queued`）。
+- 越权/不存在 → 404。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：上传即入队（用户未点「开始解析」就消耗 OCR/LLM）
+self.queue.enqueue(task_name="parse_material_pipeline", payload={...}, user_id=str(user_id))
+
+# 错误2：只关掉 service 入队，路由仍挂 BackgroundTasks → 仍会自动解析
+background_tasks.add_task(run_parse, material_id)
+
+# 错误3：新版本写成 queued 却没入队 → 永久「排队中」且无消费者
+version = MaterialVersion(..., parse_status=ParseStatus.QUEUED.value)
+```
+##### Correct
+```python
+# 正确：上传只落库；解析由用户命令触发，派发经条件更新且入队失败可见
+version = MaterialVersion(..., parse_status=ParseStatus.NOT_STARTED.value)
+# POST /{id}/parse：
+if not self.repo.try_transition_version_status(
+    target_version.id, material_id,
+    from_status=target_version.parse_status,       # 陈旧读无法通过：DB 行已变 → 未命中
+    to_status=ParseStatus.QUEUED.value, reset_errors=True,
+):
+    return target_version                                # 已被其他请求推进，不重复派发
+self._enqueue_parse(material_id, target_version.id, user_id)   # 失败 → 回写 FAILED
+```
+
+#### 6. Tests Required
+- 上传后 `parse_status == not_started` 且**队列无任务**（断言 `len(queue._queue) == 0`）。
+- `parse` 后恰好入队一次；重复 `parse` 被拒（在途状态直接返回）。
+- **并发竞态**：本会话持有陈旧 `not_started` 实体、DB 行已被推进到 `queued` 时，`trigger_parse` 必须**不**再入队（守 CAS 回归）；`retry` 同理由 CAS 拒绝。
+- 入队抛错 → 版本 `failed` + `failed_stage="queue_dispatch"`（可重试），不留 `queued`。
+- 旧 `queued` 数据仍可被 worker 消费（零回归）。
+- 前端：`not_started` → 「待解析」+ 「开始解析」可达；状态筛选含 `retake_required`。
+
+#### 代码锚点
+- `backend/app/models/material.py::ParseStatus.NOT_STARTED`
+- `backend/app/repositories/material.py::MaterialRepository.try_transition_version_status`
+- `backend/app/services/material.py::MaterialService.create_material`（不再入队）
+- `backend/app/services/material.py::MaterialService.trigger_parse`（CAS 派发）
+- `backend/app/services/material.py::MaterialService.retry_material_pipeline`（CAS 重试）
+- `backend/app/services/material.py::MaterialService._enqueue_parse`（失败回写）
+- `backend/app/api/v1/materials.py`（`/upload` 无后台任务、`/{id}/parse`、`/{id}/retry`）
+- `miniprogram/src/utils/materialState.ts`
+
+---
+
+### Scenario: Out-of-Process Queue Execution (RQ) & Terminal-Failure Writeback
+
+#### 1. Scope / Trigger
+- 解析与判题任务的真实执行：任务是进程外消费者执行的，业务记录是用户可见状态的事实源。
+
+#### 2. Signatures
+- `QueueProtocol.enqueue(task_name, payload, user_id, *, task_id=None, delay_seconds=0, priority=0) -> str`。
+- 受控任务白名单 `REGISTERED_TASK_NAMES = frozenset({"parse_material_pipeline", "grading_jobs"})`。
+- 入口固定为 `app.worker.execute_registered_task(task_name, payload, user_id)`；终态失败回调固定为 `app.worker.handle_job_terminal_failure`。
+- 队列名：默认 `zhilian`，`priority > 0` 走 `zhilian_high`。
+- 重试：`Retry(max=3, interval=[10, 30, 90])`（`min(10 * 3**i, 300)`）；`job_timeout=1800`s；`failure_ttl=7d`；`result_ttl=1d`；回调超时 60s。
+- 环境变量：`ZHILIAN_QUEUE__PROVIDER=redis`（见 `Taskfile.yml::worker`）；worker 启动 `cd backend && uv run python -m app.worker`。
+
+#### 3. Contracts
+- **只投递受控任务名**：`enqueue` 校验 `task_name in REGISTERED_TASK_NAMES` 与 `payload["user_id"] == user_id`，否则 `QueueError`；**禁止**反序列化任意客户端函数。RQ 侧只传固定入口模块路径 + 轻量标识（UUID），不携带原文或用户作答。
+- **无消费者即无执行**：内存适配器只服务单元测试与显式同步场景（`process_next` 仅在测试调用）；生产必须部署独立 worker，否则任务永久待处理。
+- **终态失败才回写**：`on_failure` 在**每次**失败都会触发（含仍将重试的中间失败），回写前必须用 `job.should_retry` 判定；`should_retry=True` 只记 warning。回写自身异常必须被吞掉（不得让回调异常污染 RQ）。
+- **幂等**：任务键绑定资料版本或练习；重复领取（重投/重试）不得重复解析、重复计分或产生重复生效判题记录。
+- **可定位**：`python -m app.cli queue stalled [--older-than-minutes N] [--limit N]` **只读**列出长期停留的 `practices.status='submitted'` 与解析中间态版本，并给出恢复入口；无滞留退出码 0、检出退出码 2、DB 不可达退出码 4。禁止在该命令中写任何业务状态。
+
+#### 4. Validation & Error Matrix
+- 未注册任务名 / 载荷用户与 `user_id` 不一致 → `QueueError`（拒绝入队）。
+- `delay_seconds < 0` 或 `priority < 0` → `QueueError`。
+- 中间失败（`should_retry=True`）→ 仅 warning，**不**改业务状态。
+- 重试耗尽 / 判定为终态 → 记 error 并回写业务状态（见下一 Scenario）。
+- 解析任务：service 自身已回写 `FAILED`，回调不再重复回写（避免双重语义）。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：存在入队代码但没有任何消费者 → 任务永久待处理且无提示
+queue.enqueue("parse_material_pipeline", {...})   # 生产无 worker 运行
+
+# 错误2：把 on_failure 当"最终失败"用，中间失败也回写 → 把仍在重试的记录标成终态
+def handle_job_terminal_failure(job, *args): 
+    mark_failed(job)                              # 未判 should_retry
+
+# 错误3：让客户端传函数名/序列化函数对象
+queue.enqueue(payload["callable"], {...})
+```
+##### Correct
+```python
+# 正确：受控白名单 + 终态判定 + 回写异常吞掉
+if task_name not in REGISTERED_TASK_NAMES:
+    raise QueueError(f"未注册的后台任务: {task_name}")
+if getattr(job, "should_retry", False):
+    logger.warning("后台任务失败，RQ 将按退避策略重试"); return
+try:
+    handler(container, payload, user_id)          # 固定模块路径解析得到
+except Exception:
+    logger.exception("终态失败回写自身异常")        # 不污染 RQ
+```
+
+#### 6. Tests Required
+- `enqueue` 断言 `on_failure.name == "app.worker.handle_job_terminal_failure"`（受控路径）。
+- 未注册任务名 / 用户不匹配被拒。
+- `should_retry=True`、解析任务、未知任务 → **不**回写。
+- 回写自身抛错不外溢。
+- CLI：空库退出 0；超阈值记录被检出并给 `action`（退出 2）；阈值内不误报；**断言业务状态未被改写**。
+- 真实 Redis 跨进程消费需人工验证（本环境无 Redis，纯替身单测不能替代）。
+
+#### 代码锚点
+- `backend/app/integrations/queue/protocol.py::REGISTERED_TASK_NAMES`
+- `backend/app/integrations/queue/rq_adapter.py`（`TASK_ENTRY`/`TERMINAL_FAILURE_CALLBACK`/`Retry`/`Callback`）
+- `backend/app/worker.py::REGISTERED_TASKS`、`execute_registered_task`、`handle_job_terminal_failure`
+- `backend/app/cli/commands/queue.py`、`backend/Dockerfile.worker`、`deploy/docker-compose.yml`
+
+---
+
+### Scenario: Grading Completion Gate, Recovery State & Atomic Retry Dispatch
+
+#### 1. Scope / Trigger
+- 交卷 → 异步判题 → 报告生成的时序；判题任务终态失败后的可恢复状态；用户主动重试判题。
+
+#### 2. Signatures
+- `POST /api/v1/practices/{id}/regrade` -> `PracticeStatusResponse`（**练习级**判题重试；与**题目级** AI 复查 `POST /api/v1/grading/regrade` 不同语义、不同路由）。
+- `PracticeService.mark_grading_failed(user_id, practice_id, *, reason="", request_id="") -> Practice | None`。
+- `PracticeService.retry_grading(user_id, practice_id, request_id="") -> tuple[str, Practice]`。
+- `PracticeRepository.try_transition_status(practice_id, user_id, *, from_status, to_status) -> bool`。
+- 前端：`needsGradingRetry(session)`（仅 `partially_graded` 为真）、`apiRetryPracticeGrading`。
+
+#### 3. Contracts
+- **`completed_at` 是全判完的唯一标记**：`GradingService` 仅在全部作答项判完（`all_graded`）时写 `COMPLETED` + `completed_at`；存在待重判则 `partially_graded` 且 `completed_at = None`。
+- **诊断门禁双条件**：`DiagnosisService` 只接受 `status == completed` **且** `completed_at is not None`，否则 40016。任何回写/重试路径都**不得**写 `completed_at`，否则绕过门禁产出早产报告。
+- **`partially_graded` 有两个成因**：主观题 LLM 超时降级为待重判；判题任务终态失败被回写。两者共享同一恢复入口 `POST /{id}/regrade`，因此 UI 文案必须对两种成因都成立（「仍有 N 题未判定」），不得表述为「部分判完」。
+- **失败回写单调**：`mark_grading_failed` 仅当 `status == submitted` 时置 `partially_graded`；`completed`/`partially_graded`/`timeout` 一律跳过，绝不回退已生效判分；重复回调天然幂等。
+- **重试派发必须原子**：状态跃迁走数据库条件更新（compare-and-swap），**不得**「先读状态再写状态」——两个并发请求会同时通过状态校验并重复入队，同一批待判项被判两遍、产生重复 `is_final` 记录。仅当 CAS 成功才入队；入队失败必须 `rollback()` 退回 `partially_graded`，恢复入口不被堵死。
+- **判题幂等**：`GradingService.grade_practice` 对已有 `SUCCESS` 且非用户自评的生效记录跳过；重复整卷判题不得重复计分、不得产生重复生效记录。
+- **结果页不显示假零分**：未判/待重判项显示「判题中」/「待重判」，不得显示 0 分或答错。
+
+#### 4. Validation & Error Matrix
+- `status == timeout` → 40011（超时冻结，不可重试）。
+- `completed_at is not None` 或 `status == completed` → 40011（已全判完）。
+- `status` 既非 `partially_graded` 也非上述 → 40011（判题尚未结束）。`submitted` 视为判题进行中，**不**开放重试，避免并发双判。
+- CAS 未命中（并发已被其他请求推进）→ 40011，且**不得**入队。
+- 入队失败 → 回滚为 `partially_graded`，可再次重试。
+- 练习不存在 / 越权 → 404。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：先读后写，两个并发重试都通过校验并各自入队（同一批待判项判两遍）
+practice = repo.get_practice_by_id(practice_id, user_id)
+if practice.status != PracticeStatus.PARTIALLY_GRADED.value:
+    raise PracticeStatusError(...)
+repo.update_practice_status(practice_id, user_id, PracticeStatus.SUBMITTED.value)
+queue.enqueue(task_name="grading_jobs", payload={...}, user_id=str(user_id))
+
+# 错误2：失败回写顺手写完成时间 → 绕过诊断门禁产出早产报告
+practice.completed_at = datetime.now(UTC)
+```
+##### Correct
+```python
+# 正确：状态跃迁由数据库判定，只有改到该行的调用才入队
+transitioned = repo.try_transition_status(
+    practice_id, user_id,
+    from_status=PracticeStatus.PARTIALLY_GRADED.value,
+    to_status=PracticeStatus.SUBMITTED.value,
+)
+if not transitioned:
+    raise PracticeStatusError("判题任务已在重试中，请勿重复提交")
+try:
+    task_id = queue.enqueue(task_name="grading_jobs", payload={...}, user_id=str(user_id), priority=1)
+    session.commit()
+except Exception:
+    session.rollback()      # 退回 partially_graded，恢复入口保持可用
+    raise
+# completed_at 只由 GradingService 在 all_graded 时写入
+```
+
+#### 6. Tests Required
+- 重试耗尽回写 → `partially_graded` 且 `completed_at is None`；重复回调幂等；`completed` 不被降级；未交卷练习不受影响。
+- 重试派发一次；第二次触发被拒且队列长度不变；**并发竞态**：本会话持有陈旧 `partially_graded` 实体、DB 行已被推进到 `submitted` 时，重试必须被拒且**不入队**（守 CAS 回归）。
+- 入队失败回滚为 `partially_graded` 且仍可再试。
+- 重试后真正跑完全卷才写 `completed_at`；重复整卷判题不重复计分、生效记录数 == 作答项数。
+- 诊断门禁：`partially_graded` → 40016（守门禁不被绕过）。
+- 前端：`needsGradingRetry` 仅对 `partially_graded` 为真；未判项 `score`/`isCorrect` 为 `null` 而非 0。
+
+#### 代码锚点
+- `backend/app/services/grading.py::GradingService.grade_practice`（`all_graded` 才写 `completed_at`）
+- `backend/app/services/diagnosis.py::DiagnosisService`（`status == COMPLETED and completed_at is not None` 门禁）
+- `backend/app/services/practice.py::PracticeService.mark_grading_failed`
+- `backend/app/services/practice.py::PracticeService.retry_grading`
+- `backend/app/repositories/practice.py::PracticeRepository.try_transition_status`
+- `backend/app/api/v1/practices.py`（`/{id}/regrade`）
+- `miniprogram/src/api/adapters/practice.ts::needsGradingRetry`
+
+---
+
+### Scenario: Practice Source-Snippet Enrichment on Both Read Paths
+
+#### 1. Scope / Trigger
+- 结果页原文依据需要逐题切片内容；创建练习的响应与查询详情的响应必须形状一致。
+
+#### 2. Signatures
+- `PracticeService._build_source_snippet_map(items, user_id)`（唯一装配实现）。
+- `PracticeService._attach_source_snippets(detail, user_id)`（详情路径）、`_attach_source_snippets_to_items(practice, user_id)`（创建路径）。
+- `MaterialRepository.list_snippets_by_ids(snippet_ids, user_id)`（批量 + 租户过滤）。
+
+#### 3. Contracts
+- 原文装配**只有一个实现**，创建与查询两条路径复用；禁止各写一份。
+- 装配必须批量按 `source_snippet_id` 关联（单查询、按 `user_id` 过滤），禁 N+1、禁跨用户泄漏；切片缺失时 DTO 为 `None`，前端渲染空态。
+- 回填快照时**必须拷贝 dict**（`snapshot = dict(snapshot)`）再写入，禁止原地修改 ORM 的 JSON 列对象——否则瞬时装配数据会随会话提交被持久化进快照。
+- 创建路径**不得**改写已落库的快照 JSON，也不得因此改变 service 的返回类型（既有调用方依赖 `Practice` ORM）。
+
+#### 4. Tests Required
+- 创建练习的响应中作答项带完整 `source_snippet`（`snippet_content`/`chapter_title`/`page_index`），与查询详情路径一致。
+- 快照副本内同样可读到 `source_snippet`；**断言落库的 JSON 未被瞬时装配污染**。
+- 切片缺失 → `None` 空态；批量查询次数常数级。
+
+#### 代码锚点
+- `backend/app/services/practice.py::PracticeService._build_source_snippet_map`
+- `backend/app/services/practice.py::PracticeService._attach_source_snippets_to_items`
+- `backend/app/schemas/practice.py::PracticeItemDetailResponse`（before-validator 回填快照副本）
+- `backend/app/repositories/material.py::MaterialRepository.list_snippets_by_ids`
+
+---
+
+### Scenario: Contract Fixture Fidelity (Never Assert Fields the Server Does Not Send)
+
+#### 1. Scope / Trigger
+- 任何用「真实后端序列化样本」固定跨层字段的前后端契约测试与 fixture。
+
+#### 2. Contracts
+- fixture 的字段名与**字段存在性**都必须逐字取自后端响应模型的真实序列化结果；**手工补一个服务端不返回的字段，会让断言在生产永不成立却测试恒绿**。
+- 字段存在性判定要以响应模型为准：模型没有该字段时，前端读取恒为 `undefined`，绑定静默渲染为空——测试若自造字段则该缺陷永远发现不了。
+- 同一实体的不同响应模型可能字段不同（例如题目：`QuestionDetailResponse` 只有 `source_snippet_id` 与 `{snippet_id, similarity, index}` 元数据，**不含切片正文**；而练习作答项的 `PracticeItemDetailResponse` 经装配**含** `source_snippet{chapter_title, page_index, snippet_content}`）。fixture 必须按**具体端点**取材，不得跨端点搬运字段。
+
+#### 3. Wrong vs Correct
+##### Wrong
+```typescript
+// 错误：题目 fixture 里手工塞了服务端从不返回的 source_snippet
+const generatedQuestionFixture = () => ({ ..., source_snippet: { snippet_content: '...' } })
+expect(adaptQuestion(raw).source_quote).toBe('...')   // 生产恒为 undefined → 假通过
+```
+##### Correct
+```typescript
+// 正确：题目侧按真实契约断言"无正文"，原文溯源断言改挂在真实返回正文的练习侧
+expect(adaptQuestion(raw).source_quote).toBeUndefined()
+expect('source_snippet' in raw).toBe(false)
+expect(buildAttemptResults(adaptPractice(realItemFixture))[0].sourceQuote).toBe('...')
+```
+
+#### 4. Tests Required
+- 题目侧：断言不存在 `source_snippet` 且 `source_quote` 为 `undefined`（守假通过回归）。
+- 练习侧：用真实练习 fixture 断言 `source_quote` 正确映射。
+- fixture 新增/修订后，必须能回答「这个字段由哪个响应模型的哪个字段产生」。
+
+#### 代码锚点
+- `miniprogram/tests/fixtures/backendResponses.ts`
+- `miniprogram/tests/backendContracts.spec.ts`
+- `backend/app/schemas/question.py::QuestionDetailResponse`（无切片正文）
+- `backend/app/schemas/practice.py::SourceSnippetDTO`、`PracticeItemDetailResponse.source_snippet`
+
+---
+
+### Scenario: Managed Avatar Upload & Presigned URL Contract
+
+#### 1. Scope / Trigger
+- 用户头像由前端直接选图上传，由应用托管对象存储；不再要求用户手填图片 URL。
+
+#### 2. Signatures
+- `POST /api/v1/users/me/avatar`（multipart 图片）-> `UserProfileResponse`。
+- `AuthService.upload_user_avatar(user_id, data: bytes) -> UserProfileResponse`。
+- 对象键：`users/{user_id}/avatars/{uuid4().hex}{suffix}`；持久字段 `User.avatar_object_key`。
+
+#### 3. Contracts
+- **校验真实内容而非声明**：先判体积（> 5 MiB → 413），再按**魔数**识别 PNG/JPEG/GIF/WebP（不认可 → 400）；禁止只信 `Content-Type`/文件名后缀。
+- **先写对象、后更新数据库**：对象写入成功后才更新 `avatar_object_key`；`avatar_url` 落库为空串，展示 URL 由响应**按需重新签发**（预签名有效期 3600s），**禁止**把会过期的签名 URL 当作长期数据库值。
+- **失败保留旧值**：DB 更新失败 → `rollback()` 并删除刚写入的新对象；旧对象只在**新对象与数据库更新均成功后**才清理，清理失败仅告警不阻断。
+- **兼容旧数据**：历史 `avatar_url` 直链仍可读；迁移后的托管头像以对象键优先。
+
+#### 4. Validation & Error Matrix
+- `len(data) > 5 MiB` → `StorageError(413)`。
+- 魔数不识别 → `StorageError(400)`。
+- 未配置对象存储 → `StorageError`。
+- 用户不存在/已注销/已停用 → `AuthenticationError`。
+- DB 更新失败 → 回滚 + 删除新对象，旧头像保持可用。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：只信声明类型；把预签名 URL 直接落库（过期后头像全裂）
+if content_type not in ALLOWED: raise ...
+user.avatar_url = generate_presigned_download_url(bucket, key, expires_in=3600)
+# 错误2：先删旧对象再更新数据库，中途失败 → 用户既无新头像也无旧头像
+storage.delete_object(bucket, old_key); repo.update_profile(user_id, avatar_object_key=new_key)
+```
+##### Correct
+```python
+# 正确：魔数校验 → 写新对象 → 更新对象键（url 留空）→ 成功后清理旧对象
+detected = _detect_image_type(data)                 # 魔数
+stored_key = storage.put_object(bucket, new_key, data, content_type=content_type)
+updated = repo.update_profile(user_id, avatar_url="", avatar_object_key=stored_key)
+session.commit()
+profile = UserProfileResponse.model_validate(updated).model_copy(
+    update={"avatar_url": generate_presigned_download_url(bucket, stored_key, expires_in=3600)})
+if old_key: storage.delete_object(bucket, old_key)  # 仅在成功后
+```
+
+#### 6. Tests Required
+- 超限（413）、非法内容（400，含"声明为图片但内容非图片"）、未配置存储。
+- 上传成功：DB 存对象键且 `avatar_url` 不含签名查询串；响应 URL 可用。
+- DB 更新失败 → 新对象被清理、旧头像仍可用。
+- 迁移 0009 `upgrade → downgrade → upgrade` SQLite 对称；旧 `avatar_url` 数据仍可读。
+
+#### 代码锚点
+- `backend/app/api/v1/users.py`（`/me/avatar`）
+- `backend/app/services/auth.py::AuthService.upload_user_avatar`、`_detect_image_type`、`_AVATAR_MAX_BYTES`
+- `backend/app/models/user.py::User.avatar_object_key`
+- `backend/migrations/versions/0009_avatar_object_key.py`
+
+---
+
+### Scenario: Grounded Course Coach with Bounded Citation Repair
+
+#### 1. Scope / Trigger
+- 课程/资料/知识点级 AI 助教答疑：回答必须基于当前用户有权访问的切片，并给出可核对的来源；无证据或服务失败时必须明确告知。
+
+#### 2. Signatures
+- `POST /api/v1/coach/ask`（`folder_id` / `material_id` / `knowledge_point_id` + 提问）-> `reply` + `suggestions` + 来源切片。
+- 题目级助教维持 `POST /api/v1/questions/{id}/ask-coach`（返回 `reply`/`suggestions`）。
+- 图：`build_coach_graph(search, llm)`，`StateGraph` 节点 授权范围解析 → 检索合并排序 → 证据是否足够 → 结构化回答 → 引用校验 → 至多一次修复或拒答。
+
+#### 3. Contracts
+- **授权是确定性代码，不交给模型**：服务层枚举当前用户有权访问的资料/版本并限定检索范围；LLM 不决定自己能读哪些资料。
+- **引用只能来自本次授权检索返回的切片**：校验答案中的 `citation_ids` 与原始检索结果逐一核对；不通过时至多修复一次，仍失败则**拒答**，不得编造引用或改用固定模板冒充 AI 答疑。
+- **无证据 → 明确空态**：检索为空或证据不足时返回明确不可用语义，不产出看似有理的答复。
+- **有界**：图只在单次请求内运行，不持久化原文/对话 checkpoint；LangGraph 的状态持久化**不**替代队列 worker。
+- **越权**：请求范围不归属当前用户 → 404，不得回落到"全库检索"。
+
+#### 4. Validation & Error Matrix
+- 检索为空 → `no_evidence` 状态 → 明确空态答复。
+- 引用含授权范围外的切片 ID → 校验失败 → 一次修复；二次仍失败 → 拒答。
+- LLM 调用失败 → 明确失败提示（不退化为模板文案）。
+- 范围越权 / 不存在 → 404。
+
+#### 5. Wrong vs Correct
+##### Wrong
+```python
+# 错误1：没有 question_id 时拼接固定文案冒充答疑
+reply = f"关于「{question}」，建议先复习相关章节。"   # 不检索、不推理
+# 错误2：让模型自己决定检索哪些资料，或信任模型给出的引用 ID
+citations = draft.citation_ids                        # 未与检索结果核对
+```
+##### Correct
+```python
+# 正确：授权范围由服务层枚举；引用与本次检索结果核对；失败至多修复一次后拒答
+allowed_material_ids = self._authorized_material_ids(user_id, scope)   # 确定性
+candidates = search.search(query, user_id=user_id, material_ids=allowed_material_ids, ...)
+if not candidates:
+    return CoachAnswer(status="no_evidence", reply="暂无可用资料依据", suggestions=[...])
+draft = validate(draft)          # citation_ids ⊆ {c.id for c in candidates}
+if not ok and state["retry_count"] == 0:
+    draft = repair(...)          # 至多一次
+if not ok:
+    return CoachAnswer(status="refused", ...)
+```
+
+#### 6. Tests Required
+- 无证据 → 明确空态，不产出答复。
+- 越权切片**不得**进入证据集合；请求越权范围 → 404。
+- 坏引用 → 触发修复且 `call_count == 2`；二次坏引用 → 拒答。
+- LLM 失败 → 明确失败语义，不回落模板文案。
+- 题目级助教读 `reply`/`suggestions`（前端不得读 `coach_reply` 等自造字段）。
+
+#### 代码锚点
+- `backend/app/integrations/llm/coach_graph.py::build_coach_graph`
+- `backend/app/services/question.py::QuestionService.ask_scoped_coach`
+- `backend/app/api/v1/questions.py`（`/coach/ask`、`/{id}/ask-coach`）
+- `backend/app/integrations/search/protocol.py`（按用户/资料限定检索）
+- `backend/tests/unit/integrations/llm/test_coach_graph.py`

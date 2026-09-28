@@ -1,8 +1,8 @@
 # Hook Guidelines
 
-> **事实源**：`miniprogram/src/subpackages/**/composables/*`、`miniprogram/src/subpackages/practice/composables/usePracticeSession.ts`
-> **最后核对**：2026-09-28 @ ca062a1
-> **核对方式**：`rg "export function use|getCurrentInstance\(\)|onUnmounted" miniprogram/src`
+> **事实源**：`miniprogram/src/subpackages/material/composables/useQuestionCompose.ts`、`miniprogram/tests/diagnosisAndCompose.spec.ts`
+> **最后核对**：2026-09-29
+> **核对方式**：`rg "export function use|composables/" miniprogram/src`
 
 > How hooks（组合式函数）are used in this project. 前端使用 Vue 3 Composition API 的 `composables` 承载有状态复用逻辑。
 
@@ -10,89 +10,102 @@
 
 ## Overview
 
-- 组合式函数位于各分包的 `composables/` 目录，命名统一 `useXxx`，采用**具名导出**（无默认导出）。
-- 输入优先采用**选项对象**（`options: { ... }`）并解构默认值；输出为普通对象，内含 `ref` / `computed` / 方法，供页面或组件解构使用。
-- 组合式函数是**网络调用**的合法发起方（与「Store 不发请求」铁律互补）：内部直接调用 `src/api/*`，再由页面消费。
-- 定时器/副作用必须可释放：轮询与动画类组合式函数在 `getCurrentInstance()` 存在时注册 `onUnmounted` 清理；无组件实例（如被纯函数测试调用）时跳过注册。
+- 组合式函数位于分包的 `composables/` 目录，命名统一 `useXxx`，采用**具名导出**（无默认导出）。
+- **当前全仓库只有 1 个组合式函数**：`src/subpackages/material/composables/useQuestionCompose.ts`（组卷配置与出题/覆盖率门禁）。`stores/practice`、`stores/material` 等承担编排职责的代码都在 store 里，没有对应的 `use*` 包装。
+- 该函数**不接收入参**（不是选项对象形式）：作用域通过返回的 `setScope({ folderId, materialId })` 在 `onLoad` 后注入。
+- 返回值为**单一普通对象**，内含 `ref` / `computed` / 方法；调用方（页面）解构后使用。
+- **没有定时器、没有 `onUnmounted`、没有 `getCurrentInstance()` 守卫**：该组合式函数是纯状态 + 异步动作，不需要生命周期收尾。全仓库 `rg "getCurrentInstance|onUnmounted" src` 无命中；唯一的卸载清理是 `subpackages/report/pages/detail/index.vue` 里 uni 的 `onUnload`（清判题轮询 `setTimeout`）。
+- 组合式函数是**网络调用**的合法发起方：`useQuestionCompose` 内部直接调 `@/api` 的 `apiGenerateQuestions`。
 
 **代码锚点**
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::useMaterialPolling`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::usePracticeSession`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::useQuestionCompose`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::onUnload`
 
 ---
 
 ## Custom Hook Patterns
 
-现有 6 个组合式函数与其契约：
+`useQuestionCompose` 的完整契约：
 
-| 组合式函数 | 选项/入参 | 返回值（节选） | 生命周期 |
-|---|---|---|---|
-| `useMaterialPolling` | `materialId: Ref<string>\|string`，`options: UseMaterialPollingOptions` | `status`、`materialData`、`isPolling`、`error`、`startPolling`、`stopPolling` | `onUnmounted` 自动 `stopPolling` |
-| `useMaterialListPolling` | `{ items, isPageVisible, onItemUpdated }` | `stopPolling`、`checkAndStartPolling`、`isPending` | `onUnmounted` 自动 `stopPolling` |
-| `useGenerationProgress` | `{ stages?, stageInterval?, tickInterval? }` | `stages`、`stageIndex`、`elapsedSeconds`、`isRunning`、`currentStage`、`start`、`stop` | `onUnmounted` 自动 `stop` |
-| `useMaterialCardActions` | `{ refresh }` | `handleCardClick/Delete/Retry/TriggerParse` | 无定时器 |
-| `useMaterialFolderMove` | `{ listData }` | `moveVisible`、`moveTarget`、`loadMoveTargets`、`handleOpenMove`、`handleMoveSelect` | 无定时器 |
-| `usePracticeSession` | 无 | `practiceId`、`loading`、`loadPractice`、`handleAnswerChange`、`flushPendingDraft`、`pauseSession`、`resumeSession`、`cleanupSession` | 由页面显式调用 `cleanupSession` |
+| 项 | 内容 |
+|---|---|
+| 入参 | 无 |
+| 导出的类型 | `ComposeScope { folderId?: string; materialId?: string }`、`KnowledgePointOption { id: string; name: string }` |
+| state（`ref`） | `scope`、`availableKpList`、`selectedKpIds`、`selectedTypes`（默认 `DEFAULT_TYPES` = 单选/多选/判断/简答）、`questionCount`（默认 5）、`difficulty`（默认 3）、`questions`、`removedIds`、`hasGenerated`、`isGenerating`、`isStarting` |
+| getters（`computed`） | `remainingQuestions`（排除 `removedIds`）、`coverage`（`computeKnowledgeCoverage` 投影）、`canStart`（有剩余题**且** `coverage.missing.length === 0`）、`plannedCount`（`max(已选考点数, 指定题量)`）、`generationNotice`（生成前后据实披露题量调整与覆盖缺口）、`isAllKpSelected` |
+| 作用域 | `setScope(next)` |
+| 考点操作 | `setKnowledgePoints(list)`（同时全选）、`flattenKnowledgePoints(FolderKnowledgePointItem[])`、`isKpSelected(id)`、`toggleKp(id)`、`toggleSelectAllKp()` |
+| 题型操作 | `isTypeSelected(type)`、`toggleType(type)`（**至少保留一种题型**，否则 toast 并拒绝） |
+| 出题 | `generate()`、`regenerateQuestion(question)`、`fillCoverageGap()`；内部共用 `generateForKnowledgePoints(ids, desiredCount)` → `planGenerationBatches` 分批 → `apiGenerateQuestions` |
+| 题目裁剪 | `removeQuestion(target)`（接受 `QuestionItem` 或 id）、`restoreQuestion(id)` |
 
 约定要点：
 
-- **选项默认值在函数体解构**：`const { interval = 1500, backoffFactor = 1.5, maxInterval = 8000, maxTimeout = 180000, immediate = true } = options`。
-- **返回值聚合成单对象**，不返回元组；调用方按需解构。
-- **可测性**：涉及定时器的组合式函数通过 `getCurrentInstance()` 守卫注册 `onUnmounted`，使单元测试可在组件外直接调用（见 `tests/unit/composables/useMaterialPolling.spec.ts`）。
-- **无组件的会话型组合式函数**（`usePracticeSession`）不自行注册卸载钩子，改由页面在 `onUnload`/`onBeforeUnmount` 调用 `cleanupSession()` 收尾。
+- **副作用与门禁内聚**：`canStart` / `coverage` / `generationNotice` 会随剔除题目自动重算，页面不需要自己判覆盖缺口。
+- **失败一律 toast + 保持原状态**：`generate` / `regenerateQuestion` / `fillCoverageGap` 都在 `catch (error: any)` 里 `uni.showToast({ title: error?.message || '...' })`，并用 `finally` 复位 `isGenerating`。
+- **返回的 `ref` 需在模板里显式 `.value`**：因为返回的是普通对象而非 `reactive`，页面写成 `compose.selectedKpIds.value.length`、`compose.isGenerating.value`（见 `subpackages/material/pages/questions/index.vue` 模板）。这是本仓库既有的写法，新增 `ref` 型组合式函数要么沿用、要么整体 `reactive` 化并统一改造调用点。
+- **状态变更都通过返回的方法**：页面不直接改 `compose.selectedKpIds`，只调 `toggleKp` / `setKnowledgePoints` 等。
 
 **代码锚点**
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::UseMaterialPollingOptions`
-- `miniprogram/src/subpackages/material/composables/useMaterialListPolling.ts::useMaterialListPolling`
-- `miniprogram/src/subpackages/material/composables/useGenerationProgress.ts::GENERATION_STAGES`
-- `miniprogram/src/subpackages/practice/pages/session/index.vue::onUnload`
-- `miniprogram/tests/unit/composables/useMaterialPolling.spec.ts`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::ComposeScope`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::canStart`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::generationNotice`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::toggleType`（至少一种题型）
+- `miniprogram/src/subpackages/material/pages/questions/index.vue`（消费点）
 
 ---
 
 ## Data Fetching
 
-- 网络调用统一经 `src/api/*`（如 `fetchMaterialStatus`、`fetchPracticeSession`、`saveAnswerDraft`）。组合式函数**不直接**使用 `uni.request`。
-- **轮询必须自适应退避 + 超时熔断**，禁止固定间隔死循环：
-  - 单条目 `useMaterialPolling`：初始 `1500ms`，`t_{next} = min(t × 1.5, 8000)`，默认 `180000ms`（3 分钟）熔断，超时 `stopPolling()` 并 toast「解析等待超时，请稍后刷新查看」；命中终态（`COMPLETED`/`READY`/`FAILED`/`RETAKE_REQUIRED`）立即停止。
-  - 列表 `useMaterialListPolling`：同样 `1.5x` 退避、上限 `8000ms`、`180000ms` 超时；页面 `isPageVisible=false` 或不再有 pending 项时停止；对 pending 项并发 `Promise.allSettled`，结果原地合并并回调 `onItemUpdated`。
-- **草稿远端同步**（`usePracticeSession`）：`handleAnswerChange` 先写 store、再写本地 Storage、最后 `setTimeout(..., 600)` 防抖同步远端；`flushPendingDraft()` 在会话卸载前立即冲刷，靠 `pendingSync` 的**身份引用**判定回调有效性，避免慢请求覆盖新作答。
-- **暂停/恢复**：`pauseSession` 先停本地计时再 `POST /practices/{id}/pause`，失败则重启计时；`resumeSession` 先 `POST /practices/{id}/resume` 再重启计时。
-- 组合式函数内的失败处理：可降级的静默忽略（如列表轮询、移动目标加载），主流程失败必须 toast。
+- 网络调用统一经 `src/api/*`（`apiGenerateQuestions`、`apiGetKnowledgeTree`、`apiListWrongRecords` 等）。组合式函数**不直接**使用 `uni.request`。
+- `useQuestionCompose.generateForKnowledgePoints` 的调用形状：
+  ```typescript
+  const result = await apiGenerateQuestions({
+    folder_id: scope.value.folderId,
+    material_id: scope.value.folderId ? undefined : scope.value.materialId,
+    knowledge_point_ids: batch.knowledgePointIds,
+    question_types: selectedTypes.value,
+    count: batch.count,
+    difficulty: difficulty.value,
+  });
+  ```
+  要点：**`folder_id` 与 `material_id` 互斥**（有课程就不传资料）；只累加 `result.qualified_questions`，`pending_count` 单独统计但当前调用方未展示。
+- **失败处理约定**：主流程失败必须 toast；可降级的次要数据（如 `materialStore.loadKnowledgeTree` 失败）用 `console.error` + `return null` 静默降级。组合式函数内不做静默吞错。
+- **轮询的现状**：全仓库**没有**组合式轮询，轮询实现在两处 store / 页面内联逻辑里，且都是固定间隔（**无自适应退避、无超时熔断**）：
+  - `materialStore.pollMaterialStatus(id, maxAttempts = 20, interval = 1500)`：固定 1500ms，命中 `ready` / `failed` / `retake_required` 即返回，超时抛 `'资料解析超时，请稍后刷新'`。
+  - `subpackages/report/pages/detail/index.vue::pollGrading`：最多 20 轮、每轮 2500ms，命中 `fullyGraded` 或 `needsRetry` 即 break；`onUnload` 清 `setTimeout`。
+  
+  新增轮询逻辑请沿用「有明确终止条件 + 有上限 + 卸载时清定时器」的现有形态，**不要**在文档里承诺不存在的退避算法。
 
 **代码锚点**
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::scheduleNext`
-- `miniprogram/src/subpackages/material/composables/useMaterialPolling.ts::handleTimeout`
-- `miniprogram/src/subpackages/material/composables/useMaterialListPolling.ts::pollPendingItems`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::flushPendingDraft`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::syncSingleDraft`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pauseSession`
-- `miniprogram/src/api/practice.ts::pausePractice`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::generateForKnowledgePoints`
+- `miniprogram/src/stores/material.ts::pollMaterialStatus`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::pollGrading`
 
 ---
 
 ## Naming Conventions
 
-- 文件名与函数名同为 `camelCase` 的 `useXxx`（`useMaterialPolling.ts` → `useMaterialPolling`）。
-- 返回的方法以 `handle*` 前缀命名交互回调（`handleCardClick`、`handleMoveSelect`、`handleAnswerChange`）；轮询控制用 `startPolling`/`stopPolling`/`checkAndStartPolling`。
-- store 实例变量小写驼峰（`materialStore`、`folderStore`、`practiceStore`）。
-- 选项接口命名 `UseXxxOptions`；返回接口（若显式声明）命名 `UseXxxReturn`。
+- 文件名与函数名同为 `useXxx`（`useQuestionCompose.ts` → `useQuestionCompose`）。
+- 导出的辅助类型用**领域名**而非 `UseXxxOptions`：本仓库只有 `ComposeScope` / `KnowledgePointOption`；没有 `UseXxxOptions` / `UseXxxReturn` 的命名先例。
+- 返回的方法名以**动作开头**：`generate` / `regenerateQuestion` / `removeQuestion` / `restoreQuestion` / `fillCoverageGap` / `toggleKp` / `toggleSelectAllKp` / `setScope` / `setKnowledgePoints` / `flattenKnowledgePoints`；布尔判定用 `isXxx`（`isKpSelected` / `isTypeSelected` / `isAllKpSelected`）。**没有 `handle*` 前缀的方法**（`handle*` 出现在页面内联回调里，如 `questions/index.vue::handleStartPractice`）。
+- store 实例变量小写驼峰（`materialStore`、`folderStore`、`practiceStore`、`authStore`）。
 
 **代码锚点**
-- `miniprogram/src/subpackages/material/composables/useMaterialCardActions.ts::UseMaterialCardActionsOptions`
-- `miniprogram/src/subpackages/material/composables/useGenerationProgress.ts::UseGenerationProgressReturn`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::ComposeScope`
+- `miniprogram/src/subpackages/material/pages/questions/index.vue::handleStartPractice`
 
 ---
 
 ## Common Mistakes
 
-- **不要用固定 `setInterval` 长期轮询**：必须 `setTimeout` 调度 + 退避 + 超时熔断，否则客户端卡顿、服务端压力激增。
-- **不要在非组件上下文中无脑调用 `onUnmounted`**：必须 `if (getCurrentInstance())` 守卫，否则测试环境报错。
-- **不要在卸载时丢弃待同步草稿**：`cleanupSession` 必须触发 `flushPendingDraft()`，且同步完成回调用身份令牌判定，不能按 `questionId` 判等（新作答会被旧回调误标已同步而丢失）。
-- **不要让轮询在终态/页面隐藏后继续**：命中终态或 `isPageVisible=false` 必须立即清定时器。
-- **不要在组合式函数里直接改全局状态而不经 store action**：状态变更统一走对应 store 的 action。
+- **不要为「包装 store」而新建组合式函数**：现有 store 已经是编排层，直接 `useXxxStore()` 即可；新增 `use*` 应承载真正的**有状态 UI 逻辑复用**（如 `useQuestionCompose` 的组卷配置）。
+- **不要在组合式函数里直接改全局状态而不经 store action**：跨页共享状态走 store；组合式函数内的 `ref` 只承载组件/页面级状态。
+- **不要忘记 `ref` 的解包规则**：返回普通对象时调用方必须 `.value`；若改成 `reactive` 需同步改造全部消费点。
+- **不要引入不存在的生命周期守卫**：当前没有组件内组合式函数注册 `onUnmounted` 的先例；若新增需要清理的定时器，按 `report/detail/index.vue` 的做法在页面 `onUnload` 里清。
+- **不要在组合式函数里直接 `uni.request`**：网络统一经 `@/api`，保留适配层归一化。
 
 **代码锚点**
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::pendingSync`
-- `miniprogram/src/subpackages/practice/composables/usePracticeSession.ts::cleanupSession`
-- `miniprogram/src/subpackages/material/composables/useMaterialListPolling.ts::stopPolling`
+- `miniprogram/src/subpackages/material/composables/useQuestionCompose.ts::setScope`
+- `miniprogram/src/subpackages/report/pages/detail/index.vue::onUnload`
+- `miniprogram/src/api/index.ts::apiGenerateQuestions`
