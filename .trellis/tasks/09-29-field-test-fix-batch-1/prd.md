@@ -165,12 +165,20 @@
 1. ✅ **worker 已在容器内运行**（用户重新拉取镜像并启动），后端已重启。
 2. ✅ **`fix-grading-no-commit` 的 AC-7 由用户实机确认**——原话「我已经完成一次题目，判断都出来了」。
    即「交卷后当场看到逐题判分结果」成立，不再是永久「判题中」。
-3. ⬜ **生题端到端仍未确认**：用户尚未报告重启后生过一次新题。
-   故 `fix-qgen-feedback` 的 AC-6 与 `fix-llm-thinking-mode` 的 AC-7 **仍然开着**，
-   尽管这两个任务的代码都已提交。**不要因为「后端重启了」就推定它们通过。**
-4. ✅ **需求 4（学情页）已澄清一半**：用户报「数字没更新」，
-   **实为缓存**——该页只在 `onMounted` 与下拉刷新时加载，下拉后数字即正确，不是缺陷。
-   但用户同时表示**打算重构学情页**，且实测暴露两处确定缺陷
-   （接口 `material_id`/`folder_id` 没填、请求错误被吞），已全部写入
-   `09-29-review-page-ia` 的 PRD。该任务应从「复核」转为「重构」。
+3. ✅ **生题端到端已由用户确认**（2026-09-29）。故 `fix-qgen-feedback` 的 AC-6 与
+   `fix-llm-thinking-mode` 的 AC-7 均已成立——两者只差这一条用户侧验证，代码早已提交。
+4. ⚠️ **需求 5（学习足迹）用户报「足迹存在」，但实测确认缺陷仍在、且**少算一半**。**
+   用户现有 **10 份 `ready` 资料，其中 5 份 `folder_id IS NULL`**（未归课程）。
+   而 `pages/profile/index.vue:115-121` 的两个数**只对 `folderStore.folders` 求和**：
+   ```js
+   readyMaterialCount   = folders.reduce((acc, f) => acc + (f.ready_material_count || 0), 0)
+   totalKnowledgePoints = folders.reduce((acc, f) => acc + (f.knowledge_point_count || 0), 0)
+   ```
+   未归类资料贡献恒为 0 ⇒ 页面显示约 **5**，真实为 **10**。
+   **「数字不再是 0」不等于修好了**——这正是本批次最容易误判为「用户说没事了」而漏掉的一条。
+   `09-29-fix-learning-stats` 仍须做。
+5. ✅ **需求 4（学情页）已澄清**：用户报「数字没更新」**实为缓存**——该页只在 `onMounted`
+   与下拉刷新时加载，下拉后数字即正确，不是缺陷。但用户同时表示**打算重构学情页**，
+   且实测暴露两处确定缺陷（接口 `material_id`/`folder_id` 没填、请求错误被吞），
+   已全部写入 `09-29-review-page-ia` 的 PRD。该任务应从「复核」转为「重构」。
 
