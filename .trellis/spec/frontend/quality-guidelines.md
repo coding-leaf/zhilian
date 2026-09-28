@@ -64,6 +64,15 @@ pnpm run test:unit     # vitest run
     并给内容加 `position: relative; z-index: 1`，否则会被绝对定位的 backdrop 盖住。
     **不要**改用 `@tap.stop` 兜底：它依赖事件传播路径，若点击命中直接落在容器上，
     内容上的 `catchtap` 不在路径内，挡不住。
+  - **backdrop 用 `inset: 0`，不要加负偏移**：绝对定位的包含块是定位祖先的
+    **padding box**，它**包含**内边距区域——所以 `top/bottom/left/right: 0` 已经覆盖到
+    内边距的外沿，浮层带 `padding: 32rpx`（本项目的 `.modal-overlay` 即是）也不例外。
+    给 backdrop 加 `-32rpx` 之类的负偏移**不会**多盖住任何可点区域，只会把热区推出视口。
+    2026-09-29 实测（Chrome 真实布局，视口最外缘逐点 `elementFromPoint`）：`inset: 0`
+    与 `-32rpx` 在视口内每一档测点命中完全相同。
+    **留这条是因为它真的被搞反过一次**：同日的复核把包含块方向理解成「以内容盒为参照」，
+    据此把 3 个浮层改成了负偏移并写进了规范；实测推翻了它，3 处已回退。
+    这类"看起来很合理的几何推断"必须落到布局引擎上量，不要靠读规范条文下结论。
   - **通用手段**：凡依赖修饰符 / 指令语义的行为，改完必须到 `dist/build/mp-weixin` 里确认它
     **真的被编译进去了**。本次定案证据就是「`currentTarget` 在整个包中 0 次出现」——
     源码看着完全正确，产物里根本没有。
@@ -464,7 +473,7 @@ export function materialStatusText(material: MaterialState): string;
 | 目标页 | 参数名 | 发送方 | 接收方解析 |
 | --- | --- | --- | --- |
 | `subpackages/material/pages/course/index` | `id`（= materialId） | `pages/index/index::goToDetail`、`AiCoachDrawer::openSource` | `options.id`（无兜底，缺则整页不加载） |
-| `subpackages/material/pages/questions/index` | `material_id` **或** `folder_id` | `pages/index/index::goToQuestions` / `::goToCourseGenerate`、`course/index::goToQuestionConfig` | 先 `options.folder_id`，否则 `options.material_id` |
+| `subpackages/material/pages/questions/index` | `material_id` **或** `folder_id`；可选 `view=generated` | `pages/index/index::goToQuestions` / `::goToCourseGenerate`、`course/index::goToQuestionConfig` / `::goToGeneratedQuestions` | 先 `options.folder_id`，否则 `options.material_id`；`options.view === 'generated'` 且带 `material_id` 时额外载入已持久化题目并直接进核对视图 |
 | `subpackages/practice/pages/session/index` | `practice_id` | `pages/review/index::navigateToSession`、`questions/index::handleStartPractice`、`report/detail::handleAdaptivePractice` | `options.practice_id`（缺失 toast「缺少练习标识」） |
 | `subpackages/report/pages/detail/index` | `practice_id` | `pages/review/index::openPractice`、`session/index::confirmSubmit`（`redirectTo`） | `options.practice_id`（缺失置 `loadError`） |
 | `pages/auth/login` | 无 | `pages/index/index::goToLogin`、`pages/profile/index::goToLogin`、`request.ts::handleUnauthorized`（`reLaunch`） | — |

@@ -865,7 +865,13 @@ const goToLogin = () => {
 }
 
 /* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
-   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
+   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。
+
+   `inset: 0` 已覆盖到浮层内边距的外沿，**不要**改用负偏移去「补」内边距：
+   绝对定位的包含块是定位祖先的 padding box，它**包含**内边距区域；overlay 是
+   fixed + inset:0 且无边框，其 padding box 即整个视口，那 32rpx 内边距本就在
+   backdrop 之下。实测（Chrome 真实布局，视口最外缘逐点 elementFromPoint）：
+   `inset: 0` 与 `-32rpx` 在视口内每个测点命中完全相同，后者只是把热区推出视口。 */
 .modal-backdrop {
   position: absolute;
   top: 0;
