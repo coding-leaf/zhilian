@@ -17,7 +17,7 @@
 - **依赖里保留 `wot-design-uni`，但业务代码当前零引用**：`pages.json` 的 `easycom` 仍声明 `^wd-(.*)` 规则，实测 `src/**` 中不存在任何 `wd-*` 组件使用点。所有卡片/按钮/抽屉均为自定义 `.vue` + `App.vue` 全局 CSS 类（`.paper-card` / `.paper-btn-primary`）。
 - 全局状态为 **5 个 Pinia store**：`auth` / `material` / `folder` / `practice` / `diagnosis`（无 `stores/index.ts` 聚合入口）。
 - 组合式函数只有 **1 个**：`subpackages/material/composables/useQuestionCompose.ts`。
-- 单元测试 **7 个 spec 文件 / 39 个用例**，全部位于 `miniprogram/tests/`（无 `tests/unit/` 子目录层级）。
+- 单元测试 **9 个 spec 文件 / 62 个用例**，全部位于 `miniprogram/tests/`（无 `tests/unit/` 子目录层级）。
 
 ---
 
@@ -30,7 +30,7 @@
 | 组件规范 | 自定义 SFC 组件、props/emits 约定、共享 SCSS | `src/components/AiCoachDrawer.vue`、`src/subpackages/*/components/*`、`src/pages/review/components/*` | 2026-09-29 |
 | 状态管理 | 5 个域 store 的职责与网络调用边界 | `src/stores/{auth,material,folder,practice,diagnosis}.ts` | 2026-09-29 |
 | 组合式函数 | `useQuestionCompose` 的契约与命名约定 | `src/subpackages/material/composables/useQuestionCompose.ts` | 2026-09-29 |
-| 网络与契约 | `uni.request` 封装、query 串由调用方拼装、`fail` 兜底 | `src/utils/request.ts`、`src/api/index.ts` | 2026-09-29 |
+| 网络与契约 | `uni.request` 封装、两档超时、结构化 `RequestError`、query 串由调用方拼装、`fail` 兜底 | `src/utils/request.ts`、`src/utils/requestError.ts`、`src/api/index.ts`、[network-contract.md](./network-contract.md) | 2026-09-29 |
 | 质量门禁 | ESLint（`any` 已关闭）+ vue-tsc + Vitest | `package.json`、`.eslintrc.cjs`、`vitest.config.ts`、`tests/*.spec.ts` | 2026-09-29 |
 | 视觉设计系统 | 温润学术纸质色盘与 `page` 级 CSS 变量 | `src/App.vue`（`--color-*` 变量与 `.paper-card`）、`docs/DESIGN.md` | 2026-09-29 |
 | 助教与智能交互 | 全局/局部 AI 助教抽屉，题目级与范围级两个端点 | `src/components/AiCoachDrawer.vue`、`src/api/index.ts` | 2026-09-29 |
@@ -49,7 +49,7 @@
 
 ## 已知偏离（如实记录）
 
-- 单 `.vue` 文件 **≤ 300 行** 是 `docs/DESIGN.md` 第 6 节的硬性约定，当前有 **5 个 `.vue` 超标**（多数在 `5d7a2f3` 之前就已超标）：`pages/index/index.vue` 865 行、`subpackages/material/pages/course/index.vue` 728 行、`pages/profile/index.vue` 440 行、`components/AiCoachDrawer.vue` 392 行、`subpackages/report/pages/detail/index.vue` 343 行；另有 3 个 `.ts` 文件同属单文件过大问题（`types/index.ts` 441、`api/index.ts` 424、`stores/practice.ts` 302）。详见 `quality-guidelines.md`。
+- 单 `.vue` 文件 **≤ 300 行** 是 `docs/DESIGN.md` 第 6 节的硬性约定，当前有 **5 个 `.vue` 超标**（多数在 `5d7a2f3` 之前就已超标）：`pages/index/index.vue` 865 行、`subpackages/material/pages/course/index.vue` 728 行、`pages/profile/index.vue` 440 行、`components/AiCoachDrawer.vue` 392 行、`subpackages/report/pages/detail/index.vue` 343 行；另有 3 个 `.ts` 文件同属单文件过大问题（`types/index.ts` 441、`api/index.ts` 437、`stores/practice.ts` 302）。详见 `quality-guidelines.md`。
 - `docs/DESIGN.md` 第 1 节的**零表情包原则**与现状不符：多个页面/组件内联了 Unicode Emoji（详见 `component-guidelines.md`）。
 - `docs/DESIGN.md` 第 2 节「禁止裸 Hex」与现状不符：`src/**` 内联 Hex 字面量约 361 处，而 `var(--color-*)` 仅 5 处（全部在 `App.vue`）。
 - `src/subpackages/material/pages/upload/index.vue` 目前是 32 行的占位页（无脚本逻辑），`pages.json` 已注册但工作台的上传入口直接走 `pages/index/index.vue`。

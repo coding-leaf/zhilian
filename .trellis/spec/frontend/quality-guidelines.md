@@ -25,7 +25,7 @@ pnpm run test:unit     # vitest run
 
 等价入口：仓库根 `Taskfile.yml` 的 `task verify-frontend`（依次跑上述三条）/ `task test-frontend` / `task format`（`pnpm run lint --fix`）。
 
-**2026-09-29 实测**：三条门禁全绿；Vitest 输出 `Test Files 7 passed (7)` / `Tests 39 passed (39)`。
+**2026-09-29 实测**：三条门禁全绿；Vitest 输出 `Test Files 9 passed (9)` / `Tests 62 passed (62)`。
 
 ---
 
@@ -37,7 +37,7 @@ pnpm run test:unit     # vitest run
 - **未使用变量是允许的**：`@typescript-eslint/no-unused-vars` 为 **`off`**；`@typescript-eslint/ban-types` 同为 `off`。
 - **直接改全局状态而不经 store**：页面/组件对全局状态一律经 `useXxxStore()` 的 action 或 `ref` 赋值（store 内 `ref` 是响应式的，如 `authStore.user = {...}`），不在模块级维护可变的跨页单例。
 - **内联密钥**：API key / secret 不得进前端源码。`API_BASE_URL` 经 `(import.meta as any).env?.VITE_API_BASE_URL` 读取，默认 `http://localhost:8000/api/v1`。
-- **静默吞错**：主流程失败必须 toast；`catch { console.error(...) }` 只允许出现在非关键路径（如 `materialStore.loadKnowledgeTree`、`pages/review/index.vue::loadWrongs`），且不得让用户以为操作成功。
+- **静默吞错**：主流程失败必须 toast；`catch { console.error(...) }` 只允许出现在非关键路径（如 `materialStore.loadKnowledgeTree`、`pages/review/index.vue::loadWrongs`），且不得让用户以为操作成功。**`authStore.fetchProfile` 属「不阻断主流程但必须留痕」的情形**：它不 rethrow（资料拉取失败不该让登录失败），但必须 `console.error` 结构化细节（`kind` + url），不要写成空 `catch {}`。
 
 ---
 
@@ -45,7 +45,7 @@ pnpm run test:unit     # vitest run
 
 - **显式类型化的公开边界**：组件 props/emits、store action、`src/api/*` 的导出函数必须显式类型化（`any` 虽为 `off`，但门禁依赖 `vue-tsc --strict` 通过）。
 - **网络出口唯一**：所有 HTTP 调用经 `src/utils/request.ts` 的 `request` / `uploadFile`，或经 `src/api/*` 封装。页面可以直接调 `@/api`，但没有页面自行 `uni.request`。
-- **跳转必须带 `fail` 兜底**：全仓库 12 处 `uni.navigateTo` / `uni.redirectTo` **全部**带 `fail` 提示；`request.ts` 的 `uni.reLaunch` 与报告页的 `uni.switchTab` 同样带 `fail`。已知例外：`pages/auth/login.vue::handleLogin` 登录成功后的 `uni.switchTab` 未带 `fail`。
+- **跳转必须带 `fail` 兜底**：全仓库 12 处 `uni.navigateTo` / `uni.redirectTo` **全部**带 `fail` 提示；`request.ts` 的 `uni.reLaunch`、报告页的 `uni.switchTab` 与 `pages/auth/login.vue::handleLogin` 登录成功后的 `uni.switchTab` 同样带 `fail`。**当前无例外**（原先记录的 `login.vue` 例外已于 2026-09-29 修复）。
 - **可选 query 参数由 API 函数条件拼装**：API 函数内用 `queryParts.push(...)` + `encodeURIComponent` 组装，**真值才拼接**（如 `if (params?.folder_id) queryParts.push(...)`；分页用 `!== undefined` 判断以放行 `0`）。`request.ts` 本身**不做** GET data 清洗，它把 `options.data` 原样交给 `uni.request`。
 - **未判题不得计零分或答错**：`score` / `isCorrect` 保持 `null`，UI 渲染「判题中 / 待重判 / 未作答」。
 - **正式诊断必须有门禁**：未全卷判完不得请求/展示诊断报告。
@@ -56,7 +56,7 @@ pnpm run test:unit     # vitest run
 
 - **框架**：Vitest + `happy-dom` 环境 + `globals: true`，setup 文件 `tests/setup.ts`（`vitest.config.ts`）。
 - **位置**：`miniprogram/tests/` 平铺（**没有** `tests/unit/` 子目录层级）；后端契约样本在 `tests/fixtures/backendResponses.ts`，注释钉死事实源为 `backend/app/schemas/{practice,diagnosis,question}.py`。
-- **当前规模**：7 个 spec 文件 / 39 个用例 —— `apiContracts`(3)、`backendContracts`(15)、`diagnosisAndCompose`(5)、`draftQueue`(4)、`materialState`(2)、`practice`(2)、`practiceStore`(8)。
+- **当前规模**：9 个 spec 文件 / 62 个用例 —— `apiContracts`(3)、`backendContracts`(17)、`diagnosisAndCompose`(5)、`draftQueue`(4)、`loginFailure`(9)、`materialState`(2)、`practice`(2)、`practiceStore`(8)、`requestFailure`(12)。
 - **`uni` 全局 mock**：`tests/setup.ts` 注入内存版 `uniMock`（`Map` 支撑的 `getStorageSync`/`setStorageSync`/`removeStorageSync`/`clearStorageSync`，以及 `showToast`/`showLoading`/`hideLoading`/`navigateTo`/`redirectTo`/`switchTab`/`showModal`）。
 - **网络 mock**：用 `vi.hoisted` + `vi.mock('@/utils/request', ...)` 替换 `request` / `uploadFile`，测试内按 `options.url` 匹配响应（`tests/practiceStore.spec.ts`、`tests/diagnosisAndCompose.spec.ts`）。
 - **Store 测试用 `setActivePinia(createPinia())`**（`beforeEach`）。
@@ -533,7 +533,7 @@ uni.navigateTo({
 | 文件 | 行数 | 备注 |
 | --- | --- | --- |
 | `src/types/index.ts` | 441 | 类型单文件集中是刻意约定（见 `type-safety.md`），但已到需要按域拆分的体量 |
-| `src/api/index.ts` | 424 | API 函数 + `GenerateQuestionsParams` / `CreatePracticeParams` 等接口全在一个文件 |
+| `src/api/index.ts` | 437 | API 函数 + `GenerateQuestionsParams` / `CreatePracticeParams` 等接口全在一个文件 |
 | `src/stores/practice.ts` | 302 | 会话 / 作答 / 草稿队列 / 交卷 / 再生题 / 判题重试全在一个 store |
 
 其中 `pages/index/index.vue`、`subpackages/material/pages/course/index.vue`、`components/AiCoachDrawer.vue`、`api/index.ts` 在 `5d7a2f3` 之前就已超标，不是本次引入。**新代码应遵守 300 行约定**；拆分这些文件属待办项，不要在规范里写成「已拆分」。
@@ -578,7 +578,7 @@ module.exports = {
 
 ### 5. 组件挂载测试缺失
 
-`@vue/test-utils` 是 `devDependencies` 之一，但 `tests/` 下没有任何 `mount()` 调用；7 个 spec 全部是纯函数 / 适配器 / store 级测试。改动页面与组件行为时，请优先把逻辑抽到可测的纯函数（现有先例：`reportView.ts`、`reviewView.ts`、`api/adapters/*`、`utils/materialState.ts`、`utils/draftQueue.ts`）。
+`@vue/test-utils` 是 `devDependencies` 之一，但 `tests/` 下没有任何 `mount()` 调用；9 个 spec 全部是纯函数 / 适配器 / store 级测试。改动页面与组件行为时，请优先把逻辑抽到可测的纯函数（现有先例：`reportView.ts`、`reviewView.ts`、`api/adapters/*`、`utils/materialState.ts`、`utils/draftQueue.ts`、`utils/requestError.ts`）。
 
 ### 6. 占位页
 

@@ -29,7 +29,7 @@
 
 | Store | State（`ref`） | Getters（`computed`） | Actions |
 |---|---|---|---|
-| `auth` | `token`（初值取 `uni.getStorageSync('access_token')`）、`user` | 无（`isLoggedIn()` 是**函数**不是 getter） | `setToken` / `clearAuth` / `loginWithWechat` / `fetchProfile` / `updateProfile` |
+| `auth` | `token`（初值取 `uni.getStorageSync('access_token')`）、`user` | 无（`isLoggedIn()` 是**函数**不是 getter） | `setToken` / `clearAuth` / `loginWithWechat` → `LoginOutcome` / `fetchProfile` / `updateProfile` |
 | `material` | `currentMaterial`、`materialList`、`questions`、`isUploading`、`isGenerating`、`currentKnowledgeTree`、`activeKnowledgePoint`、`activeSnippets` | 无 | `upload` / `triggerParse` / `fetchMaterialDetail` / `pollMaterialStatus` / `loadMaterialList` / `loadKnowledgeTree` / `loadKnowledgePointWithSnippets` / `generateQuestions` / `loadQuestions` |
 | `folder` | `folders`、`currentFolderId`（`'all'` \| `'__none__'` \| 真实 id）、`currentFolderKnowledgePoints`、`isLoading` | 无 | `loadFolders` / `createFolder` / `renameFolder` / `archiveFolder` / `loadFolderKnowledgePoints` / `setCurrentFolderId` |
 | `practice` | `currentSession`、`currentIndex`、`userAnswers`、`isSubmitting`、`isSavingDrafts`、`draftFailures`、`latestDiagnosis` | `questions`、`attemptResults`、`currentQuestion`、`answeredCount`、`unansweredCount` | `initPractice` / `refreshSession` / `recordAnswer` / `flushDrafts` / `retryDraft` / `retryAllDrafts` / `submit` / `requestRegrade` / `retryGrading` / `selfEvaluate` / `regenerateFromWrongPoints` / `loadPractices` / `askCoach` / `nextQuestion` / `prevQuestion` / `jumpTo` |
@@ -103,7 +103,8 @@ store 中的服务端数据是**前端缓存**，由页面或 store 自身拉取
   - `practiceStore.regenerateFromWrongPoints()` 成功后重置 `currentIndex` / `userAnswers` 并 `draftQueue.reset()`。
   - `folderStore.archiveFolder()` 从 `folders` 中剔除并重置 `currentFolderId`。
 - **幂等**：`practiceStore.submit()` 的提交键在请求前落盘、成功后清理；`diagnosisStore.loadReport` 用 `POST /practices/{id}/diagnosis` 触发/取回（后端按幂等语义处理重复触发）。
-- **鉴权失效**：`request.ts::handleUnauthorized` 清 `access_token` 并调用 `authStore.clearAuth()`（`token = ''`、`user = null`、`uni.removeStorageSync('access_token')`），回退未登录态；`authStore.fetchProfile` 自身失败时静默 catch，等待统一拦截处理。
+- **鉴权失效**：`request.ts::handleUnauthorized` 清 `access_token` 并调用 `authStore.clearAuth()`（`token = ''`、`user = null`、`uni.removeStorageSync('access_token')`），回退未登录态；`authStore.fetchProfile` 自身失败时不 rethrow（资料拉取失败不该让登录失败），但必须 `console.error` 结构化细节，不要写成空 `catch {}`。
+- **`loginWithWechat` 返回判别式结果**（`{ ok: true } | { ok: false; reason; message }`），不再返回裸 boolean —— 调用方要能区分「网络不通 / 后端拒绝 / `wx.login` 失败」。新增调用方请处理失败分支，不要静默忽略返回值。契约见 [network-contract.md](./network-contract.md)。
 
 **代码锚点**
 - `miniprogram/src/stores/diagnosis.ts::reset`
@@ -116,7 +117,7 @@ store 中的服务端数据是**前端缓存**，由页面或 store 自身拉取
 ## Common Mistakes
 
 - **不要以为 store 不能发请求**：本仓库的 store 就是编排层，5 个 store 都直连 `@/api`。真正要避免的是「在 `<script setup>` 里散落请求逻辑却不管 loading / 错误 / 状态重置」。
-- **不要在 store 里 import `request.ts` 去绕开 `@/api`**：网络出口经 `src/api/index.ts`，那里才有 adapter 归一化。
+- **不要在 store 里 import `request.ts` 去绕开 `@/api`**：网络出口经 `src/api/index.ts`，那里才有 adapter 归一化。**例外**：失败分类所需的错误契约位于叶子模块 `src/utils/requestError.ts`（`RequestError` / `RequestErrorKind` / `classifyTransportFailure`），store 可以 import 它 —— 它不发起请求、不反向依赖 store，因此不会引入环依赖。
 - **不要忘记 `draftQueue.reset()`**：切换练习（`initPractice`）或再生题（`regenerateFromWrongPoints`）时必须重置队列，否则上一练习的待写草稿会串到新练习。
 - **不要在未全卷判完时写 `currentReport`**：`diagnosisStore` 的 `isPending` 语义就是「报告还不存在」，伪造零分报告会在结果页渲染出全错的假象。
 - **不要用 `practiceStore.latestDiagnosis`**：它是死状态，诊断报告的数据源是 `diagnosisStore.currentReport`。
