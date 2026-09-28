@@ -1,0 +1,342 @@
+.upload-page {
+  min-height: 100vh;
+  background-color: $color-bg-page;
+  padding: 32rpx;
+  box-sizing: border-box;
+  padding-bottom: 160rpx;
+}
+
+.page-header {
+  margin-bottom: 32rpx;
+}
+
+.page-title {
+  display: block;
+  font-size: $font-size-title;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.page-subtitle {
+  display: block;
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+  margin-top: 8rpx;
+}
+
+.source-pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20rpx;
+  margin-bottom: 32rpx;
+}
+
+.picker-card {
+  @include card-box;
+  padding: 32rpx 24rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  @include press-active;
+
+  &.active {
+    border-color: $color-primary;
+    background-color: $color-primary-subtle;
+  }
+}
+
+.picker-icon-box {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: $radius-md;
+  background-color: $color-primary-subtle;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16rpx;
+}
+
+.picker-icon-text {
+  font-size: 24rpx;
+  font-weight: $font-weight-bold;
+  color: $color-primary;
+}
+
+.picker-title {
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+  margin-bottom: 4rpx;
+}
+
+.picker-desc {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+}
+
+.section-title {
+  font-size: $font-size-subtitle;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+  margin-bottom: 16rpx;
+  display: block;
+}
+
+.gallery-section {
+  margin-bottom: 32rpx;
+}
+
+.gallery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.gallery-stat {
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+
+  .rate-highlight {
+    font-weight: $font-weight-bold;
+    color: $color-primary;
+
+    &.rate-success {
+      color: $color-success;
+    }
+
+    &.rate-warning {
+      color: $color-warning;
+    }
+  }
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16rpx;
+}
+
+.gallery-card {
+  @include card-box;
+  padding: 12rpx;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1rpx solid $color-border-card;
+
+  &.is-unqualified {
+    border-color: $color-warning;
+    background-color: #fffdfa;
+  }
+}
+
+.thumb-image {
+  width: 100%;
+  height: 200rpx;
+  border-radius: $radius-xs;
+  background-color: $color-bg-muted;
+}
+
+.page-badge {
+  position: absolute;
+  top: 18rpx;
+  left: 18rpx;
+  background-color: rgba(15, 23, 42, 0.7);
+  color: #ffffff;
+  font-size: 20rpx;
+  padding: 2rpx 10rpx;
+  border-radius: $radius-xs;
+}
+
+.status-badge {
+  margin-top: 10rpx;
+  font-size: 20rpx;
+  padding: 2rpx 12rpx;
+  border-radius: $radius-xs;
+  font-weight: $font-weight-medium;
+
+  &.status-qualified {
+    background-color: $color-success-bg;
+    color: $color-success-text;
+    border: 1rpx solid $color-success-border;
+  }
+
+  &.status-blurred {
+    background-color: $color-warning-bg;
+    color: $color-warning-text;
+    border: 1rpx solid $color-warning-border;
+  }
+
+  &.status-cut-off {
+    background-color: $color-danger-bg;
+    color: $color-danger-text;
+    border: 1rpx solid $color-danger-border;
+  }
+}
+
+.btn-retake-page {
+  margin-top: 8rpx;
+  width: 100%;
+  height: 44rpx;
+  line-height: 44rpx;
+  font-size: 20rpx;
+  color: $color-primary;
+  background-color: $color-primary-subtle;
+  border: none;
+  border-radius: $radius-xs;
+  padding: 0;
+  @include press-active;
+}
+
+.document-card {
+  @include card-box;
+  padding: 24rpx;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32rpx;
+}
+
+.doc-info {
+  flex: 1;
+  overflow: hidden;
+  margin-right: 16rpx;
+}
+
+.doc-name {
+  display: block;
+  font-size: $font-size-body;
+  font-weight: $font-weight-medium;
+  color: $color-text-main;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6rpx;
+}
+
+.doc-meta {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+}
+
+.doc-tag {
+  font-size: 20rpx;
+  color: $color-primary;
+  background-color: $color-primary-subtle;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+}
+
+.meta-form-card {
+  @include card-box;
+  padding: 28rpx;
+  margin-bottom: 32rpx;
+}
+
+.form-item {
+  margin-bottom: 24rpx;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.form-label {
+  display: block;
+  font-size: $font-size-secondary;
+  font-weight: $font-weight-medium;
+  color: $color-text-regular;
+  margin-bottom: 12rpx;
+}
+
+.form-input {
+  height: 72rpx;
+  background-color: $color-bg-muted;
+  border-radius: $radius-sm;
+  padding: 0 20rpx;
+  font-size: $font-size-body;
+  color: $color-text-main;
+  box-sizing: border-box;
+}
+
+.course-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.course-pill {
+  padding: 10rpx 24rpx;
+  border-radius: $radius-pill;
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+  background-color: $color-bg-muted;
+  border: 1rpx solid transparent;
+
+  &.active {
+    background-color: $color-primary-subtle;
+    color: $color-primary;
+    border-color: $color-primary-border;
+    font-weight: $font-weight-medium;
+  }
+}
+
+.progress-box {
+  @include card-box;
+  padding: 28rpx;
+  margin-bottom: 32rpx;
+  text-align: center;
+}
+
+.progress-track {
+  height: 12rpx;
+  background-color: $color-bg-muted;
+  border-radius: $radius-pill;
+  overflow: hidden;
+  margin-bottom: 16rpx;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: $color-primary;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+}
+
+.fixed-bottom-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ffffff;
+  padding: 24rpx 32rpx;
+  box-shadow: $shadow-floating;
+  border-top: 1rpx solid $color-border-card;
+  z-index: 100;
+  box-sizing: border-box;
+}
+
+.btn-submit {
+  width: 100%;
+  height: 84rpx;
+  line-height: 84rpx;
+  background-color: $color-primary;
+  color: #ffffff;
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  border-radius: $radius-pill;
+  border: none;
+  @include press-active;
+
+  &[disabled] {
+    opacity: 0.5;
+  }
+}

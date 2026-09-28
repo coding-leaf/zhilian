@@ -10,14 +10,36 @@
       @exit="handleExit"
     />
 
+    <!-- 答题进度指示条 -->
+    <view class="progress-bar-track">
+      <view class="progress-bar-fill" :style="{ width: `${practiceStore.progressPercentage}%` }" />
+    </view>
+
     <!-- 题目主渲染区域 -->
     <view class="session-body">
-      <view v-if="normalizedQuestion" class="question-container">
+      <view
+        v-if="normalizedQuestion"
+        class="question-container"
+        @touchstart="handleTouchStart"
+        @touchend="handleTouchEnd"
+      >
+        <view class="question-action-bar">
+          <view
+            class="flag-btn"
+            :class="{ active: isCurrentQuestionFlagged }"
+            @tap="handleToggleFlag"
+          >
+            <text class="flag-icon">{{ isCurrentQuestionFlagged ? '★' : '☆' }}</text>
+            <text class="flag-text">{{
+              isCurrentQuestionFlagged ? '已标记疑难' : '标记疑难'
+            }}</text>
+          </view>
+        </view>
         <QuestionRenderer
           :question="normalizedQuestion"
           :model-value="currentAnswer"
           :order-index="practiceStore.currentIndex + 1"
-          @update:model-value="handleAnswerChange"
+          @update:model-value="onAnswerChange"
         />
       </view>
       <view v-else-if="!loading" class="empty-state">
@@ -48,6 +70,7 @@
       :current-index="practiceStore.currentIndex"
       :answers="currentAnswersMap"
       :question-ids="questionIds"
+      :flagged-ids="flaggedQuestionIds"
       @select="handleSelectFromSheet"
     />
 
@@ -85,6 +108,7 @@ import { submitPractice } from '../../../../api/practice';
 import { clearDraftFromStorage, calculateQuestionStats } from '../../utils/draft';
 import { getOrCreateSubmitKey, clearSubmitKey } from '../../utils/submitKey';
 import { AppError } from '../../../../utils/error';
+import { usePracticeSync, clearLocalDraft } from '../../../../composables/usePracticeSync';
 
 const practiceStore = usePracticeStore();
 const {
@@ -100,9 +124,50 @@ const {
   cleanupSession,
 } = usePracticeSession();
 
+const { isFlagged, toggleFlag, recordAnswer, flaggedQuestionIds } = usePracticeSync(practiceId);
+
 const sheetDrawerVisible = ref<boolean>(false);
 const confirmModalVisible = ref<boolean>(false);
 const unansweredIndices = ref<number[]>([]);
+
+let touchStartX = 0;
+let touchStartY = 0;
+
+function handleTouchStart(e: TouchEvent): void {
+  if (e.touches?.[0]) {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+}
+
+function handleTouchEnd(e: TouchEvent): void {
+  if (!e.changedTouches?.[0]) return;
+  const deltaX = e.changedTouches[0].clientX - touchStartX;
+  const deltaY = e.changedTouches[0].clientY - touchStartY;
+  if (Math.abs(deltaX) > 60 && Math.abs(deltaY) < 50) {
+    if (deltaX < 0) {
+      handleNext();
+    } else {
+      handlePrev();
+    }
+  }
+}
+
+const isCurrentQuestionFlagged = computed<boolean>(() => {
+  const qid = currentQuestion.value?.id;
+  return qid ? isFlagged(qid) : false;
+});
+
+function handleToggleFlag(): void {
+  const qid = currentQuestion.value?.id;
+  if (qid) toggleFlag(qid);
+}
+
+function onAnswerChange(val: string | string[]): void {
+  const qid = currentQuestion.value?.id;
+  handleAnswerChange(val);
+  if (qid) recordAnswer(qid, val);
+}
 
 const questionIds = computed<string[]>(() => {
   return practiceStore.questions.map((q) => q.id);
@@ -118,15 +183,12 @@ const currentQuestion = computed<PracticeQuestion | null>(() => {
 
 const normalizedQuestion = computed<RendererQuestion | null>(() => {
   const q = currentQuestion.value;
-  if (!q) {
-    return null;
-  }
+  if (!q) return null;
   const raw = q as unknown as { question_type?: string; type?: string; difficulty?: number };
-  const qType = raw.question_type || raw.type || '';
   return {
     id: q.id,
     stem: q.stem,
-    question_type: qType,
+    question_type: raw.question_type || raw.type || '',
     options: q.options,
     difficulty: raw.difficulty,
   };
@@ -135,33 +197,23 @@ const normalizedQuestion = computed<RendererQuestion | null>(() => {
 const currentAnswer = computed<string | string[]>({
   get: () => {
     const qid = currentQuestion.value?.id;
-    if (!qid) {
-      return '';
-    }
-    const ans = practiceStore.currentDraft?.answers[qid];
-    return (ans as string | string[]) ?? '';
+    return (qid ? (practiceStore.currentDraft?.answers[qid] as string | string[]) : '') ?? '';
   },
-  set: (val) => {
-    handleAnswerChange(val);
-  },
+  set: (val) => onAnswerChange(val),
 });
 
 function handlePrev(): void {
   practiceStore.prevQuestion();
 }
-
 function handleNext(): void {
   practiceStore.nextQuestion();
 }
-
 function handleOpenSheet(): void {
   sheetDrawerVisible.value = true;
 }
-
 function handleSelectFromSheet(index: number): void {
   practiceStore.jumpToQuestion(index);
 }
-
 function handleLocateUnanswered(index: number): void {
   practiceStore.jumpToQuestion(index);
 }
@@ -199,6 +251,7 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
 
     clearSubmitKey(targetPracticeId);
     clearDraftFromStorage(targetPracticeId);
+    clearLocalDraft(targetPracticeId);
     practiceStore.clearSession(targetPracticeId);
     confirmModalVisible.value = false;
 
@@ -207,7 +260,7 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
       icon: 'success',
     });
     uni.redirectTo({
-      url: `/subpackages/report/index?practice_id=${targetPracticeId}`,
+      url: `/subpackages/practice/pages/transition/index?practice_id=${targetPracticeId}`,
     });
   } catch (err: unknown) {
     // A 400 means the submission is already in a terminal state, so retrying is
@@ -227,27 +280,15 @@ async function handleConfirmSubmit(payload: { confirm_unanswered: boolean }): Pr
 
 onLoad((query) => {
   const pid = (query?.id as string) || (query?.practice_id as string) || '';
-  if (pid) {
-    void loadPractice(pid);
-  }
+  if (pid) void loadPractice(pid);
 });
 
-onMounted(() => {
-  if (typeof uni !== 'undefined' && typeof uni.onNetworkStatusChange === 'function') {
-    uni.onNetworkStatusChange(handleNetworkChange);
-  }
-});
-
+onMounted(() => uni.onNetworkStatusChange?.(handleNetworkChange));
 onUnload(() => {
   cleanupSession();
-  if (typeof uni !== 'undefined' && typeof uni.offNetworkStatusChange === 'function') {
-    uni.offNetworkStatusChange(handleNetworkChange);
-  }
+  uni.offNetworkStatusChange?.(handleNetworkChange);
 });
-
-onBeforeUnmount(() => {
-  cleanupSession();
-});
+onBeforeUnmount(cleanupSession);
 </script>
 
 <style lang="scss" scoped>

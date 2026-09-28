@@ -195,6 +195,13 @@
           border-color: $--wot-color-gray-4;
           background: $--wot-color-gray-2;
         }
+
+        &.explanation-btn {
+          color: #ffffff;
+          border-color: $color-primary;
+          background: $color-primary;
+          font-weight: $font-weight-medium;
+        }
       }
     }
   }

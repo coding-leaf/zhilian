@@ -1,0 +1,421 @@
+.review-page {
+  min-height: 100vh;
+  background-color: $color-bg-page;
+  padding: 32rpx 32rpx 140rpx;
+  box-sizing: border-box;
+}
+
+.overview-section {
+  margin-bottom: 32rpx;
+}
+
+.overview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.section-title {
+  font-size: $font-size-title;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.refresh-btn {
+  font-size: $font-size-secondary;
+  color: $color-primary;
+}
+
+.mastery-summary-card {
+  @include card-box;
+  display: flex;
+  padding: 32rpx;
+}
+
+.mastery-rate-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-right: 32rpx;
+  border-right: 1rpx solid $color-border-card;
+  min-width: 170rpx;
+}
+
+.progress-ring-box {
+  width: 136rpx;
+  height: 136rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background-color: $color-bg-muted;
+}
+
+.ring-inner {
+  width: 112rpx;
+  height: 112rpx;
+  border-radius: 50%;
+  background-color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 2rpx 6rpx rgba(15, 23, 42, 0.04);
+}
+
+.rate-value {
+  font-size: 36rpx;
+  font-weight: $font-weight-bold;
+  color: $color-primary;
+  line-height: 1;
+}
+
+.rate-label {
+  font-size: 18rpx;
+  color: $color-text-muted;
+  margin-top: 4rpx;
+}
+
+.filter-bar {
+  margin-bottom: 20rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  gap: 12rpx;
+  white-space: nowrap;
+  padding-bottom: 4rpx;
+}
+
+.filter-pill {
+  padding: 8rpx 20rpx;
+  border-radius: $radius-pill;
+  font-size: 22rpx;
+  color: $color-text-muted;
+  background-color: $color-bg-card;
+  border: 1rpx solid $color-border-card;
+  flex-shrink: 0;
+  @include press-active;
+
+  &.active {
+    background-color: $color-primary-subtle;
+    color: $color-primary;
+    border-color: $color-primary-border;
+    font-weight: $font-weight-medium;
+  }
+}
+
+.mastery-stats-col {
+  flex: 1;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding-left: 16rpx;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat-num {
+  font-size: 34rpx;
+  font-weight: $font-weight-bold;
+}
+
+.stat-text {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+  margin-top: 4rpx;
+}
+
+.text-success {
+  color: $color-success;
+}
+
+.text-warning {
+  color: $color-warning;
+}
+
+.text-muted {
+  color: $color-text-muted;
+}
+
+.wrong-book-section {
+  margin-top: 16rpx;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24rpx;
+}
+
+.tab-group {
+  display: flex;
+  gap: 24rpx;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  padding: 12rpx 20rpx;
+  border-radius: $radius-pill;
+  background-color: transparent;
+  color: $color-text-muted;
+  font-size: $font-size-secondary;
+  font-weight: $font-weight-medium;
+
+  &.active {
+    background-color: $color-primary-subtle;
+    color: $color-primary;
+    font-weight: $font-weight-bold;
+  }
+}
+
+.badge {
+  font-size: 20rpx;
+  background-color: rgba(15, 23, 42, 0.08);
+  padding: 2rpx 12rpx;
+  border-radius: $radius-pill;
+
+  .active & {
+    background-color: $color-primary;
+    color: #ffffff;
+  }
+}
+
+.toggle-text {
+  font-size: $font-size-secondary;
+  color: $color-primary;
+  font-weight: $font-weight-medium;
+}
+
+.loading-state,
+.empty-state {
+  @include card-box;
+  padding: 48rpx 32rpx;
+  text-align: center;
+}
+
+.empty-text {
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.wrong-record-card {
+  @include card-box;
+  padding: 28rpx;
+  transition: border-color 0.16s ease;
+
+  &.selected {
+    border-color: $color-primary;
+    background-color: #fbfdff;
+  }
+}
+
+.card-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.tag-group {
+  display: flex;
+  gap: 12rpx;
+}
+
+.type-tag {
+  font-size: $font-size-caption;
+  color: $color-primary;
+  background-color: $color-primary-subtle;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+}
+
+.course-tag {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+  background-color: $color-bg-muted;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+}
+
+.checkbox {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: $radius-xs;
+  border: 2rpx solid $color-border-card;
+
+  &.checked {
+    background-color: $color-primary;
+    border-color: $color-primary;
+  }
+}
+
+.stem-text {
+  font-size: $font-size-body;
+  font-weight: $font-weight-medium;
+  color: $color-text-main;
+  line-height: $line-height-normal;
+  margin-bottom: 16rpx;
+  display: block;
+}
+
+.answer-compare {
+  background-color: $color-bg-muted;
+  border-radius: $radius-sm;
+  padding: 16rpx 20rpx;
+  margin-bottom: 16rpx;
+}
+
+.compare-row {
+  display: flex;
+  font-size: $font-size-secondary;
+  line-height: 1.4;
+
+  &.wrong-row {
+    color: $color-danger-text;
+    margin-bottom: 8rpx;
+  }
+
+  &.correct-row {
+    color: $color-success-text;
+  }
+}
+
+.compare-label {
+  font-weight: $font-weight-medium;
+  min-width: 140rpx;
+}
+
+.compare-content {
+  flex: 1;
+}
+
+.analysis-box {
+  background-color: #fafbfd;
+  border-left: 4rpx solid $color-primary;
+  padding: 12rpx 16rpx;
+  margin-bottom: 16rpx;
+  font-size: $font-size-secondary;
+  color: $color-text-regular;
+  line-height: 1.4;
+}
+
+.analysis-label {
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.card-action-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.action-time {
+  font-size: 20rpx;
+  color: $color-text-subtle;
+}
+
+.card-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.btn-practice-single {
+  height: 52rpx;
+  line-height: 52rpx;
+  font-size: $font-size-caption;
+  color: #ffffff;
+  background-color: $color-primary;
+  border: none;
+  border-radius: $radius-pill;
+  padding: 0 24rpx;
+  @include press-active;
+}
+
+.btn-toggle-mastery {
+  height: 52rpx;
+  line-height: 52rpx;
+  font-size: $font-size-caption;
+  color: $color-primary;
+  background-color: $color-primary-subtle;
+  border: none;
+  border-radius: $radius-pill;
+  padding: 0 24rpx;
+
+  &.btn-revert {
+    color: $color-text-muted;
+    background-color: $color-bg-muted;
+  }
+}
+
+.floating-batch-bar {
+  position: fixed;
+  left: 32rpx;
+  right: 32rpx;
+  bottom: 24rpx;
+  background-color: #ffffff;
+  border-radius: $radius-xl;
+  padding: 20rpx 28rpx;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: $shadow-floating;
+  border: 1rpx solid $color-border-card;
+  z-index: 100;
+}
+
+.batch-info {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.select-count {
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.select-all-btn {
+  font-size: $font-size-secondary;
+  color: $color-primary;
+}
+
+.btn-create-practice {
+  background-color: $color-primary;
+  color: #ffffff;
+  font-size: $font-size-secondary;
+  font-weight: $font-weight-bold;
+  height: 72rpx;
+  line-height: 72rpx;
+  border-radius: $radius-pill;
+  padding: 0 36rpx;
+  border: none;
+
+  &[disabled] {
+    opacity: 0.5;
+  }
+}

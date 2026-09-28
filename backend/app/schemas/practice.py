@@ -93,6 +93,10 @@ class PracticeCreateRequest(BaseModel):
         default=None,
         description="来源诊断报告主键标识 (用于继续练习防重合并)",
     )
+    question_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        description="指定题目主键列表（用于错题本勾选题精确组卷；提供时优先直接以此题目列表生成练习试卷）",
+    )
     idempotency_key: str | None = Field(
         default=None,
         max_length=128,
@@ -119,9 +123,17 @@ class PracticeCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_practice_scope(self) -> "PracticeCreateRequest":
-        """校验 folder_id 缺省时必须显式提供至少一个知识点。"""
-        if self.folder_id is None and not self.knowledge_point_ids:
-            raise ValueError("folder_id 与 knowledge_point_ids 至少提供一个")
+        """校验 folder_id / question_ids 缺省时必须显式提供至少一个知识点。"""
+        if self.folder_id is None and not self.knowledge_point_ids and not self.question_ids:
+            raise ValueError("folder_id、knowledge_point_ids 与 question_ids 至少提供一个")
+        return self
+
+    @model_validator(mode="after")
+    def _sync_question_count_with_ids(self) -> "PracticeCreateRequest":
+        """当指定 question_ids 且 question_count 缺省或大于题目数时，自动同步为实际题量。"""
+        if self.question_ids:
+            if self.question_count == 10 or self.question_count > len(self.question_ids):
+                self.question_count = len(self.question_ids)
         return self
 
 

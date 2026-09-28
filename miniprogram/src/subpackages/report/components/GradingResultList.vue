@@ -93,6 +93,9 @@
         <view v-if="canRegrade(item)" class="action-btn regrade-btn" @tap="emit('regrade', item)">
           <text>申请重判</text>
         </view>
+        <view class="action-btn explanation-btn" @tap="emit('view-explanation', item)">
+          <text>深度解析与追问</text>
+        </view>
       </view>
     </view>
   </view>
@@ -119,6 +122,7 @@ const emit = defineEmits<{
   (e: 'view-snippet', item: AttemptGradingItem): void;
   (e: 'self-grade', item: AttemptGradingItem): void;
   (e: 'regrade', item: AttemptGradingItem): void;
+  (e: 'view-explanation', item: AttemptGradingItem): void;
 }>();
 
 const questionTypeMap: Record<string, string> = {

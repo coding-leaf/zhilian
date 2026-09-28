@@ -23,6 +23,8 @@ import type {
   QuestionAuditLogsResponse,
   RawQuestionGenerateResponse,
   RawQuestionItem,
+  AskCoachRequest,
+  AskCoachResponse,
 } from '../types/question';
 
 /** 出题流水线单次请求超时（毫秒），真实生成耗时可 30s+，故放宽至 3 分钟。 */
@@ -136,3 +138,21 @@ export function fetchQuestionAudit(
  * 获取题目修改审计日志别名方法。
  */
 export const fetchQuestionAuditLogs = fetchQuestionAudit;
+
+/**
+ * 追问 AI 助教答疑。
+ *
+ * @param questionId 题目主键 ID。
+ * @param payload 包含追问内容、学生作答与相关采分点。
+ * @returns 统一响应包，包含 AI 助教通俗生动的深度解析内容与延伸建议。
+ */
+export function askCoach(
+  questionId: string,
+  payload: AskCoachRequest,
+): Promise<ApiResponse<AskCoachResponse>> {
+  return request<AskCoachResponse>({
+    url: `/api/v1/questions/${questionId}/ask-coach`,
+    method: 'POST',
+    data: payload,
+  });
+}

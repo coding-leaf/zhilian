@@ -158,7 +158,7 @@ defineExpose({
 
 .kp-summary {
   font-size: $font-size-caption;
-  color: $--wot-color-shift-text-color;
+  color: $--wot-color-gray-6;
 }
 
 .kp-state {

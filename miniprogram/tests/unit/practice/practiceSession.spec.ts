@@ -420,7 +420,7 @@ describe('Practice Session Integration (session/index.vue)', () => {
     // Verified storage cleared
     expect(loadDraftFromStorage('practice_999')).toBeNull();
     expect(uni.redirectTo).toHaveBeenCalledWith({
-      url: '/subpackages/report/index?practice_id=practice_999',
+      url: '/subpackages/practice/pages/transition/index?practice_id=practice_999',
     });
   });
 

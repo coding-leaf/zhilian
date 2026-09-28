@@ -168,11 +168,12 @@ export interface CreatePracticePayload {
   folder_id?: string;
   /** Optional: folder scope derives the knowledge-point set from the folder. */
   knowledge_point_ids?: string[];
+  question_ids?: string[];
   question_count?: number;
   question_types?: QuestionType[];
   difficulty?: number;
   mode?: 'sequential' | 'random' | 'weak_points';
-  source_type?: 'normal' | 'weakness';
+  source_type?: 'normal' | 'weakness' | 'wrong_record';
   source_report_id?: string;
 }
 

@@ -1,0 +1,419 @@
+.verify-page {
+  min-height: 100vh;
+  background-color: $color-bg-page;
+  padding: 32rpx;
+  box-sizing: border-box;
+  padding-bottom: 180rpx;
+}
+
+.page-header {
+  margin-bottom: 32rpx;
+}
+
+.page-title {
+  display: block;
+  font-size: $font-size-title;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.page-subtitle {
+  display: block;
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+  margin-top: 8rpx;
+}
+
+.config-card {
+  @include card-box;
+  padding: 32rpx;
+  margin-bottom: 32rpx;
+}
+
+.config-section-title {
+  font-size: $font-size-subtitle;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+  margin-bottom: 24rpx;
+  display: block;
+}
+
+.config-item {
+  margin-bottom: 28rpx;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.config-label {
+  display: block;
+  font-size: $font-size-secondary;
+  font-weight: $font-weight-medium;
+  color: $color-text-regular;
+  margin-bottom: 12rpx;
+}
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+}
+
+.pill-item {
+  padding: 12rpx 28rpx;
+  border-radius: $radius-pill;
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+  background-color: $color-bg-muted;
+  border: 1rpx solid transparent;
+  @include press-active;
+
+  &.active {
+    background-color: $color-primary-subtle;
+    color: $color-primary;
+    border-color: $color-primary-border;
+    font-weight: $font-weight-medium;
+  }
+}
+
+.count-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.step-btn {
+  width: 64rpx;
+  height: 64rpx;
+  line-height: 60rpx;
+  text-align: center;
+  border-radius: $radius-sm;
+  background-color: $color-bg-muted;
+  color: $color-text-main;
+  font-size: 32rpx;
+  font-weight: $font-weight-bold;
+  border: 1rpx solid $color-border-card;
+  padding: 0;
+  margin: 0;
+
+  &[disabled] {
+    opacity: 0.4;
+  }
+}
+
+.count-display {
+  font-size: $font-size-title;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+  min-width: 60rpx;
+  text-align: center;
+}
+
+.btn-generate {
+  width: 100%;
+  height: 84rpx;
+  line-height: 84rpx;
+  background-color: $color-primary;
+  color: #ffffff;
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  border-radius: $radius-pill;
+  border: none;
+  margin-top: 16rpx;
+  @include press-active;
+}
+
+.generation-progress-box {
+  @include card-box;
+  padding: 36rpx;
+  margin-bottom: 32rpx;
+  text-align: center;
+}
+
+.progress-stage-list {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 24rpx;
+}
+
+.stage-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.stage-dot {
+  width: 24rpx;
+  height: 24rpx;
+  border-radius: $radius-pill;
+  background-color: $color-border-card;
+
+  &.active {
+    background-color: $color-primary;
+    box-shadow: 0 0 12rpx rgba(37, 99, 235, 0.4);
+  }
+
+  &.done {
+    background-color: $color-success;
+  }
+}
+
+.stage-text {
+  font-size: 20rpx;
+  color: $color-text-muted;
+
+  &.active {
+    color: $color-primary;
+    font-weight: $font-weight-bold;
+  }
+}
+
+.generating-hint {
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+}
+
+.list-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+
+.summary-text {
+  font-size: $font-size-subtitle;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.summary-sub {
+  font-size: $font-size-caption;
+  color: $color-text-muted;
+}
+
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24rpx;
+}
+
+.verify-q-card {
+  @include card-box;
+  padding: 28rpx;
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.q-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.badge-type {
+  font-size: 20rpx;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+  background-color: $color-primary-subtle;
+  color: $color-primary;
+  font-weight: $font-weight-medium;
+}
+
+.badge-diff {
+  font-size: 20rpx;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+  background-color: $color-bg-muted;
+  color: $color-text-muted;
+}
+
+.badge-audit {
+  font-size: 20rpx;
+  padding: 4rpx 14rpx;
+  border-radius: $radius-xs;
+  background-color: $color-success-bg;
+  color: $color-success-text;
+  border: 1rpx solid $color-success-border;
+}
+
+.q-stem {
+  font-size: $font-size-body;
+  font-weight: $font-weight-medium;
+  color: $color-text-main;
+  line-height: $line-height-relaxed;
+  margin-bottom: 16rpx;
+  display: block;
+}
+
+.q-options {
+  background-color: $color-bg-muted;
+  border-radius: $radius-sm;
+  padding: 16rpx;
+  margin-bottom: 16rpx;
+}
+
+.option-row {
+  display: flex;
+  font-size: $font-size-secondary;
+  color: $color-text-regular;
+  margin-bottom: 8rpx;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.option-key {
+  font-weight: $font-weight-bold;
+  margin-right: 12rpx;
+}
+
+.option-text {
+  flex: 1;
+}
+
+.q-answer-box {
+  display: flex;
+  font-size: $font-size-secondary;
+  color: $color-success-text;
+  background-color: $color-success-bg;
+  padding: 12rpx 16rpx;
+  border-radius: $radius-sm;
+  margin-bottom: 16rpx;
+}
+
+.ans-label {
+  font-weight: $font-weight-bold;
+  margin-right: 8rpx;
+}
+
+.ans-text {
+  flex: 1;
+}
+
+.citation-section {
+  border-top: 1rpx dashed $color-border-card;
+  padding-top: 16rpx;
+  margin-bottom: 16rpx;
+}
+
+.citation-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.citation-toggle-text {
+  font-size: $font-size-caption;
+  color: $color-primary;
+  font-weight: $font-weight-medium;
+}
+
+.citation-box {
+  margin-top: 12rpx;
+  background-color: #fcfdfe;
+  border-left: 4rpx solid $color-primary;
+  padding: 16rpx;
+  border-radius: 0 $radius-xs $radius-xs 0;
+}
+
+.citation-content {
+  font-size: $font-size-caption;
+  color: $color-text-regular;
+  line-height: $line-height-normal;
+  display: block;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid $color-border-light;
+}
+
+.btn-card-action {
+  height: 52rpx;
+  line-height: 52rpx;
+  font-size: $font-size-caption;
+  border-radius: $radius-pill;
+  padding: 0 24rpx;
+  background-color: $color-bg-muted;
+  color: $color-text-regular;
+  border: 1rpx solid $color-border-card;
+  margin: 0;
+
+  &.danger {
+    color: $color-danger-text;
+    background-color: $color-danger-bg;
+    border-color: $color-danger-border;
+  }
+}
+
+.empty-block {
+  @include card-box;
+  padding: 48rpx;
+  text-align: center;
+}
+
+.empty-text {
+  font-size: $font-size-secondary;
+  color: $color-text-muted;
+}
+
+.fixed-bottom-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ffffff;
+  padding: 24rpx 32rpx;
+  box-shadow: $shadow-floating;
+  border-top: 1rpx solid $color-border-card;
+  z-index: 100;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bar-summary {
+  display: flex;
+  flex-direction: column;
+}
+
+.bar-count {
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  color: $color-text-main;
+}
+
+.bar-hint {
+  font-size: 20rpx;
+  color: $color-text-muted;
+}
+
+.btn-start-practice {
+  background-color: $color-primary;
+  color: #ffffff;
+  font-size: $font-size-body;
+  font-weight: $font-weight-bold;
+  height: 80rpx;
+  line-height: 80rpx;
+  border-radius: $radius-pill;
+  padding: 0 48rpx;
+  border: none;
+  margin: 0;
+  @include press-active;
+
+  &[disabled] {
+    opacity: 0.5;
+  }
+}

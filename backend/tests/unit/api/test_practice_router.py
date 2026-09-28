@@ -214,6 +214,39 @@ async def test_create_practice_wrong_record_without_material(
 
 
 @pytest.mark.asyncio
+async def test_create_practice_with_question_ids_success(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """测试通过指定 question_ids 创建定向重练练习 (201)。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    q1_id = uuid.uuid4()
+    q2_id = uuid.uuid4()
+    practice = make_fake_practice(user_id=mock_user.id, title="错题定向练习")
+    mock_practice_service.create_practice.return_value = practice
+
+    payload = {
+        "title": "错题定向练习",
+        "question_ids": [str(q1_id), str(q2_id)],
+        "source_type": "wrong_record",
+    }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post("/api/v1/practices", json=payload)
+
+    assert response.status_code == 201
+    called_kwargs = mock_practice_service.create_practice.call_args.kwargs
+    assert called_kwargs["options"].question_ids == [q1_id, q2_id]
+    assert called_kwargs["options"].question_count == 2
+
+
+@pytest.mark.asyncio
 async def test_create_practice_forwards_idempotency_key_header(
     mock_user: User,
     mock_practice_service: MagicMock,

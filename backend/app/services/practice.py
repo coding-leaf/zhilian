@@ -110,6 +110,7 @@ class CreatePracticeOptions:
     source_report_id: uuid.UUID | None = None
     idempotency_key: str | None = None
     folder_id: uuid.UUID | None = None
+    question_ids: Sequence[uuid.UUID] | None = None
 
 
 @dataclass(frozen=True)
@@ -428,91 +429,129 @@ class PracticeService:
                 )
                 return existing
 
-        # Step 2: 检索候选可用题目 (按知识点轮转交织，保证各知识点均衡覆盖)
-        effective_kp_ids = self._resolve_folder_scope_knowledge_points(user_id, options)
-        kp_questions_map: dict[uuid.UUID, list[Question]] = {}
-        total_available = 0
-        for kp_id in effective_kp_ids:
-            kp_questions = self.question_repo.list_questions_by_knowledge_point(
-                knowledge_point_id=kp_id,
-                user_id=user_id,
-                status=QuestionStatus.AVAILABLE.value,
+        # Step 2: 检索候选可用题目 (若指定 question_ids 走指定题目组卷，否则按考点抽取)
+        if options.question_ids:
+            explicit_questions = self.question_repo.list_questions_by_ids(
+                options.question_ids,
+                user_id,
                 include_deleted=False,
             )
-            if options.question_types:
-                type_set = set(options.question_types)
-                kp_questions = [q for q in kp_questions if q.question_type in type_set]
-            if options.difficulty is not None:
-                kp_questions = [q for q in kp_questions if q.difficulty == options.difficulty]
-            kp_questions_map[kp_id] = kp_questions
-            total_available += len(kp_questions)
+            available_questions = [
+                q for q in explicit_questions if q.status == QuestionStatus.AVAILABLE.value
+            ]
+            if not available_questions:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self._log_metric(
+                    action="create_practice_failed",
+                    request_id=request_id,
+                    user_id=user_id,
+                    target_id="empty_questions",
+                    duration_ms=duration_ms,
+                    error_code=40012,
+                    extra={"required": len(options.question_ids), "available": 0},
+                )
+                raise PracticeEmptyQuestionsError(
+                    "指定的题目不存在、越权或不可用",
+                    details={"requested_ids": [str(qid) for qid in options.question_ids]},
+                )
 
-        # 题量门禁校验
-        if total_available < options.question_count:
-            duration_ms = (time.perf_counter() - start_time) * 1000
-            self._log_metric(
-                action="create_practice_failed",
-                request_id=request_id,
-                user_id=user_id,
-                target_id="empty_questions",
-                duration_ms=duration_ms,
-                error_code=40012,
-                extra={"required": options.question_count, "available": total_available},
-            )
-            raise PracticeEmptyQuestionsError(
-                "题库可用题目不足，无法满足当前出题配置要求",
-                details={
-                    "required": options.question_count,
-                    "available": total_available,
-                },
-            )
+            q_map = {q.id: q for q in available_questions}
+            ordered_explicit = [q_map[qid] for qid in options.question_ids if qid in q_map]
+            effective_kp_ids = [
+                q.knowledge_point_id for q in ordered_explicit if q.knowledge_point_id is not None
+            ]
+            effective_kp_ids = list(dict.fromkeys(effective_kp_ids))
 
-        # 轮转交织候选题目
-        interleaved_candidates: list[Question] = []
-        max_kp_len = max((len(qs) for qs in kp_questions_map.values()), default=0)
-        for idx in range(max_kp_len):
+            if options.mode == PracticeAssemblyMode.RANDOM:
+                shuffled = list(ordered_explicit)
+                random.shuffle(shuffled)
+                selected_questions = shuffled[: options.question_count]
+            else:
+                selected_questions = ordered_explicit[: options.question_count]
+        else:
+            effective_kp_ids = self._resolve_folder_scope_knowledge_points(user_id, options)
+            kp_questions_map: dict[uuid.UUID, list[Question]] = {}
+            total_available = 0
             for kp_id in effective_kp_ids:
-                qs = kp_questions_map[kp_id]
-                if idx < len(qs):
-                    interleaved_candidates.append(qs[idx])
+                kp_questions = self.question_repo.list_questions_by_knowledge_point(
+                    knowledge_point_id=kp_id,
+                    user_id=user_id,
+                    status=QuestionStatus.AVAILABLE.value,
+                    include_deleted=False,
+                )
+                if options.question_types:
+                    type_set = set(options.question_types)
+                    kp_questions = [q for q in kp_questions if q.question_type in type_set]
+                if options.difficulty is not None:
+                    kp_questions = [q for q in kp_questions if q.difficulty == options.difficulty]
+                kp_questions_map[kp_id] = kp_questions
+                total_available += len(kp_questions)
 
-        # 去重保持唯一
-        seen_ids: set[uuid.UUID] = set()
-        filtered_candidates: list[Question] = []
-        for q in interleaved_candidates:
-            if q.id not in seen_ids:
-                seen_ids.add(q.id)
-                filtered_candidates.append(q)
+            # 题量门禁校验
+            if total_available < options.question_count:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self._log_metric(
+                    action="create_practice_failed",
+                    request_id=request_id,
+                    user_id=user_id,
+                    target_id="empty_questions",
+                    duration_ms=duration_ms,
+                    error_code=40012,
+                    extra={"required": options.question_count, "available": total_available},
+                )
+                raise PracticeEmptyQuestionsError(
+                    "题库可用题目不足，无法满足当前出题配置要求",
+                    details={
+                        "required": options.question_count,
+                        "available": total_available,
+                    },
+                )
 
-        # Step 3: 根据模式排序抽题
-        selected_questions: list[Question]
-        if options.mode == PracticeAssemblyMode.WEAK_POINTS:
-            # 查询未攻克错题与低掌握度知识点
-            wrong_q_stmt = select(WrongRecord.question_id).where(
-                WrongRecord.user_id == user_id,
-                WrongRecord.is_mastered.is_(False),
-            )
-            unmastered_wrong_ids = set(self.session.execute(wrong_q_stmt).scalars().all())
+            # 轮转交织候选题目
+            interleaved_candidates: list[Question] = []
+            max_kp_len = max((len(qs) for qs in kp_questions_map.values()), default=0)
+            for idx in range(max_kp_len):
+                for kp_id in effective_kp_ids:
+                    qs = kp_questions_map[kp_id]
+                    if idx < len(qs):
+                        interleaved_candidates.append(qs[idx])
 
-            weak_kp_stmt = select(MasteryRecord.knowledge_point_id).where(
-                MasteryRecord.user_id == user_id,
-                MasteryRecord.mastery_score < 0.40,
-            )
-            weak_kp_ids = set(self.session.execute(weak_kp_stmt).scalars().all())
+            # 去重保持唯一
+            seen_ids: set[uuid.UUID] = set()
+            filtered_candidates: list[Question] = []
+            for q in interleaved_candidates:
+                if q.id not in seen_ids:
+                    seen_ids.add(q.id)
+                    filtered_candidates.append(q)
 
-            def _weakness_priority(q: Question) -> tuple[int, int]:
-                is_wrong = 1 if q.id in unmastered_wrong_ids else 0
-                is_weak = 1 if q.knowledge_point_id in weak_kp_ids else 0
-                return (is_wrong, is_weak)
+            # Step 3: 根据模式排序抽题
+            if options.mode == PracticeAssemblyMode.WEAK_POINTS:
+                # 查询未攻克错题与低掌握度知识点
+                wrong_q_stmt = select(WrongRecord.question_id).where(
+                    WrongRecord.user_id == user_id,
+                    WrongRecord.is_mastered.is_(False),
+                )
+                unmastered_wrong_ids = set(self.session.execute(wrong_q_stmt).scalars().all())
 
-            filtered_candidates.sort(key=_weakness_priority, reverse=True)
-            selected_questions = filtered_candidates[: options.question_count]
-        elif options.mode == PracticeAssemblyMode.RANDOM:
-            shuffled = list(filtered_candidates)
-            random.shuffle(shuffled)
-            selected_questions = shuffled[: options.question_count]
-        else:  # SEQUENTIAL
-            selected_questions = filtered_candidates[: options.question_count]
+                weak_kp_stmt = select(MasteryRecord.knowledge_point_id).where(
+                    MasteryRecord.user_id == user_id,
+                    MasteryRecord.mastery_score < 0.40,
+                )
+                weak_kp_ids = set(self.session.execute(weak_kp_stmt).scalars().all())
+
+                def _weakness_priority(q: Question) -> tuple[int, int]:
+                    is_wrong = 1 if q.id in unmastered_wrong_ids else 0
+                    is_weak = 1 if q.knowledge_point_id in weak_kp_ids else 0
+                    return (is_wrong, is_weak)
+
+                filtered_candidates.sort(key=_weakness_priority, reverse=True)
+                selected_questions = filtered_candidates[: options.question_count]
+            elif options.mode == PracticeAssemblyMode.RANDOM:
+                shuffled = list(filtered_candidates)
+                random.shuffle(shuffled)
+                selected_questions = shuffled[: options.question_count]
+            else:  # SEQUENTIAL
+                selected_questions = filtered_candidates[: options.question_count]
 
         # Step 4: 纯函数同知识点不相邻打散 (FR-31)
         scattered_questions = scatter_adjacent_knowledge_questions(

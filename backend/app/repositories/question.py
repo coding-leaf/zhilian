@@ -107,6 +107,33 @@ class QuestionRepository:
 
     get_by_id = get_question_by_id
 
+    def list_questions_by_ids(
+        self,
+        question_ids: Sequence[uuid.UUID],
+        user_id: uuid.UUID,
+        *,
+        include_deleted: bool = False,
+    ) -> list[Question]:
+        """批量根据主键列表和租户用户查询题目列表。
+
+        Args:
+            question_ids: 题目主键序列。
+            user_id: 租户用户主键。
+            include_deleted: 是否包含软删除记录，默认 False。
+
+        Returns:
+            list[Question]: 查询到的题目实体列表。
+        """
+        if not question_ids:
+            return []
+        stmt = select(Question).where(
+            Question.id.in_(list(question_ids)),
+            Question.user_id == user_id,
+        )
+        if not include_deleted:
+            stmt = stmt.where(Question.is_deleted.is_(False))
+        return list(self.session.execute(stmt).scalars().all())
+
     def list_questions_by_knowledge_point(
         self,
         knowledge_point_id: uuid.UUID,

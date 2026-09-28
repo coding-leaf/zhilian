@@ -7,10 +7,6 @@
         <view class="skeleton-line tall" />
         <view class="skeleton-line medium" />
       </view>
-      <view class="skeleton-card">
-        <view class="skeleton-line medium" />
-        <view class="skeleton-line short" />
-      </view>
     </view>
 
     <!-- 异常状态 -->
@@ -45,6 +41,7 @@
         @view-snippet="handleViewSnippet"
         @self-grade="handleOpenSelfGrade"
         @regrade="handleOpenRegrade"
+        @view-explanation="handleViewExplanation"
       />
     </view>
 
@@ -67,8 +64,8 @@
       :material-id="materialId"
       :knowledge-point-ids="currentWeakPointIds"
       :source-report-id="currentReport.id"
-      :title="'薄弱点强化练习'"
-      :button-text="'一键强化薄弱点练习'"
+      title="薄弱点强化练习"
+      button-text="一键强化薄弱点练习"
     />
 
     <!-- 原文切片溯源抽屉 -->
@@ -82,7 +79,7 @@
       @close="snippetDrawerVisible = false"
     />
 
-    <!-- 主观题自评弹窗 -->
+    <!-- 主观题自评与重判弹窗 -->
     <SelfGradeModal
       :visible="selfGradeVisible"
       :attempt-item-id="activeGradeItem?.attempt_item_id || ''"
@@ -97,8 +94,6 @@
       @update:visible="selfGradeVisible = $event"
       @success="onSelfGradeSuccess"
     />
-
-    <!-- 申请重判弹窗 -->
     <RegradeModal
       :visible="regradeVisible"
       :attempt-item-id="activeRegradeItem?.attempt_item_id || ''"
@@ -133,16 +128,9 @@ import SelfGradeModal from '../../components/SelfGradeModal.vue';
 import RegradeModal from '../../components/RegradeModal.vue';
 import ContinuePracticeBar from '../../components/ContinuePracticeBar.vue';
 
-interface Props {
-  practiceId?: string;
-}
-
-const props = withDefaults(defineProps<Props>(), {
-  practiceId: '',
-});
+const props = withDefaults(defineProps<{ practiceId?: string }>(), { practiceId: '' });
 
 const reportStore = useReportStore();
-
 const loading = ref(true);
 const error = ref<string | null>(null);
 const itemsError = ref<string | null>(null);
@@ -151,19 +139,13 @@ const durationSeconds = ref(0);
 const materialId = ref('');
 const items = ref<AttemptGradingItem[]>([]);
 
-// First-screen load de-duplication guard (onLoad + onMounted must fire once)
 let isInitialLoading = false;
 let lastLoadedPracticeId = '';
-
-// Snippet drawer state
 const snippetDrawerVisible = ref(false);
 const activeSnippet = ref<OriginalSnippet | null>(null);
 const snippetKeywords = ref<string[]>([]);
-
-// Modals state
 const selfGradeVisible = ref(false);
 const activeGradeItem = ref<AttemptGradingItem | null>(null);
-
 const regradeVisible = ref(false);
 const activeRegradeItem = ref<AttemptGradingItem | null>(null);
 
@@ -174,8 +156,7 @@ const currentWeakPointIds = computed(() => {
 
 function formatUserAnswer(ans?: unknown): string {
   if (ans === null || ans === undefined || ans === '') return '';
-  if (Array.isArray(ans)) return ans.join(', ');
-  return String(ans);
+  return Array.isArray(ans) ? ans.join(', ') : String(ans);
 }
 
 async function loadReportData(pid: string): Promise<void> {
@@ -231,17 +212,13 @@ async function loadReportData(pid: string): Promise<void> {
 }
 
 function handleRetry(): void {
-  if (currentPracticeId.value) {
-    loadReportData(currentPracticeId.value);
-  }
+  if (currentPracticeId.value) loadReportData(currentPracticeId.value);
 }
 
 function handleBackHome(): void {
   uni.reLaunch({
     url: '/pages/index/index',
-    fail: () => {
-      uni.showToast({ title: '返回学习中心失败', icon: 'none' });
-    },
+    fail: () => uni.showToast({ title: '返回学习中心失败', icon: 'none' }),
   });
 }
 
@@ -254,14 +231,28 @@ function handleViewSnippet(item: AttemptGradingItem): void {
   snippetDrawerVisible.value = true;
 }
 
-function handleOpenSelfGrade(item: AttemptGradingItem): void {
+const handleOpenSelfGrade = (item: AttemptGradingItem) => {
   activeGradeItem.value = item;
   selfGradeVisible.value = true;
-}
+};
 
-function handleOpenRegrade(item: AttemptGradingItem): void {
+const handleOpenRegrade = (item: AttemptGradingItem) => {
   activeRegradeItem.value = item;
   regradeVisible.value = true;
+};
+
+function handleViewExplanation(item: AttemptGradingItem): void {
+  const qid = item.question_id || item.attempt_item_id;
+  uni.navigateTo({
+    url: `/subpackages/report/pages/explanation/index?practice_id=${currentPracticeId.value}&question_id=${qid}&order_index=${item.order_index}`,
+  });
+}
+
+function refreshReport(): void {
+  if (!currentPracticeId.value) return;
+  fetchDiagnosisReport(currentPracticeId.value)
+    .then((res) => res.code === 0 && res.data && reportStore.setReport(res.data))
+    .catch(() => {});
 }
 
 function onSelfGradeSuccess(payload: { attempt_item_id: string; score: number }): void {
@@ -270,15 +261,7 @@ function onSelfGradeSuccess(payload: { attempt_item_id: string; score: number })
     target.score = payload.score;
     target.status = 'graded';
   }
-  if (currentPracticeId.value) {
-    fetchDiagnosisReport(currentPracticeId.value)
-      .then((res) => {
-        if (res.code === 0 && res.data) {
-          reportStore.setReport(res.data);
-        }
-      })
-      .catch(() => {});
-  }
+  refreshReport();
 }
 
 function onRegradeSuccess(payload: {
@@ -288,38 +271,19 @@ function onRegradeSuccess(payload: {
 }): void {
   const target = items.value.find((it) => it.attempt_item_id === payload.attempt_item_id);
   if (target) {
-    if (payload.status === 'success' && typeof payload.score === 'number') {
-      target.score = payload.score;
-      target.status = 'graded';
-      target.grading_status = 'graded';
-    } else {
-      target.status = 'pending_regrade';
-      target.grading_status = 'pending_regrade';
-    }
+    const isSuccess = payload.status === 'success' && typeof payload.score === 'number';
+    target.score = isSuccess ? payload.score! : target.score;
+    target.status = isSuccess ? 'graded' : 'pending_regrade';
+    target.grading_status = target.status;
   }
-  if (currentPracticeId.value) {
-    fetchDiagnosisReport(currentPracticeId.value)
-      .then((res) => {
-        if (res.code === 0 && res.data) {
-          reportStore.setReport(res.data);
-        }
-      })
-      .catch(() => {});
-  }
+  refreshReport();
 }
 
 onMounted(() => {
   const pid = props.practiceId || currentPracticeId.value;
-  if (!pid) {
-    loading.value = false;
-    return;
-  }
+  if (!pid) return void (loading.value = false);
   currentPracticeId.value = pid;
-  // onLoad 已触发同一 practice 的首屏加载时，跳过 onMounted 的重复触发 (BUG-GRADE-006)
-  if (lastLoadedPracticeId === pid) {
-    return;
-  }
-  loadReportData(pid);
+  if (lastLoadedPracticeId !== pid) loadReportData(pid);
 });
 
 onLoad((query?: Record<string, string>) => {

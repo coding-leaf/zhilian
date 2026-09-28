@@ -1415,3 +1415,62 @@ class TestQuestionServiceCRUDAndAudit:
         checks = service.list_quality_checks(material_id, user_id)
         assert len(checks) >= 1
         assert any(c.batch_id == "batch_helper" for c in checks)
+
+    def test_ask_coach_success_and_not_found(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify QuestionService.ask_coach returns structured AI response and raises on 404."""
+        from app.schemas.question import AskCoachResponse
+        from unittest.mock import MagicMock
+
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        version_id = helper_setup["version_id"]
+        point_id = helper_setup["point_id"]
+
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.return_value = (
+            AskCoachResponse(
+                reply="AI 助教深度讲解：本题重点在于理解条件概率的贝叶斯公式。",
+                suggestions=["建议复习全概率公式", "多做一道相关题巩固"],
+            ),
+            MagicMock(),
+        )
+
+        service = QuestionService(
+            session=session,
+            llm=mock_llm,
+            embedding=FakeEmbeddingAdapter(),
+        )
+
+        q = Question(
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=point_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="已知事件 A 与 B，求 P(A|B)。",
+            answer="A",
+            analysis="利用贝叶斯公式计算得出。",
+            difficulty=3,
+        )
+        saved = service.question_repo.create_question(q, user_id)
+
+        resp = service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="能否给一个生活中的例子？",
+            user_answer="我选了 B",
+            grading_points=["贝叶斯公式", "先验概率"],
+        )
+
+        assert "贝叶斯公式" in resp.reply
+        assert len(resp.suggestions) == 2
+        mock_llm.generate_structured.assert_called_once()
+
+        # Non-existent question raises QuestionNotFoundError
+        with pytest.raises(QuestionNotFoundError):
+            service.ask_coach(
+                question_id=uuid.uuid4(),
+                user_id=user_id,
+                user_prompt="test",
+            )

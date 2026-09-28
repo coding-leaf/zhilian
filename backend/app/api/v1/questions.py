@@ -17,6 +17,8 @@ from app.api.deps.auth import get_current_user
 from app.api.deps.question import get_question_service
 from app.models.user import User
 from app.schemas.question import (
+    AskCoachRequest,
+    AskCoachResponse,
     MaterialQualityChecksResponse,
     QuestionAuditLogsResponse,
     QuestionDeleteResponse,
@@ -203,6 +205,41 @@ async def get_question_detail(
         user_id=user.id,
     )
     return QuestionDetailResponse.model_validate(question)
+
+
+@router.post(
+    "/questions/{id}/ask-coach",
+    response_model=AskCoachResponse,
+    status_code=status.HTTP_200_OK,
+    summary="AI 助教深度答疑追问",
+)
+async def ask_coach(
+    id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    payload: Annotated[AskCoachRequest, Body(description="追问 AI 助教请求体")],
+) -> AskCoachResponse:
+    """结合当前题目上下文、采分点与用户追问进行 AI 助教启发式深度答疑。
+
+    Args:
+        id: 题目主键 UUIDv4。
+        user: 当前已认证登录租户用户对象。
+        question_service: 题目领域编排服务。
+        payload: 追问 AI 助教请求参数模型。
+
+    Returns:
+        AskCoachResponse: AI 助教深入解析回复与延伸思考建议。
+
+    Raises:
+        QuestionNotFoundError: 题目不存在或越权访问 (40009)。
+    """
+    return question_service.ask_coach(
+        question_id=id,
+        user_id=user.id,
+        user_prompt=payload.user_prompt,
+        user_answer=payload.user_answer,
+        grading_points=payload.grading_points,
+    )
 
 
 @router.get(

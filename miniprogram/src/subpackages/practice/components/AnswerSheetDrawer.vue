@@ -24,6 +24,10 @@
           <view class="legend-dot legend-unanswered" />
           <text class="legend-text">未作答</text>
         </view>
+        <view class="legend-item">
+          <view class="legend-dot legend-flagged" />
+          <text class="legend-text">标记疑难</text>
+        </view>
       </view>
 
       <!-- 题号网格 -->
@@ -61,6 +65,7 @@ interface Props {
   currentIndex?: number;
   answers?: Record<string, unknown>;
   questionIds?: string[];
+  flaggedIds?: string[];
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -69,6 +74,7 @@ const props = withDefaults(defineProps<Props>(), {
   currentIndex: 0,
   answers: () => ({}),
   questionIds: () => [],
+  flaggedIds: () => [],
 });
 
 const emit = defineEmits<{
@@ -95,14 +101,17 @@ const answeredCount = computed<number>(() => {
 });
 
 function getCellStatusClass(index: number, qid: string): string {
+  const isFlagged = props.flaggedIds?.includes(qid);
+  const flagSuffix = isFlagged ? ' cell-flagged' : '';
+
   if (index === props.currentIndex) {
-    return 'cell-current';
+    return `cell-current${flagSuffix}`;
   }
   const ans = props.answers[qid];
   if (isAnswerFilled(ans)) {
-    return 'cell-answered';
+    return `cell-answered${flagSuffix}`;
   }
-  return 'cell-unanswered';
+  return `cell-unanswered${flagSuffix}`;
 }
 
 function handleSelectQuestion(index: number): void {

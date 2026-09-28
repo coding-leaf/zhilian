@@ -262,7 +262,24 @@ class QuestionQualityCheckListResponse(MaterialQualityChecksResponse):
     """题目质检拦截记录响应模型 (兼容别名)。"""
 
 
+class AskCoachRequest(BaseModel):
+    """AI 助教深度答疑追问请求入参模型。"""
+
+    user_prompt: str = Field(..., min_length=1, max_length=1000, description="学生追问内容")
+    user_answer: str | None = Field(default=None, description="学生的原始作答")
+    grading_points: list[str] | None = Field(default=None, description="相关采分点")
+
+
+class AskCoachResponse(BaseModel):
+    """AI 助教深度答疑响应模型。"""
+
+    reply: str = Field(..., description="AI 助教通俗生动的深度解析内容")
+    suggestions: list[str] = Field(default_factory=list, description="推荐延伸思考提示")
+
+
 __all__ = [
+    "AskCoachRequest",
+    "AskCoachResponse",
     "MaterialQualityChecksResponse",
     "QuestionAuditLogsResponse",
     "QuestionDeleteResponse",

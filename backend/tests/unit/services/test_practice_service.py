@@ -1053,3 +1053,43 @@ class TestPracticeServiceTenantIsolation:
 
         detail = service.get_practice(user_id, practice.id)
         assert detail.items[0].source_snippet is None
+
+    def test_create_practice_with_question_ids(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """验证使用指定 question_ids 直接组卷能力 (错题本针对性重练)."""
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        questions = test_setup["questions"]
+
+        service = PracticeService(session)
+        target_ids = [questions[0].id, questions[2].id]
+
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="错题定向重练组卷",
+                material_id=material_id,
+                knowledge_point_ids=[],
+                question_count=2,
+                question_ids=target_ids,
+            ),
+        )
+
+        assert practice.question_count == 2
+        assert len(practice.items) == 2
+        item_qids = {item.question_id for item in practice.items}
+        assert item_qids == set(target_ids)
+
+        # 验证指定不存在题目时抛出 PracticeEmptyQuestionsError
+        with pytest.raises(PracticeEmptyQuestionsError):
+            service.create_practice(
+                user_id,
+                CreatePracticeOptions(
+                    title="非法题目组卷",
+                    material_id=material_id,
+                    knowledge_point_ids=[],
+                    question_count=1,
+                    question_ids=[uuid.uuid4()],
+                ),
+            )

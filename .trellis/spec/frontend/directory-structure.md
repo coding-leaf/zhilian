@@ -1,8 +1,8 @@
 # Directory Structure
 
 > **事实源**：`miniprogram/src/**`、`miniprogram/src/pages.json`、`miniprogram/vite.config.ts`、`miniprogram/tsconfig.json`
-> **最后核对**：2026-09-28 @ ca062a1
-> **核对方式**：`rg "subPackages|alias|createSSRApp" miniprogram/src miniprogram/vite.config.ts`
+> **最后核对**：2026-09-28 @ task:new-frontend-v2-architecture
+> **核对方式**：`rg "subPackages|alias|createSSRApp|tabBar" miniprogram/src miniprogram/vite.config.ts`
 
 > How frontend code is organized in this project. 本文档描述 `miniprogram/` 工程的**真实**布局，不描述理想态。
 
@@ -49,16 +49,19 @@ miniprogram/
 │   │   ├── course/              #   课程域（CourseCard/PracticeStartBar/...）
 │   │   └── home/                #   工作台首页域（CourseListSection/...）
 │   ├── config/env.ts            # 运行时 API base 解析（storage/env/test 三优先级）
-│   ├── pages/                   # 主包页面
+│   ├── styles/                  # 全局设计系统样式
+│   │   └── theme.scss           #   主流学术科技蓝调主题变量（颜色/阴影/圆角/Mixins）
+│   ├── pages/                   # 主包页面（原生三 Tab 架构）
 │   │   ├── auth/login.vue       #   登录
-│   │   ├── index/index.vue      #   控制台首页
-│   │   ├── login/index.vue      #   登录
-│   │   └── profile/index.vue    #   个人资料
+│   │   ├── index/index.vue      #   Tab 1: 学习工作台
+│   │   ├── review/index.vue     #   Tab 2: 学情与错题攻克看板
+│   │   ├── profile/index.vue    #   Tab 3: 我的与数据安全治理
+│   │   └── login/index.vue      #   登录
 │   ├── stores/                  # Pinia 全局状态（5 个域 store + 薄再导出 + 注册入口）
 │   ├── subpackages/             # 分包（资料 / 练习 / 报告）
-│   │   ├── material/            #   components/ composables/ pages/ utils/
-│   │   ├── practice/            #   components/ composables/ pages/ types/ utils/
-│   │   └── report/              #   components/ pages/ utils/
+│   │   ├── material/            #   upload(J2画廊质检) / verify(J3题目核验) / course / list / detail
+│   │   ├── practice/            #   session(J4作答滑屏) / transition(动效过渡态)
+│   │   └── report/              #   detail(J6强化练) / explanation(J5采分+AI助教追问) / wrong-book
 │   ├── types/                   # 全量 TS 数据契约（含 storage/raw/adapter 边界类型）
 │   ├── utils/                   # 纯函数工具（request/storage/error/file/时间格式化等）
 │   ├── App.vue                  # 应用生命周期

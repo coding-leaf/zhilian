@@ -220,3 +220,14 @@ export interface RawQuestionGenerateResponse extends Omit<
 export type RawQuestionUpdatePayload = Omit<QuestionUpdateRequest, 'options'> & {
   options?: RawQuestionOption[];
 };
+
+export interface AskCoachRequest {
+  user_prompt: string;
+  user_answer?: string;
+  grading_points?: string[];
+}
+
+export interface AskCoachResponse {
+  reply: string;
+  suggestions: string[];
+}

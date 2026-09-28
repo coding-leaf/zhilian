@@ -134,6 +134,10 @@ describe('Grading Results & Original Snippet Components', () => {
       await cards[1].find('.regrade-btn').trigger('tap');
       expect(wrapper.emitted('regrade')).toBeTruthy();
       expect(wrapper.emitted('regrade')?.[0]).toEqual([mockItems[1]]);
+
+      await cards[0].find('.explanation-btn').trigger('tap');
+      expect(wrapper.emitted('view-explanation')).toBeTruthy();
+      expect(wrapper.emitted('view-explanation')?.[0]).toEqual([mockItems[0]]);
     });
 
     it('renders keyword capsules from top-level fields (BUG-GRADE-003)', () => {

@@ -96,6 +96,10 @@
           background-color: $--wot-color-gray-2;
           border: 1px solid $--wot-color-gray-4;
         }
+
+        &.legend-flagged {
+          background-color: $color-warning;
+        }
       }
 
       .legend-text {
@@ -145,6 +149,22 @@
           background-color: $--wot-color-gray-2;
           border: 1px solid $--wot-color-gray-4;
           color: $--wot-color-gray-7;
+        }
+
+        &.cell-flagged {
+          position: relative;
+          box-shadow: inset 0 0 0 2rpx $color-warning;
+
+          &::after {
+            content: '';
+            position: absolute;
+            top: 6rpx;
+            right: 6rpx;
+            width: 10rpx;
+            height: 10rpx;
+            border-radius: 50%;
+            background-color: $color-warning;
+          }
         }
       }
     }

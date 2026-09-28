@@ -9,6 +9,7 @@
 - 结构化脱敏日志 8 要素输出，严禁向日志记录题干、选项、答案与材料全文。
 """
 
+import json
 import logging
 import time
 import uuid
@@ -55,6 +56,7 @@ from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
+from app.schemas.question import AskCoachResponse
 
 logger = logging.getLogger(__name__)
 
@@ -1635,3 +1637,63 @@ class QuestionService:
         return self.question_repo.list_quality_checks_by_material(material_id, user_id)
 
     list_quality_checks_by_material = list_quality_checks
+
+    def ask_coach(
+        self,
+        question_id: uuid.UUID,
+        user_id: uuid.UUID,
+        user_prompt: str,
+        user_answer: str | None = None,
+        grading_points: list[str] | None = None,
+    ) -> AskCoachResponse:
+        """AI 助教结合题目上下文、用户作答与采分点进行深度启发式答疑。
+
+        Args:
+            question_id: 题目主键 UUID。
+            user_id: 租户用户主键。
+            user_prompt: 学生追问内容。
+            user_answer: 学生原始作答（可选）。
+            grading_points: 相关采分点（可选）。
+
+        Returns:
+            AskCoachResponse: AI 助教答疑内容与延伸思考建议。
+
+        Raises:
+            QuestionNotFoundError: 题目不存在或越权。
+        """
+        question = self.question_repo.get_question_by_id(question_id, user_id)
+        if question is None:
+            raise QuestionNotFoundError("请求的题目不存在或无权访问")
+
+        system_content = (
+            "你是一位耐心的专业 AI 助教。请结合给出的题目题干、标准答案、解析与学生追问，"
+            "为学生提供通俗生动、逻辑严密、循序渐进的答疑解析，引导学生掌握核心考点并给出延伸思考建议。"
+        )
+        context_parts = [
+            f"【题干】\n{question.stem}",
+            f"【题目类型】\n{question.question_type}",
+            f"【标准答案】\n{question.answer}",
+        ]
+        if question.options:
+            context_parts.append(f"【选项】\n{json.dumps(question.options, ensure_ascii=False)}")
+        if question.analysis:
+            context_parts.append(f"【解析】\n{question.analysis}")
+        if user_answer:
+            context_parts.append(f"【学生作答】\n{user_answer}")
+        if grading_points:
+            context_parts.append(f"【采分点/关键词】\n{', '.join(grading_points)}")
+        context_parts.append(f"【学生追问】\n{user_prompt}")
+
+        user_content = "\n\n".join(context_parts)
+        messages = [
+            LLMMessage(role="system", content=system_content),
+            LLMMessage(role="user", content=user_content),
+        ]
+        options = LLMOptions(temperature=0.7)
+
+        output, _ = self.llm.generate_structured(
+            messages=messages,
+            response_model=AskCoachResponse,
+            options=options,
+        )
+        return output

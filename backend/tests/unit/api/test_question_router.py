@@ -805,6 +805,65 @@ async def test_generate_questions_requires_knowledge_point_target(
     mock_question_service.generate_questions_for_knowledge_points.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_ask_coach_success(mock_user: User, mock_question_service: MagicMock) -> None:
+    """Tests POST /api/v1/questions/{id}/ask-coach successfully returns AI coach response."""
+    from app.schemas.question import AskCoachResponse
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    question_id = uuid.uuid4()
+    mock_question_service.ask_coach.return_value = AskCoachResponse(
+        reply="这是一道经典的贪心算法题，我们可以从局部最优推导全局最优。",
+        suggestions=["思考一下动态规划解法的空间复杂度", "尝试用反证法证明贪心选择性质"],
+    )
+
+    payload = {
+        "user_prompt": "为什么这里可以使用贪心选择？",
+        "user_answer": "我的选择是 A",
+        "grading_points": ["无后效性", "最优子结构"],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/questions/{question_id}/ask-coach", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "贪心算法" in data["reply"]
+    assert len(data["suggestions"]) == 2
+    mock_question_service.ask_coach.assert_called_once_with(
+        question_id=question_id,
+        user_id=mock_user.id,
+        user_prompt="为什么这里可以使用贪心选择？",
+        user_answer="我的选择是 A",
+        grading_points=["无后效性", "最优子结构"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_coach_not_found(mock_user: User, mock_question_service: MagicMock) -> None:
+    """Tests POST /api/v1/questions/{id}/ask-coach returns 404 when question is not found."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    question_id = uuid.uuid4()
+    mock_question_service.ask_coach.side_effect = QuestionNotFoundError("题目不存在")
+
+    payload = {
+        "user_prompt": "这道题怎么做？",
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/questions/{question_id}/ask-coach", json=payload)
+
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == 40009
+
+
 def test_default_dependency_provider() -> None:
     """Tests that default dependency provider raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="QuestionService 生产装配工厂尚未挂载"):
