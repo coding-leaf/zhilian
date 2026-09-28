@@ -17,7 +17,7 @@
 - **依赖里保留 `wot-design-uni`，但业务代码当前零引用**：`pages.json` 的 `easycom` 仍声明 `^wd-(.*)` 规则，实测 `src/**` 中不存在任何 `wd-*` 组件使用点。所有卡片/按钮/抽屉均为自定义 `.vue` + `App.vue` 全局 CSS 类（`.paper-card` / `.paper-btn-primary`）。
 - 全局状态为 **5 个 Pinia store**：`auth` / `material` / `folder` / `practice` / `diagnosis`（无 `stores/index.ts` 聚合入口）。
 - 组合式函数只有 **1 个**：`subpackages/material/composables/useQuestionCompose.ts`。
-- 单元测试 **9 个 spec 文件 / 62 个用例**，全部位于 `miniprogram/tests/`（无 `tests/unit/` 子目录层级）。
+- 单元测试 **9 个 spec 文件 / 69 个用例**，全部位于 `miniprogram/tests/`（无 `tests/unit/` 子目录层级）。
 
 ---
 

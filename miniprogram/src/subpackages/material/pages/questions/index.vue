@@ -94,7 +94,7 @@
           class="paper-btn-primary full-btn"
           :loading="compose.isGenerating.value"
           :disabled="compose.selectedKpIds.value.length === 0 || compose.isGenerating.value"
-          @tap="compose.generate"
+          @tap="handleGenerate"
         >
           {{ compose.isGenerating.value ? 'AI 正在组卷中...' : `一键智能出题 (${compose.selectedKpIds.value.length} 考点)` }}
         </button>
@@ -183,6 +183,9 @@ onLoad(async (options) => {
     compose.setScope({ materialId: options.material_id })
     await loadKpFromMaterial(options.material_id)
   }
+  if (options?.view === 'generated' && options?.material_id) {
+    await loadGeneratedQuestions(options.material_id)
+  }
 })
 
 const loadKpFromFolder = async (folderId: string) => {
@@ -215,6 +218,36 @@ const loadKpFromMaterial = async (materialId: string) => {
   } finally {
     uni.hideLoading()
     isLoadingKp.value = false
+  }
+}
+
+/**
+ * 「继续核对已生成题目」入口：直接进入核对视图。
+ *
+ * 一条都载不到时留在配置区并说明原因——既不渲染空的核对列表，
+ * 也不静默停在这里让用户以为入口坏了。
+ */
+const loadGeneratedQuestions = async (materialId: string) => {
+  uni.showLoading({ title: '加载已生成题目...' })
+  try {
+    const count = await compose.loadExistingQuestions(materialId)
+    if (count > 0) {
+      isConfigMode.value = false
+      return
+    }
+    uni.showToast({ title: '该讲义暂无已生成题目', icon: 'none' })
+  } catch (error: any) {
+    uni.showToast({ title: error?.message || '已生成题目加载失败', icon: 'none' })
+  } finally {
+    uni.hideLoading()
+  }
+}
+
+/** 生成成功才切到核对视图；失败与零合格题留在配置区（见 compose.generate 的返回值约定）。 */
+const handleGenerate = async () => {
+  const generatedCount = await compose.generate()
+  if (generatedCount > 0) {
+    isConfigMode.value = false
   }
 }
 

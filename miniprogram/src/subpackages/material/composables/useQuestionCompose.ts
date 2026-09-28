@@ -1,5 +1,11 @@
 import { computed, ref } from 'vue'
-import { apiGenerateQuestions, computeKnowledgeCoverage, dedupeQuestions, planGenerationBatches } from '@/api'
+import {
+  apiGenerateQuestions,
+  apiGetQuestionsByMaterial,
+  computeKnowledgeCoverage,
+  dedupeQuestions,
+  planGenerationBatches,
+} from '@/api'
 import type { CoverageResult } from '@/api/adapters/question'
 import type { FolderKnowledgePointItem, QuestionItem, QuestionType } from '@/types'
 
@@ -118,10 +124,17 @@ export function useQuestionCompose() {
     return { questions: dedupeQuestions(collected), pending }
   }
 
-  const generate = async () => {
+  /**
+   * 生成题目。
+   *
+   * 返回值即「本次合格题数量」，调用方据此决定是否切到核对视图：
+   * 失败与零合格题都返回 0，使调用方无需自行区分异常与空结果——
+   * 两种情况都必须留在配置区，展示一个空核对列表比留在配置区更糟。
+   */
+  const generate = async (): Promise<number> => {
     if (selectedKpIds.value.length === 0) {
       uni.showToast({ title: '请至少勾选一个知识点', icon: 'none' })
-      return
+      return 0
     }
     isGenerating.value = true
     try {
@@ -131,16 +144,42 @@ export function useQuestionCompose() {
       )
       if (generated.length === 0) {
         uni.showToast({ title: '未生成合格题目，请调整配置后重试', icon: 'none' })
-        return
+        return 0
       }
       questions.value = generated
       removedIds.value = []
       hasGenerated.value = true
+      uni.showToast({ title: `已生成 ${generated.length} 道题目`, icon: 'success' })
+      return generated.length
     } catch (error: any) {
       uni.showToast({ title: error?.message || '生成失败', icon: 'none' })
+      return 0
     } finally {
       isGenerating.value = false
     }
+  }
+
+  /**
+   * 载入该资料已持久化的题目，供「继续核对已生成题目」入口直接进入核对视图。
+   *
+   * 选中考点取自已加载题目**实际覆盖**的考点集合，因此覆盖率缺口必然为空——
+   * 这批题本来就只为这些考点生成过，「缺口」在这里不是缺口，不该拦住作答。
+   * 一条都没载到时返回 0，由调用方留在配置区。
+   */
+  const loadExistingQuestions = async (materialId: string): Promise<number> => {
+    const loaded = await apiGetQuestionsByMaterial(materialId)
+    if (loaded.length === 0) return 0
+    selectedKpIds.value = Array.from(
+      new Set(
+        loaded
+          .map((item) => item.knowledge_point_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    )
+    questions.value = loaded
+    removedIds.value = []
+    hasGenerated.value = true
+    return loaded.length
   }
 
   const removeQuestion = (target: QuestionItem | string) => {
@@ -224,6 +263,7 @@ export function useQuestionCompose() {
     isTypeSelected,
     toggleType,
     generate,
+    loadExistingQuestions,
     removeQuestion,
     restoreQuestion,
     regenerateQuestion,

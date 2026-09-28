@@ -49,6 +49,11 @@ pnpm run test:unit     # vitest run
 - **可选 query 参数由 API 函数条件拼装**：API 函数内用 `queryParts.push(...)` + `encodeURIComponent` 组装，**真值才拼接**（如 `if (params?.folder_id) queryParts.push(...)`；分页用 `!== undefined` 判断以放行 `0`）。`request.ts` 本身**不做** GET data 清洗，它把 `options.data` 原样交给 `uni.request`。
 - **未判题不得计零分或答错**：`score` / `isCorrect` 保持 `null`，UI 渲染「判题中 / 待重判 / 未作答」。
 - **正式诊断必须有门禁**：未全卷判完不得请求/展示诊断报告。
+- **条件渲染分支必须有写点**：每个 `v-if` / `v-else-if` / `v-else` 都必须存在把它切换过去的赋值点，否则该分支是**死代码**——编译不报错、门禁不拦、界面也不崩，用户看到的只是「点了没反应」。
+  - **2026-09-29 实测踩中**：`subpackages/material/pages/questions/index.vue` 的 `isConfigMode` 全文件只被写过 `true`，导致整块核对视图（生成的题目、覆盖缺口提示、「开始作答」按钮）不可达；用户生成题目后屏幕毫无变化，反馈为「生题没有反馈，也不知道题目在哪里」。
+  - **检查手段**：对页面上每个条件标识符跑一次 `grep <identifier> <file>`，逐处标注读/写；**只有读没有写的分支即为死代码**。
+  - **重点查 `v-else`**：它天然没有自己的标识符，最容易被整块漏掉——`v-if` 有名字可查，`v-else` 只能靠反查那个名字的**写点是否存在**。
+  - **优先用返回值驱动状态切换**：`compose.generate()` 改为返回合格题数量，调用方据 `> 0` 切换视图，使「零合格题 / 失败」在类型层面就不可能被误当成「可进核对视图」（见 `useQuestionCompose.ts` 与 `tests/diagnosisAndCompose.spec.ts` 的返回值契约用例）。
 
 ---
 
@@ -56,7 +61,7 @@ pnpm run test:unit     # vitest run
 
 - **框架**：Vitest + `happy-dom` 环境 + `globals: true`，setup 文件 `tests/setup.ts`（`vitest.config.ts`）。
 - **位置**：`miniprogram/tests/` 平铺（**没有** `tests/unit/` 子目录层级）；后端契约样本在 `tests/fixtures/backendResponses.ts`，注释钉死事实源为 `backend/app/schemas/{practice,diagnosis,question}.py`。
-- **当前规模**：9 个 spec 文件 / 62 个用例 —— `apiContracts`(3)、`backendContracts`(17)、`diagnosisAndCompose`(5)、`draftQueue`(4)、`loginFailure`(9)、`materialState`(2)、`practice`(2)、`practiceStore`(8)、`requestFailure`(12)。
+- **当前规模**：9 个 spec 文件 / **69** 个用例 —— `apiContracts`(3)、`backendContracts`(17)、`diagnosisAndCompose`(**12**)、`draftQueue`(4)、`loginFailure`(9)、`materialState`(2)、`practice`(2)、`practiceStore`(8)、`requestFailure`(12)。（2026-09-29：`diagnosisAndCompose` 由 5 增至 12，新增的 7 例锁定 `generate()` 的返回值契约与 `loadExistingQuestions` 的载入契约。）
 - **`uni` 全局 mock**：`tests/setup.ts` 注入内存版 `uniMock`（`Map` 支撑的 `getStorageSync`/`setStorageSync`/`removeStorageSync`/`clearStorageSync`，以及 `showToast`/`showLoading`/`hideLoading`/`navigateTo`/`redirectTo`/`switchTab`/`showModal`）。
 - **网络 mock**：用 `vi.hoisted` + `vi.mock('@/utils/request', ...)` 替换 `request` / `uploadFile`，测试内按 `options.url` 匹配响应（`tests/practiceStore.spec.ts`、`tests/diagnosisAndCompose.spec.ts`）。
 - **Store 测试用 `setActivePinia(createPinia())`**（`beforeEach`）。

@@ -126,3 +126,144 @@ describe('question compose coverage gating', () => {
     expect(compose.canStart.value).toBe(true)
   })
 })
+
+/**
+ * 出题页曾经把「生成成功」和「切到核对视图」之间的连接漏掉：`isConfigMode` 只被写过 true，
+ * 于是生成的题目永远渲染不出来，用户看到的是「点了没反应」。
+ * 修复把这条连接放在 `generate()` 的返回值上——下面锁定该返回值契约，
+ * 使「零合格题/失败」不可能被误当成「可以进核对视图」。
+ */
+describe('question compose reports generated count to the caller', () => {
+  beforeEach(() => {
+    requestMock.mockReset()
+  })
+
+  const respondWithQualified = (knowledgePointIds: string[]) => {
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/generate') {
+        return {
+          batch_id: 'b-1',
+          total_generated: knowledgePointIds.length,
+          qualified_count: knowledgePointIds.length,
+          pending_count: 0,
+          qualified_questions: knowledgePointIds.map((kpId) =>
+            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId }),
+          ),
+          pending_questions: [],
+        }
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+  }
+
+  it('returns the qualified count on success', async () => {
+    respondWithQualified(['k-1', 'k-2'])
+    const compose = useQuestionCompose()
+    compose.setKnowledgePoints([
+      { id: 'k-1', name: '考点一' },
+      { id: 'k-2', name: '考点二' },
+    ])
+    compose.selectedTypes.value = ['single_choice']
+
+    await expect(compose.generate()).resolves.toBe(2)
+    expect(compose.questions.value).toHaveLength(2)
+    expect(compose.canStart.value).toBe(true)
+  })
+
+  it('returns zero and stays out of the reviewable state when nothing qualifies', async () => {
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/generate') {
+        return {
+          batch_id: 'b-1',
+          total_generated: 0,
+          qualified_count: 0,
+          pending_count: 0,
+          qualified_questions: [],
+          pending_questions: [],
+        }
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+    compose.setKnowledgePoints([{ id: 'k-1', name: '考点一' }])
+
+    await expect(compose.generate()).resolves.toBe(0)
+    expect(compose.questions.value).toEqual([])
+    expect(compose.canStart.value).toBe(false)
+  })
+
+  it('returns zero instead of throwing when generation fails', async () => {
+    requestMock.mockImplementation(async (options: any) => {
+      throw new Error(`upstream down: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+    compose.setKnowledgePoints([{ id: 'k-1', name: '考点一' }])
+
+    await expect(compose.generate()).resolves.toBe(0)
+    expect(compose.questions.value).toEqual([])
+    expect(compose.canStart.value).toBe(false)
+  })
+
+  it('returns zero and generates nothing when no point is selected', async () => {
+    const compose = useQuestionCompose()
+
+    await expect(compose.generate()).resolves.toBe(0)
+    expect(requestMock).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 「继续核对已生成题目」入口的载入契约：选中考点必须取自题目实际覆盖的集合，
+ * 否则覆盖率会凭空出现缺口，把用户挡在「开始作答」之外。
+ */
+describe('loading already generated questions', () => {
+  beforeEach(() => {
+    requestMock.mockReset()
+  })
+
+  it('selects exactly the points the loaded questions cover', async () => {
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions?material_id=m-1') {
+        return {
+          items: [
+            generatedQuestionFixture({ id: 'q-2', knowledge_point_id: 'k-2' }),
+            generatedQuestionFixture({ id: 'q-1', knowledge_point_id: 'k-1' }),
+          ],
+        }
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+
+    await expect(compose.loadExistingQuestions('m-1')).resolves.toBe(2)
+    expect(compose.questions.value).toHaveLength(2)
+    expect([...compose.selectedKpIds.value].sort()).toEqual(['k-1', 'k-2'])
+    expect(compose.coverage.value.missing).toEqual([])
+    expect(compose.canStart.value).toBe(true)
+  })
+
+  it('reports zero and keeps the config view when nothing was persisted', async () => {
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions?material_id=m-empty') return { items: [] }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+
+    await expect(compose.loadExistingQuestions('m-empty')).resolves.toBe(0)
+    expect(compose.questions.value).toEqual([])
+    expect(compose.canStart.value).toBe(false)
+  })
+
+  it('accepts a bare array response as well as the items envelope', async () => {
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions?material_id=m-2') {
+        return [generatedQuestionFixture({ id: 'q-9', knowledge_point_id: 'k-9' })]
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+
+    await expect(compose.loadExistingQuestions('m-2')).resolves.toBe(1)
+    expect(compose.canStart.value).toBe(true)
+  })
+})

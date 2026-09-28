@@ -37,6 +37,14 @@
 
       <view v-else-if="material.status === 'ready'" class="status-box ready-box">
         <text class="ready-tips">✓ 讲义解析已就绪，已构建完整考点树与证据溯源切片。</text>
+        <!-- 已有持久化题目时才渲染：入口表达的「之前生成过」，空态不该由它承担 -->
+        <button
+          v-if="generatedQuestionCount > 0"
+          class="review-existing-btn"
+          @tap="goToGeneratedQuestions"
+        >
+          继续核对已生成题目（{{ generatedQuestionCount }} 道）
+        </button>
       </view>
     </view>
 
@@ -162,6 +170,7 @@ const materialStore = useMaterialStore()
 const materialId = ref<string>('')
 const material = ref<MaterialItem | null>(null)
 const knowledgeNodes = ref<KnowledgeTreeNode[]>([])
+const generatedQuestionCount = ref<number>(0)
 
 const showPointModal = ref(false)
 const selectedPoint = ref<KnowledgeTreeNode | null>(null)
@@ -205,6 +214,7 @@ const loadDetail = async () => {
       if (tree && tree.nodes) {
         knowledgeNodes.value = flattenTree(tree.nodes)
       }
+      await loadGeneratedQuestionCount()
     }
   } catch (err) {
     console.error(err)
@@ -226,6 +236,22 @@ const flattenTree = (nodes: KnowledgeTreeNode[]): KnowledgeTreeNode[] => {
   return result
 }
 
+/**
+ * 已生成题目数量，仅用于决定「继续核对已生成题目」入口是否渲染。
+ *
+ * 失败时保持 0（即不渲染入口）：这个入口是便利，不该因为一次计数请求失败
+ * 就让讲义详情页整体不可用。
+ */
+const loadGeneratedQuestionCount = async () => {
+  if (!materialId.value) return
+  try {
+    const list = await materialStore.loadQuestions(materialId.value)
+    generatedQuestionCount.value = list.length
+  } catch (err) {
+    console.error(err)
+  }
+}
+
 // 等待解析推进：命中终态或超时后都保留最新一次轮询到的资料状态
 const syncParseProgress = async () => {
   if (!materialId.value) return
@@ -239,6 +265,7 @@ const syncParseProgress = async () => {
     if (tree && tree.nodes) {
       knowledgeNodes.value = flattenTree(tree.nodes)
     }
+    await loadGeneratedQuestionCount()
   }
 }
 
@@ -313,6 +340,15 @@ const goToQuestionConfig = () => {
   uni.navigateTo({
     url: `/subpackages/material/pages/questions/index?material_id=${materialId.value}`,
     fail: () => uni.showToast({ title: '打开出题页失败，请重试', icon: 'none' }),
+  })
+}
+
+/** 直接进入核对视图；出题页据 view=generated 载入已持久化题目，不再走配置流程。 */
+const goToGeneratedQuestions = () => {
+  if (!materialId.value) return
+  uni.navigateTo({
+    url: `/subpackages/material/pages/questions/index?material_id=${materialId.value}&view=generated`,
+    fail: () => uni.showToast({ title: '打开已生成题目失败，请重试', icon: 'none' }),
   })
 }
 </script>
@@ -429,6 +465,20 @@ const goToQuestionConfig = () => {
 .ready-box {
   background: #f0fdf4;
   color: #166534;
+}
+
+.review-existing-btn {
+  margin-top: 20rpx;
+  height: 72rpx;
+  background: #ffffff;
+  color: #166534;
+  font-size: 26rpx;
+  font-weight: 600;
+  border: 1px solid #86efac;
+  border-radius: 10rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .error-box {
