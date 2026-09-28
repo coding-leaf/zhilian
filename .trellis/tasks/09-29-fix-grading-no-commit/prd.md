@@ -121,20 +121,27 @@ self.session.flush()
 
 ## Acceptance Criteria
 
-- [ ] AC-1 复现脚本在修复前失败、修复后通过：跑一次整卷判题 → **新开会话**查
+- [x] AC-1 复现脚本在修复前失败、修复后通过：跑一次整卷判题 → **新开会话**查
       `grading_records` 有记录、`practices.status` 已推进、`total_score` 非 `None`。
-      证据：修复前后各一次的实测输出。
-- [ ] AC-2 以用户账号的真实数据核对：`b5fa06ed-9270-4db3-ac23-daa11a1ae57c`（12 条作答）
+      证据：检查代理从零重做——还原 `grading.py` 到 HEAD 后 `assert 0 == 4`（失败原因正是
+      「新会话看不到记录」），恢复后通过；还原用文件备份 + sha256 比对，前后哈希一致
+      （`320e8daf…d9d5` / 41240 B）。另做变异测试（断言 `4` 改 `5`）确认用例非空转。
+- [x] AC-2 以用户账号的真实数据核对：`b5fa06ed-9270-4db3-ac23-daa11a1ae57c`（12 条作答）
       重新判题后，`grading_records` 出现 12 条、练习状态离开 `submitted`。
-- [ ] AC-3 R3 的换会话边界用例已加入判题测试文件，且**在修复前能红**（先红后绿）。
-- [ ] AC-4 幂等重放不被破坏：对同一练习连续判题两次，第二次不产生重复的最终记录
-      （对应 R2；用既有幂等用例保证零回归）。
-- [ ] AC-5 `grading.py` 内其他写库方法的提交边界已逐一核对，结论写进 Notes
-      （缺失的列出来；确认无缺失的也写明依据）。
-- [ ] AC-6 `task verify-backend` 全绿（ruff / mypy strict / lint-imports /
-      pytest `--cov-fail-under=80`），既有判题用例零回归。
+      **实测（新会话查）**：`grading_records` 0 → **12**（12 条均 `is_final`）；
+      `practices.status` `submitted` → **`completed`**；`total_score` `None` → **4.0**（满分 12.0）；
+      `completed_at` 已写；`attempt_items` 已判分 0/12 → **12/12**。整卷耗时 141ms。
+- [x] AC-3 R3 的换会话边界用例已加入判题测试文件，且**在修复前能红**（先红后绿，见 AC-1 证据）。
+- [x] AC-4 幂等重放不被破坏：对同一练习连续判题两次，第二次不产生重复的最终记录。
+      **实测（真实库）**：第二次判题后 `grading_records` 仍为 12（未翻倍）、`is_final` 恰为 12
+      （每题一条生效记录）、`total_score` 仍为 4.0（分数不漂移）。
+- [x] AC-5 `grading.py` 内其他写库方法的提交边界已逐一核对，结论见 Notes。
+- [x] AC-6 `task verify-backend` 全绿，既有判题用例零回归。
+      **实测**：ruff format（249 files already formatted）/ ruff check（All checks passed!）/
+      mypy strict（135 文件无问题）/ lint-imports（5 contracts kept, 0 broken）/
+      pytest（真实退出码 **0**、零 `FAILED`/`ERROR`、覆盖率 **91.16%** ≥ 阈值 80%）。
 - [ ] AC-7 端到端：worker 在跑的前提下交卷一次，开发者工具里能看到**逐题判分结果**而非永久「判题中」。
-      **此条待用户确认。**
+      **此条待用户确认——尚未验证，不得由我方代签。**
 
 ## Notes
 
@@ -152,3 +159,34 @@ self.session.flush()
   后者是判题的权威记录（含 `hit_keywords`/`grading_metadata` 等）。
   排查同类问题时**以 `grading_records` 为准**，否则容易把「冗余字段没回填」误判成「判题没跑」。
   本次侦察一度踩到这个坑，留档备查。
+
+### AC-5 结论：`grading.py` 之外没有遗漏的提交边界
+
+- `mark_grading_failed` **不在本文件**——它在 `app/services/practice.py:1219`，
+  **且已经在 `:1262` 提交**，形状与本次三处完全相同（裸 `commit()` 在 `_log_metric` 之前）。
+- `grading.py` 内三个私有写库辅助方法（`_grade_attempt_item` / `_grade_with_llm` /
+  `_build_pending_regrade_record`）的调用点全部落在三个已修复的边界方法内，
+  故**无需**在私有方法里再插提交点。
+- `GradingRepository` 自身 0 次提交是**正确**的（规范禁止仓储私自提交），不是遗漏。
+
+### 实测环境观察（与本次改动无关，但会误导下次判断，故留档）
+
+- **并发跑后端测试会产出两条假失败**：本次门禁与检查代理的测试并发执行时，
+  `test_migrated_schema_matches_orm_metadata` 与
+  `TestMasteryPerformanceBenchmark::test_performance_thousand_records_benchmark` 变红；
+  **同一份代码单独重跑退出码为 0、零失败**。下次见到这两条先确认是否有并发运行，
+  不要当成回归。性能基准受 CPU 争抢影响是预期内的；迁移一致性那条**同样敏感**，
+  这点反直觉，值得记住。
+- **`pytest` 汇总行会被 `-qq` 静默关掉**：项目 `backend/pyproject.toml:67` 的
+  `addopts = "-ra -q"` 已带一个 `-q`，命令行再加 `-q` 就是 `-qq`，pytest **不再打印**
+  `N passed` 汇总行。后果：无法从输出文本判断成败，**只能看退出码**；而
+  `cmd | tail` 拿到的 `$?` 是 `tail` 的退出码，恒为 0——这会伪造"全绿"。
+  正确姿势：`cmd > out.txt 2>&1; echo $?`，不要接管道。
+- **覆盖率达标 ≠ 零失败**：`--cov-fail-under` 通过时照样打印
+  `Required test coverage of 80% reached`，**即使有用例失败**。
+  本次差点据此误报门禁通过，是 `pytest_cache/v/cache/lastfailed` 暴露了真相。
+
+### 过程留档
+
+本任务的**实现代理未交出报告即消失**，故验证由**另一个**检查代理从零独立重做，
+而非采信实现方自述。总结论不变，但证据链是重建的（见 AC-1 的哈希比对与变异测试）。
