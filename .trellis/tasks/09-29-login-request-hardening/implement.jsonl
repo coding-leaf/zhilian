@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "网络出口唯一、静默吞错禁令、跳转 fail 兜底要求、新增单测须落在 tests/ 平铺且只测纯函数/store"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "auth store 的 state/action 契约、store 不得 import request.ts 的约束"}
