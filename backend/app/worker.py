@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from redis import Redis
-from rq import Queue, SpawnWorker, Worker
+from rq import Queue, SimpleWorker, Worker
 from rq.job import Job
 
 from app.container import AppContainer
@@ -64,7 +64,13 @@ def run_worker() -> None:
         raise RuntimeError("worker 需要 ZHILIAN_QUEUE__PROVIDER=redis")
     connection = Redis.from_url(settings.redis.redis_url)
     queues = [Queue("zhilian_high", connection=connection), Queue("zhilian", connection=connection)]
-    worker_type = SpawnWorker if os.name == "nt" else Worker
+    # Windows 没有 fork：`Worker.wait_for_horse` 调用 POSIX-only 的 `os.wait4`，
+    # 而 `SpawnWorker` 只重写了 `fork_work_horse`、仍继承同一个 `wait_for_horse`，
+    # 因此它在 Windows 上照样抛 `AttributeError: module 'os' has no attribute 'wait4'`。
+    # 只有 `SimpleWorker` 派生自 `BaseWorker`、在同进程内执行任务，不触碰 fork/wait4。
+    # 代价：同进程执行无法强杀超时任务，一个卡死的任务会阻塞整个 worker；
+    # 解析流水线各外设调用自带超时，故接受此代价。
+    worker_type = SimpleWorker if os.name == "nt" else Worker
     worker_type(queues, connection=connection).work(with_scheduler=True)
 
 
