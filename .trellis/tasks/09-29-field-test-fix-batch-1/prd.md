@@ -34,6 +34,7 @@
 | [09-29-fix-parse-stuck](../09-29-fix-parse-stuck/prd.md) | 需求 2 | 后端（队列/worker）+ 前端（状态与反馈） | P0 | 无 |
 | [09-29-fix-qgen-feedback](../09-29-fix-qgen-feedback/prd.md) | 需求 3 | 前端（组卷流程反馈与结果落点） | P1 | **无**（定案后修正，见下） |
 | [09-29-fix-llm-thinking-mode](../09-29-fix-llm-thinking-mode/prd.md) | 追加需求 6（生题 502） | 后端（LLM 结构化输出） | P0 | 无 |
+| [09-29-fix-grading-no-commit](../09-29-fix-grading-no-commit/prd.md) | 追加需求 8 的真因 | 后端（判题事务边界） | P0 | 无；worker 可用后才会显现 |
 | [09-29-fix-learning-stats](../09-29-fix-learning-stats/prd.md) | 需求 5 | 前后端（统计聚合）+ 前端空态 | P1 | **口径缺陷独立可复现**；parse-stuck 修好后会放大其可见度 |
 | [09-29-review-page-ia](../09-29-review-page-ia/prd.md) | 需求 4 | 产品/信息架构 | P2 | **门禁**：learning-stats 完成前不启动 |
 
@@ -90,3 +91,61 @@
   本批次的执行顺序即按此排列。
 - 父任务收口时会重新核对「需求 3/4/5 是否真的只是下游后果」这一判断。若链路修好后它们依然存在，
   须回到 Plan 阶段补子任务，而不是在收口时临时扩 scope。
+
+---
+
+## 交接状态板（2026-09-29，供上下文压缩后接续）
+
+### 已提交并验证
+
+| commit | 内容 |
+| --- | --- |
+| `b5f205a` | 本任务树与规划产物登记 |
+| `78befe2` | 出题核对视图可达（死代码修复） |
+| `6c3ffcd` | worker Windows：`os.wait4` → `SimpleWorker` |
+| `fb9788a` | 浮层点击热区独立成元素（输入框根因修复） |
+| `22d708f` | spec：两条会静默失效的前端约定 |
+| `6b9832c` | worker Windows：`signal.SIGALRM` → `TimerDeathPenalty` |
+| `d0e759b` | LLM：不再强制 `tool_choice`（生题 502） |
+
+**用户已实机确认**：输入框可正常输入（原「点输入框即关闭浮层」已消除）。
+
+### 环境结论（**重要，不要再走回头路**）
+
+- **部署目标是 Linux/Docker**，由用户明确确认。**Windows 不是后端 worker 的目标平台**，
+  「RQ 2.12 在原生 Windows 上不可用」这一结论虽然成立，但**前提本身就是错的**——
+  不需要在 Windows 上跑 worker，也**不要在 Windows 上继续给 RQ 打补丁**。
+- `app/worker.py` 里保留的两处 `os.name == "nt"` 守卫补丁**经用户确认保留**
+  （POSIX 侧零影响，把排查结论留在代码里）。**不要删除，也不要扩展。**
+- `deploy/docker-compose.yml` **本来就定义了 worker 服务**；本批次的「解析全卡住」根因是
+  **该服务从未启动**（postgres / redis / minio 都是这套 compose 起的，唯独 worker 没起）。
+- 容器构建曾因 **Docker 守护进程拿到被污染的 DNS**（解析 `registry-1.docker.io` 到
+  `185.45.7.185`，而 Windows 侧解析到正确的 AWS 地址）而拉不到 `python:3.13-slim`。
+  用户决定**开 xray 的 TUN 模式**解决，**不再配置 Docker 代理**。用户自行执行
+  `docker compose up -d worker`。
+- 侦察期间验证链路可用所跑的 **WSL worker 是会话级后台进程，会随会话结束而消失**；
+  它只用于验证，**不是常驻方案**。常驻方案以容器为准。
+
+### 未开工的子任务
+
+- `09-29-fix-learning-stats`（学习足迹统计漏算未分类资料）
+- `09-29-review-page-ia`（学情页信息架构复核，有门禁）
+- `09-29-question-bank-page`（**独立任务，不在本批次树下**：题库页 + 批次分组 + 跨批次再练；
+  后端已就绪，纯前端。用户已确认要做，**PRD 尚未编写**）
+
+### 未决项
+
+- **手动记录错题**：用户明确**暂不立项**，不要再创建任务。
+- **判题改为交卷时同步判客观题**：属体验设计决策，需单独评估（见 fix-grading-no-commit 的 Out of scope）。
+- **`max_tokens` 与推理 token 的关系**：`deepseek-flash` 是推理模型，`max_tokens` 过小会拿到空
+  `content`（实测 `max_tokens=8` 时 `finish_content` 为空）。留档在 fix-llm-thinking-mode 的 Notes。
+- **全局 401 `uni.reLaunch` 销毁当前页**（`src/utils/request.ts:9-20`）：真实隐患，
+  尚未立项。收口时决定。
+- **`vue@3.5.43` 编译 / `3.4.21` 运行时错配**：真实隐患但与已确认的现象均无关，尚未立项。
+
+### 本批次收口时必须重核的一条
+
+需求 3/4/5 曾被假定为「派生的下游后果」，规划阶段已用证据推翻其中两条（3 是死代码、
+5 是统计口径）。**收口时要再核一次剩余判断**，特别是需求 4（学情页）——
+它至今仍未被真实验证过，因为判题结果从未落库，学情页始终是零数据状态。
+

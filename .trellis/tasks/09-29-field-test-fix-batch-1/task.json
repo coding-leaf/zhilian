@@ -24,7 +24,8 @@
     "09-29-fix-qgen-feedback",
     "09-29-fix-learning-stats",
     "09-29-review-page-ia",
-    "09-29-fix-llm-thinking-mode"
+    "09-29-fix-llm-thinking-mode",
+    "09-29-fix-grading-no-commit"
   ],
   "parent": null,
   "relatedFiles": [],
