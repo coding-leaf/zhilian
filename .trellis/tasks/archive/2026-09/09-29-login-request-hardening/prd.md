@@ -62,17 +62,33 @@
 
 ## Acceptance Criteria
 
-- [ ] AC-1 传输层默认超时 15000ms，且请求确实把它传给 `uni.request`（以 mock 捕获的 `options.timeout` 为准）。
-- [ ] AC-2 `/questions/generate`、`/coach/ask`、`/questions/{id}/ask-coach`、`/grading/regrade` 四类请求的
-      `timeout` 为 90000ms；其余接口为 15000ms。
-- [ ] AC-3 `errMsg: 'request:fail timeout'` 归一为 `kind='timeout'`，toast 文案含「超时」与秒数，`console.error` 输出含 url 与 errMsg。
-- [ ] AC-4 非超时的传输失败归一为 `kind='network'`，并与 `timeout` 文案可区分。
-- [ ] AC-5 HTTP 4xx/5xx 归一为 `kind='http'`，携带 `statusCode` 与后端 `detail`；401 仍走既有 `handleUnauthorized`。
-- [ ] AC-6 `loginWithWechat` 在 `wx.login` 失败（含 `res.code` 缺失）时返回 `reason='wechat'`。
-- [ ] AC-7 `loginWithWechat` 在登录请求超时/网络失败/后端拒绝时分别返回 `timeout`/`network`/`http`，且 `message` 非空。
-- [ ] AC-8 登录页在失败时按 `reason` 弹出可见提示；成功后跳转带 `fail` 兜底。
-- [ ] AC-9 `fetchProfile` 失败不再静默：至少记录含结构化细节的错误。
-- [ ] AC-10 `pnpm run lint` / `pnpm run type-check` / `pnpm run test:unit` 三条门禁全绿，且既有 39 个用例零回归。
+全部以 `task verify`（退出码 0：后端 ruff/mypy/lint-imports/pytest 1378 passed；前端 eslint/vue-tsc/vitest 9 文件 62 用例）
+与 `dist/dev/mp-weixin` 编译产物核对。
+
+- [x] AC-1 传输层默认超时 15000ms，且请求确实把它传给 `uni.request`（以 mock 捕获的 `options.timeout` 为准）。
+      证据：`tests/requestFailure.spec.ts`「passes the converged default timeout…」。
+      `vue-tsc` 通过同时证明 `timeout` 是 `uni.request` 的合法字段。
+- [x] AC-2 `/questions/generate`、`/coach/ask`、`/questions/{id}/ask-coach`、`/grading/regrade` 四类请求的
+      `timeout` 为 90000ms；其余接口为 15000ms。证据：单测断言四个函数 + 编译产物中 `LONG_REQUEST_TIMEOUT_MS`
+      恰好 4 处，且 `apiGetKnowledgePointSnippets` 确认**未**携带（排除滑动窗口假阳性）。
+- [x] AC-3 `errMsg: 'request:fail timeout'` 归一为 `kind='timeout'`，toast 文案含「超时」与秒数，`console.error` 输出含 url 与 errMsg。
+- [x] AC-4 非超时的传输失败归一为 `kind='network'`，并与 `timeout` 文案可区分。
+- [x] AC-5 HTTP 4xx/5xx 归一为 `kind='http'`，携带 `statusCode` 与后端 `detail`；401 仍走既有 `handleUnauthorized`
+      （断言 `access_token` 被清且不重复 toast）。
+- [x] AC-6 `loginWithWechat` 在 `wx.login` 失败（含 `res.code` 缺失）时返回 `reason='wechat'`。
+      **覆盖度说明：已实现，但无单测覆盖。** `#ifdef MP-WEIXIN` 条件编译在 vitest 下不生效
+      （`vitest.config.ts` 不加载 uni 插件），`#ifndef` 分支同步 `resolve` 会抢在 `uni.login` 异步回调之前完成，
+      登录失败路径在单测里不可达。因此只把分类逻辑抽成纯函数测了 6 条映射，`wechat` 两条分支需在真机/开发者工具验证。
+- [x] AC-7 `loginWithWechat` 在登录请求超时/网络失败/后端拒绝时分别返回 `timeout`/`network`/`http`，且 `message` 非空
+      （含非 Error 抛出也保证非空）。
+- [x] AC-8 登录页在失败时按 `reason` 弹出可见提示；成功后跳转带 `fail` 兜底。
+      证据：编译产物 `dist/dev/mp-weixin/pages/auth/login.js` 含 `outcome.ok` 分支与 `switchTab` 的 `fail`。
+- [x] AC-9 `fetchProfile` 失败不再静默：不 rethrow、不清 token，但记录含 url 与 kind 的结构化错误。
+- [x] AC-10 三条门禁全绿，且既有用例零回归（新增 21 例，41 → 62；原件数比规范记录多 2 例，为本次之前既存漂移）。
+
+**未纳入验收但须留档的风险**：本次故障的**根因不在本仓库代码**（微信开发者工具网络层未把请求字节发出：
+TCP 两端 ESTABLISHED 静默 140+ 秒，但后端无访问日志、库中无新建用户）。本任务只消除其「不可诊断」的放大效应，
+环境侧的 `xray_tun` 回环广播路由问题仍未解决，实测时仍可能复现失败——届时 Console 会直接给出 `kind` 与 url。
 
 ## Notes
 
