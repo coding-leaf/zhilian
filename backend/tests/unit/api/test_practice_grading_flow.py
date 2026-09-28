@@ -762,6 +762,7 @@ async def test_unauthenticated_request_rejected_on_all_endpoints() -> None:
             ("POST", f"/api/v1/practices/{random_id}/pause", None),
             ("POST", f"/api/v1/practices/{random_id}/resume", None),
             ("POST", f"/api/v1/practices/{random_id}/submit", None),
+            ("POST", f"/api/v1/practices/{random_id}/regrade", None),
             ("GET", f"/api/v1/attempts/{random_id}/grading", None),
             ("POST", "/api/v1/grading/self-evaluate", {"attempt_item_id": str(random_id)}),
             ("POST", "/api/v1/grading/regrade", {"attempt_item_id": str(random_id)}),

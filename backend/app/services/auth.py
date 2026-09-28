@@ -17,7 +17,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.errors import AuthenticationError
+from app.core.errors import AuthenticationError, StorageError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -25,12 +25,31 @@ from app.core.security import (
     generate_user_ref,
     verify_token_version,
 )
+from app.integrations.storage.protocol import StorageProtocol
 from app.models.user import User
 from app.repositories.user import UserRepository
 from app.schemas.auth import TokenResponse
 from app.schemas.user import UserProfileResponse
 
 logger = logging.getLogger(__name__)
+_AVATAR_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _detect_image_type(data: bytes) -> tuple[str, str] | None:
+    """Return an image MIME type and suffix only for recognized image signatures."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR":
+        return "image/png", ".png"
+    if data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9"):
+        return "image/jpeg", ".jpg"
+    if data.startswith((b"GIF87a", b"GIF89a")) and data.endswith(b";"):
+        return "image/gif", ".gif"
+    if (
+        data.startswith(b"RIFF")
+        and data[8:12] == b"WEBP"
+        and int.from_bytes(data[4:8], "little") + 8 == len(data)
+    ):
+        return "image/webp", ".webp"
+    return None
 
 
 def validate_user_status(user: User | None, payload_token_version: int) -> User:
@@ -71,6 +90,8 @@ class AuthService:
         session: Session,
         user_repo: UserRepository | None = None,
         user_repository: UserRepository | None = None,
+        storage: StorageProtocol | None = None,
+        storage_bucket: str = "",
     ) -> None:
         """初始化认证与用户管理编排服务。
 
@@ -82,6 +103,8 @@ class AuthService:
         self.session = session
         self.user_repo = user_repo or user_repository or UserRepository(session)
         self.user_repository = self.user_repo
+        self.storage = storage
+        self.storage_bucket = storage_bucket
 
     def _resolve_wechat_openid(self, code: str) -> str:
         """解析微信登录凭证换取 OpenID。
@@ -342,7 +365,73 @@ class AuthService:
         if not user.is_active:
             raise AuthenticationError("用户账号已被停用")
 
-        return UserProfileResponse.model_validate(user)
+        profile = UserProfileResponse.model_validate(user)
+        if user.avatar_object_key and self.storage is not None:
+            return profile.model_copy(
+                update={
+                    "avatar_url": self.storage.generate_presigned_download_url(
+                        self.storage_bucket,
+                        user.avatar_object_key,
+                        expires_in=3600,
+                    )
+                }
+            )
+        return profile
+
+    def upload_user_avatar(self, user_id: uuid.UUID, data: bytes) -> UserProfileResponse:
+        """Validate, store and persist a user avatar, retaining the previous value on failure."""
+        if len(data) > _AVATAR_MAX_BYTES:
+            raise StorageError("头像文件不能超过 5 MiB", status_code=413)
+        detected = _detect_image_type(data)
+        if detected is None:
+            raise StorageError("头像必须是有效的 PNG、JPEG、GIF 或 WebP 图片", status_code=400)
+        if self.storage is None or not self.storage_bucket:
+            raise StorageError("头像存储服务尚未配置")
+
+        user = self.user_repo.get_user_by_id(user_id)
+        if user is None or user.is_deleted:
+            raise AuthenticationError("用户不存在或已注销")
+        if not user.is_active:
+            raise AuthenticationError("用户账号已被停用")
+
+        content_type, suffix = detected
+        old_key = user.avatar_object_key
+        new_key = f"users/{user_id}/avatars/{uuid.uuid4().hex}{suffix}"
+        stored_key = self.storage.put_object(
+            self.storage_bucket,
+            new_key,
+            data,
+            content_type=content_type,
+        )
+        try:
+            avatar_url = self.storage.generate_presigned_download_url(
+                self.storage_bucket, stored_key, expires_in=3600
+            )
+            updated = self.user_repo.update_profile(
+                user_id,
+                avatar_url="",
+                avatar_object_key=stored_key,
+            )
+            if updated is None:
+                raise AuthenticationError("用户不存在或已注销")
+            profile = UserProfileResponse.model_validate(updated).model_copy(
+                update={"avatar_url": avatar_url}
+            )
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            try:
+                self.storage.delete_object(self.storage_bucket, stored_key)
+            except StorageError:
+                logger.warning("头像上传失败后的新对象清理失败")
+            raise
+
+        if old_key:
+            try:
+                self.storage.delete_object(self.storage_bucket, old_key)
+            except StorageError:
+                logger.warning("替换头像后的旧对象清理失败")
+        return profile
 
     def update_user_profile(
         self,
@@ -379,7 +468,7 @@ class AuthService:
                 raise AuthenticationError("用户账号已被停用")
 
             self.session.commit()
-            return UserProfileResponse.model_validate(user)
+            return self.get_user_profile(user_id)
         except Exception:
             self.session.rollback()
             raise

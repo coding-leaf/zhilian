@@ -14,7 +14,6 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Body,
     Depends,
     File,
@@ -27,7 +26,6 @@ from fastapi import (
 )
 
 from app.api.deps.auth import get_current_user
-from app.api.deps.container import get_container
 from app.api.deps.folder import get_folder_service
 from app.api.deps.material import get_material_service
 from app.container import AppContainer
@@ -203,18 +201,16 @@ async def upload_material(
     file: Annotated[UploadFile, File(description="待解析学习资料文件二进制流")],
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
-    background_tasks: BackgroundTasks,
     title: Annotated[str | None, Form(description="资料展示标题 (为空时使用文件名)")] = None,
     source_type: Annotated[str, Form(description="资料来源渠道 (local/wechat)")] = "local",
     folder_id: Annotated[uuid.UUID | None, Form(description="归属课程文件夹标识 (缺省=未分类)")] = (
         None
     ),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
-    container: Annotated[AppContainer | None, Depends(get_container)] = None,
 ) -> MaterialUploadResponse:
-    """上传文件创建学习资料并触发异步解析流水线。
+    """上传文件并创建待解析资料，不自动调度解析。
 
-    读取文件流并委托 MaterialService 执行格式魔数校验、内容查重秒传与入队调度。
+    读取文件流并委托 MaterialService 执行格式魔数校验与持久化。
     读取前先做 Content-Length 与流式累计双重体积门禁，防范内存放大 DoS。
 
     Args:
@@ -226,8 +222,6 @@ async def upload_material(
         idempotency_key: 可选的请求防重幂等键。
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
-        background_tasks: FastAPI 后台任务管理器。
-        container: 可选全局应用容器依赖。
 
     Returns:
         MaterialUploadResponse: 创建就绪的资料与版本初始元数据。
@@ -242,15 +236,6 @@ async def upload_material(
         idempotency_key=idempotency_key,
         folder_id=folder_id,
     )
-    if container is not None:
-        background_tasks.add_task(
-            run_material_pipeline_background,
-            container,
-            material.id,
-            version.id,
-            user.id,
-        )
-
     return MaterialUploadResponse(
         id=material.id,
         version_id=version.id,
@@ -643,8 +628,6 @@ async def retry_material_pipeline(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
-    background_tasks: BackgroundTasks,
-    container: Annotated[AppContainer | None, Depends(get_container)] = None,
 ) -> MaterialDetailResponse:
     """重试解析失败的学习资料流水线。
 
@@ -655,8 +638,6 @@ async def retry_material_pipeline(
         material_id: 资料主键。
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
-        background_tasks: FastAPI 后台任务管理器。
-        container: 全局应用容器依赖。
 
     Returns:
         MaterialDetailResponse: 重新进入就绪队列的资料详情。
@@ -665,15 +646,6 @@ async def retry_material_pipeline(
         material_id=material_id,
         user_id=user.id,
     )
-    if container is not None:
-        background_tasks.add_task(
-            run_material_pipeline_background,
-            container,
-            material.id,
-            version.id,
-            user.id,
-        )
-
     versions_count = getattr(material, "versions_count", None)
     if versions_count is None:
         versions = getattr(material, "versions", [])

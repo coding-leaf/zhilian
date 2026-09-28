@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint
+from app.models.material import Material, MaterialFolder
 from app.models.practice import (
     AttemptItem,
     DiagnosisReport,
@@ -497,6 +498,8 @@ class DiagnosisRepository:
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         error_type: str | None = None,
         question_type: str | None = None,
         limit: int = 50,
@@ -518,14 +521,21 @@ class DiagnosisRepository:
             list[WrongRecord]: 错题实体列表。
         """
         statement = select(WrongRecord).where(WrongRecord.user_id == user_id)
-        if material_id is not None:
+        if material_id is not None or folder_id is not None or unclassified:
             statement = statement.join(
                 KnowledgePoint,
                 WrongRecord.knowledge_point_id == KnowledgePoint.id,
-            ).where(
-                KnowledgePoint.material_id == material_id,
-                KnowledgePoint.user_id == user_id,
-            )
+            ).where(KnowledgePoint.user_id == user_id)
+            if material_id is not None:
+                statement = statement.where(KnowledgePoint.material_id == material_id)
+            if folder_id is not None or unclassified:
+                statement = statement.join(
+                    Material, KnowledgePoint.material_id == Material.id
+                ).where(Material.user_id == user_id)
+                if folder_id is not None:
+                    statement = statement.where(Material.folder_id == folder_id)
+                if unclassified:
+                    statement = statement.where(Material.folder_id.is_(None))
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
         if knowledge_point_id is not None:
@@ -546,6 +556,8 @@ class DiagnosisRepository:
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         error_type: str | None = None,
         question_type: str | None = None,
     ) -> int:
@@ -565,14 +577,21 @@ class DiagnosisRepository:
         statement = (
             select(func.count()).select_from(WrongRecord).where(WrongRecord.user_id == user_id)
         )
-        if material_id is not None:
+        if material_id is not None or folder_id is not None or unclassified:
             statement = statement.join(
                 KnowledgePoint,
                 WrongRecord.knowledge_point_id == KnowledgePoint.id,
-            ).where(
-                KnowledgePoint.material_id == material_id,
-                KnowledgePoint.user_id == user_id,
-            )
+            ).where(KnowledgePoint.user_id == user_id)
+            if material_id is not None:
+                statement = statement.where(KnowledgePoint.material_id == material_id)
+            if folder_id is not None or unclassified:
+                statement = statement.join(
+                    Material, KnowledgePoint.material_id == Material.id
+                ).where(Material.user_id == user_id)
+                if folder_id is not None:
+                    statement = statement.where(Material.folder_id == folder_id)
+                if unclassified:
+                    statement = statement.where(Material.folder_id.is_(None))
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
         if knowledge_point_id is not None:
@@ -585,6 +604,55 @@ class DiagnosisRepository:
             )
 
         return int(self.session.execute(statement).scalar_one())
+
+    def get_wrong_record_scopes(
+        self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None]]:
+        """Batch-resolve each wrong record's source material and course."""
+        if not knowledge_point_ids:
+            return {}
+        rows = self.session.execute(
+            select(KnowledgePoint.id, Material.id, Material.folder_id)
+            .join(Material, Material.id == KnowledgePoint.material_id)
+            .where(
+                KnowledgePoint.id.in_(knowledge_point_ids),
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+            )
+        ).all()
+        return {point_id: (material_id, folder_id) for point_id, material_id, folder_id in rows}
+
+    def list_wrong_record_groups(
+        self, user_id: uuid.UUID, is_mastered: bool | None = None
+    ) -> list[tuple[uuid.UUID | None, str | None, uuid.UUID, str, int]]:
+        """Count all wrong records per material, preserving unclassified sources."""
+        statement = (
+            select(
+                Material.folder_id,
+                MaterialFolder.name,
+                Material.id,
+                Material.title,
+                func.count(WrongRecord.id),
+            )
+            .select_from(WrongRecord)
+            .join(KnowledgePoint, WrongRecord.knowledge_point_id == KnowledgePoint.id)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                WrongRecord.user_id == user_id,
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+            )
+            .group_by(Material.folder_id, MaterialFolder.name, Material.id, Material.title)
+        )
+        if is_mastered is not None:
+            statement = statement.where(WrongRecord.is_mastered == is_mastered)
+        return [
+            (folder_id, folder_name, material_id, material_title, int(count))
+            for folder_id, folder_name, material_id, material_title, count in self.session.execute(
+                statement
+            ).all()
+        ]
 
     def delete_wrong_record(
         self,

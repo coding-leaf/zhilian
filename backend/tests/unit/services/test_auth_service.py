@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.errors import AuthenticationError
+from app.core.errors import AuthenticationError, StorageError
+from app.integrations.storage.memory import MemoryStorageAdapter
 from app.models.base import Base
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
@@ -304,3 +305,77 @@ class TestAuthService:
             service.update_user_profile(uuid.uuid4(), nickname="Ghost")
         assert exc_info.value.code == 20001
         assert "用户不存在" in exc_info.value.message
+
+    def test_upload_avatar_persists_object_key_and_returns_signed_url(
+        self, session: Session
+    ) -> None:
+        storage = MemoryStorageAdapter()
+        storage.ensure_bucket_exists("avatars")
+        service = AuthService(session, storage=storage, storage_bucket="avatars")
+        user, _ = service.login_with_wechat(
+            code="avatar_upload_user", avatar_url="https://legacy.example/avatar.jpg"
+        )
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 20
+
+        profile = service.upload_user_avatar(user.id, png)
+
+        persisted = UserRepository(session).get_user_by_id(user.id)
+        assert persisted is not None
+        assert persisted.avatar_object_key is not None
+        assert persisted.avatar_url == ""
+        assert storage.get_object("avatars", persisted.avatar_object_key) == png
+        assert "X-Amz-Expires=3600" in profile.avatar_url
+        assert "X-Amz-Expires=3600" in service.get_user_profile(user.id).avatar_url
+
+    def test_upload_avatar_rejects_fake_mime_and_preserves_existing_avatar(
+        self, session: Session
+    ) -> None:
+        storage = MemoryStorageAdapter()
+        service = AuthService(session, storage=storage, storage_bucket="avatars")
+        user, _ = service.login_with_wechat(
+            code="avatar_invalid_user", avatar_url="https://legacy.example/keep.jpg"
+        )
+
+        with pytest.raises(StorageError) as exc_info:
+            service.upload_user_avatar(user.id, b"not actually an image")
+
+        assert exc_info.value.status_code == 400
+        persisted = UserRepository(session).get_user_by_id(user.id)
+        assert persisted is not None
+        assert persisted.avatar_url == "https://legacy.example/keep.jpg"
+        assert persisted.avatar_object_key is None
+
+    def test_upload_avatar_storage_failure_preserves_old_avatar(self, session: Session) -> None:
+        storage = MemoryStorageAdapter()
+        storage.inject_failure("put_object", StorageError("storage unavailable"))
+        service = AuthService(session, storage=storage, storage_bucket="avatars")
+        user, _ = service.login_with_wechat(
+            code="avatar_storage_error_user", avatar_url="https://legacy.example/keep.jpg"
+        )
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 20
+
+        with pytest.raises(StorageError):
+            service.upload_user_avatar(user.id, png)
+
+        persisted = UserRepository(session).get_user_by_id(user.id)
+        assert persisted is not None
+        assert persisted.avatar_url == "https://legacy.example/keep.jpg"
+        assert persisted.avatar_object_key is None
+
+    def test_upload_avatar_signing_failure_preserves_old_object(self, session: Session) -> None:
+        storage = MemoryStorageAdapter()
+        storage.ensure_bucket_exists("avatars")
+        service = AuthService(session, storage=storage, storage_bucket="avatars")
+        user, _ = service.login_with_wechat(code="avatar_signing_error_user")
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 20
+        service.upload_user_avatar(user.id, png)
+        old_key = user.avatar_object_key
+        assert old_key is not None
+        storage.inject_failure("generate_presigned_download_url", StorageError("signing failed"))
+
+        with pytest.raises(StorageError):
+            service.upload_user_avatar(user.id, png)
+
+        session.refresh(user)
+        assert user.avatar_object_key == old_key
+        assert storage.get_object("avatars", old_key) == png

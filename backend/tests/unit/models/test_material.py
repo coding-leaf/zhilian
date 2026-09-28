@@ -150,7 +150,7 @@ class TestMaterialModels:
             assert retrieved_mat.current_version is not None
             assert retrieved_mat.current_version.id == version.id
             assert retrieved_mat.current_version.version_number == 1
-            assert retrieved_mat.current_version.parse_status == ParseStatus.QUEUED.value
+            assert retrieved_mat.current_version.parse_status == ParseStatus.NOT_STARTED.value
             assert retrieved_mat.current_version.is_active is True
 
     def test_material_snippet_fields_and_isolation(self, db_session: sessionmaker[Session]) -> None:

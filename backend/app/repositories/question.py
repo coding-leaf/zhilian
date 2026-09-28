@@ -420,6 +420,25 @@ class QuestionRepository:
             stmt = stmt.where(Material.status == MaterialStatus.READY.value)
         return [row[0] for row in self.session.execute(stmt).all()]
 
+    def list_current_versions_for_folder(
+        self, user_id: uuid.UUID, folder_id: uuid.UUID
+    ) -> dict[uuid.UUID, uuid.UUID]:
+        """Resolve ready current versions in one tenant-filtered query."""
+        statement = (
+            select(Material.id, Material.current_version_id)
+            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                Material.user_id == user_id,
+                MaterialFolder.user_id == user_id,
+                Material.folder_id == folder_id,
+                Material.is_deleted.is_(False),
+                Material.status == MaterialStatus.READY.value,
+                Material.current_version_id.is_not(None),
+                MaterialFolder.archived_at.is_(None),
+            )
+        )
+        return {row[0]: row[1] for row in self.session.execute(statement).all()}
+
     def list_recent_for_deduplication(
         self,
         material_id: uuid.UUID,

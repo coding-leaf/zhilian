@@ -942,3 +942,88 @@ async def test_cross_tenant_isolation_propagation(
         user_id=mock_user.id,
         practice_id=practice_id,
     )
+
+
+# ==============================================================================
+# 9. POST /api/v1/practices/{id}/regrade (重试未完成的整卷判题) 测试用例
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_retry_practice_grading_success(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """测试待重判练习可主动重试判题并返回 200。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    practice = make_fake_practice(user_id=mock_user.id, status_str="partially_graded")
+    mock_practice_service.retry_grading.return_value = ("task-regrade-1", practice)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(f"/api/v1/practices/{practice.id}/regrade")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["practice_id"] == str(practice.id)
+    assert data["status"] == "partially_graded"
+    assert "重新调度" in data["message"]
+    mock_practice_service.retry_grading.assert_called_once_with(
+        user_id=mock_user.id,
+        practice_id=practice.id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_practice_grading_rejected_when_completed(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """测试已全部判完的练习重试判题返回 400 / 40011。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    practice_id = uuid.uuid4()
+    mock_practice_service.retry_grading.side_effect = PracticeStatusError(
+        "练习已全部判分完成，无需重试判题"
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(f"/api/v1/practices/{practice_id}/regrade")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == 40011
+
+
+@pytest.mark.asyncio
+async def test_retry_practice_grading_missing_practice_returns_404(
+    mock_user: User,
+    mock_practice_service: MagicMock,
+) -> None:
+    """测试对他人或不存在的练习重试判题返回 404 / 40010（跨租户越权拦截）。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_practice_service] = lambda: mock_practice_service
+
+    practice_id = uuid.uuid4()
+    mock_practice_service.retry_grading.side_effect = PracticeNotFoundError(
+        "请求的练习不存在或无权访问"
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(f"/api/v1/practices/{practice_id}/regrade")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == 40010

@@ -53,6 +53,12 @@ class User(Base, TimestampMixin):
         default="",
         comment="用户头像 URL",
     )
+    avatar_object_key: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        default=None,
+        comment="应用托管头像对象键",
+    )
     token_version: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

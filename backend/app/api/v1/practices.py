@@ -437,4 +437,48 @@ async def submit_practice(
         raise
 
 
+@router.post(
+    "/{id}/regrade",
+    response_model=PracticeStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="重试未完成的整卷判题",
+)
+async def retry_practice_grading(
+    id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    practice_service: Annotated[PracticeService, Depends(get_practice_service)],
+) -> PracticeStatusResponse:
+    """重试未完成的整卷判题（用户可操作的恢复入口，幂等）。
+
+    仅在练习处于 ``partially_graded``（存在待重判项或判题任务终态失败）时允许触发；
+    状态回写为 ``submitted`` 本身即并发锁，重复触发会被拒绝从而不会重复派发判题任务。
+
+    Args:
+        id: 练习主键标识。
+        current_user: 当前已认证登录租户用户对象。
+        practice_service: 练习会话与组卷编排服务。
+
+    Returns:
+        PracticeStatusResponse: 重新调度后的练习状态与提示信息。
+
+    Raises:
+        PracticeNotFoundError: 练习不存在或跨租户越权 (404 / 40010)。
+        PracticeStatusError: 练习已全判完或当前状态不允许重试判题 (400 / 40011)。
+    """
+    try:
+        _, practice = practice_service.retry_grading(
+            user_id=current_user.id,
+            practice_id=id,
+        )
+        return PracticeStatusResponse(
+            practice_id=getattr(practice, "id", None) or id,
+            status=getattr(practice, "status", "submitted"),
+            message="判题任务已重新调度，请稍候刷新查看结果",
+        )
+    except PracticeNotFoundError:
+        raise
+    except PracticeStatusError:
+        raise
+
+
 __all__ = ["router"]

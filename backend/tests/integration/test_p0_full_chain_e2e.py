@@ -657,7 +657,7 @@ async def test_p0_positive_full_chain(
         json={"confirm_unanswered": False},
     )
     assert sub_resp_1.status_code == 200
-    assert sub_resp_1.json()["status"] == "completed"
+    assert sub_resp_1.json()["status"] == "submitted"
 
     # 重复交卷验证强幂等回放
     sub_resp_2 = await http_client.post(
@@ -666,7 +666,7 @@ async def test_p0_positive_full_chain(
         json={"confirm_unanswered": False},
     )
     assert sub_resp_2.status_code == 200
-    assert sub_resp_2.json()["status"] == "completed"
+    assert sub_resp_2.json()["status"] == "submitted"
 
     # 执行判题编排流水线 (客观题秒判 + 主观题 AI 判分)
     grading_svc: GradingService = e2e_services["grading"]

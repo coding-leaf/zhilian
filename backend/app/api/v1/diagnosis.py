@@ -26,6 +26,7 @@ from app.schemas.diagnosis import (
     MarkWrongRecordMasteredRequest,
     MarkWrongRecordMasteredResponse,
     UserMasteryOverviewResponse,
+    WrongRecordGroupResponse,
     WrongRecordItemResponse,
     WrongRecordListResponse,
 )
@@ -271,6 +272,8 @@ async def list_wrong_records(
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
     material_id: Annotated[uuid.UUID | None, Query(description="学习资料主键 UUID")] = None,
+    folder_id: Annotated[uuid.UUID | None, Query(description="课程文件夹主键 UUID")] = None,
+    unclassified: Annotated[bool, Query(description="仅未分类资料错题")] = False,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="知识点主键 UUID")] = None,
     error_type: Annotated[str | None, Query(description="错误类型分类过滤")] = None,
     question_type: Annotated[str | None, Query(description="题目类型过滤")] = None,
@@ -306,6 +309,8 @@ async def list_wrong_records(
     result = diagnosis_service.list_wrong_records(
         user_id=current_user.id,
         material_id=material_id,
+        folder_id=folder_id,
+        unclassified=unclassified,
         status=status,
         is_mastered=is_mastered,
         knowledge_point_id=knowledge_point_id,
@@ -334,11 +339,25 @@ async def list_wrong_records(
         r if isinstance(r, WrongRecordItemResponse) else WrongRecordItemResponse.model_validate(r)
         for r in records
     ]
+    if items:
+        scopes = diagnosis_service.get_wrong_record_scopes(
+            current_user.id, {item.knowledge_point_id for item in items}
+        )
+        if isinstance(scopes, dict):
+            for item in items:
+                scope = scopes.get(item.knowledge_point_id)
+                if scope is not None:
+                    item.material_id, item.folder_id = scope
+    groups = [
+        WrongRecordGroupResponse.model_validate(group)
+        for group in diagnosis_service.list_wrong_record_groups(current_user.id, is_mastered)
+    ]
     if total_count is None:
         total_count = len(items)
 
     return WrongRecordListResponse(
         items=items,
+        groups=groups,
         total=total_count,
         offset=effective_offset,
         limit=effective_limit,

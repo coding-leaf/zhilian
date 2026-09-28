@@ -89,6 +89,7 @@ class UserRepository:
         *,
         nickname: str | None = None,
         avatar_url: str | None = None,
+        avatar_object_key: str | None = None,
     ) -> User | None:
         """更新指定用户的基础画像资料 (昵称、头像)。
 
@@ -96,6 +97,7 @@ class UserRepository:
             user_id: 用户唯一标识 UUID。
             nickname: 更新后的新昵称，传入 None 表示不修改。
             avatar_url: 更新后的新头像 URL，传入 None 表示不修改。
+            avatar_object_key: 托管头像对象键，传入 None 表示不修改。
 
         Returns:
             User | None: 更新成功返回用户实体，若用户不存在返回 None。
@@ -108,6 +110,8 @@ class UserRepository:
             user.nickname = nickname
         if avatar_url is not None:
             user.avatar_url = avatar_url
+        if avatar_object_key is not None:
+            user.avatar_object_key = avatar_object_key
 
         self.session.flush()
         return user

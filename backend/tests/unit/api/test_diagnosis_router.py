@@ -574,6 +574,8 @@ def test_list_wrong_records_success(
     mock_diagnosis_service.list_wrong_records.assert_called_once_with(
         user_id=mock_user.id,
         material_id=material_id,
+        folder_id=None,
+        unclassified=False,
         status="active",
         is_mastered=False,
         knowledge_point_id=knowledge_point_id,

@@ -10,7 +10,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.user import get_user_service
@@ -73,6 +73,22 @@ async def update_current_user_profile(
         nickname=payload.nickname,
         avatar_url=payload.avatar_url,
     )
+
+
+@router.post(
+    "/me/avatar",
+    response_model=UserProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="上传当前用户头像",
+)
+async def upload_current_user_avatar(
+    current_user: Annotated[User, Depends(get_current_user)],
+    user_service: Annotated[AuthService, Depends(get_user_service)],
+    file: Annotated[UploadFile, File()],
+) -> UserProfileResponse:
+    """Upload a bounded image and persist its app-managed object key."""
+    data = await file.read(5 * 1024 * 1024 + 1)
+    return user_service.upload_user_avatar(user_id=current_user.id, data=data)
 
 
 @router.delete(

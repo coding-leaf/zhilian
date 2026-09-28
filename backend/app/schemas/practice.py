@@ -131,9 +131,10 @@ class PracticeCreateRequest(BaseModel):
     @model_validator(mode="after")
     def _sync_question_count_with_ids(self) -> "PracticeCreateRequest":
         """当指定 question_ids 且 question_count 缺省或大于题目数时，自动同步为实际题量。"""
-        if self.question_ids:
-            if self.question_count == 10 or self.question_count > len(self.question_ids):
-                self.question_count = len(self.question_ids)
+        if self.question_ids and (
+            self.question_count == 10 or self.question_count > len(self.question_ids)
+        ):
+            self.question_count = len(self.question_ids)
         return self
 
 
@@ -208,6 +209,10 @@ class QuestionSnapshotDTO(BaseModel):
     question_type: str = Field(
         ...,
         description="题型标识 (single_choice, multiple_choice, true_false, short_answer)",
+    )
+    knowledge_point_id: uuid.UUID | None = Field(
+        default=None,
+        description="出题瞬间所属知识点标识 (用于错题溯源与考点归因)",
     )
     options: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -744,7 +749,9 @@ class SubmitPracticeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     practice_id: uuid.UUID = Field(..., description="练习主键 UUIDv4")
-    status: str = Field(..., description="交卷后练习状态 (completed / partially_graded)")
+    status: str = Field(
+        ..., description="交卷后练习状态 (submitted / partially_graded / completed)"
+    )
     message: str = Field(default="", description="交卷处理提示说明")
     uncompleted_count: int = Field(default=0, ge=0, description="未完成作答题目数")
     unanswered_count: int | None = Field(default=None, ge=0, description="未作答题数别名")

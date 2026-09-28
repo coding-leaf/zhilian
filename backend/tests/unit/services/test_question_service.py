@@ -43,6 +43,8 @@ from app.core.errors import (
     QuestionNotFoundError,
 )
 from app.integrations.embedding import FakeEmbeddingAdapter
+from app.integrations.llm.coach_graph import CoachDraft
+from app.integrations.llm.fake import FakeLLMAdapter
 from app.integrations.llm.protocol import (
     LLMMessage,
     LLMOptions,
@@ -75,6 +77,67 @@ from app.services.question import (
     build_generation_prompt,
     convert_llm_items_to_candidates,
 )
+
+
+def test_scoped_coach_uses_owned_knowledge_point_snippets(
+    session: Session, helper_setup: dict[str, uuid.UUID]
+) -> None:
+    """A knowledge-point answer cites only its linked, current-version snippets."""
+    ids = helper_setup
+    material = session.get(Material, ids["material_id"])
+    assert material is not None
+    material.status = "ready"
+    material.current_version_id = ids["version_id"]
+    session.commit()
+
+    search = FakeSearchAdapter()
+    linked = SearchSnippetCandidate(
+        snippet_id=ids["snippet_id_1"],
+        material_id=ids["material_id"],
+        version_id=ids["version_id"],
+        content="敏捷开发以人为本。",
+        chapter_title="第一章",
+        source_info={"page": 1},
+        vector_score=0.82,
+        final_score=0.016,
+    )
+    unrelated = SearchSnippetCandidate(
+        snippet_id=uuid.uuid4(),
+        material_id=ids["material_id"],
+        version_id=ids["version_id"],
+        content="不关联该考点的内容",
+        chapter_title="第二章",
+        source_info={},
+        vector_score=0.95,
+    )
+    search.set_canned_candidates([unrelated, linked])
+    llm = FakeLLMAdapter()
+    llm.set_canned_structured_response(
+        CoachDraft,
+        CoachDraft(reply="敏捷开发重视响应变化。", citation_ids=[linked.snippet_id]),
+    )
+    service = QuestionService(
+        session=session,
+        llm=llm,
+        embedding=FakeEmbeddingAdapter(),
+        search_adapter=search,
+    )
+
+    result = service.ask_scoped_coach(
+        user_id=ids["user_id"],
+        knowledge_point_id=ids["point_id"],
+        user_prompt="敏捷开发强调什么？",
+    )
+
+    assert result.reply == "敏捷开发重视响应变化。"
+    assert [source.snippet_id for source in result.sources] == [linked.snippet_id]
+    with pytest.raises(KnowledgeNotFoundError):
+        service.ask_scoped_coach(
+            user_id=uuid.uuid4(),
+            knowledge_point_id=ids["point_id"],
+            user_prompt="敏捷开发强调什么？",
+        )
+
 
 # ==============================================================================
 # 测试打桩与 Fake 适配器
@@ -1420,8 +1483,9 @@ class TestQuestionServiceCRUDAndAudit:
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:
         """Verify QuestionService.ask_coach returns structured AI response and raises on 404."""
-        from app.schemas.question import AskCoachResponse
         from unittest.mock import MagicMock
+
+        from app.schemas.question import AskCoachResponse
 
         user_id = helper_setup["user_id"]
         material_id = helper_setup["material_id"]

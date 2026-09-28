@@ -44,6 +44,7 @@ class MaterialStatus(enum.StrEnum):
 class ParseStatus(enum.StrEnum):
     """版本表细粒度解析流水线状态枚举。"""
 
+    NOT_STARTED = "not_started"
     QUEUED = "queued"
     PARSING_DOC = "parsing_doc"
     OCR_PROCESSING = "ocr_processing"
@@ -304,7 +305,7 @@ class MaterialVersion(Base, TimestampMixin, TenantModelMixin):
     parse_status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
-        default=ParseStatus.QUEUED.value,
+        default=ParseStatus.NOT_STARTED.value,
         comment="细粒度解析状态 (ParseStatus)",
     )
     failed_stage: Mapped[str | None] = mapped_column(

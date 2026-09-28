@@ -7,6 +7,8 @@ Verifies:
 3. generate_diagnosis_report state machine blocking:
    - PracticeStatus.PARTIALLY_GRADED raises PracticeNotGradedError (40016).
    - Non-COMPLETED status (e.g. IN_PROGRESS, NOT_STARTED) raises PracticeNotGradedError (40016).
+   - COMPLETED without completed_at, or with items lacking a final SUCCESS
+     grading record, raises PracticeNotGradedError (40016).
    - Practice not found raises PracticeNotFoundError (40401).
 4. generate_diagnosis_report idempotency when report already exists for practice_id.
 5. WrongRecord sync on correct vs incorrect answers (including unanswered items).
@@ -91,6 +93,25 @@ def diagnosis_service(
         practice_repo=mock_repos["practice_repo"],
         grading_repo=mock_repos["grading_repo"],
         knowledge_repo=mock_repos["knowledge_repo"],
+    )
+
+
+def make_final_grading_record(
+    practice_id: uuid.UUID,
+    user_id: uuid.UUID,
+    item: AttemptItem,
+) -> GradingRecord:
+    """Build the per-item final SUCCESS record the diagnosis gate requires."""
+    return GradingRecord(
+        id=uuid.uuid4(),
+        practice_id=practice_id,
+        attempt_item_id=item.id,
+        user_id=user_id,
+        channel=GradingChannel.OFFLINE.value,
+        status=GradingStatus.SUCCESS.value,
+        score=item.score or 0.0,
+        max_score=item.max_score,
+        is_final=True,
     )
 
 
@@ -268,6 +289,7 @@ class TestGenerateDiagnosisReport:
             material_id=uuid.uuid4(),
             title="综合练习测试",
             status=PracticeStatus.COMPLETED.value,
+            completed_at=now,
             knowledge_point_ids=[str(point_id)],
         )
         mock_repos["practice_repo"].get_practice_by_id.return_value = practice
@@ -485,6 +507,7 @@ class TestGenerateDiagnosisReport:
             material_id=uuid.uuid4(),
             title="已完成练习",
             status=PracticeStatus.COMPLETED.value,
+            completed_at=datetime.now(UTC),
         )
         mock_repos["practice_repo"].get_practice_by_id.return_value = practice
 
@@ -524,6 +547,7 @@ class TestGenerateDiagnosisReport:
             material_id=uuid.uuid4(),
             title="低可信度专项",
             status=PracticeStatus.COMPLETED.value,
+            completed_at=datetime.now(UTC),
             knowledge_point_ids=[str(point_id)],
         )
         mock_repos["practice_repo"].get_practice_by_id.return_value = practice
@@ -541,7 +565,9 @@ class TestGenerateDiagnosisReport:
             max_score=1.0,
         )
         mock_repos["practice_repo"].list_attempt_items.return_value = [item]
-        mock_repos["grading_repo"].list_final_records_by_practice.return_value = []
+        mock_repos["grading_repo"].list_final_records_by_practice.return_value = [
+            make_final_grading_record(practice_id, user_id, item)
+        ]
         mock_repos["diagnosis_repo"].get_attempt_history_for_knowledge_point.return_value = []
         mock_repos["diagnosis_repo"].list_mastery_records_by_knowledge_point_ids.return_value = []
 
@@ -585,6 +611,7 @@ class TestGenerateDiagnosisReport:
             material_id=uuid.uuid4(),
             title="并发报告生成",
             status=PracticeStatus.COMPLETED.value,
+            completed_at=datetime.now(UTC),
             knowledge_point_ids=[str(point_id)],
         )
         mock_repos["practice_repo"].get_practice_by_id.return_value = practice
@@ -615,7 +642,9 @@ class TestGenerateDiagnosisReport:
             max_score=1.0,
         )
         mock_repos["practice_repo"].list_attempt_items.return_value = [item]
-        mock_repos["grading_repo"].list_final_records_by_practice.return_value = []
+        mock_repos["grading_repo"].list_final_records_by_practice.return_value = [
+            make_final_grading_record(practice_id, user_id, item)
+        ]
         mock_repos["diagnosis_repo"].get_attempt_history_for_knowledge_point.return_value = []
         mock_repos["diagnosis_repo"].list_mastery_records_by_knowledge_point_ids.return_value = []
         mock_repos["knowledge_repo"].get_by_id.return_value = None
@@ -653,6 +682,7 @@ class TestWrongRecordSyncDetails:
             material_id=uuid.uuid4(),
             title="未作答测试练习",
             status=PracticeStatus.COMPLETED.value,
+            completed_at=datetime.now(UTC),
             knowledge_point_ids=[str(point_id)],
         )
         mock_repos["practice_repo"].get_practice_by_id.return_value = practice
@@ -674,7 +704,9 @@ class TestWrongRecordSyncDetails:
             max_score=1.0,
         )
         mock_repos["practice_repo"].list_attempt_items.return_value = [item]
-        mock_repos["grading_repo"].list_final_records_by_practice.return_value = []
+        mock_repos["grading_repo"].list_final_records_by_practice.return_value = [
+            make_final_grading_record(practice_id, user_id, item)
+        ]
         mock_repos["diagnosis_repo"].get_attempt_history_for_knowledge_point.return_value = []
         mock_repos["diagnosis_repo"].list_mastery_records_by_knowledge_point_ids.return_value = []
         mock_repos["knowledge_repo"].get_by_id.return_value = None

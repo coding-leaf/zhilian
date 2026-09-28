@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload
 
@@ -570,6 +570,53 @@ class MaterialRepository:
             version.is_active = is_active
         self.session.flush()
         return True
+
+    def try_transition_version_status(
+        self,
+        version_id: uuid.UUID,
+        material_id: uuid.UUID,
+        *,
+        from_status: str,
+        to_status: str,
+        reset_errors: bool = False,
+    ) -> bool:
+        """以条件更新原子地跃迁版本解析状态 (compare-and-swap)。
+
+        解析派发是「用户命令 -> 置 QUEUED -> 入队」，若跃迁用「先读后写」，两个并发
+        请求会凭同一次陈旧读各自入队一次，同一版本被两个 worker 同时解析（重复 OCR/
+        LLM 开销与重复切片）。因此跃迁必须由数据库判定：只有真正把该行从
+        ``from_status`` 改到 ``to_status`` 的调用返回 True。
+
+        租户隔离由调用方先行校验资料归属保证；此处再以 ``material_id`` 收窄作用域。
+
+        Args:
+            version_id: 版本标识。
+            material_id: 归属资料标识。
+            from_status: 期望的当前解析状态。
+            to_status: 目标解析状态。
+            reset_errors: 是否同时清空 ``error_message`` 与 ``failed_stage``。
+
+        Returns:
+            bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
+        """
+        values: dict[str, Any] = {"parse_status": to_status}
+        if reset_errors:
+            values["error_message"] = None
+            values["failed_stage"] = None
+
+        stmt = (
+            update(MaterialVersion)
+            .where(
+                MaterialVersion.id == version_id,
+                MaterialVersion.material_id == material_id,
+                MaterialVersion.parse_status == from_status,
+            )
+            .values(**values)
+            .execution_options(synchronize_session="fetch")
+        )
+        result = self.session.execute(stmt)
+        self.session.flush()
+        return result.rowcount == 1
 
     # ==========================================
     # MaterialSnippet 切片表操作

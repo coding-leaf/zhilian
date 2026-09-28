@@ -33,10 +33,12 @@ from app.core.errors import (
     MaterialNotFoundError,
     MissingSourceSnippetError,
     QuestionNotFoundError,
+    SearchError,
 )
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.agent_graph import run_structured_agent_workflow
+from app.integrations.llm.coach_graph import answer_with_course_evidence
 from app.integrations.llm.protocol import (
     LLMMessage,
     LLMOptions,
@@ -44,6 +46,7 @@ from app.integrations.llm.protocol import (
 )
 from app.integrations.search.protocol import SearchProtocol
 from app.models.knowledge import KnowledgePoint
+from app.models.material import MaterialStatus
 from app.models.question import (
     AuditAction,
     Question,
@@ -56,7 +59,11 @@ from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
-from app.schemas.question import AskCoachResponse
+from app.schemas.question import (
+    AskCoachResponse,
+    CoachSourceResponse,
+    ScopedCoachResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1697,3 +1704,86 @@ class QuestionService:
             options=options,
         )
         return output
+
+    def ask_scoped_coach(
+        self,
+        *,
+        user_id: uuid.UUID,
+        user_prompt: str,
+        folder_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
+        knowledge_point_id: uuid.UUID | None = None,
+    ) -> ScopedCoachResponse:
+        """Answer only from snippets in one authorized learning scope."""
+        if self.search_adapter is None:
+            raise SearchError("课程助教检索服务暂不可用")
+
+        version_id: uuid.UUID | None = None
+        material_versions: dict[uuid.UUID, uuid.UUID] = {}
+        allowed_snippet_ids: frozenset[uuid.UUID] | None = None
+        if folder_id is not None:
+            folder = self.folder_repo.get_by_id(folder_id, user_id)
+            if folder is None:
+                raise FolderNotFoundError("课程不存在或无权访问")
+            material_versions = self.question_repo.list_current_versions_for_folder(
+                user_id, folder_id
+            )
+            material_ids = tuple(material_versions)
+        elif material_id is not None:
+            material = self.material_repo.get_material_by_id(
+                material_id, user_id, exclude_archived_folder=True
+            )
+            if material is None:
+                raise MaterialNotFoundError("学习资料不存在或无权访问")
+            version_id = material.current_version_id
+            is_ready = material.status == MaterialStatus.READY.value
+            material_ids = (material.id,) if is_ready and version_id else ()
+        elif knowledge_point_id is not None:
+            point = self.knowledge_repo.get_by_id(knowledge_point_id, user_id)
+            if point is None:
+                raise KnowledgeNotFoundError("知识点不存在或无权访问")
+            material = self.material_repo.get_material_by_id(
+                point.material_id, user_id, exclude_archived_folder=True
+            )
+            if material is None or material.current_version_id != point.version_id:
+                raise KnowledgeNotFoundError("知识点不存在或无权访问")
+            material_ids = (material.id,) if material.status == MaterialStatus.READY.value else ()
+            version_id = point.version_id
+            allowed_snippet_ids = frozenset(
+                snippet.id
+                for snippet in self.knowledge_repo.get_snippets_for_point(point.id, user_id)
+            )
+            user_prompt = f"关于知识点「{point.name}」：{user_prompt}"
+        else:
+            raise ValueError("必须指定答疑范围")
+
+        if not material_ids:
+            return ScopedCoachResponse(reply="当前范围没有已解析完成的资料，暂时无法依据资料回答。")
+        answer, cited = answer_with_course_evidence(
+            search=self.search_adapter,
+            llm=self.llm,
+            query=user_prompt,
+            user_id=user_id,
+            material_ids=material_ids,
+            version_id=version_id,
+            material_versions=material_versions,
+            allowed_snippet_ids=allowed_snippet_ids,
+        )
+        if answer is None:
+            return ScopedCoachResponse(
+                reply="未在当前资料中找到足够且可核实的依据，暂时无法可靠回答。"
+            )
+        return ScopedCoachResponse(
+            reply=answer.reply,
+            suggestions=answer.suggestions,
+            sources=[
+                CoachSourceResponse(
+                    snippet_id=item.snippet_id,
+                    material_id=item.material_id,
+                    chapter_title=item.chapter_title,
+                    excerpt=item.content[:320],
+                    source_info=item.source_info,
+                )
+                for item in cited
+            ],
+        )

@@ -277,9 +277,43 @@ class AskCoachResponse(BaseModel):
     suggestions: list[str] = Field(default_factory=list, description="推荐延伸思考提示")
 
 
+class ScopedCoachRequest(BaseModel):
+    """Ask about exactly one authorized course, material, or knowledge point."""
+
+    folder_id: uuid.UUID | None = None
+    material_id: uuid.UUID | None = None
+    knowledge_point_id: uuid.UUID | None = None
+    user_prompt: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "ScopedCoachRequest":
+        if (
+            sum(
+                value is not None
+                for value in (self.folder_id, self.material_id, self.knowledge_point_id)
+            )
+            != 1
+        ):
+            raise ValueError("必须且只能指定一个答疑范围")
+        return self
+
+
+class CoachSourceResponse(BaseModel):
+    snippet_id: uuid.UUID
+    material_id: uuid.UUID
+    chapter_title: str
+    excerpt: str
+    source_info: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScopedCoachResponse(AskCoachResponse):
+    sources: list[CoachSourceResponse] = Field(default_factory=list)
+
+
 __all__ = [
     "AskCoachRequest",
     "AskCoachResponse",
+    "CoachSourceResponse",
     "MaterialQualityChecksResponse",
     "QuestionAuditLogsResponse",
     "QuestionDeleteResponse",
@@ -294,4 +328,6 @@ __all__ = [
     "QuestionQualityCheckResponse",
     "QuestionUpdateRequest",
     "QuestionUpdateResponse",
+    "ScopedCoachRequest",
+    "ScopedCoachResponse",
 ]

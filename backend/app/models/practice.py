@@ -41,14 +41,17 @@ class PracticeStatus(enum.StrEnum):
     NOT_STARTED: 已创建，尚未打开或作答
     IN_PROGRESS: 作答进行中
     PAUSED: 用户主动暂停作答 (可恢复至 IN_PROGRESS)
+    SUBMITTED: 已交卷并排队判题
     TIMEOUT: 作答超时归档 (不可逆冻结态)
-    PARTIALLY_GRADED: 部分判分/未决态 (存在 pending_regrade 主观题，阻断掌握度与报告)
+    PARTIALLY_GRADED: 部分判分/未决态 (存在 pending_regrade 主观题或判题任务终态失败，
+        阻断掌握度与正式报告；两种成因都通过 POST /practices/{id}/regrade 主动重试恢复)
     COMPLETED: 全卷终态判完 (已生成掌握度快照与正式诊断报告)
     """
 
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     PAUSED = "paused"
+    SUBMITTED = "submitted"
     TIMEOUT = "timeout"
     PARTIALLY_GRADED = "partially_graded"
     COMPLETED = "completed"
@@ -200,6 +203,13 @@ def validate_practice_transition(
     if status_str == PracticeStatus.PAUSED.value:
         # 暂停态只能恢复作答，不可直接结卷
         return True, None, PracticeStatus.IN_PROGRESS
+
+    if status_str == PracticeStatus.SUBMITTED.value:
+        if has_pending_regrade:
+            return True, None, PracticeStatus.PARTIALLY_GRADED
+        if all_items_graded:
+            return True, None, PracticeStatus.COMPLETED
+        return True, None, PracticeStatus.SUBMITTED
 
     if status_str == PracticeStatus.TIMEOUT.value:
         return False, "Practice already timed out and is immutable", None

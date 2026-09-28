@@ -245,7 +245,7 @@ class PracticeService:
         return PracticeSubmissionResult(
             practice_id=practice.id,
             task_id="",
-            status=PracticeStatus.COMPLETED.value,
+            status=practice.status,
             unanswered_count=unanswered_count,
             total_questions=total_questions,
             submitted_at=submitted_at,
@@ -289,6 +289,7 @@ class PracticeService:
             if cached_result is not None:
                 replayed = self._replay_idempotent_practice(cached_result, user_id)
                 if replayed is not None:
+                    self._attach_source_snippets_to_items(replayed, user_id)
                     return replayed
             self.idempotency.acquire_lock(clean_key, str(user_id))
 
@@ -321,6 +322,8 @@ class PracticeService:
                     practice.id,
                 )
                 self._release_lock_quietly(clean_key, user_id)
+        # 创建响应与详情响应共用同一溯源装配实现，避免「开始作答」后原文抽屉短暂为空
+        self._attach_source_snippets_to_items(practice, user_id)
         return practice
 
     def _replay_idempotent_practice(
@@ -570,6 +573,7 @@ class PracticeService:
                 "analysis": q.analysis or "",
                 "explanation": q.analysis or "",
                 "difficulty": q.difficulty,
+                "knowledge_point_id": str(q.knowledge_point_id) if q.knowledge_point_id else None,
                 "source_snippet_id": str(q.source_snippet_id) if q.source_snippet_id else None,
                 "grading_rubric": q.grading_rubric or {},
             }
@@ -664,11 +668,13 @@ class PracticeService:
         return detail
 
     @staticmethod
-    def _snapshot_source_snippet_id(item: PracticeItemDetailResponse) -> uuid.UUID | None:
+    def _snapshot_source_snippet_id(
+        item: PracticeItemDetailResponse | AttemptItem,
+    ) -> uuid.UUID | None:
         """安全解析作答项快照中的来源切片主键。
 
         Args:
-            item: 作答项详情 DTO。
+            item: 作答项详情 DTO 或 ORM 作答项实体。
 
         Returns:
             uuid.UUID | None: 合法切片主键；缺失或非法时返回 None。
@@ -708,6 +714,41 @@ class PracticeService:
                 return candidate
         return 1
 
+    def _build_source_snippet_map(
+        self,
+        items: Sequence[PracticeItemDetailResponse | AttemptItem],
+        user_id: uuid.UUID,
+    ) -> dict[uuid.UUID, SourceSnippetDTO]:
+        """按快照 ``source_snippet_id`` 批量装载原文切片投影。
+
+        这是练习原文溯源的**唯一**装配实现：查询详情路径与创建练习路径都复用
+        本方法，避免两处各自拼装导致响应形状漂移。
+
+        Args:
+            items: 作答项详情 DTO 或 ORM 作答项实体序列。
+            user_id: 租户用户标识。
+
+        Returns:
+            dict[uuid.UUID, SourceSnippetDTO]: 切片主键到投影对象的映射。
+        """
+        snippet_ids: set[uuid.UUID] = set()
+        for item in items:
+            snippet_id = self._snapshot_source_snippet_id(item)
+            if snippet_id is not None:
+                snippet_ids.add(snippet_id)
+        if not snippet_ids:
+            return {}
+
+        return {
+            snippet.id: SourceSnippetDTO(
+                id=snippet.id,
+                chapter_title=snippet.chapter_title or "",
+                page_index=self._resolve_snippet_page_index(snippet),
+                snippet_content=snippet.content or "",
+            )
+            for snippet in self.material_repo.list_snippets_by_ids(sorted(snippet_ids), user_id)
+        }
+
     def _attach_source_snippets(
         self,
         detail: PracticeDetailResponse,
@@ -719,18 +760,7 @@ class PracticeService:
             detail: 已装配的练习详情 DTO (就地补全 source_snippet)。
             user_id: 租户用户标识。
         """
-        snippet_ids: set[uuid.UUID] = set()
-        for item in detail.items:
-            snippet_id = self._snapshot_source_snippet_id(item)
-            if snippet_id is not None:
-                snippet_ids.add(snippet_id)
-        if not snippet_ids:
-            return
-
-        snippet_map = {
-            snippet.id: snippet
-            for snippet in self.material_repo.list_snippets_by_ids(sorted(snippet_ids), user_id)
-        }
+        snippet_map = self._build_source_snippet_map(detail.items, user_id)
         if not snippet_map:
             return
 
@@ -738,21 +768,43 @@ class PracticeService:
             snippet_id = self._snapshot_source_snippet_id(item)
             if snippet_id is None:
                 continue
-            snippet = snippet_map.get(snippet_id)
-            if snippet is None:
+            snippet_dto = snippet_map.get(snippet_id)
+            if snippet_dto is None:
                 continue
-            snippet_dto = SourceSnippetDTO(
-                id=snippet.id,
-                chapter_title=snippet.chapter_title or "",
-                page_index=self._resolve_snippet_page_index(snippet),
-                snippet_content=snippet.content or "",
-            )
             item.source_snippet = snippet_dto
             snapshot = item.question_snapshot
             if isinstance(snapshot, QuestionSnapshotDTO):
                 snapshot.source_snippet = snippet_dto
             elif isinstance(snapshot, dict):
                 snapshot["source_snippet"] = snippet_dto
+
+    def _attach_source_snippets_to_items(
+        self,
+        practice: Practice,
+        user_id: uuid.UUID,
+    ) -> None:
+        """把原文溯源投影挂到 ORM 作答项上，使创建响应与详情响应形状一致 (R5)。
+
+        仅写入未映射的瞬时属性 ``source_snippet``：``PracticeItemDetailResponse``
+        在装配快照时会把它回填进题目快照副本，因此无需改写已落库的快照 JSON。
+
+        Args:
+            practice: 已持久化的练习实体。
+            user_id: 租户用户标识。
+        """
+        items = list(practice.items or [])
+        snippet_map = self._build_source_snippet_map(items, user_id)
+        if not snippet_map:
+            return
+
+        for item in items:
+            snippet_id = self._snapshot_source_snippet_id(item)
+            if snippet_id is None:
+                continue
+            snippet_dto = snippet_map.get(snippet_id)
+            if snippet_dto is not None:
+                # 未映射的瞬时属性，仅供响应装配读取，不会写回数据库
+                setattr(item, "source_snippet", snippet_dto)  # noqa: B010
 
     def list_practices(
         self,
@@ -949,7 +1001,11 @@ class PracticeService:
                 "请求的练习不存在或无权访问",
                 details={"practice_id": str(practice_id)},
             )
-        if practice.status == PracticeStatus.COMPLETED.value:
+        if practice.status in (
+            PracticeStatus.SUBMITTED.value,
+            PracticeStatus.PARTIALLY_GRADED.value,
+            PracticeStatus.COMPLETED.value,
+        ):
             raise PracticeStatusError(
                 "练习已完成，禁止标记超时",
                 details={"status": practice.status},
@@ -1057,7 +1113,11 @@ class PracticeService:
                     details={"practice_id": str(dto.practice_id)},
                 )
 
-            if practice.status == PracticeStatus.COMPLETED.value:
+            if practice.status in (
+                PracticeStatus.SUBMITTED.value,
+                PracticeStatus.PARTIALLY_GRADED.value,
+                PracticeStatus.COMPLETED.value,
+            ):
                 # DB 级幂等兜底回放 (BUG-PRAC-013)：快照写入曾失败但事务已提交，
                 # 同一幂等键的重试不再抛 40011，而是从已提交实体安全重建结果。
                 if practice.submit_idempotency_key == clean_key:
@@ -1106,7 +1166,7 @@ class PracticeService:
             self.practice_repo.update_practice_status(
                 dto.practice_id,
                 user_id,
-                PracticeStatus.COMPLETED.value,
+                PracticeStatus.SUBMITTED.value,
                 submit_idempotency_key=clean_key,
                 submitted_at=now,
             )
@@ -1127,7 +1187,7 @@ class PracticeService:
             result = PracticeSubmissionResult(
                 practice_id=dto.practice_id,
                 task_id=task_id,
-                status=PracticeStatus.COMPLETED.value,
+                status=PracticeStatus.SUBMITTED.value,
                 unanswered_count=unanswered_count,
                 total_questions=total_questions,
                 submitted_at=now,
@@ -1180,6 +1240,165 @@ class PracticeService:
             self.session.rollback()
             self.idempotency.release_lock(clean_key, str(user_id))
             raise
+
+    # --------------------------------------------------------------------------
+    # 判题任务终态失败回写与主动重试 (AC-9 / design.md 第 19 条)
+    # --------------------------------------------------------------------------
+
+    def mark_grading_failed(
+        self,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        *,
+        reason: str = "",
+        request_id: str = "",
+    ) -> Practice | None:
+        """把判题任务终态失败的练习回写为「待重判」，供用户可见并可主动恢复。
+
+        仅当练习仍停留在 ``submitted``（即判题任务从未成功跑完）时才回写为
+        ``partially_graded``；已是 ``completed`` / ``partially_graded`` /
+        ``timeout`` 的记录一律跳过，绝不回退已生效的判分结果，重复回调天然幂等。
+        ``completed_at`` 保持为空，因此 ``DiagnosisService`` 的
+        「全卷判完才可生成报告」门禁不会被绕过。
+
+        Args:
+            user_id: 租户用户标识。
+            practice_id: 练习主键。
+            reason: 失败原因摘要（仅记录长度与类型，严禁写入用户作答原文）。
+            request_id: 请求跟踪标识。
+
+        Returns:
+            Practice | None: 回写后的练习实体；练习不存在时返回 None。
+        """
+        practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=False)
+        if practice is None:
+            logger.error(
+                "判题任务终态失败但练习不存在 target_id=%s user_ref=%s",
+                practice_id,
+                generate_user_ref(user_id),
+            )
+            return None
+
+        if practice.status != PracticeStatus.SUBMITTED.value:
+            # 已终态或已可恢复：幂等跳过，绝不回退已完成的判分结果
+            return practice
+
+        self.practice_repo.update_practice_status(
+            practice_id,
+            user_id,
+            PracticeStatus.PARTIALLY_GRADED.value,
+        )
+        self.session.commit()
+        self._log_metric(
+            action="mark_grading_failed",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=practice_id,
+            duration_ms=0.0,
+            error_code=40015,
+            extra={"final_status": practice.status, "reason_len": len(reason)},
+        )
+        return practice
+
+    def retry_grading(
+        self,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        request_id: str = "",
+    ) -> tuple[str, Practice]:
+        """主动重试未完成的整卷判题（用户可操作、幂等、可恢复）。
+
+        允许重试的前置条件是练习处于 ``partially_graded``（判题已跑完但存在待重判项，
+        或判题任务终态失败被回写）。判题任务只允许派发一次：状态从 ``partially_graded``
+        到 ``submitted`` 的跃迁走数据库条件更新（compare-and-swap），并发触发的第二次
+        请求会因未能改到该行而被拒绝，因此不会重复入队。``GradingService.grade_practice``
+        对已判定成功的作答项同样幂等跳过，``completed_at`` 只在全部题目真正判完时写入。
+
+        Args:
+            user_id: 租户用户标识。
+            practice_id: 练习主键。
+            request_id: 请求跟踪标识。
+
+        Returns:
+            tuple[str, Practice]: (判题任务标识, 回写为 submitted 的练习实体)。
+
+        Raises:
+            PracticeNotFoundError: 练习不存在或无权访问。
+            PracticeStatusError: 练习已全判完或当前状态不允许重试判题。
+            QueueError: 判题任务入队失败（状态回滚为待重判，仍可再次重试）。
+        """
+        start_time = time.perf_counter()
+        practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=False)
+        if practice is None:
+            raise PracticeNotFoundError(
+                "请求的练习不存在或无权访问",
+                details={"practice_id": str(practice_id)},
+            )
+
+        if practice.status == PracticeStatus.TIMEOUT.value:
+            raise PracticeStatusError(
+                "练习已超时冻结，无法重试判题",
+                details={"status": practice.status},
+            )
+
+        if practice.completed_at is not None or practice.status == PracticeStatus.COMPLETED.value:
+            raise PracticeStatusError(
+                "练习已全部判分完成，无需重试判题",
+                details={"status": practice.status},
+            )
+
+        if practice.status != PracticeStatus.PARTIALLY_GRADED.value:
+            raise PracticeStatusError(
+                "练习判题尚未结束，暂无需重试判题",
+                details={"status": practice.status},
+            )
+
+        try:
+            # 状态跃迁必须是数据库条件更新：并发的第二个请求不能从陈旧读到的
+            # partially_graded 再次派发判题任务，否则同一批待判项会被判两遍。
+            transitioned = self.practice_repo.try_transition_status(
+                practice_id,
+                user_id,
+                from_status=PracticeStatus.PARTIALLY_GRADED.value,
+                to_status=PracticeStatus.SUBMITTED.value,
+            )
+            if not transitioned:
+                raise PracticeStatusError(
+                    "判题任务已在重试中，请勿重复提交",
+                    details={"status": practice.status},
+                )
+            task_id = self.queue.enqueue(
+                task_name="grading_jobs",
+                payload={
+                    "practice_id": str(practice_id),
+                    "user_id": str(user_id),
+                },
+                user_id=str(user_id),
+                priority=1,
+            )
+            self.session.commit()
+        except Exception:
+            # 入队失败必须回滚状态，避免练习永久停在「判题中」而无可恢复入口
+            self.session.rollback()
+            raise
+
+        practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=False)
+        if practice is None:
+            raise PracticeNotFoundError(
+                "请求的练习不存在或无权访问",
+                details={"practice_id": str(practice_id)},
+            )
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        self._log_metric(
+            action="retry_grading_dispatched",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=practice_id,
+            duration_ms=duration_ms,
+            extra={"task_id": task_id, "status": practice.status},
+        )
+        return task_id, practice
 
 
 __all__ = [

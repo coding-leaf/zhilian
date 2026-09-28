@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import (
@@ -31,7 +31,7 @@ from app.integrations.ocr.protocol import OCRResult, OCRTextBlock
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.storage.memory import MemoryStorageAdapter
 from app.models.base import Base
-from app.models.material import MaterialOCRPage, MaterialStatus, ParseStatus
+from app.models.material import MaterialOCRPage, MaterialStatus, MaterialVersion, ParseStatus
 from app.services.material import (
     MaterialService,
     validate_file_magic,
@@ -171,13 +171,13 @@ class TestMagicAndValidation:
 class TestMaterialCreationAndLifecycle:
     """Test suite for MaterialService lifecycle operations."""
 
-    def test_create_material_success_and_queue_dispatch(
+    def test_create_material_waits_for_explicit_parse(
         self,
         service: MaterialService,
         storage: MemoryStorageAdapter,
         queue: MemoryQueueAdapter,
     ) -> None:
-        """Verify successful creation, storage write, and queue dispatch."""
+        """Uploading stores a new version but does not schedule parsing."""
         user_id = uuid.uuid4()
         content = "微积分核心概念讲解：极限、连续性与微积分基本定理。".encode()
 
@@ -195,12 +195,8 @@ class TestMaterialCreationAndLifecycle:
         assert version.version_number == 1
         assert storage.object_exists("zhilian-materials", version.storage_key) is True
 
-        # Verify queue dispatch
-        assert len(queue._queue) == 1
-        task = queue._queue[0]
-        assert task.task_name == "parse_material_pipeline"
-        assert task.payload["material_id"] == str(material.id)
-        assert task.payload["version_id"] == str(version.id)
+        assert version.parse_status == ParseStatus.NOT_STARTED.value
+        assert queue._queue == []
 
     def test_idempotency_conflict_and_replay(self, service: MaterialService) -> None:
         """Verify idempotency lock prevents concurrent duplicates and replays finished result."""
@@ -756,12 +752,12 @@ class TestMaterialCreationAndLifecycle:
         items, total = service.list_materials(user_id=user_id, keyword="Math")
         assert total == 1
         assert items[0].id == mat1.id
-        assert getattr(items[0], "parse_status", None) == ParseStatus.QUEUED.value
-        assert getattr(items[0], "progress_percentage", None) == 10
+        assert getattr(items[0], "parse_status", None) == ParseStatus.NOT_STARTED.value
+        assert getattr(items[0], "progress_percentage", None) == 0
 
         mat_detail = service.get_material_detail(material_id=mat1.id, user_id=user_id)
-        assert getattr(mat_detail, "parse_status", None) == ParseStatus.QUEUED.value
-        assert getattr(mat_detail, "progress_percentage", None) == 10
+        assert getattr(mat_detail, "parse_status", None) == ParseStatus.NOT_STARTED.value
+        assert getattr(mat_detail, "progress_percentage", None) == 0
 
         _items_all, total_all = service.list_materials(
             user_id=user_id, status=MaterialStatus.PENDING.value
@@ -856,8 +852,8 @@ class TestMaterialCreationAndLifecycle:
         for item in items:
             if item.id == ready_material.id:
                 continue
-            assert getattr(item, "parse_status", None) == ParseStatus.QUEUED.value
-            assert getattr(item, "progress_percentage", None) == 10
+            assert getattr(item, "parse_status", None) == ParseStatus.NOT_STARTED.value
+            assert getattr(item, "progress_percentage", None) == 0
 
     def test_switch_material_version_flow(self, service: MaterialService) -> None:
         """Verify switch_material_version success and error conditions."""
@@ -941,6 +937,51 @@ class TestMaterialCreationAndLifecycle:
         # Material not found
         with pytest.raises(MaterialNotFoundError):
             service.trigger_parse(user_id=user_id, material_id=uuid.uuid4())
+
+    def test_trigger_parse_rejects_stale_read_when_version_already_dispatched(
+        self, service: MaterialService, queue: MemoryQueueAdapter, session: Session
+    ) -> None:
+        """并发触发解析不得凭陈旧读重复入队 (派发由数据库条件更新判定).
+
+        模拟真实竞态：本会话先加载出 not_started 的版本实体，另一请求随后把该版本
+        推进到 queued。若派发是「先读后写」，本请求会凭陈旧状态再次入队，同一版本
+        被两个 worker 同时解析（重复 OCR/LLM 开销与重复切片）。
+        """
+        user_id = uuid.uuid4()
+        content = b"Concurrent parse dispatch guard test\n\n" * 4
+        mat, ver = service.create_material(
+            user_id=user_id,
+            title="ParseRaceTest.txt",
+            file_format="txt",
+            file_size=len(content),
+            file_content=content,
+        )
+        assert ver.parse_status == ParseStatus.NOT_STARTED.value
+
+        # 先加载实体，让本会话持有 not_started 快照（此后 SELECT 不会覆盖它）
+        stale = service.repo.get_version_by_id(ver.id, user_id)
+        assert stale is not None
+        assert stale.parse_status == ParseStatus.NOT_STARTED.value
+        queued_before = len(queue._queue)
+
+        # 另一请求已把该版本推进到 queued（synchronize_session=False 使本会话的
+        # 身份映射保持陈旧，忠实模拟并发写入后的陈旧读）
+        session.execute(
+            update(MaterialVersion)
+            .where(MaterialVersion.id == ver.id)
+            .values(parse_status=ParseStatus.QUEUED.value)
+            .execution_options(synchronize_session=False)
+        )
+
+        service.trigger_parse(user_id=user_id, material_id=mat.id, version_id=ver.id)
+
+        # 未重复派发：队列长度与竞态发生前一致
+        assert len(queue._queue) == queued_before
+        # 并发请求写入的 queued 未被本次调用改写
+        session.expire_all()
+        persisted = service.repo.get_version_by_id(ver.id, user_id)
+        assert persisted is not None
+        assert persisted.parse_status == ParseStatus.QUEUED.value
 
     def test_reshoot_material_page_service(self, service: MaterialService) -> None:
         """Verify reshoot_material_page service logic."""
@@ -1397,5 +1438,5 @@ def test_parse_pipeline_knowledge_chaining(
     assert mat3.id != mat2.id
     # MAT-001：重新上传同哈希失败文件也不得复用其它资料的物理存储对象
     assert ver3.storage_key != ver2.storage_key
-    assert ver3.parse_status == ParseStatus.QUEUED.value
+    assert ver3.parse_status == ParseStatus.NOT_STARTED.value
     assert mat3.status == MaterialStatus.PENDING.value

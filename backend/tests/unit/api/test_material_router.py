@@ -1252,11 +1252,11 @@ def test_unimplemented_service_dependency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_material_triggers_background_tasks(
+async def test_upload_material_does_not_trigger_background_tasks(
     mock_user: User,
     mock_material_service: MagicMock,
 ) -> None:
-    """验证 POST /api/v1/materials/upload 注册 BackgroundTasks 且后台任务通过独立 Session 调度。"""
+    """上传仅持久化；旧后台入口不得被上传路由调用。"""
     from contextlib import contextmanager
     from unittest.mock import MagicMock, patch
 
@@ -1285,14 +1285,14 @@ async def test_upload_material_triggers_background_tasks(
         version_number=1,
         storage_key="users/.../v1.pdf",
         content_hash="mockhash",
-        parse_status=ParseStatus.QUEUED.value,
+        parse_status=ParseStatus.NOT_STARTED.value,
     )
     mock_material_service.import_material_file.return_value = (fake_material, fake_version)
 
     mock_container = MagicMock()
     app.state.container = mock_container
 
-    # 1. 验证 POST /upload 触发了后台任务调度
+    # 上传不再触发旧 Web 后台任务。
     with patch("app.api.v1.materials.run_material_pipeline_background") as mock_bg_runner:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             file_bytes = b"%PDF-1.4 test document content"
@@ -1300,12 +1300,7 @@ async def test_upload_material_triggers_background_tasks(
             response = await client.post("/api/v1/materials/upload", files=files)
 
         assert response.status_code == 201
-        mock_bg_runner.assert_called_once_with(
-            mock_container,
-            material_id,
-            version_id,
-            mock_user.id,
-        )
+        mock_bg_runner.assert_not_called()
 
     # 2. 验证 run_material_pipeline_background 独立 Session 执行体
     isolated_session = MagicMock()

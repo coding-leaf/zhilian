@@ -29,6 +29,8 @@ from app.schemas.question import (
     QuestionListResponse,
     QuestionQualityCheckResponse,
     QuestionUpdateRequest,
+    ScopedCoachRequest,
+    ScopedCoachResponse,
 )
 from app.services.question import (
     GenerateQuestionsOptions,
@@ -239,6 +241,27 @@ async def ask_coach(
         user_prompt=payload.user_prompt,
         user_answer=payload.user_answer,
         grading_points=payload.grading_points,
+    )
+
+
+@router.post(
+    "/coach/ask",
+    response_model=ScopedCoachResponse,
+    status_code=status.HTTP_200_OK,
+    summary="根据课程资料来源回答问题",
+)
+async def ask_scoped_coach(
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    payload: ScopedCoachRequest,
+) -> ScopedCoachResponse:
+    """Answer within one authenticated course, material, or knowledge-point scope."""
+    return question_service.ask_scoped_coach(
+        user_id=user.id,
+        user_prompt=payload.user_prompt,
+        folder_id=payload.folder_id,
+        material_id=payload.material_id,
+        knowledge_point_id=payload.knowledge_point_id,
     )
 
 

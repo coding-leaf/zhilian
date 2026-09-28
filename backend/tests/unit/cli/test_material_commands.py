@@ -116,7 +116,7 @@ def test_material_upload_and_status(
     assert upload["material_id"]
     assert upload["version_id"]
     assert upload["material_status"] == "pending"
-    assert upload["parse_status"] == "queued"
+    assert upload["parse_status"] == "not_started"
 
     status_code, status = _run(
         capsys,
@@ -133,7 +133,7 @@ def test_material_upload_and_status(
     )
     assert status_code == EXIT_OK
     assert status["material_status"] == "pending"
-    assert status["parse_status"] == "queued"
+    assert status["parse_status"] == "not_started"
     assert len(status["versions"]) == 1
 
 

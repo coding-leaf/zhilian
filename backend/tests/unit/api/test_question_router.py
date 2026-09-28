@@ -864,6 +864,67 @@ async def test_ask_coach_not_found(mock_user: User, mock_question_service: Magic
     assert data["code"] == 40009
 
 
+@pytest.mark.asyncio
+async def test_scoped_coach_routes_authorized_scope(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    from app.schemas.question import ScopedCoachResponse
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+    folder_id = uuid.uuid4()
+    mock_question_service.ask_scoped_coach.return_value = ScopedCoachResponse(
+        reply="根据资料可得结论。",
+        sources=[
+            {
+                "snippet_id": uuid.uuid4(),
+                "material_id": uuid.uuid4(),
+                "chapter_title": "第一章",
+                "excerpt": "资料原文",
+            }
+        ],
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={"folder_id": str(folder_id), "user_prompt": "这个概念是什么？"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["excerpt"] == "资料原文"
+    mock_question_service.ask_scoped_coach.assert_called_once_with(
+        user_id=mock_user.id,
+        user_prompt="这个概念是什么？",
+        folder_id=folder_id,
+        material_id=None,
+        knowledge_point_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_coach_rejects_ambiguous_scope(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "folder_id": str(uuid.uuid4()),
+                "material_id": str(uuid.uuid4()),
+                "user_prompt": "为什么？",
+            },
+        )
+
+    assert response.status_code == 422
+    mock_question_service.ask_scoped_coach.assert_not_called()
+
+
 def test_default_dependency_provider() -> None:
     """Tests that default dependency provider raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="QuestionService 生产装配工厂尚未挂载"):

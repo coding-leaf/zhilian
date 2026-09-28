@@ -23,7 +23,7 @@ from collections.abc import Generator
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import (
@@ -47,6 +47,7 @@ from app.models.practice import (
 )
 from app.models.question import Question, QuestionStatus, QuestionType
 from app.schemas.practice import PracticeDetailResponse, SourceSnippetDTO
+from app.services.grading import GradingService
 from app.services.practice import (
     CreatePracticeOptions,
     PracticeAssemblyMode,
@@ -727,7 +728,7 @@ class TestPracticeServiceSubmissionAndIdempotency:
             ),
         )
         assert result.practice_id == practice.id
-        assert result.status == PracticeStatus.COMPLETED.value
+        assert result.status == PracticeStatus.SUBMITTED.value
         assert result.total_questions == 2
         assert result.unanswered_count == 1
         assert result.answered_questions == 1
@@ -829,8 +830,8 @@ class TestPracticeServiceSubmissionAndIdempotency:
             user_id,
             SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
         )
-        # Snapshot write degraded, but the primary flow still returns success.
-        assert result.status == PracticeStatus.COMPLETED.value
+        # Snapshot write degraded, but the primary flow still returns the acceptance state.
+        assert result.status == PracticeStatus.SUBMITTED.value
         assert result.is_idempotent_replay is False
         assert result.practice_id == practice.id
         assert len(queue._queue) == 1
@@ -838,7 +839,7 @@ class TestPracticeServiceSubmissionAndIdempotency:
         # The transaction already persisted the idempotency key on the practice row.
         persisted = session.get(Practice, practice.id)
         assert persisted is not None
-        assert persisted.status == PracticeStatus.COMPLETED.value
+        assert persisted.status == PracticeStatus.SUBMITTED.value
         assert persisted.submit_idempotency_key == submit_key
 
         # Same-key retry must replay (not raise 40011), because the snapshot was lost.
@@ -847,7 +848,7 @@ class TestPracticeServiceSubmissionAndIdempotency:
             SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
         )
         assert replay.practice_id == practice.id
-        assert replay.status == PracticeStatus.COMPLETED.value
+        assert replay.status == PracticeStatus.SUBMITTED.value
         assert replay.is_idempotent_replay is True
         assert replay.total_questions == 1
         assert len(queue._queue) == 1
@@ -1093,3 +1094,329 @@ class TestPracticeServiceTenantIsolation:
                     question_ids=[uuid.uuid4()],
                 ),
             )
+
+    def test_create_practice_response_items_carry_source_snippet(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """验证创建练习的响应与详情响应一致地包含原文溯源对象 (R5 原文依据)."""
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        version_id = test_setup["version_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        snippet_id = uuid.uuid4()
+        session.add(
+            MaterialSnippet(
+                id=snippet_id,
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+                snippet_index=0,
+                content="慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。",
+                char_length=24,
+                start_offset=0,
+                end_offset=24,
+                chapter_title="第 3 章 拥塞控制",
+                source_info={"page_number": 88},
+            )
+        )
+        sourced_question = Question(
+            id=uuid.uuid4(),
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=kp1_id,
+            user_id=user_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="慢启动阶段拥塞窗口如何变化？",
+            options=[{"key": "A", "content": "指数增长"}, {"key": "B", "content": "线性增长"}],
+            answer="A",
+            difficulty=3,
+            status=QuestionStatus.AVAILABLE.value,
+            source_snippet_id=snippet_id,
+        )
+        session.add(sourced_question)
+        session.commit()
+
+        service = PracticeService(session)
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="创建响应原文溯源测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_count=1,
+                question_ids=[sourced_question.id],
+            ),
+        )
+
+        # 路由层对创建返回值直接 model_validate，因此创建响应必须已挂载追溯对象
+        detail = PracticeDetailResponse.model_validate(practice)
+        assert len(detail.items) == 1
+        item = detail.items[0]
+        assert item.source_snippet is not None
+        assert isinstance(item.source_snippet, SourceSnippetDTO)
+        assert (
+            item.source_snippet.snippet_content
+            == "慢启动阶段拥塞窗口指数增长，直到达到慢启动阈值。"
+        )
+        assert item.source_snippet.chapter_title == "第 3 章 拥塞控制"
+        assert item.source_snippet.page_index == 88
+        # 快照副本同样带上溯源对象，供前端原文回顾抽屉读取
+        snapshot = item.question_snapshot
+        snapshot_snippet = (
+            snapshot.get("source_snippet")
+            if isinstance(snapshot, dict)
+            else snapshot.source_snippet
+        )
+        assert isinstance(snapshot_snippet, SourceSnippetDTO)
+        assert snapshot_snippet.snippet_content == item.source_snippet.snippet_content
+
+
+class TestPracticeServiceGradingRecovery:
+    """判题任务终态失败回写与主动重试 (AC-9 / design.md 第 19 条)."""
+
+    @staticmethod
+    def _create_and_submit(service: PracticeService, setup: dict[str, Any]) -> Practice:
+        """创建一个全部作答并已交卷的练习，返回 ORM 实体。"""
+        practice = service.create_practice(
+            setup["user_id"],
+            CreatePracticeOptions(
+                title="判题恢复测试",
+                material_id=setup["material_id"],
+                knowledge_point_ids=[setup["kp1_id"]],
+                question_count=2,
+            ),
+        )
+        for item in practice.items:
+            assert item.question_id is not None
+            service.save_answer(
+                setup["user_id"],
+                SaveAnswerDTO(
+                    practice_id=practice.id,
+                    question_id=item.question_id,
+                    user_answer="A",
+                ),
+            )
+        service.submit_practice(
+            setup["user_id"],
+            SubmitPracticeDTO(practice_id=practice.id, idempotency_key=str(uuid.uuid4())),
+        )
+        return practice
+
+    def test_mark_grading_failed_writes_recoverable_partially_graded_state(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """worker 抛错重试耗尽后，练习必须回写为可恢复的 partially_graded 且不放行报告."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        assert practice.status == PracticeStatus.SUBMITTED.value
+
+        recovered = service.mark_grading_failed(
+            test_setup["user_id"], practice.id, reason="rq_job_failed"
+        )
+
+        assert recovered is not None
+        assert recovered.status == PracticeStatus.PARTIALLY_GRADED.value
+        # completed_at 必须保持为空：DiagnosisService 以 (completed, completed_at) 双条件
+        # 门禁阻断早产报告，因此回写不会绕过诊断门禁。
+        assert recovered.completed_at is None
+
+    def test_mark_grading_failed_is_idempotent_and_never_downgrades_terminal(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """重复回调不得重复计分或回退，且绝不覆盖已完成的终态."""
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter())
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+
+        first = service.mark_grading_failed(user_id, practice.id)
+        second = service.mark_grading_failed(user_id, practice.id)
+        assert first is not None and second is not None
+        assert first.status == PracticeStatus.PARTIALLY_GRADED.value
+        assert second.status == PracticeStatus.PARTIALLY_GRADED.value
+
+        # 已完成的练习不得被失败回调降级
+        practice.status = PracticeStatus.COMPLETED.value
+        session.commit()
+        kept = service.mark_grading_failed(user_id, practice.id)
+        assert kept is not None
+        assert kept.status == PracticeStatus.COMPLETED.value
+
+    def test_mark_grading_failed_skips_unsubmitted_and_missing_practice(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """未交卷练习不受影响；练习不存在时返回 None 且不抛异常."""
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter())
+        user_id = test_setup["user_id"]
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="未交卷练习",
+                material_id=test_setup["material_id"],
+                knowledge_point_ids=[test_setup["kp1_id"]],
+                question_count=1,
+            ),
+        )
+
+        untouched = service.mark_grading_failed(user_id, practice.id)
+        assert untouched is not None
+        assert untouched.status == PracticeStatus.NOT_STARTED.value
+        assert service.mark_grading_failed(user_id, uuid.uuid4()) is None
+
+    def test_retry_grading_redispatches_and_second_trigger_is_rejected(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """重试成功派发一次判题任务；重复触发被状态锁拒绝，不会重复派发."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+        service.mark_grading_failed(user_id, practice.id)
+        assert len(queue._queue) == 1  # 仅交卷派发的那一次
+
+        task_id, retried = service.retry_grading(user_id, practice.id)
+
+        assert task_id != ""
+        assert retried.status == PracticeStatus.SUBMITTED.value
+        assert len(queue._queue) == 2
+        # 重试任务以高优先级入队，按优先级排序后位于队首
+        assert queue._queue[0].task_name == "grading_jobs"
+        assert queue._queue[0].payload["practice_id"] == str(practice.id)
+
+        # 状态已回到 submitted，第二次触发必须被拒绝（并发锁语义）
+        with pytest.raises(PracticeStatusError) as exc_info:
+            service.retry_grading(user_id, practice.id)
+        assert exc_info.value.error_code == 40011
+        assert len(queue._queue) == 2
+
+    def test_retry_grading_rejects_completed_and_unauthorized(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """已全判完或非 partially_graded 状态不得重试；跨租户一律 404."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+
+        with pytest.raises(PracticeStatusError):
+            service.retry_grading(user_id, practice.id)
+
+        practice.status = PracticeStatus.COMPLETED.value
+        session.commit()
+        with pytest.raises(PracticeStatusError):
+            service.retry_grading(user_id, practice.id)
+
+        practice.status = PracticeStatus.PARTIALLY_GRADED.value
+        session.commit()
+        with pytest.raises(PracticeNotFoundError):
+            service.retry_grading(uuid.uuid4(), practice.id)
+
+    def test_retry_grading_rolls_back_status_when_dispatch_fails(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """入队失败必须回滚为可恢复状态，避免练习永久停在「判题中」."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+        service.mark_grading_failed(user_id, practice.id)
+
+        queue.set_fault_injection("enqueue", RuntimeError("redis down"))
+        with pytest.raises(RuntimeError):
+            service.retry_grading(user_id, practice.id)
+
+        queue.set_fault_injection("enqueue", None)
+        restored = service.practice_repo.get_practice_by_id(practice.id, user_id)
+        assert restored is not None
+        assert restored.status == PracticeStatus.PARTIALLY_GRADED.value
+        # 仍可再次主动重试，恢复入口没有被堵死
+        _, retried = service.retry_grading(user_id, practice.id)
+        assert retried.status == PracticeStatus.SUBMITTED.value
+
+    def test_regrading_after_failure_completes_and_only_then_stamps_completed_at(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """重试后真正跑完判题才写 completed_at；失败回写期间始终保持未完成."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+
+        service.mark_grading_failed(user_id, practice.id)
+        failed_state = service.practice_repo.get_practice_by_id(practice.id, user_id)
+        assert failed_state is not None
+        assert failed_state.completed_at is None
+        assert failed_state.total_score is None
+
+        service.retry_grading(user_id, practice.id)
+
+        grading_service = GradingService(session)
+        summary = grading_service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        assert summary.status == PracticeStatus.COMPLETED.value
+        completed = service.practice_repo.get_practice_by_id(practice.id, user_id)
+        assert completed is not None
+        assert completed.status == PracticeStatus.COMPLETED.value
+        assert completed.completed_at is not None
+        assert summary.graded_items == summary.total_items
+
+    def test_regrading_is_idempotent_and_does_not_double_count(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """判题任务被重复投递时不得重复计分或产生重复生效记录 (AC-9 幂等)."""
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+
+        grading_service = GradingService(session)
+        first = grading_service.grade_practice(user_id=user_id, practice_id=practice.id)
+        second = grading_service.grade_practice(user_id=user_id, practice_id=practice.id)
+
+        assert first.total_score == second.total_score
+        assert second.graded_items == second.total_items
+        completed = service.practice_repo.get_practice_by_id(practice.id, user_id)
+        assert completed is not None
+        assert completed.status == PracticeStatus.COMPLETED.value
+        assert completed.completed_at is not None
+        # 每个作答项只有一条生效判题记录，重复投递不产生重复计分
+        records = grading_service.grading_repo.list_final_records_by_practice(practice.id, user_id)
+        assert len(records) == len(practice.items)
+
+    def test_retry_grading_rejects_stale_read_when_row_already_transitioned(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """并发请求不得凭陈旧读重复派发判题任务 (状态跃迁由数据库条件更新判定).
+
+        模拟真实竞态：本会话先加载出 ``partially_graded`` 的实体，另一请求随后把该行
+        推进到 ``submitted``。若状态跃迁是「先读后写」，本请求会凭陈旧状态再次入队，
+        同一批待判项就会被判两遍并产生重复生效记录；条件更新 (compare-and-swap) 则
+        因未能改到该行而拒绝本次请求。
+        """
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
+        practice = self._create_and_submit(service, test_setup)
+        user_id = test_setup["user_id"]
+
+        service.mark_grading_failed(user_id, practice.id)
+        # 先加载实体，让本会话持有 partially_graded 的快照（此后 SELECT 不会覆盖它）
+        stale = service.practice_repo.get_practice_by_id(practice.id, user_id)
+        assert stale is not None
+        assert stale.status == PracticeStatus.PARTIALLY_GRADED.value
+        queued_before = len(queue._queue)
+
+        # 另一请求已把该行推进到 submitted（synchronize_session=False 使本会话的
+        # 身份映射保持陈旧，从而忠实模拟并发写入后的陈旧读）
+        session.execute(
+            update(Practice)
+            .where(Practice.id == practice.id)
+            .values(status=PracticeStatus.SUBMITTED.value)
+            .execution_options(synchronize_session=False)
+        )
+
+        with pytest.raises(PracticeStatusError) as exc_info:
+            service.retry_grading(user_id, practice.id)
+        assert exc_info.value.error_code == 40011
+        # 未重复派发：队列长度与竞态发生前一致
+        assert len(queue._queue) == queued_before

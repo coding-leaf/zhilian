@@ -400,6 +400,8 @@ class WrongRecordItemResponse(BaseModel):
     practice_id: uuid.UUID = Field(..., description="最近答错练习主键 UUID")
     attempt_item_id: uuid.UUID = Field(..., description="最近答错作答项主键 UUID")
     knowledge_point_id: uuid.UUID = Field(..., description="关联知识点标识 UUID")
+    material_id: uuid.UUID | None = Field(default=None, description="归属资料标识")
+    folder_id: uuid.UUID | None = Field(default=None, description="归属课程标识，未分类为空")
     error_type: str = Field(default="conceptual", description="错误类型分类 (ErrorType)")
     is_mastered: bool = Field(default=False, description="是否已攻克掌握")
     wrong_count: int = Field(default=1, description="连续答错累计次数")
@@ -462,6 +464,16 @@ class WrongRecordItemResponse(BaseModel):
         return self
 
 
+class WrongRecordGroupResponse(BaseModel):
+    """A complete-course count, or one unclassified material source."""
+
+    folder_id: uuid.UUID | None = None
+    folder_name: str | None = None
+    material_id: uuid.UUID | None = None
+    material_title: str | None = None
+    count: int = Field(ge=0)
+
+
 class WrongRecordListResponse(BaseModel):
     """错题本记录分页列表响应模型。"""
 
@@ -469,6 +481,9 @@ class WrongRecordListResponse(BaseModel):
 
     items: list[WrongRecordItemResponse] = Field(
         default_factory=list, description="错题记录明细列表"
+    )
+    groups: list[WrongRecordGroupResponse] = Field(
+        default_factory=list, description="完整错题本按课程/未分类资料聚合的计数"
     )
     total: int = Field(default=0, description="符合过滤条件的总错题数")
     offset: int = Field(default=0, description="分页偏移量")
@@ -542,6 +557,7 @@ __all__ = [
     "RegressedKnowledgeItemDTO",
     "UserMasteryOverviewResponse",
     "WeakKnowledgeItemDTO",
+    "WrongRecordGroupResponse",
     "WrongRecordItemResponse",
     "WrongRecordListResponse",
 ]

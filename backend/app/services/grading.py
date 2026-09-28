@@ -227,6 +227,7 @@ class GradingService:
             )
 
         if practice.status not in (
+            PracticeStatus.SUBMITTED.value,
             PracticeStatus.COMPLETED.value,
             PracticeStatus.PARTIALLY_GRADED.value,
         ):
@@ -239,12 +240,35 @@ class GradingService:
         saved_records: list[GradingRecord] = []
         has_pending_regrade = False
 
+        existing_records = {
+            record.attempt_item_id: record
+            for record in self.grading_repo.list_final_records_by_practice(practice_id, user_id)
+        }
+
         for item in items:
-            record, item_has_pending = self._grade_attempt_item(
-                item=item,
-                practice=practice,
-                user_id=user_id,
-            )
+            existing = existing_records.get(item.id)
+            # 幂等重放: 已由系统判成功的题不重复判题 (避免队列重投重复消耗 LLM 与分数漂移);
+            # 用户自评记录除外, 整卷判题须重新推演并保留旧记录为历史 (GRADE-016 / FR-44)
+            if (
+                existing is not None
+                and existing.status == GradingStatus.SUCCESS.value
+                and existing.channel != GradingChannel.USER_SELF.value
+                and (
+                    practice.status
+                    in (
+                        PracticeStatus.SUBMITTED.value,
+                        PracticeStatus.PARTIALLY_GRADED.value,
+                    )
+                    or practice.completed_at is not None
+                )
+            ):
+                record, item_has_pending = existing, False
+            else:
+                record, item_has_pending = self._grade_attempt_item(
+                    item=item,
+                    practice=practice,
+                    user_id=user_id,
+                )
             saved_records.append(record)
             if item_has_pending:
                 has_pending_regrade = True
@@ -256,12 +280,12 @@ class GradingService:
         practice.max_score = max_score
 
         # 状态机决策: 存在待重判必须置为 PARTIALLY_GRADED (FR-42 阻断报告); 全判完置为 COMPLETED
-        all_graded = all(
-            r.status in (GradingStatus.SUCCESS.value, GradingStatus.PENDING_REGRADE.value)
-            for r in saved_records
+        all_graded = bool(items) and all(
+            r.status == GradingStatus.SUCCESS.value for r in saved_records
         )
         if has_pending_regrade:
             practice.status = PracticeStatus.PARTIALLY_GRADED.value
+            practice.completed_at = None
         elif all_graded:
             practice.status = PracticeStatus.COMPLETED.value
             if not practice.completed_at:

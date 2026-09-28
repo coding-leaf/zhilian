@@ -43,6 +43,7 @@ from app.core.security import generate_user_ref
 from app.models.practice import (
     DiagnosisReport,
     ErrorType,
+    GradingStatus,
     MasteryLevel,
     MasteryRecord,
     PracticeStatus,
@@ -468,10 +469,7 @@ class DiagnosisService:
             )
 
         # 2. 状态机防错：非 COMPLETED 或 PARTIALLY_GRADED 严禁生成报告
-        if (
-            practice.status == PracticeStatus.PARTIALLY_GRADED.value
-            or practice.status != PracticeStatus.COMPLETED.value
-        ):
+        if practice.status != PracticeStatus.COMPLETED.value or practice.completed_at is None:
             self._log_metric(
                 action="GENERATE_DIAGNOSIS_REPORT",
                 request_id=request_id,
@@ -512,6 +510,17 @@ class DiagnosisService:
             user_id=user_id,
         )
         grading_map = {record.attempt_item_id: record for record in grading_records}
+
+        if not items or any(
+            item.id not in grading_map
+            or grading_map[item.id].status != GradingStatus.SUCCESS.value
+            or grading_map[item.id].score is None
+            for item in items
+        ):
+            raise PracticeNotGradedError(
+                "练习仍有未判完题目，无法生成学情诊断报告",
+                details={"practice_id": str(practice_id)},
+            )
 
         unanswered_count = 0
         wrong_count = 0
@@ -1151,6 +1160,8 @@ class DiagnosisService:
         self,
         user_id: uuid.UUID,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         status: str | None = None,
         is_mastered: bool | None = None,
         knowledge_point_id: uuid.UUID | None = None,
@@ -1193,6 +1204,11 @@ class DiagnosisService:
         # BUG-DIAG-010/011/012: material_id / error_type / question_type 全量下推仓储，
         # 由数据库统一完成过滤、分页与真实计数，彻底移除 limit=1000 内存截断。
         normalized_error_type = normalize_error_type(error_type)
+        scope_filters: dict[str, Any] = {}
+        if folder_id is not None:
+            scope_filters["folder_id"] = folder_id
+        if unclassified:
+            scope_filters["unclassified"] = True
         records = self.diagnosis_repo.list_wrong_records(
             user_id=user_id,
             is_mastered=effective_is_mastered,
@@ -1202,6 +1218,7 @@ class DiagnosisService:
             question_type=question_type,
             limit=effective_limit,
             offset=effective_offset,
+            **scope_filters,
         )
         total = int(
             self.diagnosis_repo.count_wrong_records(
@@ -1211,9 +1228,46 @@ class DiagnosisService:
                 material_id=material_id,
                 error_type=normalized_error_type,
                 question_type=question_type,
+                **scope_filters,
             )
         )
         return records, total
+
+    def get_wrong_record_scopes(
+        self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None]]:
+        """Resolve material and course for a page of wrong records."""
+        return self.diagnosis_repo.get_wrong_record_scopes(user_id, knowledge_point_ids)
+
+    def list_wrong_record_groups(
+        self, user_id: uuid.UUID, is_mastered: bool | None = None
+    ) -> list[dict[str, Any]]:
+        """Group the complete wrong-record collection by course and source."""
+        groups: dict[tuple[uuid.UUID | None, uuid.UUID | None], dict[str, Any]] = {}
+        for (
+            folder_id,
+            folder_name,
+            material_id,
+            material_title,
+            count,
+        ) in self.diagnosis_repo.list_wrong_record_groups(user_id, is_mastered):
+            key = (folder_id, None if folder_id is not None else material_id)
+            if key not in groups:
+                groups[key] = {
+                    "folder_id": folder_id,
+                    "folder_name": folder_name,
+                    "material_id": key[1],
+                    "material_title": material_title if folder_id is None else None,
+                    "count": 0,
+                }
+            groups[key]["count"] += count
+        return sorted(
+            groups.values(),
+            key=lambda group: (
+                group["folder_id"] is None,
+                group["folder_name"] or group["material_title"] or "",
+            ),
+        )
 
     def mark_wrong_record_mastered(
         self,

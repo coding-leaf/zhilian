@@ -390,6 +390,32 @@ def test_put_users_me_partial_update_single_field(
     )
 
 
+def test_post_users_me_avatar_uploads_image(
+    client: TestClient,
+    mock_user_service: MagicMock,
+    mock_user: User,
+) -> None:
+    profile = UserProfileResponse(
+        id=mock_user.id,
+        nickname=mock_user.nickname,
+        avatar_url="https://storage.example/signed-avatar",
+        created_at=None,
+    )
+    mock_user_service.upload_user_avatar.return_value = profile
+
+    response = client.post(
+        "/api/v1/users/me/avatar",
+        files={"file": ("avatar.png", b"png bytes", "image/png")},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["avatar_url"] == "https://storage.example/signed-avatar"
+    mock_user_service.upload_user_avatar.assert_called_once_with(
+        user_id=mock_user.id,
+        data=b"png bytes",
+    )
+
+
 def test_put_users_me_extra_fields_forbidden_422(client: TestClient) -> None:
     """测试更新画像请求体携带未定义字段被 extra='forbid' 拦截返回 422。"""
     response = client.put(

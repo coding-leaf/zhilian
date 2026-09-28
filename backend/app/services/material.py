@@ -381,7 +381,7 @@ class MaterialService:
         idempotency_key: str | None = None,
         folder_id: uuid.UUID | None = None,
     ) -> tuple[Material, MaterialVersion]:
-        """上传创建资料：魔数校验、内容哈希记录、MinIO 独占隔离写入、创建版本并调度异步解析。
+        """上传创建资料：校验文件并持久化独占对象与待解析版本。
 
         Args:
             user_id: 所属用户标识。
@@ -482,24 +482,12 @@ class MaterialService:
                 version_number=1,
                 storage_key=storage_key,
                 content_hash=content_hash,
-                parse_status=ParseStatus.QUEUED.value,
+                parse_status=ParseStatus.NOT_STARTED.value,
             )
 
             self.session.commit()
 
-            # 5. 调度异步解析流水线入队
-            if self.queue is not None:
-                self.queue.enqueue(
-                    task_name="parse_material_pipeline",
-                    payload={
-                        "material_id": str(material.id),
-                        "version_id": str(version.id),
-                        "user_id": str(user_id),
-                    },
-                    user_id=str(user_id),
-                )
-
-            # 6. 持久化幂等完成快照
+            # 5. 持久化幂等完成快照；解析只由用户显式触发。
             if idempotency_key is not None and self.idempotency is not None:
                 self.idempotency.set_result(
                     key=idempotency_key,
@@ -600,20 +588,24 @@ class MaterialService:
         version = self.repo.get_version_by_id(version_id, user_id)
         if material is None or version is None:
             raise MaterialNotFoundError("学习资料或对应版本不存在")
+        if version.material_id != material_id:
+            raise MaterialNotFoundError("资料版本不属于指定资料")
+        if version.parse_status == ParseStatus.READY.value:
+            return version
 
-        self.repo.update_material_status(material_id, user_id, MaterialStatus.PARSING.value)
-        file_bytes = self.storage.get_object(self.bucket, version.storage_key)
         clean_format = material.file_format.lower().lstrip(".")
         current_stage = (
             "ocr_processing" if clean_format in ("png", "jpg", "jpeg", "image") else "parsing_doc"
         )
 
         try:
+            self.repo.update_material_status(material_id, user_id, MaterialStatus.PARSING.value)
+            self.repo.update_version_status(version_id, user_id, current_stage)
+            self.session.commit()
+            file_bytes = self.storage.get_object(self.bucket, version.storage_key)
+
             # 阶段 A: 提取文本与 OCR 质量门禁
             if clean_format in ("png", "jpg", "jpeg", "image"):
-                self.repo.update_version_status(
-                    version_id, user_id, ParseStatus.OCR_PROCESSING.value
-                )
                 ocr_result = self.ocr.recognize_image(file_bytes)
 
                 # 逐页门禁评估
@@ -646,6 +638,9 @@ class MaterialService:
                     unqualified_reason=page_report.unqualified_reason,
                     reshoot_count=0,
                 )
+                for previous_page in self.repo.get_ocr_pages(version_id, user_id):
+                    self.session.delete(previous_page)
+                self.session.flush()
                 self.repo.create_ocr_pages([ocr_page])
 
                 if not report.is_all_qualified:
@@ -667,7 +662,6 @@ class MaterialService:
                 extracted_text = ocr_result.full_text
                 paragraphs = [p.strip() for p in extracted_text.split("\n") if p.strip()]
             else:
-                self.repo.update_version_status(version_id, user_id, ParseStatus.PARSING_DOC.value)
                 paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
                 extracted_text = "\n\n".join(paragraphs)
 
@@ -684,6 +678,7 @@ class MaterialService:
             self.repo.update_version_status(
                 version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
             )
+            self.session.commit()
             chunk_result = split_material_into_snippets(paragraphs)
 
             if not chunk_result.snippets:
@@ -694,6 +689,7 @@ class MaterialService:
             self.repo.update_version_status(
                 version_id, user_id, ParseStatus.EMBEDDING_GENERATION.value
             )
+            self.session.commit()
             snippet_texts = [snip.content for snip in chunk_result.snippets]
             vectors = self.embedding.embed_documents(snippet_texts)
 
@@ -716,6 +712,7 @@ class MaterialService:
                     )
                 )
 
+            self.repo.delete_snippets_by_version(version_id, user_id)
             self.repo.create_snippets(snippets_to_save)
 
             # 阶段 D: 自动串联知识树抽取与落库 (若注入了 KnowledgeService)
@@ -724,6 +721,7 @@ class MaterialService:
                 self.repo.update_version_status(
                     version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
                 )
+                self.session.commit()
                 self.knowledge_service.extract_and_build_knowledge_tree(
                     material_id=material_id,
                     version_id=version_id,
@@ -808,12 +806,19 @@ class MaterialService:
         if version is None:
             raise MaterialNotFoundError("资料对应版本不存在")
 
-        self.repo.update_version_status(
-            version_id=version.id,
-            user_id=user_id,
-            status=ParseStatus.QUEUED.value,
+        if version.parse_status != ParseStatus.FAILED.value:
+            raise MaterialInvalidError("只有解析失败的资料可以重试")
+
+        # 与 trigger_parse 同理：重试派发也必须原子，避免并发重试重复入队同一版本。
+        if not self.repo.try_transition_version_status(
+            version.id,
+            material_id,
+            from_status=ParseStatus.FAILED.value,
+            to_status=ParseStatus.QUEUED.value,
             reset_errors=True,
-        )
+        ):
+            raise MaterialInvalidError("解析重试已在处理中，请勿重复提交")
+
         self.repo.update_material_status(
             material_id=material_id,
             user_id=user_id,
@@ -822,16 +827,7 @@ class MaterialService:
         )
         self.session.commit()
 
-        if self.queue is not None:
-            self.queue.enqueue(
-                task_name="parse_material_pipeline",
-                payload={
-                    "material_id": str(material_id),
-                    "version_id": str(version.id),
-                    "user_id": str(user_id),
-                },
-                user_id=str(user_id),
-            )
+        self._enqueue_parse(material_id, version.id, user_id)
 
         logger.info(
             "material pipeline retry scheduled",
@@ -1085,6 +1081,7 @@ class MaterialService:
         """根据细粒度解析流水线状态或资料主状态计算进度百分比 (0-100)。"""
         if parse_status is not None:
             status_map: dict[str, int] = {
+                ParseStatus.NOT_STARTED.value: 0,
                 ParseStatus.QUEUED.value: 10,
                 ParseStatus.PARSING_DOC.value: 30,
                 ParseStatus.OCR_PROCESSING.value: 30,
@@ -1440,13 +1437,29 @@ class MaterialService:
                 user_id=user_id,
             )
 
-        self.repo.update_version_status(
-            target_version.id,
-            user_id,
+        if target_version.parse_status in {
             ParseStatus.QUEUED.value,
-            error_message=None,
-            failed_stage=None,
-        )
+            ParseStatus.PARSING_DOC.value,
+            ParseStatus.OCR_PROCESSING.value,
+            ParseStatus.EXTRACTING_KNOWLEDGE.value,
+            ParseStatus.AUDITING_KNOWLEDGE.value,
+            ParseStatus.EMBEDDING_GENERATION.value,
+            ParseStatus.READY.value,
+        }:
+            return target_version
+
+        # 派发必须是原子的：两个并发请求不能凭同一次陈旧读各入队一次，否则同一版本
+        # 会被两个 worker 同时解析（重复 OCR/LLM 开销与重复切片）。条件更新未命中
+        # 说明该版本已被其他请求推进，本次不再重复派发。
+        if not self.repo.try_transition_version_status(
+            target_version.id,
+            material_id,
+            from_status=target_version.parse_status,
+            to_status=ParseStatus.QUEUED.value,
+            reset_errors=True,
+        ):
+            return target_version
+
         self.repo.update_material_status(
             material_id,
             user_id,
@@ -1454,17 +1467,34 @@ class MaterialService:
         )
         self.session.commit()
 
-        if self.queue is not None:
+        self._enqueue_parse(material_id, target_version.id, user_id)
+        return target_version
+
+    def _enqueue_parse(
+        self, material_id: uuid.UUID, version_id: uuid.UUID, user_id: uuid.UUID
+    ) -> None:
+        """Dispatch one explicit parse request and expose dispatch failure in DB."""
+        try:
             self.queue.enqueue(
                 task_name="parse_material_pipeline",
                 payload={
                     "material_id": str(material_id),
-                    "version_id": str(target_version.id),
+                    "version_id": str(version_id),
                     "user_id": str(user_id),
                 },
                 user_id=str(user_id),
             )
-        return target_version
+        except Exception:
+            self.repo.update_version_status(
+                version_id,
+                user_id,
+                ParseStatus.FAILED.value,
+                failed_stage="queue_dispatch",
+                error_message="解析任务提交失败，请重试",
+            )
+            self.repo.update_material_status(material_id, user_id, MaterialStatus.FAILED.value)
+            self.session.commit()
+            raise
 
     def reshoot_material_page(
         self,

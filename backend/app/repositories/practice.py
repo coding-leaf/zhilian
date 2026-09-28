@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import PracticeNotFoundError
@@ -169,6 +169,43 @@ class PracticeRepository:
 
         self.session.flush()
         return practice
+
+    def try_transition_status(
+        self,
+        practice_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        from_status: str,
+        to_status: str,
+    ) -> bool:
+        """以条件更新原子地跃迁练习状态 (compare-and-swap)。
+
+        「先读状态、再写状态」会让两个并发请求同时通过状态校验并重复派发后台任务，
+        因此状态跃迁必须由数据库判定：只有真正把该行从 ``from_status`` 改到
+        ``to_status`` 的调用返回 True，其余并发调用返回 False。
+
+        Args:
+            practice_id: 练习标识。
+            user_id: 租户用户标识。
+            from_status: 期望的当前状态。
+            to_status: 目标状态。
+
+        Returns:
+            bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
+        """
+        stmt = (
+            update(Practice)
+            .where(
+                Practice.id == practice_id,
+                Practice.user_id == user_id,
+                Practice.status == from_status,
+            )
+            .values(status=to_status)
+            .execution_options(synchronize_session="fetch")
+        )
+        result = self.session.execute(stmt)
+        self.session.flush()
+        return result.rowcount == 1
 
     # ==========================================
     # AttemptItem 作答项操作
