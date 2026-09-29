@@ -1,5 +1,9 @@
 import type { PracticeStatus, PracticeSummary, WrongRecordItem } from '@/types'
-import { collectUnmasteredKnowledgePointIds, type WrongGroupOption } from '@/api/adapters/wrong'
+import {
+  collectUnmasteredKnowledgePointIds,
+  isManualWrongRecord,
+  type WrongGroupOption,
+} from '@/api/adapters/wrong'
 
 const RESUMEABLE: PracticeStatus[] = ['not_started', 'in_progress', 'paused']
 
@@ -56,4 +60,40 @@ export function recordRegenerateScope(record: WrongRecordItem): {
 
 export function hasScope(scope: { folderId?: string; materialId?: string }): boolean {
   return Boolean(scope.folderId || scope.materialId)
+}
+
+/**
+ * 题库题目行「记入错题 / 取消标记」的动作分道。
+ *
+ * | 记录来源 | 判据 | 动作 |
+ * | --- | --- | --- |
+ * | 无记录 | `record == null` | `mark` 记入错题 |
+ * | 手工 | `practice_id == null` | `delete` 取消标记（删记录） |
+ * | 判题 | `practice_id` 非空且未掌握 | `master` 引导「已掌握」，**不删** |
+ * | 判题且已掌握 | 同上且 `is_mastered` | `none` 无动作 |
+ *
+ * 判题来源的记录是真实作答历史，删掉它会让「已消灭错题」等统计失去依据；
+ * 「已掌握」正是为该处境设计的语义。
+ */
+export type WrongMarkAction = 'mark' | 'delete' | 'master' | 'none'
+
+export function resolveWrongMarkAction(record: WrongRecordItem | null): WrongMarkAction {
+  if (!record) return 'mark'
+  if (isManualWrongRecord(record)) return 'delete'
+  if (!record.is_mastered) return 'master'
+  return 'none'
+}
+
+/** 题目行动作位的文案，按分道结果穷尽取值（新增动作必须在这里显式表态）。 */
+export function wrongMarkLabel(record: WrongRecordItem | null): string {
+  switch (resolveWrongMarkAction(record)) {
+    case 'mark':
+      return '记入错题'
+    case 'delete':
+      return '取消标记'
+    case 'master':
+      return '已标记'
+    case 'none':
+      return '已掌握'
+  }
 }

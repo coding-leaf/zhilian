@@ -8,6 +8,7 @@
 5. GET /mastery 与 GET /mastery/overview (掌握度宏观全景 200)
 6. GET /mastery/{knowledge_point_id} (单知识点掌握度 200，未评估 404/40018)
 7. GET /wrong-records (错题本多维检索 200，含类型过滤与备用分支)
+7.5 POST /wrong-records (手动标记错题 201，快照不合法 400/40008，题目不存在 404/40009)
 8. POST /wrong-records/{id}/master (标记攻克掌握 200，不存在 404/40019)
 9. DELETE /wrong-records/{id} (移除错题记录 200，不存在 404/40019)
 10. 未认证请求拦截 (401 / 20001) 与租户隔离 (user_id 透传) 校验。
@@ -31,6 +32,7 @@ from app.core.errors import (
     MasteryRecordNotFoundError,
     PracticeNotFoundError,
     PracticeNotGradedError,
+    QuestionNotFoundError,
     WrongRecordNotFoundError,
 )
 from app.models.user import User
@@ -210,6 +212,8 @@ def make_fake_wrong_record(
     record_id: uuid.UUID | None = None,
     practice_id: uuid.UUID | None = None,
     knowledge_point_id: uuid.UUID | None = None,
+    *,
+    manual: bool = False,
 ) -> WrongRecordItemResponse:
     """构造错题记录明细假数据实体。
 
@@ -217,6 +221,7 @@ def make_fake_wrong_record(
         record_id: 可选的错题主键标识。
         practice_id: 可选的练习会话标识。
         knowledge_point_id: 可选的知识点主键标识。
+        manual: 是否为手工标记记录（练习/作答归属为 NULL）。
 
     Returns:
         WrongRecordItemResponse: 错题记录响应实体。
@@ -227,10 +232,10 @@ def make_fake_wrong_record(
     return WrongRecordItemResponse(
         id=resolved_record_id,
         question_id=uuid.uuid4(),
-        practice_id=resolved_practice_id,
-        attempt_item_id=uuid.uuid4(),
+        practice_id=None if manual else resolved_practice_id,
+        attempt_item_id=None if manual else uuid.uuid4(),
         knowledge_point_id=resolved_knowledge_point_id,
-        error_type="conceptual",
+        error_type="manual" if manual else "conceptual",
         is_mastered=False,
         wrong_count=2,
         error_count=2,
@@ -630,6 +635,92 @@ def test_list_wrong_records_real_total_from_tuple(
 
 
 # ==============================================================================
+# 7.5 POST /wrong-records (题库题目手动标记错题) 测试
+# ==============================================================================
+def test_create_wrong_record_success_201(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+    mock_user: User,
+) -> None:
+    """测试手动标记错题成功返回 201，且入参只有 question_id。"""
+    question_id = uuid.uuid4()
+    mock_diagnosis_service.mark_question_as_wrong.return_value = make_fake_wrong_record()
+
+    response = client.post("/wrong-records", json={"question_id": str(question_id)})
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["id"]
+    # 服务端解析知识点归属：客户端无法指定 knowledge_point_id。
+    mock_diagnosis_service.mark_question_as_wrong.assert_called_once_with(
+        user_id=mock_user.id,
+        question_id=question_id,
+    )
+
+
+def test_create_wrong_record_manual_scope_serializes_nulls(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+) -> None:
+    """手工记录的 practice_id / attempt_item_id 为 NULL，响应必须能表达该现实。"""
+    mock_diagnosis_service.mark_question_as_wrong.return_value = make_fake_wrong_record(manual=True)
+
+    response = client.post("/wrong-records", json={"question_id": str(uuid.uuid4())})
+
+    data = response.json()
+    assert data["practice_id"] is None
+    assert data["attempt_item_id"] is None
+
+
+def test_create_wrong_record_requires_question_id_422(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+) -> None:
+    """只收 question_id：缺参 422，且不得调用服务层。"""
+    response = client.post("/wrong-records", json={"knowledge_point_id": str(uuid.uuid4())})
+
+    assert response.status_code == 422
+    mock_diagnosis_service.mark_question_as_wrong.assert_not_called()
+
+
+def test_create_wrong_record_question_not_found_404(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+) -> None:
+    """测试题目不存在/跨租户/已软删除时映射 404 (40009)。"""
+    question_id = uuid.uuid4()
+    mock_diagnosis_service.mark_question_as_wrong.side_effect = QuestionNotFoundError(
+        "请求的题目不存在或无权访问",
+        {"question_id": str(question_id)},
+    )
+
+    response = client.post("/wrong-records", json={"question_id": str(question_id)})
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["code"] == 40009
+
+
+def test_create_wrong_record_invalid_snapshot_400(
+    client: TestClient,
+    mock_diagnosis_service: MagicMock,
+) -> None:
+    """测试快照不合法时映射 400 (40008)，details 带 question_id 与原因。"""
+    question_id = uuid.uuid4()
+    mock_diagnosis_service.mark_question_as_wrong.side_effect = AppError(
+        error_code=40008,
+        message="题目快照质检未通过: options must be a list with at least 2 items",
+        details={"question_id": str(question_id), "reason": "options ..."},
+    )
+
+    response = client.post("/wrong-records", json={"question_id": str(question_id)})
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    data = response.json()
+    assert data["code"] == 40008
+    assert data["details"]["question_id"] == str(question_id)
+
+
+# ==============================================================================
 # 8. POST /wrong-records/{id}/master (错题攻克标记) 测试
 # ==============================================================================
 def test_mark_wrong_record_mastered_success(
@@ -781,6 +872,7 @@ def test_unauthenticated_request_401(mock_diagnosis_service: MagicMock) -> None:
         ("GET", "/mastery"),
         ("GET", f"/mastery/{test_id}"),
         ("GET", "/wrong-records"),
+        ("POST", "/wrong-records"),
         ("POST", f"/wrong-records/{test_id}/master"),
         ("DELETE", f"/wrong-records/{test_id}"),
     ]
@@ -850,6 +942,11 @@ def test_tenant_isolation_user_id_passed_correctly(
     )
     client.get("/wrong-records")
     assert mock_diagnosis_service.list_wrong_records.call_args.kwargs["user_id"] == mock_user.id
+
+    # 7.5 POST /wrong-records
+    mock_diagnosis_service.mark_question_as_wrong.return_value = make_fake_wrong_record()
+    client.post("/wrong-records", json={"question_id": str(test_id)})
+    assert mock_diagnosis_service.mark_question_as_wrong.call_args.kwargs["user_id"] == mock_user.id
 
     # 8. POST /wrong-records/{id}/master
     mock_diagnosis_service.mark_wrong_record_mastered.return_value = (

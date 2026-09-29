@@ -46,6 +46,7 @@ from app.models.practice import (
     PracticeSourceType,
     PracticeStatus,
     WrongRecord,
+    build_question_snapshot,
     validate_question_snapshot,
 )
 from app.models.question import Question, QuestionStatus
@@ -565,18 +566,7 @@ class PracticeService:
         # Step 5: 题目 6 要素快照完整性校验与持久化
         snapshots: list[dict[str, Any]] = []
         for q in scattered_questions:
-            snapshot = {
-                "stem": q.stem,
-                "question_type": q.question_type,
-                "options": q.options or [],
-                "answer": q.answer,
-                "analysis": q.analysis or "",
-                "explanation": q.analysis or "",
-                "difficulty": q.difficulty,
-                "knowledge_point_id": str(q.knowledge_point_id) if q.knowledge_point_id else None,
-                "source_snippet_id": str(q.source_snippet_id) if q.source_snippet_id else None,
-                "grading_rubric": q.grading_rubric or {},
-            }
+            snapshot = build_question_snapshot(q)
             is_valid, err_msg = validate_question_snapshot(snapshot)
             if not is_valid:
                 raise AppError(

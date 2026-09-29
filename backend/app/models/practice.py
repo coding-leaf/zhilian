@@ -31,7 +31,7 @@ from app.models.base import Base, TenantModelMixin, TimestampMixin
 if TYPE_CHECKING:
     from app.models.knowledge import KnowledgePoint
     from app.models.material import Material  # noqa: F401
-    from app.models.question import Question  # noqa: F401
+    from app.models.question import Question
 
 
 class PracticeStatus(enum.StrEnum):
@@ -103,12 +103,48 @@ class MasteryLevel(enum.StrEnum):
 
 
 class ErrorType(enum.StrEnum):
-    """错题错误归因类型枚举 (覆盖需求 FR-55 四类一票否决归因)。"""
+    """错题错误归因类型枚举 (覆盖需求 FR-55 四类一票否决归因)。
+
+    前四个成员是**错因归因**；MANUAL 不属于归因体系，见其注释。
+    """
 
     CONCEPTUAL = "conceptual"  # 概念性错误 (核心知识点理解偏差)
     INCOMPLETE_EXPRESSION = "incomplete_expression"  # 表述不全 (要点遗漏)
     QUESTION_MISREADING = "question_misreading"  # 审题偏差 (误解题干限定条件)
     UNANSWERED = "unanswered"  # 未作答 (FR-36 独立分类统计)
+    # 手工标记来源标记，**不是错因归因**；未来做归因分布统计时必须排除
+    MANUAL = "manual"
+
+
+def build_question_snapshot(question: "Question") -> dict[str, Any]:
+    """从题目实体构造练习作答项与错题本共用的题目快照字典。
+
+    唯一构造入口：`PracticeService.create_practice`（作答项快照）与手动错题标记
+    （`DiagnosisService.mark_question_as_wrong`）必须共用本函数。前端错题卡片
+    **只**读 `question_snapshot` 渲染，两份形状 = 手工错题与判题错题渲染不一致。
+
+    Args:
+        question: 题目 ORM 实体。
+
+    Returns:
+        dict[str, Any]: 与 `validate_question_snapshot` 配对校验的题目快照字典。
+    """
+    return {
+        "stem": question.stem,
+        "question_type": question.question_type,
+        "options": question.options or [],
+        "answer": question.answer,
+        "analysis": question.analysis or "",
+        "explanation": question.analysis or "",
+        "difficulty": question.difficulty,
+        "knowledge_point_id": (
+            str(question.knowledge_point_id) if question.knowledge_point_id else None
+        ),
+        "source_snippet_id": (
+            str(question.source_snippet_id) if question.source_snippet_id else None
+        ),
+        "grading_rubric": question.grading_rubric or {},
+    }
 
 
 def validate_question_snapshot(snapshot: dict[str, Any]) -> tuple[bool, str | None]:
@@ -836,19 +872,19 @@ class WrongRecord(Base, TimestampMixin, TenantModelMixin):
         index=True,
         comment="关联知识点标识",
     )
-    practice_id: Mapped[uuid.UUID] = mapped_column(
+    practice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("practices.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="最近答错练习标识",
+        comment="最近答错练习标识 (NULL = 手工标记，无练习归属)",
     )
-    attempt_item_id: Mapped[uuid.UUID] = mapped_column(
+    attempt_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("attempt_items.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
-        comment="最近答错作答项标识",
+        comment="最近答错作答项标识 (NULL = 手工标记，无作答归属)",
     )
     error_type: Mapped[str] = mapped_column(
         String(32),
@@ -896,10 +932,10 @@ class WrongRecord(Base, TimestampMixin, TenantModelMixin):
     knowledge_point: Mapped["KnowledgePoint"] = relationship(
         "KnowledgePoint",
     )
-    practice: Mapped["Practice"] = relationship(
+    practice: Mapped["Practice | None"] = relationship(
         "Practice",
     )
-    attempt_item: Mapped["AttemptItem"] = relationship(
+    attempt_item: Mapped["AttemptItem | None"] = relationship(
         "AttemptItem",
     )
 

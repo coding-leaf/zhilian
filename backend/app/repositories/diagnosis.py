@@ -373,8 +373,8 @@ class DiagnosisRepository:
         user_id: uuid.UUID,
         question_id: uuid.UUID | None,
         knowledge_point_id: uuid.UUID,
-        practice_id: uuid.UUID,
-        attempt_item_id: uuid.UUID,
+        practice_id: uuid.UUID | None,
+        attempt_item_id: uuid.UUID | None,
         error_type: str,
         question_snapshot: dict[str, Any],
         last_wrong_answer: str | None = None,
@@ -384,12 +384,16 @@ class DiagnosisRepository:
         若已存在同用户该题错题，累加 error_count，重置 is_mastered 为 False，刷新快照与作答；
         若不存在，创建全新错题记录。
 
+        **练习归属契约**：错题记录的 practice_id / attempt_item_id 一旦写下，
+        不会被后续无归属（传 None）的 upsert 清除——手工标记路径没有练习归属，
+        无权抹掉判题路径写下的真实来源。只有非 None 入参才会覆盖这两个字段。
+
         Args:
             user_id: 租户用户标识。
             question_id: 关联题目标识。
             knowledge_point_id: 关联知识点标识。
-            practice_id: 最近答错练习标识。
-            attempt_item_id: 最近答错作答项标识。
+            practice_id: 最近答错练习标识；None = 无练习归属（手工标记），不覆盖已有值。
+            attempt_item_id: 最近答错作答项标识；None 同上。
             error_type: 错误分类 (ErrorType)。
             question_snapshot: 题目快照字典。
             last_wrong_answer: 最近一次错误作答内容。
@@ -421,8 +425,11 @@ class DiagnosisRepository:
             record.is_mastered = False
             record.mastered_at = None
             record.knowledge_point_id = knowledge_point_id
-            record.practice_id = practice_id
-            record.attempt_item_id = attempt_item_id
+            # None = 本次调用没有练习归属（手工标记）：不得抹掉判题写下的真实来源。
+            if practice_id is not None:
+                record.practice_id = practice_id
+            if attempt_item_id is not None:
+                record.attempt_item_id = attempt_item_id
             record.error_type = error_type
             record.question_snapshot = question_snapshot
             record.last_wrong_answer = last_wrong_answer

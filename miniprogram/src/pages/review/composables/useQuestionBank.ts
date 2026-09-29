@@ -14,7 +14,7 @@
 import { computed, ref } from 'vue'
 import { apiCreatePractice, apiListQuestionBankItems, apiListQuestionBatches } from '@/api'
 import type { PracticeSession, QuestionBankItem, QuestionBatchSummary } from '@/types'
-import { RequestError } from '@/utils/requestError'
+import { describeFailure } from '@/utils/requestError'
 import {
   buildPracticeTitle,
   countSelectedBatches,
@@ -45,12 +45,6 @@ const MAX_QUESTION_PAGES = 20
  */
 const MAX_PRACTICE_QUESTIONS = 50
 const SESSION_PAGE_URL = '/subpackages/practice/pages/session/index'
-
-/** 从失败对象取出可直接展示的短文案。 */
-function describeFailure(error: unknown, fallback: string): string {
-  if (error instanceof RequestError) return error.userMessage
-  return fallback
-}
 
 export function useQuestionBank() {
   const batches = ref<QuestionBatchSummary[]>([])

@@ -14,7 +14,7 @@
       </view>
     </view>
 
-    <!-- 动作位：09-29-manual-wrong-mark 在此挂「记入错题」，本任务只留位不实现动作 -->
+    <!-- 动作位：由 QuestionBatchRow 填充「记入错题 / 取消标记」（09-29-manual-wrong-mark） -->
     <slot name="action" />
   </view>
 </template>

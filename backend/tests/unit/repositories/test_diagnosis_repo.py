@@ -23,6 +23,7 @@ from app.models.material import Material, MaterialVersion
 from app.models.practice import (
     AttemptItem,
     DiagnosisReport,
+    ErrorType,
     MasteryLevel,
     MasteryRecord,
     Practice,
@@ -512,6 +513,52 @@ class TestWrongRecordCRUD:
         assert second.error_type == "CARELESSNESS"
         assert second.last_wrong_answer == "C"
         assert not second.is_mastered
+
+    def test_manual_upsert_preserves_judged_practice_provenance(
+        self,
+        session: Session,
+        helper_setup: dict[str, uuid.UUID],
+    ) -> None:
+        """手工标记（无练习归属）不得抹掉判题写下的 practice_id / attempt_item_id。
+
+        回归看守：更新分支曾无条件覆盖这两个字段，使得「先判题写入真实归属、
+        再从题库手工标记同一题」这条路径静默把判题来源抹成 NULL（无错误信号）。
+        """
+        repo = DiagnosisRepository(session)
+        user_id = helper_setup["user_id"]
+        question_id = helper_setup["question_id_1"]
+        point_id = helper_setup["point_id_1"]
+        practice_id = helper_setup["practice_id"]
+        item_id = helper_setup["attempt_item_id_1"]
+
+        # 1. 判题路径先写入带真实练习归属的错题记录。
+        repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=question_id,
+            knowledge_point_id=point_id,
+            practice_id=practice_id,
+            attempt_item_id=item_id,
+            error_type=ErrorType.CONCEPTUAL.value,
+            question_snapshot={"stem": "题干", "answer": "B"},
+        )
+
+        # 2. 用户从题库手工标记同一题：该路径没有练习归属，传 None。
+        manual = repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=question_id,
+            knowledge_point_id=point_id,
+            practice_id=None,
+            attempt_item_id=None,
+            error_type=ErrorType.MANUAL.value,
+            question_snapshot={"stem": "题干", "answer": "B"},
+        )
+
+        # 3. 练习归属一旦写下不得被无归属的 upsert 清除；累加与重置语义照旧。
+        assert manual.practice_id == practice_id
+        assert manual.attempt_item_id == item_id
+        assert manual.error_count == 2
+        assert manual.is_mastered is False
+        assert manual.error_type == ErrorType.MANUAL.value
 
     def test_upsert_wrong_record_resets_is_mastered(
         self,

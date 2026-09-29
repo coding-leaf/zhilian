@@ -27,6 +27,7 @@ from app.models.practice import (
     PracticeSourceType,
     PracticeStatus,
     WrongRecord,
+    build_question_snapshot,
     validate_practice_transition,
     validate_question_snapshot,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "TimestampMixin",
     "User",
     "WrongRecord",
+    "build_question_snapshot",
     "get_vector_type",
     "validate_practice_transition",
     "validate_question_payload",

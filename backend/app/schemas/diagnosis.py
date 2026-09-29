@@ -397,8 +397,12 @@ class WrongRecordItemResponse(BaseModel):
 
     id: uuid.UUID = Field(..., description="错题记录主键 UUID")
     question_id: uuid.UUID | None = Field(default=None, description="关联题目主键 UUID")
-    practice_id: uuid.UUID = Field(..., description="最近答错练习主键 UUID")
-    attempt_item_id: uuid.UUID = Field(..., description="最近答错作答项主键 UUID")
+    practice_id: uuid.UUID | None = Field(
+        default=None, description="最近答错练习主键 UUID；NULL = 手工标记，无练习归属"
+    )
+    attempt_item_id: uuid.UUID | None = Field(
+        default=None, description="最近答错作答项主键 UUID；NULL = 手工标记，无作答归属"
+    )
     knowledge_point_id: uuid.UUID = Field(..., description="关联知识点标识 UUID")
     material_id: uuid.UUID | None = Field(default=None, description="归属资料标识")
     folder_id: uuid.UUID | None = Field(default=None, description="归属课程标识，未分类为空")
@@ -462,6 +466,17 @@ class WrongRecordItemResponse(BaseModel):
             elif self.error_count == 1 and self.wrong_count != 1:
                 self.error_count = self.wrong_count
         return self
+
+
+class WrongRecordCreateRequest(BaseModel):
+    """手动标记错题请求模型 (题库题目行「记入错题」)。
+
+    刻意只收 `question_id`：知识点归属由题目自身唯一决定，让客户端传
+    `knowledge_point_id` 只会多一个「归错考点 → 举一反三练错方向」的失效面，
+    没有任何收益。
+    """
+
+    question_id: uuid.UUID = Field(..., description="要标记为错题的题目主键 UUID")
 
 
 class WrongRecordGroupResponse(BaseModel):
@@ -557,6 +572,7 @@ __all__ = [
     "RegressedKnowledgeItemDTO",
     "UserMasteryOverviewResponse",
     "WeakKnowledgeItemDTO",
+    "WrongRecordCreateRequest",
     "WrongRecordGroupResponse",
     "WrongRecordItemResponse",
     "WrongRecordListResponse",

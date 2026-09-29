@@ -1,6 +1,6 @@
 """学情诊断、掌握度衰减聚合与错题闭环 API 路由控制模块。
 
-处理学情诊断报告生成与查询、艾宾浩斯掌握度全景与单点查询、错题本检索、攻克标记与删除。
+处理学情诊断报告生成与查询、艾宾浩斯掌握度全景与单点查询、错题本检索、手动标记、攻克标记与删除。
 严格遵循 AGENTS.md 规范与 spec.md 技术契约：
 - 路由层只负责 HTTP 协议解析、参数校验、依赖注入、调用 Service 层与响应转换；
 - 严禁直接跨层导入仓储层 (app.repositories)；
@@ -26,6 +26,7 @@ from app.schemas.diagnosis import (
     MarkWrongRecordMasteredRequest,
     MarkWrongRecordMasteredResponse,
     UserMasteryOverviewResponse,
+    WrongRecordCreateRequest,
     WrongRecordGroupResponse,
     WrongRecordItemResponse,
     WrongRecordListResponse,
@@ -364,6 +365,43 @@ async def list_wrong_records(
         page=page,
         page_size=page_size,
     )
+
+
+@router.post(
+    "/wrong-records",
+    response_model=WrongRecordItemResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="手动标记错题",
+)
+async def create_wrong_record(
+    current_user: Annotated[User, Depends(get_current_user)],
+    diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
+    request: Annotated[WrongRecordCreateRequest, Body()],
+) -> WrongRecordItemResponse:
+    """把题库里已有的一道题手动记入错题本。
+
+    入参只有 `question_id`：知识点归属由服务端从题目解析，避免客户端传错考点
+    导致错题归错、举一反三练错方向。
+
+    Args:
+        current_user: 当前认证登录租户用户对象。
+        diagnosis_service: 学情诊断与错题联动编排服务。
+        request: 手动标记错题请求体 (`question_id`)。
+
+    Returns:
+        WrongRecordItemResponse: 新建或累加更新后的错题记录响应。
+
+    Raises:
+        QuestionNotFoundError: 题目不存在、已软删除或跨租户非法访问 (404 / 40009)。
+        AppError: 题目快照不合法 (400 / 40008)，此时数据库无新增记录。
+    """
+    record = diagnosis_service.mark_question_as_wrong(
+        user_id=current_user.id,
+        question_id=request.question_id,
+    )
+    if isinstance(record, WrongRecordItemResponse):
+        return record
+    return WrongRecordItemResponse.model_validate(record)
 
 
 @router.post(

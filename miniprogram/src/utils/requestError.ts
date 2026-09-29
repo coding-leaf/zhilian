@@ -116,3 +116,14 @@ export function classifyTransportFailure(
   }
   return { kind: 'network', userMessage: '网络连接失败，请检查网络后重试' }
 }
+
+/**
+ * 从失败对象取出可直接展示的短文案。
+ *
+ * 统一「失败提示」口径：RequestError 用自己的 userMessage（短、可行动），
+ * 其他异常回落到调用方给的兜底文案。
+ */
+export function describeFailure(error: unknown, fallback: string): string {
+  if (error instanceof RequestError) return error.userMessage
+  return fallback
+}

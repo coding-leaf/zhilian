@@ -21,6 +21,9 @@ import type {
   SelfEvaluateResponse,
   AskCoachResponse,
   WrongRecordListResult,
+  WrongRecordItem,
+  DeleteWrongRecordResult,
+  MarkWrongRecordMasteredResult,
   QuestionType,
   AttemptResult,
   QuestionBatchListResult,
@@ -491,5 +494,39 @@ export function apiListWrongRecords(params?: {
   return request<WrongRecordListResult>({
     url: `/wrong-records${qs}`,
     method: 'GET',
+  })
+}
+
+/**
+ * 手动把题库里的一道题记入错题本（无需先在 App 里做过这道题）。
+ *
+ * 只传 `question_id`：知识点归属由服务端从题目解析，客户端传知识点只会多一个
+ * 「归错考点 → 举一反三练错方向」的失效面。
+ */
+export function apiMarkQuestionWrong(questionId: string): Promise<WrongRecordItem> {
+  return request<WrongRecordItem>({
+    url: '/wrong-records',
+    method: 'POST',
+    data: { question_id: questionId },
+  })
+}
+
+/** 取消手工错题标记（仅手工记录；判题来源的记录不得删除）。 */
+export function apiDeleteWrongRecord(recordId: string): Promise<DeleteWrongRecordResult> {
+  return request<DeleteWrongRecordResult>({
+    url: `/wrong-records/${recordId}`,
+    method: 'DELETE',
+  })
+}
+
+/** 标记/取消错题「已掌握」（判题来源记录的取消标记走这里，而非删除）。 */
+export function apiMarkWrongRecordMastered(
+  recordId: string,
+  isMastered = true,
+): Promise<MarkWrongRecordMasteredResult> {
+  return request<MarkWrongRecordMasteredResult>({
+    url: `/wrong-records/${recordId}/master`,
+    method: 'POST',
+    data: { is_mastered: isMastered },
   })
 }

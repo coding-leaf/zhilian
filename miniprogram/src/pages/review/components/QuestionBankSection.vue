@@ -36,10 +36,13 @@
         :selected-ids="selectedIdsFor(batch.batchId)"
         :is-loading-questions="isLoadingQuestions(batch.batchId)"
         :question-error="questionError(batch.batchId)"
+        :wrong-marks="wrongMarks"
+        :wrong-pending-ids="wrongPendingIds"
         @toggle="toggleBatch(batch.batchId)"
         @toggle-expand="toggleExpand(batch.batchId)"
         @toggle-question="(questionId) => toggleQuestion(batch.batchId, questionId)"
         @retry-questions="retryBatchQuestions(batch.batchId)"
+        @toggle-wrong="handleToggleWrong"
       />
 
       <view v-if="hasMore" class="bank-more">
@@ -68,8 +71,19 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { WrongRecordItem } from '@/types'
 import QuestionBatchRow from './QuestionBatchRow.vue'
 import { useQuestionBank } from '../composables/useQuestionBank'
+import { useWrongMarking } from '../composables/useWrongMarking'
+
+const props = defineProps<{
+  /** 页面已拉取的全量错题：本题库区块只按 question_id 建索引，不自己再拉一份。 */
+  wrongRecords: WrongRecordItem[]
+}>()
+
+const emit = defineEmits<{
+  (e: 'wrong-changed'): void
+}>()
 
 const {
   batches,
@@ -93,6 +107,17 @@ const {
   toggleQuestion,
   startPractice,
 } = useQuestionBank()
+
+const {
+  marksById: wrongMarks,
+  pendingIds: wrongPendingIds,
+  toggle: toggleWrongMark,
+} = useWrongMarking(() => props.wrongRecords)
+
+/** 结果落到错题列表：由页面重新拉取，保证题库与「错题巩固」看到同一份数据。 */
+const handleToggleWrong = async (questionId: string) => {
+  if (await toggleWrongMark(questionId)) emit('wrong-changed')
+}
 
 const actionHint = computed(() => {
   if (selectedCount.value === 0) {

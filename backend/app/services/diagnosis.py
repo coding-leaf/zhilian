@@ -33,10 +33,12 @@ from app.core.algorithms.mastery import (
     aggregate_mastery_scores,
 )
 from app.core.errors import (
+    AppError,
     DiagnosisReportNotFoundError,
     MasteryRecordNotFoundError,
     PracticeNotFoundError,
     PracticeNotGradedError,
+    QuestionNotFoundError,
     WrongRecordNotFoundError,
 )
 from app.core.security import generate_user_ref
@@ -48,11 +50,14 @@ from app.models.practice import (
     MasteryRecord,
     PracticeStatus,
     WrongRecord,
+    build_question_snapshot,
+    validate_question_snapshot,
 )
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.grading import GradingRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.practice import PracticeRepository
+from app.repositories.question import QuestionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +209,7 @@ class DiagnosisService:
         practice_repo: PracticeRepository | None = None,
         grading_repo: GradingRepository | None = None,
         knowledge_repo: KnowledgeRepository | None = None,
+        question_repo: QuestionRepository | None = None,
     ) -> None:
         """初始化诊断服务实例。
 
@@ -213,6 +219,7 @@ class DiagnosisService:
             practice_repo: 练习与答卷仓储实例。
             grading_repo: 判题记录仓储实例。
             knowledge_repo: 知识点仓储实例。
+            question_repo: 题目标仓储实例 (手动标记错题需按题解析知识点归属)。
         """
         # 防御性兼容参数位置顺序
         if isinstance(grading_repo, KnowledgeRepository) and knowledge_repo is None:
@@ -227,6 +234,7 @@ class DiagnosisService:
         self.practice_repo = practice_repo or PracticeRepository(session)
         self.grading_repo = grading_repo or GradingRepository(session)
         self.knowledge_repo = knowledge_repo or KnowledgeRepository(session)
+        self.question_repo = question_repo or QuestionRepository(session)
 
     # --------------------------------------------------------------------------
     # 结构化脱敏日志 8 要素工具方法
@@ -1268,6 +1276,94 @@ class DiagnosisService:
                 group["folder_name"] or group["material_title"] or "",
             ),
         )
+
+    def mark_question_as_wrong(
+        self,
+        user_id: uuid.UUID,
+        question_id: uuid.UUID,
+        request_id: str | None = None,
+    ) -> WrongRecord:
+        """把题库里已有的一道题手动记入错题本 (无需先在 App 内做过这道题)。
+
+        快照构造与判题路径共用 `build_question_snapshot`：前端错题卡片**只**读
+        `question_snapshot` 渲染，两份形状就意味着手工错题与判题错题在界面上长得不一样。
+        构造后经 `validate_question_snapshot` 校验，不通过即失败且**不写库**——
+        写入一条渲染不出来的错题比拒绝标记糟得多。
+
+        手工记录没有练习归属：`practice_id` / `attempt_item_id` 均为 NULL
+        (该 NULL 本身就是「手工创建」的定义，不另设 source 列)，`error_type` 为
+        `ErrorType.MANUAL` (来源标记，不是错因归因)。对已有错题记录的题目重复标记是
+        幂等更新 (累加 `error_count`、重置 `is_mastered`)，且**不会**抹掉判题路径写下的
+        练习归属，见 `DiagnosisRepository.upsert_wrong_record` 的练习归属契约。
+
+        Args:
+            user_id: 租户用户主键。
+            question_id: 要标记为错题的题目主键。
+            request_id: 请求追踪标识。
+
+        Returns:
+            WrongRecord: 新建或累加更新后的错题记录实体。
+
+        Raises:
+            QuestionNotFoundError: 题目不存在、已软删除或跨租户非法访问 (404 / 40009)。
+            AppError: 题目快照不合法 (400 / 40008)，此时数据库无新增记录。
+        """
+        start_time = time.perf_counter()
+        request_id = request_id or str(uuid.uuid4())
+
+        question = self.question_repo.get_question_by_id(question_id, user_id)
+        if question is None:
+            self._log_metric(
+                action="MARK_QUESTION_AS_WRONG",
+                request_id=request_id,
+                user_id=user_id,
+                target_id=question_id,
+                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                error_code=40009,
+            )
+            raise QuestionNotFoundError(
+                message="请求的题目不存在或无权访问",
+                details={"question_id": str(question_id)},
+            )
+
+        snapshot = build_question_snapshot(question)
+        is_valid, err_msg = validate_question_snapshot(snapshot)
+        if not is_valid:
+            self._log_metric(
+                action="MARK_QUESTION_AS_WRONG",
+                request_id=request_id,
+                user_id=user_id,
+                target_id=question_id,
+                duration_ms=(time.perf_counter() - start_time) * 1000.0,
+                error_code=40008,
+                extra={"reason": err_msg},
+            )
+            raise AppError(
+                error_code=40008,
+                message=f"题目快照质检未通过: {err_msg}",
+                details={"question_id": str(question_id), "reason": err_msg},
+            )
+
+        record = self.diagnosis_repo.upsert_wrong_record(
+            user_id=user_id,
+            question_id=question_id,
+            knowledge_point_id=question.knowledge_point_id,
+            practice_id=None,
+            attempt_item_id=None,
+            error_type=ErrorType.MANUAL.value,
+            question_snapshot=snapshot,
+        )
+        self.session.commit()
+        self._log_metric(
+            action="MARK_QUESTION_AS_WRONG",
+            request_id=request_id,
+            user_id=user_id,
+            target_id=question_id,
+            duration_ms=(time.perf_counter() - start_time) * 1000.0,
+            error_code=0,
+            extra={"wrong_record_id": str(record.id), "error_count": record.error_count},
+        )
+        return record
 
     def mark_wrong_record_mastered(
         self,

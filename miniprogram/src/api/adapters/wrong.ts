@@ -6,8 +6,8 @@ export interface WireWrongRecordItem {
   id: string
   folder_id?: string | null
   material_id?: string | null
-  practice_id: string
-  attempt_item_id: string
+  practice_id: string | null
+  attempt_item_id: string | null
   question_id?: string | null
   knowledge_point_id?: string | null
   error_type?: string
@@ -17,6 +17,16 @@ export interface WireWrongRecordItem {
   updated_at?: string | null
   user_answer?: string | null
   question_snapshot?: (WireQuestion & { stem?: string }) | null
+}
+
+/**
+ * 手工标记记录（题库「记入错题」）的判据。
+ *
+ * `practice_id IS NULL` 就是「手工创建」的定义——后端刻意不另设 source 列，
+ * 两个字段表达同一件事一定会漂移。取消标记的分道据此判定。
+ */
+export function isManualWrongRecord(record: WrongRecordItem): boolean {
+  return record.practice_id == null
 }
 
 /** 错题题干只来自后端下发的 question_snapshot，禁止读不存在的 question.stem。 */

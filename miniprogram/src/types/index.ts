@@ -450,8 +450,9 @@ export interface WrongRecordItem {
   id: string
   folder_id?: string | null
   material_id?: string | null
-  practice_id: string
-  attempt_item_id: string
+  /** NULL = 手工标记（题库「记入错题」），无练习归属；非空 = 判题写入的真实来源。 */
+  practice_id: string | null
+  attempt_item_id: string | null
   question_id?: string | null
   knowledge_point_id: string
   error_type?: string
@@ -461,6 +462,22 @@ export interface WrongRecordItem {
   updated_at?: string | null
   user_answer?: string | null
   question_snapshot: WrongQuestionSnapshot
+}
+
+/** DELETE /wrong-records/{id} 的响应形状。 */
+export interface DeleteWrongRecordResult {
+  id: string
+  success: boolean
+  removed: boolean
+  message: string
+}
+
+/** POST /wrong-records/{id}/master 的响应形状。 */
+export interface MarkWrongRecordMasteredResult {
+  id: string
+  is_mastered: boolean
+  mastered_at?: string | null
+  message: string
 }
 
 export interface WrongRecordGroup {

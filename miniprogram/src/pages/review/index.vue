@@ -22,7 +22,7 @@
       </view>
     </view>
 
-    <QuestionBankSection />
+    <QuestionBankSection :wrong-records="wrongRecords" @wrong-changed="loadWrongs" />
 
     <template v-if="practices.length">
       <view class="section-title-row">

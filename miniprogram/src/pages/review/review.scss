@@ -407,12 +407,53 @@
 .bank-question-row {
   padding: 16rpx 0;
   border-bottom: 1px solid #fafaf9;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
 }
 
 .bank-question-main {
   display: flex;
   align-items: flex-start;
   gap: 16rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 动作位：记入错题 / 取消标记（进行中置灰，避免双击打出两次往返） */
+.bank-wrong-btn {
+  flex-shrink: 0;
+  padding: 8rpx 18rpx;
+  border-radius: 999rpx;
+  border: 1px solid #d6d3d1;
+  background: #ffffff;
+}
+
+.bank-wrong-btn.marked {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.bank-wrong-btn.mastered {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.bank-wrong-btn.pending {
+  opacity: 0.5;
+}
+
+.bank-wrong-text {
+  font-size: 20rpx;
+  color: #57534e;
+}
+
+.bank-wrong-btn.marked .bank-wrong-text {
+  color: #b91c1c;
+}
+
+.bank-wrong-btn.mastered .bank-wrong-text {
+  color: #15803d;
 }
 
 .bank-pending-badge {
