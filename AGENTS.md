@@ -45,3 +45,12 @@ Toolchain notes:
 - `mypy` and `ruff` CLI are the single source of truth for backend diagnostics.
 - The `pyright` editor LSP is pinned to `backend/.venv` via `backend/pyrightconfig.json` (typeCheckingMode=basic) for in-editor feedback only; it does not replace the CLI gate.
 - Frontend tooling runs through `pnpm` inside `miniprogram/`.
+- **不要经由 WSL / Linux 容器跑后端或前端命令**。本项目在 Windows 上开发，
+  `uv run` / `pnpm` / `task` 直接用宿主 shell 跑即可；绕道 WSL 启一套 Ubuntu 再执行
+  宿主命令既慢又容易失败。控制台的编码问题（`lint-imports` 撞 GBK）已由 `Taskfile.yml`
+  里的 `PYTHONIOENCODING: utf-8` 解决 —— **不要为了绕开它去启 WSL，也不要用
+  `--junitxml=` 之类的临时手段另找取证通道**；命令的输出直接看即可。
+- **`tests/unit/core/algorithms/` 下有一组墙钟阈值断言**（200ms / 50ms / 20ms / 100ms 等）。
+  跑全量套件时 CPU 争用会让其中 2–4 个失败，**单独跑全部通过**。
+  这是既有的测试设计问题，与你本次改动无关：**不要把它当成自己引入的回归去追，
+  也不要为了让它变绿去放宽阈值**——那是把测试改到通过，不是修问题。
