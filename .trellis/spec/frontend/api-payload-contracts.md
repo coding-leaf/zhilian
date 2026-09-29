@@ -178,3 +178,114 @@ const session = await apiCreatePractice({
 - **前端类型可选就以为后端可省**：`title?` 在后端是必填（契约 C）。
 - **只看一个调用点**：同一根因可能存在于多个调用方。修 `question_count` 时要
   `git grep -n "question_ids"` 把全部调用方看一遍。
+
+---
+
+## Scenario: 手动标记错题（`POST /wrong-records` 及其取消分道）
+
+### 1. Scope / Trigger
+
+调用 `POST /wrong-records` 标记/取消错题时；或改动 `upsert_wrong_record` 的字段赋值时。
+
+### 2. Signatures
+
+```python
+# backend/app/schemas/diagnosis.py::WrongRecordCreateRequest
+question_id: uuid.UUID          # 仅此一个字段
+
+# POST   /wrong-records                -> 201 WrongRecordItemResponse
+# POST   /wrong-records/{id}/master    -> 切换「已掌握」（既有）
+# DELETE /wrong-records/{id}           -> 彻底移除（既有）
+```
+
+### 3. Contracts
+
+**契约 A：创建请求只收 `question_id`。** 知识点归属由题目自身唯一决定，服务端从
+`Question.knowledge_point_id` 解析。让客户端传 `knowledge_point_id` 只会多一个
+「归错考点 → 举一反三练错方向」的失效面，没有收益。
+
+**契约 B：「无练习归属」是手工记录的定义性特征。** `practice_id IS NULL` 即手工创建。
+**不另设 `source` 列** —— 两个字段表达同一件事必然漂移。
+
+**契约 C（后端不变量）：错题记录的练习归属一旦写下，不会被后续无归属的 upsert 清除。**
+
+```python
+# backend/app/repositories/diagnosis.py::upsert_wrong_record 更新分支
+if practice_id is not None:            # 手工路径传 None，无权抹掉判题写下的真实来源
+    record.practice_id = practice_id
+if attempt_item_id is not None:
+    record.attempt_item_id = attempt_item_id
+```
+
+用「非 None 才覆盖」而**不是**加一个 `preserve_scope: bool = False` 开关：
+开关依赖每个未来调用方都记得传它，漏传的后果是**静默销毁判题来源**；
+一个靠记忆维持的不变量，在「缺陷不可见」的场景里必然失守。
+
+**契约 D：取消标记按来源分道，绝不删除判题记录。**
+
+| 记录来源 | 判据 | 行为 |
+| --- | --- | --- |
+| 手工 | `practice_id == null` | 调 `DELETE /wrong-records/{id}` 移除 |
+| 判题 | `practice_id` 非空 | **不删除**；引导到 `POST /wrong-records/{id}/master`（已掌握） |
+
+判题记录是真实作答历史，删掉它会让「已消灭错题」等既有统计失去依据。
+
+**契约 E：`error_type = "manual"` 是来源标记，不是错因归因。**
+既有四个成员（`conceptual` / `incomplete_expression` / `question_misreading` / `unanswered`）
+是 FR-55 的四因归因；`manual` 表达的是记录来源，两者不同维度。
+**未来做归因分布统计时必须排除它。**
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+| --- | --- |
+| 题目不存在 / 属他人 / 已软删除 | not found（与既有 not-found 同语义），**不写库** |
+| 快照校验不通过（`stem`/`question_type`/`answer` 为空，或选择题 `options` < 2） | 报错，**不写库** |
+| 对已有错题记录的题目重复标记 | 幂等更新：仍只有一条（`uq_wrong_records_user_question`），`error_count` 累加，`is_mastered` 重置 |
+| 同一题既是判题错题又被手工标记 | 允许；**保留**判题归属，累加计数 |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**：服务端用共享的 `build_question_snapshot` 构造快照 → `validate_question_snapshot`
+  → 不通过就抛错不落库 → 再 `upsert_wrong_record(practice_id=None, attempt_item_id=None,
+  error_type=ErrorType.MANUAL.value)`。
+- **Base**：前端「已标记」状态按 `question_id` 反查错题列表回显；在途禁用按钮。
+- **Bad**：手工路径另写一份快照构造。前端**完全**从 `question_snapshot` 渲染错题
+  （见 `network-contract`/适配器约定：禁止读不存在的 `question.stem`），
+  两份形状 = 手工错题与判题错题在界面上长得不一样。
+
+### 6. Tests Required
+
+- 重复标记 → 仍一条 + `error_count` 累加（幂等）。
+- **判题归属不被抹掉**：先由判题路径写入带 `practice_id` 的记录，再手工标记，
+  断言 `practice_id` / `attempt_item_id` **仍为原值**。按旧的覆盖行为实现时该用例必须失败。
+- 快照不合法 → 报错且**库中无新增**。
+- 越权/软删除题目 → not found。
+- 手工错题进入再生题范围：断言「按 `is_mastered=False` 且 `knowledge_point_id` 非空收集出的
+  考点集合」包含该题考点。**不要**据此声称该考点真的被练到（见下）。
+- 取消分道：手工记录走 DELETE 且不碰 master 接口；判题记录不删、改走 master。
+
+### 7. Wrong vs Correct
+
+#### Wrong —— 无条件覆盖归属，静默销毁判题来源
+
+```python
+record.practice_id = practice_id          # 手工路径传 None -> 判题归属被抹成 NULL
+record.attempt_item_id = attempt_item_id # 无报错、无信号，数据已损坏
+```
+
+#### Correct —— 无归属的一方无权清除已写下的归属
+
+```python
+if practice_id is not None:
+    record.practice_id = practice_id
+if attempt_item_id is not None:
+    record.attempt_item_id = attempt_item_id
+```
+
+### 已知边界（不要越过）
+
+「举一反三」当前**不回传 `question_count`**，而后端显式题目路径按它切片（默认 10）。
+所以「手工错题的知识点进入了再生题范围」**不等于**「该考点被练到了」：
+考点一旦排在第 11 位之后，对应题目不会进练习，而覆盖率仍按全部生成题目声明。
+该缺陷归 `09-29-question-bank-tab`（R6 / AC-9），修好前不要用它推导「已覆盖」。

@@ -108,4 +108,17 @@ return count == 1
 
 注：`.execution_options(synchronize_session="fetch")` **不是**诱因 —— 加不加它，`Session.execute` 的静态类型都是 `Result[Any]`（已用 `reveal_type` 实测）。新增 DML 语句后若门禁报该错误，先按上面对照补兜底，不要改成 `cast()`：`cast()` 只让类型检查闭嘴，运行时毫不知情，一旦返回对象不是 `CursorResult` 就直接抛 `AttributeError`；而 isinstance 兜底在同样情形下回落为 `count = 0`（判定为「未赢得跃迁」），方向安全且与既有站点一致。本仓库运行时该兜底分支不会触发（实测恒为 `CursorResult`）。
 
+- **错题记录的练习归属被「无归属的 upsert」清除**：`upsert_wrong_record` 的更新分支若无条件
+  `record.practice_id = practice_id`，手工标记路径（传 `None`）会把判题写下的真实来源
+  **静默抹成 NULL** —— 无报错、无信号，数据已损坏。改为**「非 None 才覆盖」**，
+  把不变量写在方法自己身上；加 `preserve_scope: bool = False` 开关则依赖每个未来调用方
+  记得传它，而漏传的后果恰好是不可见的。
+  同理：`wrong_records.practice_id IS NULL` **就是**「手工记录」的定义，
+  不要再加一列表达同一件事（两个字段表达同一件事必然漂移）。
+- **把「记录来源」塞进「错因归因」枚举**：`ErrorType` 既有四个成员是 FR-55 的四因归因，
+  手工标记**没有错因**。新增的 `MANUAL = "manual"` 是**来源标记**，维度不同。
+  它满足「枚举必须取自 `StrEnum` 成员」这条约定，但未来做归因分布统计时**必须排除**它。
+  （已核查：前端从不渲染 `error_type`，且 `normalize_error_type` 对未知值原样透传，
+  故新增取值对现有代码零影响。）
+
 代码锚点：`backend/app/repositories/knowledge.py::KnowledgeRepository.list_all_by_user_id`、`backend/app/repositories/material.py::MaterialRepository.try_transition_version_status`、`backend/app/repositories/practice.py::PracticeRepository.try_transition_status`、`backend/app/repositories/grading.py::GradingRepository.update_final_flag`、`backend/app/repositories/user.py::UserRepository.soft_delete_user`、`backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`、`backend/app/models/practice.py::PracticeStatus`、`backend/tests/unit/models/test_practice_migrations.py`。
