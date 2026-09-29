@@ -70,7 +70,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import type { WrongRecordItem } from '@/types'
 import QuestionBatchRow from './QuestionBatchRow.vue'
 import { useQuestionBank } from '../composables/useQuestionBank'
@@ -107,6 +107,22 @@ const {
   toggleQuestion,
   startPractice,
 } = useQuestionBank()
+
+/**
+ * 进页面即拉取批次。
+ *
+ * 此前本组件只把 `loadBatches` 挂在「刷新」与「重试」两个按钮上，没有任何程序化调用点，
+ * 于是进入页面时一个请求都不发，「我的题目」恒显示「题库还是空的」——而接口其实有数据。
+ * 空态文案还会引导用户「到资料详情页发起智能出题」，让已出过题的人**重复劳动**。
+ *
+ * 计划任务：ZL-144（缺陷编号 P1-8）。回归测试见 `tests/questionBankSection.spec.ts`——
+ * 该用例挂载本组件并断言「挂载即请求」，是唯一能拦住这类**接线**缺陷的层次：
+ * `questionBank.spec.ts` 的 16 个组合式函数用例当时全绿。
+ */
+onMounted(loadBatches)
+
+/** 供父页面的下拉刷新一并刷新本区块；见 `pages/review/index.vue` 的 onPullDownRefresh。 */
+defineExpose({ loadBatches })
 
 const {
   marksById: wrongMarks,
