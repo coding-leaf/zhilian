@@ -1,4 +1,14 @@
-import type { QuestionItem, QuestionOption, QuestionType, SourceSnippet } from '@/types'
+import type {
+  BatchSource,
+  QuestionBankItem,
+  QuestionBankListResult,
+  QuestionBatchListResult,
+  QuestionBatchSummary,
+  QuestionItem,
+  QuestionOption,
+  QuestionType,
+  SourceSnippet,
+} from '@/types'
 import { SUBJECTIVE_QUESTION_TYPES } from '@/types'
 
 /**
@@ -12,6 +22,8 @@ export interface WireQuestion {
   version_id?: string
   knowledge_point_id?: string
   batch_id?: string | null
+  /** 后端 QuestionStatus：available 可选 / pending_review 待处理区 */
+  status?: string | null
   question_type: QuestionType
   stem: string
   options?: Array<{ key: string; content: string }>
@@ -57,6 +69,90 @@ export function adaptQuestion(question: WireQuestion): QuestionItem {
     max_score: question.max_score ?? rubricTotal,
     source_quote: question.source_snippet?.snippet_content,
   }
+}
+
+/**
+ * 后端 QuestionBatchSummaryResponse / QuestionBatchListResponse 的 wire 形状。
+ * 事实源：backend/app/schemas/question.py
+ */
+export interface WireQuestionBatchSource {
+  material_id?: string | null
+  material_title?: string | null
+  folder_id?: string | null
+  folder_name?: string | null
+}
+
+export interface WireQuestionBatchSummary {
+  batch_id?: string | null
+  question_count?: number | null
+  available_count?: number | null
+  pending_review_count?: number | null
+  created_at?: string | null
+  sources?: WireQuestionBatchSource[] | null
+}
+
+export interface WireQuestionBatchList {
+  items?: WireQuestionBatchSummary[] | null
+  total?: number | null
+  limit?: number | null
+  offset?: number | null
+}
+
+function adaptBatchSource(source: WireQuestionBatchSource): BatchSource {
+  return {
+    materialId: source.material_id || '',
+    materialTitle: source.material_title ?? null,
+    folderId: source.folder_id ?? null,
+    folderName: source.folder_name ?? null,
+  }
+}
+
+/** 批次摘要归一化：计数字段一律取整，缺失按 0；批次标识为 null 是合法语义。 */
+export function adaptQuestionBatch(batch: WireQuestionBatchSummary): QuestionBatchSummary {
+  const availableCount = Math.max(0, batch.available_count ?? 0)
+  const pendingReviewCount = Math.max(0, batch.pending_review_count ?? 0)
+  return {
+    batchId: batch.batch_id ?? null,
+    questionCount: batch.question_count ?? availableCount + pendingReviewCount,
+    availableCount,
+    pendingReviewCount,
+    createdAt: batch.created_at ?? '',
+    sources: (batch.sources ?? []).map(adaptBatchSource),
+  }
+}
+
+export function adaptQuestionBatchList(result: WireQuestionBatchList | null): QuestionBatchListResult {
+  const items = (result?.items ?? []).map(adaptQuestionBatch)
+  return {
+    items,
+    total: result?.total ?? items.length,
+    limit: result?.limit ?? items.length,
+    offset: result?.offset ?? 0,
+  }
+}
+
+/**
+ * 题库区块的单题投影。
+ *
+ * `selectable` 只认 `status === 'available'`：未知状态一律按不可选处理，
+ * 宁可让用户看到「这题不能选」，也不要让界面的已选题数高于实际进入练习的题数。
+ */
+export function adaptQuestionBankItem(question: WireQuestion): QuestionBankItem {
+  return {
+    id: question.id || '',
+    stem: question.stem,
+    type: question.question_type,
+    selectable: question.status === 'available',
+    batchId: question.batch_id ?? null,
+  }
+}
+
+export function adaptQuestionBankList(result: {
+  items?: WireQuestion[] | null
+  total?: number | null
+}): QuestionBankListResult {
+  const items = (result?.items ?? []).map(adaptQuestionBankItem)
+  return { items, total: result?.total ?? items.length }
 }
 
 /** 题型中文标签；未知题型回退为通用文案，不伪造具体题型。 */

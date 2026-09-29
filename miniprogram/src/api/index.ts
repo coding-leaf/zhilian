@@ -23,16 +23,21 @@ import type {
   WrongRecordListResult,
   QuestionType,
   AttemptResult,
+  QuestionBatchListResult,
+  QuestionBankListResult,
 } from '@/types'
 import {
   adaptDiagnosisReport,
   adaptMaterial,
   adaptPractice,
   adaptQuestion,
+  adaptQuestionBankList,
+  adaptQuestionBatchList,
   buildAttemptResults,
   type WireDiagnosisReport,
   type WirePracticeDetail,
   type WireQuestion,
+  type WireQuestionBatchList,
 } from './adapters'
 
 export {
@@ -40,6 +45,9 @@ export {
   adaptMaterial,
   adaptPractice,
   adaptQuestion,
+  adaptQuestionBankList,
+  adaptQuestionBatch,
+  adaptQuestionBatchList,
   buildAttemptResults,
   computeKnowledgeCoverage,
   dedupeQuestions,
@@ -51,6 +59,12 @@ export {
 } from './adapters'
 export type { AttemptResult } from '@/types'
 export type { CoverageResult, GenerationBatch } from './adapters'
+export type {
+  WireQuestion,
+  WireQuestionBatchList,
+  WireQuestionBatchSource,
+  WireQuestionBatchSummary,
+} from './adapters'
 
 // 1. 认证与用户 API
 export function apiLoginByWechat(code: string): Promise<LoginResult> {
@@ -228,6 +242,50 @@ export function apiGetQuestionsByMaterial(materialId: string): Promise<QuestionI
     if (res && 'items' in res) return res.items.map(adaptQuestion)
     return ((res as WireQuestion[]) || []).map(adaptQuestion)
   })
+}
+
+export interface QuestionBatchQuery {
+  page?: number
+  page_size?: number
+}
+
+/** 题库批次聚合（服务端 group by，一次请求渲染一页批次，不做前端拼装）。 */
+export function apiListQuestionBatches(
+  params: QuestionBatchQuery = {},
+): Promise<QuestionBatchListResult> {
+  const page = params.page ?? 1
+  const pageSize = params.page_size ?? 20
+  return request<WireQuestionBatchList>({
+    url: `/questions/batches?page=${page}&page_size=${pageSize}`,
+    method: 'GET',
+  }).then(adaptQuestionBatchList)
+}
+
+export interface QuestionBankQuery {
+  /** 批次标识；缺省时不按批次过滤。未分批分组请传 `unbatched: true`。 */
+  batchId?: string | null
+  /** 只看 `batch_id IS NULL` 的历史题目（后端 batch_id 过滤无法表达 IS NULL）。 */
+  unbatched?: boolean
+  reviewStatus?: 'available' | 'pending_review'
+  page?: number
+  page_size?: number
+}
+
+/** 题库区块的题目列表（展开批次 / 解析整批题目 ID 共用）。 */
+export function apiListQuestionBankItems(
+  query: QuestionBankQuery = {},
+): Promise<QuestionBankListResult> {
+  const queryParts: string[] = []
+  if (query.batchId) queryParts.push(`batch_id=${encodeURIComponent(query.batchId)}`)
+  if (query.unbatched) queryParts.push('unbatched=true')
+  if (query.reviewStatus) queryParts.push(`review_status=${query.reviewStatus}`)
+  queryParts.push(`page=${query.page ?? 1}`)
+  queryParts.push(`page_size=${query.page_size ?? 20}`)
+
+  return request<{ items?: WireQuestion[] | null; total?: number | null }>({
+    url: `/questions?${queryParts.join('&')}`,
+    method: 'GET',
+  }).then(adaptQuestionBankList)
 }
 
 export function apiAskQuestionCoach(

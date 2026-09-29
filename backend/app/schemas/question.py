@@ -171,6 +171,45 @@ class QuestionGenerateResponse(BaseModel):
     )
 
 
+class QuestionBatchSourceDTO(BaseModel):
+    """批次来源资料投影 (同一批次可横跨多份资料)。
+
+    资料已被物理删除时标题为空值，由前端渲染「来源已删除」，
+    而不是让整条批次从列表里消失。
+    """
+
+    material_id: uuid.UUID = Field(..., description="来源资料主键 UUIDv4")
+    material_title: str | None = Field(default=None, description="来源资料标题 (已删除时为空)")
+    folder_id: uuid.UUID | None = Field(default=None, description="来源资料所属课程主键")
+    folder_name: str | None = Field(default=None, description="来源资料所属课程名称")
+
+
+class QuestionBatchSummaryResponse(BaseModel):
+    """出题批次聚合摘要响应模型。"""
+
+    batch_id: str | None = Field(
+        default=None, description="出题生成批次标识；null 表示未分批的历史题目，不伪造 ID"
+    )
+    question_count: int = Field(..., ge=0, description="该批次题目总数 (不含软删除)")
+    available_count: int = Field(..., ge=0, description="其中可用 (available) 题数")
+    pending_review_count: int = Field(..., ge=0, description="其中待审核 (pending_review) 题数")
+    created_at: datetime = Field(..., description="批次内最早的题目创建时间")
+    sources: list[QuestionBatchSourceDTO] = Field(
+        default_factory=list, description="批次来源资料集合 (课程范围出题可多份)"
+    )
+
+
+class QuestionBatchListResponse(BaseModel):
+    """出题批次聚合分页列表响应模型。"""
+
+    items: list[QuestionBatchSummaryResponse] = Field(
+        default_factory=list, description="批次摘要列表"
+    )
+    total: int = Field(..., ge=0, description="符合条件的批次总数")
+    limit: int = Field(default=20, ge=1, description="单页批次数量限制")
+    offset: int = Field(default=0, ge=0, description="分页游标偏移量")
+
+
 class QuestionListQuery(BaseModel):
     """题目多条件分页筛选查询参数模型。"""
 
@@ -324,6 +363,9 @@ __all__ = [
     "CoachSourceResponse",
     "MaterialQualityChecksResponse",
     "QuestionAuditLogsResponse",
+    "QuestionBatchListResponse",
+    "QuestionBatchSourceDTO",
+    "QuestionBatchSummaryResponse",
     "QuestionDeleteResponse",
     "QuestionDetailResponse",
     "QuestionEditLogListResponse",

@@ -21,6 +21,7 @@ from app.schemas.question import (
     AskCoachResponse,
     MaterialQualityChecksResponse,
     QuestionAuditLogsResponse,
+    QuestionBatchListResponse,
     QuestionDeleteResponse,
     QuestionDetailResponse,
     QuestionEditLogResponse,
@@ -196,6 +197,45 @@ async def generate_questions(
 
 
 @router.get(
+    "/questions/batches",
+    response_model=QuestionBatchListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="按出题批次聚合查询题库批次列表",
+)
+async def list_question_batches(
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100, description="每页批次数")] = 20,
+) -> QuestionBatchListResponse:
+    """按 batch_id 服务端聚合分页返回本人的题目批次摘要。
+
+    本路由**必须**注册在 ``/questions/{id}`` 之前：FastAPI 按注册顺序匹配，
+    否则 ``batches`` 会被 ``{id}`` 捕获并按 UUID 解析失败返回 422。
+
+    Args:
+        user: 当前已认证登录租户用户对象。
+        question_service: 题目领域编排服务。
+        page: 页码。
+        page_size: 每页批次数，上限 100。
+
+    Returns:
+        QuestionBatchListResponse: 批次摘要分页列表及真实批次总数。
+    """
+    items, total = question_service.list_question_batches(
+        user_id=user.id,
+        page=page,
+        page_size=page_size,
+    )
+    return QuestionBatchListResponse(
+        items=items,
+        total=total,
+        limit=page_size,
+        offset=max(page - 1, 0) * page_size,
+    )
+
+
+@router.get(
     "/questions/{id}",
     response_model=QuestionDetailResponse,
     status_code=status.HTTP_200_OK,
@@ -303,6 +343,9 @@ async def list_questions(
     ] = None,
     status_filter: Annotated[str | None, Query(alias="status", description="题目状态过滤")] = None,
     batch_id: Annotated[str | None, Query(description="按出题生成批次标识过滤")] = None,
+    unbatched: Annotated[
+        bool, Query(description="只看未分批的历史题目 (batch_id IS NULL)")
+    ] = False,
     page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页记录数")] = 20,
     limit: Annotated[int | None, Query(ge=1, le=100, description="单页限制 (兼容)")] = None,
@@ -321,6 +364,7 @@ async def list_questions(
         review_status: 可选的审核/可用状态过滤。
         status_filter: 别名状态过滤。
         batch_id: 可选的出题生成批次标识过滤。
+        unbatched: 为 True 时只返回 batch_id 为空的历史题目。
         page: 页码。
         page_size: 每页记录数。
         limit: 单页记录数限制。
@@ -342,6 +386,7 @@ async def list_questions(
         difficulty=difficulty,
         review_status=effective_status,
         batch_id=batch_id,
+        unbatched=unbatched,
         page=page,
         page_size=effective_limit,
         limit=effective_limit,

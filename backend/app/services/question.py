@@ -63,6 +63,8 @@ from app.schemas.material import SourceSnippetDTO
 from app.schemas.question import (
     AskCoachResponse,
     CoachSourceResponse,
+    QuestionBatchSourceDTO,
+    QuestionBatchSummaryResponse,
     QuestionDetailResponse,
     ScopedCoachResponse,
 )
@@ -1440,6 +1442,7 @@ class QuestionService:
         status: str | None = None,
         folder_id: uuid.UUID | None = None,
         batch_id: str | None = None,
+        unbatched: bool = False,
         limit: int | None = None,
         offset: int | None = None,
         include_deleted: bool = False,
@@ -1459,6 +1462,7 @@ class QuestionService:
             status: 兼容的状态过滤入参。
             folder_id: 可选的课程文件夹标识过滤（仅未归档课程资料）。
             batch_id: 可选的出题生成批次标识过滤。
+            unbatched: 为 True 时只返回未分批（batch_id 为空）的历史题目。
             limit: 可选的单页数量限制（优先于 page_size）。
             offset: 可选的分页游标偏移量（优先于 page 计算）。
             include_deleted: 是否包含软删除记录，默认 False。
@@ -1487,10 +1491,86 @@ class QuestionService:
             difficulty=difficulty or kwargs.get("difficulty"),
             status=effective_status,
             batch_id=batch_id or kwargs.get("batch_id"),
+            unbatched=unbatched or bool(kwargs.get("unbatched", False)),
             include_deleted=include_deleted or bool(kwargs.get("include_deleted", False)),
             limit=calc_limit,
             offset=calc_offset,
         )
+
+    def list_question_batches(
+        self,
+        user_id: uuid.UUID,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[QuestionBatchSummaryResponse], int]:
+        """按出题批次聚合分页查询批次摘要并装配来源。
+
+        三次批量查询完成装配：本页批次聚合、批次总数、本页批次的来源资料。
+        不对批次逐条补查来源 (N+1)。
+
+        Args:
+            user_id: 租户用户标识。
+            page: 当前页码，从 1 开始，默认 1。
+            page_size: 单页批次数量限制，默认 20。
+
+        Returns:
+            tuple[list[QuestionBatchSummaryResponse], int]: (本页批次摘要, 真实批次总数)。
+        """
+        resolved_page_size = max(1, page_size)
+        offset = max(page - 1, 0) * resolved_page_size
+
+        rows = self.question_repo.list_question_batches(
+            user_id,
+            limit=resolved_page_size,
+            offset=offset,
+        )
+        total = self.question_repo.count_question_batches(user_id)
+        sources_by_batch = self._group_batch_sources(
+            user_id,
+            [batch_id for batch_id, *_rest in rows],
+        )
+
+        items = [
+            QuestionBatchSummaryResponse(
+                batch_id=batch_id,
+                question_count=question_count,
+                available_count=available_count,
+                pending_review_count=question_count - available_count,
+                created_at=created_at,
+                # 未分批组按「没有批次」渲染，不借它的资料拼一个假来源
+                sources=sources_by_batch.get(batch_id, []) if batch_id is not None else [],
+            )
+            for batch_id, question_count, available_count, created_at in rows
+        ]
+        return items, total
+
+    def _group_batch_sources(
+        self,
+        user_id: uuid.UUID,
+        batch_ids: Sequence[str | None],
+    ) -> dict[str, list[QuestionBatchSourceDTO]]:
+        """一次查询批量装配本页批次的来源资料。
+
+        Args:
+            user_id: 租户用户标识。
+            batch_ids: 本页批次标识 (可含 None，None 不参与来源查询)。
+
+        Returns:
+            dict[str, list[QuestionBatchSourceDTO]]: 批次标识 → 来源资料投影列表。
+        """
+        non_null_ids = [batch_id for batch_id in batch_ids if batch_id is not None]
+        grouped: dict[str, list[QuestionBatchSourceDTO]] = {}
+        for row in self.question_repo.list_batch_sources(user_id, non_null_ids):
+            grouped.setdefault(row[0], []).append(
+                QuestionBatchSourceDTO(
+                    material_id=row[1],
+                    material_title=row[2],
+                    folder_id=row[3],
+                    folder_name=row[4],
+                )
+            )
+        return grouped
 
     def update_question(
         self,

@@ -9,9 +9,10 @@
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -218,6 +219,7 @@ class QuestionRepository:
         difficulty: int | None = None,
         status: str | None = None,
         batch_id: str | None = None,
+        unbatched: bool = False,
         include_deleted: bool = False,
         limit: int = 20,
         offset: int = 0,
@@ -235,6 +237,8 @@ class QuestionRepository:
             difficulty: 可选的难度过滤。
             status: 可选的状态过滤。
             batch_id: 可选的出题生成批次标识过滤。
+            unbatched: 为 True 时只返回 ``batch_id IS NULL`` 的历史题目
+                （``batch_id`` 过滤无法表达 IS NULL）。
             include_deleted: 是否包含已软删除题目，默认 False。
             limit: 单页记录数限制，默认 20。
             offset: 偏移游标，默认 0。
@@ -263,6 +267,8 @@ class QuestionRepository:
             count_stmt = count_stmt.where(Question.status == status)
         if batch_id is not None:
             count_stmt = count_stmt.where(Question.batch_id == batch_id)
+        if unbatched:
+            count_stmt = count_stmt.where(Question.batch_id.is_(None))
 
         total = self.session.execute(count_stmt).scalar_one()
 
@@ -287,6 +293,8 @@ class QuestionRepository:
             stmt = stmt.where(Question.status == status)
         if batch_id is not None:
             stmt = stmt.where(Question.batch_id == batch_id)
+        if unbatched:
+            stmt = stmt.where(Question.batch_id.is_(None))
 
         stmt = stmt.order_by(Question.created_at.desc()).offset(offset).limit(limit)
         items = list(self.session.execute(stmt).scalars().all())
@@ -317,6 +325,134 @@ class QuestionRepository:
                 MaterialFolder.archived_at.is_(None),
             )
         )
+
+    # ==========================================
+    # 出题批次聚合 (题库视图)
+    # ==========================================
+
+    def list_question_batches(
+        self,
+        user_id: uuid.UUID,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[tuple[str | None, int, int, datetime]]:
+        """按出题批次聚合分页查询批次摘要。
+
+        服务端 group by 完成聚合：前端按页拉取题目再本地分组会把题干正文
+        一并传回，且请求数随题目总量线性增长。
+
+        同一批次可横跨多份资料：``QuestionService.generate_questions_for_folder``
+        按 (material_id, version_id) 分组生成却只分配一个 batch_id。
+
+        Args:
+            user_id: 租户用户标识。
+            limit: 单页批次数量限制，默认 20。
+            offset: 分页游标偏移量，默认 0。
+
+        Returns:
+            list[tuple[str | None, int, int, datetime]]: 每项为
+                (批次标识 | None 表示未分批, 题量, 可用题量, 批次最早创建时间)，
+                按批次最早创建时间倒序；``batch_id IS NULL`` 的历史题目单独成组。
+        """
+        # sum(case ...) 而非 count(*) FILTER：两种数据库都接受，SQLite 不必依赖 3.30+。
+        available_count = func.sum(
+            case((Question.status == QuestionStatus.AVAILABLE.value, 1), else_=0)
+        ).label("available_count")
+        first_created_at = func.min(Question.created_at).label("first_created_at")
+
+        stmt = (
+            select(
+                Question.batch_id,
+                func.count(Question.id).label("question_count"),
+                available_count,
+                first_created_at,
+            )
+            .where(
+                Question.user_id == user_id,
+                Question.is_deleted.is_(False),
+            )
+            .group_by(Question.batch_id)
+            .order_by(first_created_at.desc(), Question.batch_id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = self.session.execute(stmt).all()
+        return [(row[0], int(row[1]), int(row[2]), row[3]) for row in rows]
+
+    def count_question_batches(self, user_id: uuid.UUID) -> int:
+        """统计用户真实批次总数 (与 ``list_question_batches`` 同一 WHERE 条件)。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            int: 未软删除题目覆盖的批次总数，含 ``batch_id IS NULL`` 的未分批组。
+        """
+        grouped = (
+            select(Question.batch_id)
+            .where(
+                Question.user_id == user_id,
+                Question.is_deleted.is_(False),
+            )
+            .group_by(Question.batch_id)
+            .subquery()
+        )
+        total = self.session.execute(select(func.count()).select_from(grouped)).scalar_one()
+        return int(total)
+
+    def list_batch_sources(
+        self,
+        user_id: uuid.UUID,
+        batch_ids: Sequence[str],
+    ) -> list[tuple[str, uuid.UUID, str | None, uuid.UUID | None, str | None]]:
+        """批量查询指定批次的来源资料集合 (仅针对本页批次，禁止逐批查询)。
+
+        对 materials 与 material_folders 均使用 ``LEFT JOIN`` 且把租户条件写在
+        ON 子句：资料已被物理删除时批次来源位保留为空值，由装配层给出可读降级标签，
+        而不是因 JOIN 不中而整条批次从列表里消失。
+
+        Args:
+            user_id: 租户用户标识。
+            batch_ids: 本页批次的非空批次标识集合。
+
+        Returns:
+            list[tuple[str, uuid.UUID, str | None, uuid.UUID | None, str | None]]:
+                (批次标识, 资料主键, 资料标题, 课程主键, 课程名称)，已去重。
+        """
+        if not batch_ids:
+            return []
+        stmt = (
+            select(
+                Question.batch_id,
+                Question.material_id,
+                Material.title,
+                Material.folder_id,
+                MaterialFolder.name,
+            )
+            .outerjoin(
+                Material,
+                and_(
+                    Material.id == Question.material_id,
+                    Material.user_id == user_id,
+                ),
+            )
+            .outerjoin(
+                MaterialFolder,
+                and_(
+                    MaterialFolder.id == Material.folder_id,
+                    MaterialFolder.user_id == user_id,
+                ),
+            )
+            .where(
+                Question.user_id == user_id,
+                Question.is_deleted.is_(False),
+                Question.batch_id.in_(list(batch_ids)),
+            )
+            .distinct()
+        )
+        rows = self.session.execute(stmt).all()
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
 
     def list_knowledge_points_for_folder(
         self,

@@ -102,6 +102,10 @@
     </view>
 
     <view v-else class="preview-section">
+      <view v-if="compose.generatedBatchNotice.value" class="notice-box">
+        <text class="notice-text">{{ compose.generatedBatchNotice.value }}</text>
+      </view>
+
       <view v-if="compose.generationNotice.value" class="notice-box">
         <text class="notice-text">{{ compose.generationNotice.value }}</text>
       </view>

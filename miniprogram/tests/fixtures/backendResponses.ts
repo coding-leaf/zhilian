@@ -219,6 +219,43 @@ export const wrongRecordsFixture = {
   page_size: 20,
 }
 
+/**
+ * 题库批次聚合响应样本。
+ * 事实源：`backend/app/schemas/question.py::QuestionBatchListResponse`
+ * （`GET /questions/batches`，服务端按 batch_id group by）。
+ * `batch_id: null` 是合法语义：历史题目未分批，必须能被看到而不是被丢掉。
+ */
+export const questionBatchListFixture = {
+  items: [
+    {
+      batch_id: 'batch_a',
+      question_count: 3,
+      available_count: 2,
+      pending_review_count: 1,
+      created_at: '2026-03-01T08:00:00',
+      sources: [
+        {
+          material_id: 'm-1',
+          material_title: '软件工程导论.pdf',
+          folder_id: null,
+          folder_name: null,
+        },
+      ],
+    },
+    {
+      batch_id: null,
+      question_count: 1,
+      available_count: 1,
+      pending_review_count: 0,
+      created_at: '2026-02-01T08:00:00',
+      sources: [],
+    },
+  ],
+  total: 2,
+  limit: 20,
+  offset: 0,
+}
+
 export function generatedQuestionFixture(overrides: Record<string, unknown> = {}) {
   return {
     id: 'q-new-1',

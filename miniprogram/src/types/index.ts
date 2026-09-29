@@ -196,6 +196,47 @@ export interface QuestionItem {
   max_score?: number
 }
 
+// 题库批次：与 backend/app/schemas/question.py::QuestionBatchSummaryResponse 一致
+export interface BatchSource {
+  materialId: string
+  /** 资料行已缺失时为 null，界面渲染「来源已删除」而不丢整条批次 */
+  materialTitle: string | null
+  folderId: string | null
+  folderName: string | null
+}
+
+export interface QuestionBatchSummary {
+  /** null = 未分批的历史题目（batch_id IS NULL），不得伪造 ID */
+  batchId: string | null
+  questionCount: number
+  availableCount: number
+  pendingReviewCount: number
+  createdAt: string
+  sources: BatchSource[]
+}
+
+export interface QuestionBatchListResult {
+  items: QuestionBatchSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** 题库区块展开后的单题投影：只保留勾选与展示所需字段。 */
+export interface QuestionBankItem {
+  id: string
+  stem: string
+  type: QuestionType
+  /** 仅 available 题目可选；未知状态一律按不可选处理，不夸大已选题数 */
+  selectable: boolean
+  batchId: string | null
+}
+
+export interface QuestionBankListResult {
+  items: QuestionBankItem[]
+  total: number
+}
+
 // 练习生命周期：与 backend/app/models/practice.py::PracticeStatus 保持一致
 export type PracticeStatus =
   | 'not_started'

@@ -2,12 +2,14 @@ import { computed, ref } from 'vue'
 import {
   apiGenerateQuestions,
   apiGetQuestionsByMaterial,
+  apiListQuestionBatches,
   computeKnowledgeCoverage,
   dedupeQuestions,
   planGenerationBatches,
 } from '@/api'
 import type { CoverageResult } from '@/api/adapters/question'
-import type { FolderKnowledgePointItem, QuestionItem, QuestionType } from '@/types'
+import { describeBatchLabel } from '@/utils/questionBatch'
+import type { FolderKnowledgePointItem, QuestionItem, QuestionBatchSummary, QuestionType } from '@/types'
 
 export interface ComposeScope {
   folderId?: string
@@ -39,6 +41,10 @@ export function useQuestionCompose() {
   const hasGenerated = ref(false)
   const isGenerating = ref(false)
   const isStarting = ref(false)
+
+  /** 本次生成的批次摘要：标签由 describeBatchLabel 统一推导（与题库区块同一函数）。 */
+  const generatedBatches = ref<QuestionBatchSummary[]>([])
+  const generatedBatchFallback = ref('')
 
   const remainingQuestions = computed(() =>
     questions.value.filter((question) => question.id && !removedIds.value.includes(question.id)),
@@ -108,6 +114,7 @@ export function useQuestionCompose() {
   const generateForKnowledgePoints = async (knowledgePointIds: string[], desiredCount: number) => {
     const batches = planGenerationBatches(knowledgePointIds, desiredCount)
     const collected: QuestionItem[] = []
+    const batchIds: string[] = []
     let pending = 0
     for (const batch of batches) {
       const result = await apiGenerateQuestions({
@@ -119,10 +126,52 @@ export function useQuestionCompose() {
         difficulty: difficulty.value,
       })
       collected.push(...result.qualified_questions)
+      if (result.batch_id) batchIds.push(result.batch_id)
       pending += result.pending_count
     }
-    return { questions: dedupeQuestions(collected), pending }
+    return { questions: dedupeQuestions(collected), pending, batchIds }
   }
+
+  /**
+   * 拉取本次生成批次的摘要用于展示。
+   *
+   * 标签只在题库批次接口上有完整输入（一个批次可以横跨多份资料，「来源」不是生成
+   * 响应能拼出来的），所以这里回查同一份数据，保证两处说的「同一个批次」一致。
+   * 回查失败只降级提示，不影响核对与开练。
+   */
+  const loadGeneratedBatches = async (batchIds: string[]) => {
+    generatedBatchFallback.value = ''
+    if (batchIds.length === 0) {
+      generatedBatches.value = []
+      return
+    }
+    try {
+      const wanted = new Set(batchIds)
+      const result = await apiListQuestionBatches({ page: 1, page_size: 50 })
+      generatedBatches.value = result.items.filter(
+        (batch) => batch.batchId !== null && wanted.has(batch.batchId),
+      )
+      if (generatedBatches.value.length === 0) {
+        generatedBatchFallback.value = '本次生成已归入题库，可稍后在学情页确认。'
+      }
+    } catch (error) {
+      console.error('Failed to load generated batch summaries', error)
+      generatedBatches.value = []
+      generatedBatchFallback.value = '本次生成已归入题库，但批次信息暂时取不到。'
+    }
+  }
+
+  const generatedBatchLabels = computed(() =>
+    generatedBatches.value.map((batch) => describeBatchLabel(batch)),
+  )
+
+  /** 核对视图顶部的一行提示：有批次就报批次，取不到就如实说明。 */
+  const generatedBatchNotice = computed(() => {
+    if (generatedBatchLabels.value.length > 0) {
+      return `本次生成批次：${generatedBatchLabels.value.join('；')}。已归入「学情 - 我的题目」，可在那里按批次再练。`
+    }
+    return generatedBatchFallback.value
+  })
 
   /**
    * 生成题目。
@@ -138,7 +187,7 @@ export function useQuestionCompose() {
     }
     isGenerating.value = true
     try {
-      const { questions: generated } = await generateForKnowledgePoints(
+      const { questions: generated, batchIds } = await generateForKnowledgePoints(
         selectedKpIds.value,
         questionCount.value,
       )
@@ -149,6 +198,7 @@ export function useQuestionCompose() {
       questions.value = generated
       removedIds.value = []
       hasGenerated.value = true
+      await loadGeneratedBatches(batchIds)
       uni.showToast({ title: `已生成 ${generated.length} 道题目`, icon: 'success' })
       return generated.length
     } catch (error: any) {
@@ -249,6 +299,9 @@ export function useQuestionCompose() {
     remainingQuestions,
     removedIds,
     generationNotice,
+    generatedBatches,
+    generatedBatchLabels,
+    generatedBatchNotice,
     coverage,
     canStart,
     plannedCount,

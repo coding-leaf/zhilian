@@ -22,6 +22,8 @@
       </view>
     </view>
 
+    <QuestionBankSection />
+
     <template v-if="practices.length">
       <view class="section-title-row">
         <text class="section-title">我的练习</text>
@@ -106,6 +108,7 @@ import { usePracticeStore } from '@/stores/practice'
 import type { PracticeSummary, WrongRecordItem } from '@/types'
 import WrongRecordCard from './components/WrongRecordCard.vue'
 import PracticeEntryCard from './components/PracticeEntryCard.vue'
+import QuestionBankSection from './components/QuestionBankSection.vue'
 import {
   groupKnowledgePointIds,
   hasScope,
