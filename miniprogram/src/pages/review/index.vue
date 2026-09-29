@@ -22,7 +22,7 @@
       </view>
     </view>
 
-    <QuestionBankSection :wrong-records="wrongRecords" @wrong-changed="loadWrongs" />
+    <QuestionBankSection ref="bankSection" :wrong-records="wrongRecords" @wrong-changed="loadWrongs" />
 
     <template v-if="practices.length">
       <view class="section-title-row">
@@ -119,6 +119,14 @@ import {
 const practiceStore = usePracticeStore()
 
 const wrongRecords = ref<WrongRecordItem[]>([])
+
+/**
+ * 题库区块的句柄。
+ *
+ * 该区块自己负责「进页面即加载」（见 `QuestionBankSection.vue` 的 onMounted），
+ * 这里只在**下拉刷新**时一并刷新它，使三个区块在同一个手势下行为一致。
+ */
+const bankSection = ref<InstanceType<typeof QuestionBankSection> | null>(null)
 const groupOptions = ref<WrongGroupOption[]>([])
 const selectedGroupKey = ref('')
 const practices = ref<PracticeSummary[]>([])
@@ -189,7 +197,7 @@ onMounted(async () => {
 })
 
 onPullDownRefresh(async () => {
-  await Promise.all([loadWrongs(), loadPractices()])
+  await Promise.all([loadWrongs(), loadPractices(), bankSection.value?.loadBatches()])
   uni.stopPullDownRefresh()
 })
 
