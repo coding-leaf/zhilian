@@ -11,6 +11,11 @@ tasks:
   verify-backend:
     desc: Run all backend quality gates (ruff format/check, mypy, import-linter, pytest with 80% coverage)
     dir: backend
+    env:
+      # import-linter 用 rich 写转圈动画；Windows 控制台默认 GBK，遇到 U+2219 会抛
+      # UnicodeEncodeError，且发生在任何契约被评估之前 —— 门禁会假失败。
+      # 强制 UTF-8 输出即可；Linux/Docker 上此设置无副作用。
+      PYTHONIOENCODING: utf-8
     cmds:
       - uv run ruff format --check .
       - uv run ruff check .
