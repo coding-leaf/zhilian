@@ -157,11 +157,45 @@ PR 作者批准自己的 PR**，因此若启用 `required_pull_request_reviews`�
 | 配置项 | 取值 | 作用 |
 | --- | --- | --- |
 | `required_status_checks` | 严格模式 + CI 两个 job | 门禁不过不许合并 |
-| `enforce_admins` | false | 保留管理员应急通道 |
+| `enforce_admins` | **true** | 取证推翻了初版设计，见下方「5.3」 |
 | `required_pull_request_reviews` | **不设置** | 单账号自锁，见上 |
 | `allow_force_pushes` | false | 禁止强推 |
 | `allow_deletions` | false | 禁止删除 |
 | `restrictions` | 不设置 | 无多用户可限 |
+
+### 5.3 取证推翻的设计：`enforce_admins` 必须为 true
+
+初版本节的设计是 `enforce_admins: false`，理由是「保留管理员应急通道」。**实测证明这个取值
+等于没有保护**，已改为 `true`。
+
+取证过程（2026-09-29，在本仓库实测）：
+
+1. 按初版配置（`enforce_admins: false`）在本地 `master` 造一个空提交并直接推送；
+2. 推送**成功**，远端返回的原文就写明了原因：
+
+   ```
+   remote: Bypassed rule violations for refs/heads/master:
+   remote: - 2 of 2 required status checks are expected.
+   ```
+
+   `Bypassed rule violations` 意为**规则被绕过**，不是「规则不存在」。管理员身份直接穿透了
+   必需状态检查。
+3. 改为 `enforce_admins: true` 后重测，同一操作被真实拒绝：
+
+   ```
+   remote: error: GH006: Protected branch update failed for refs/heads/master.
+   remote: - 2 of 2 required status checks are expected.
+   ! [remote rejected] master -> master (protected branch hook declined)
+   ```
+
+**教训**：`enforce_admins: false` 看起来像「留一条应急通道」，实际效果是**对管理员完全失效**。
+配置项的名字容易被读成「是否对管理员更严格」，而它的真实语义是「保护规则是否也约束管理员」。
+凡是「配置成功 ≠ 约束生效」的场合，都必须**用一次真实的违规操作去验证**——
+这与本项目在 `AGENTS.md` 里记下的「退出码与覆盖率都会骗人」是同一条纪律。
+
+另有一处需要知道的副作用：本轮清理误推的空提交时发现，**`required_status_checks` 的严格模式
+会连管理员的历史回退一起挡住**。也就是说，一旦 master 上出现不合意的提交，正常流程下**只能靠
+新增提交来纠正，不能靠回退**。这是启用严格模式的真实代价，不是缺陷。
 
 **偏差留痕**：文档 3.1 表 3-1 要求 `main`/`develop`「需 1 名代码所有权人批准」。
 本仓库以 `master` 为集成分支、单账号运作，评审要求**在组织层面不可执行**。

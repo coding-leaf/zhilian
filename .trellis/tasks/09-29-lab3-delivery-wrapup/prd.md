@@ -192,3 +192,33 @@
 | `lab3-vc-evidence` | R4 | 对外可见的仓库形态 | 与 R1/R2/R3 同批走 `feature/ZL-143-lab3-delivery` 分支 |
 
 **父子不是依赖系统**：上表「排期约束」是执行顺序建议，各子任务仍须能独立计划、验证、归档。
+
+---
+
+## 交付状态（2026-09-29 收口）
+
+| 需求 | 状态 | 产物 | 验收 |
+| --- | --- | --- | --- |
+| R1 交付文档集 | **完成** | 根 `README.md`、`docs/开发过程文档.md`、`docs/后续待解决问题.md` | AC-1 ~ AC-3 通过 |
+| R2 界面截图集 | **未完成（占位）** | `docs/screenshots/README.md`（清单 + 采集记录） | AC-4 / AC-5 **不满足** |
+| R3 分工与个人小结 | **完成** | `docs/团队分工.md`（代号版）；真名版在仓库外 `zhilian-lab3-deliverables/` | AC-6 ~ AC-9 通过 |
+| R4 版本控制证据与门面 | **完成** | `verify.yml`、`CODEOWNERS`、`LICENSE`、PR #1、分支保护、description/topics | AC-10 ~ AC-13 通过 |
+
+### 客观取证
+
+| 项 | 证据 |
+| --- | --- |
+| CI 跑绿 | PR #1 运行 `36517460341` → success；合并后 master 运行 `36517710074` → success，两个 job 全绿 |
+| 合并提交 | `623d00f`，`git log --graph` 可见完整分支结构 |
+| 分支保护 | 直接推 master 被拒：`GH006: Protected branch update failed` / `2 of 2 required status checks are expected`，退出码 1 |
+| 防泄露 | 闸门取证 6 项通过；全对象库扫描 0 命中；全量被跟踪文件 0 命中 |
+| 本地门禁 | `task verify` 退出码 0 |
+
+### 未闭环项
+
+1. **R2 截图未完成**。首轮自动采集时后端进程僵死（端口在监听但应用层不响应），
+   10 张里仅 5 张可用，产物未归档。采集清单与重采前置条件已写进 `docs/screenshots/README.md`。
+2. **本任务树未归档**。R2 未完成即整树未收口；且归档会把目录移入 `archive/2026-09/`，
+   使各任务间的相对链接失效。按仓库既有做法，等真正收口时一起归档并改链接。
+3. **设计更正**：`design.md` 5.2 的 `enforce_admins` 初版取值被取证推翻，已在 5.3 记录
+   取证过程与真实结论（须为 `true`）。
