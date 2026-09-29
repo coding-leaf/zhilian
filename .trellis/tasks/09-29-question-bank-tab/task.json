@@ -12,7 +12,7 @@
   "assignee": "coding-leaf",
   "createdAt": "2026-09-29",
   "completedAt": null,
-  "branch": null,
+  "branch": "feat/question-bank-tab",
   "base_branch": "master",
   "worktree_path": null,
   "commit": null,
@@ -24,6 +24,6 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "2026-09-29 用户决定暂缓本任务自身的实现；两个子任务已交付并提交。",
   "meta": {}
 }

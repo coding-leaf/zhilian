@@ -477,3 +477,84 @@
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 14: 题库 Tab 任务树：批次分组题库、手动标记错题，并推翻一次「实测确认」
+
+### Summary
+
+用户提出四条需求（题库页按批次分组并跨批次再练、生题按批次归类、手动错题并据此再生题、
+学情页意义不明）。四项产品决策确认后建任务树：父任务 `09-29-question-bank-tab`
+下辖「题库区块」与「手动标记错题」两个子任务；原 `09-29-review-page-ia` 归档，
+结论无损移交。
+
+**两个子任务已实现并提交；父任务自身的页面重定义按用户决定暂缓**，收口为一个里程碑。
+
+本会话最有价值的部分是**两次被推翻的判断**：
+
+1. **`question_ids` 路径「不按 `question_count` 截断」是错的**（我曾标为「实测确认」）。
+   截断就在我读到的下一行（`services/practice.py:473`），`question_count` 默认 10。
+   实测 12 题显式建练习只落库 10 题，无任何错误信号。成因：读到一半就下结论。
+   教训写进 `.trellis/spec/frontend/api-payload-contracts.md` 的 Common Mistakes。
+2. **F1（错题记录缺 material/folder）在继承时已被 `15a621e` 修好**，任务性质从「修」
+   改为「补防回归测试」——它零覆盖，而失效模式是接口内两条路径互相矛盾。
+
+顺带查出一条**既有缺陷**：举一反三按「全部生成题目」算覆盖率，而练习按 `question_count`
+只收前 10 题，故会声称某考点已覆盖而对应题目根本没进练习（归父任务 R6，本次未修，
+已写进里程碑的已知问题）。
+
+### Main Changes
+
+- **题库区块**：新增 `GET /questions/batches`（服务端 group by，三次批量查询无 N+1）。
+  批次 ID 是 `batch_{uuid4().hex[:12]}` 无任何可读含义，故标签一律推导；一个批次可跨多份资料
+  （folder 范围出题只生成一个 batch_id）。路由必须注册在 `/questions/{id}` 之前，
+  否则被 `{id}` 捕获并 422 —— 有专门的变异验证断言。
+- **三态勾选用「整批 + 增删集」建模**，而非题目 ID 集合：否则「未展开不得预取题目」
+  与「全选」无法同时成立。只允许勾 `available` 题目，使「显示题数 == 实际题数」由结构保证。
+- **手动标记错题** + 修掉 `upsert_wrong_record` 的**无条件覆盖**：手工路径传 `None` 会把
+  判题写下的练习归属**静默抹成 NULL**。改为「非 None 才覆盖」，回归测试先确认失败再改。
+- 迁移 `0010` 放宽 `practice_id`/`attempt_item_id` 为可空，回滚显式删除手工记录行；
+  `ErrorType.MANUAL` 注明是来源标记而非错因归因；`build_question_snapshot` 抽出共用
+  （前端完全从快照渲染错题，两份形状会让手工与判题错题长得不一样）。
+- 新 spec `api-payload-contracts.md`：整理 `POST /practices` 与 `POST /wrong-records` 上
+  的**静默**请求体陷阱（截断、状态过滤、title 必填、material_id 自动补位、来源分道）。
+- `Taskfile.yml` 加 `PYTHONIOENCODING: utf-8`：`lint-imports` 撞 Windows GBK 会在
+  **任何契约被评估之前**假失败（实测退出码 1 / 加环境变量后 0）。
+- `AGENTS.md` 增两条：禁止绕道 WSL 执行（子代理曾因此耗时并失败，现场留下
+  `backend/.junit_report.xml`）；`tests/unit/core/algorithms/` 的墙钟阈值断言是既有抖动，
+  别当回归去追、也别放宽阈值。
+
+### Git Commits
+
+| 提交 | 说明 |
+|------|---------|
+| `c47b4b5` | chore(ci): 修 verify-backend 在 Windows 上的 GBK 假失败 |
+| `12fbc37` | docs(task): 题库 Tab 任务树，并沉淀 POST /practices 请求体语义 |
+| `74220aa` | feat(question-bank): 题库区块：按批次分组、三态选题与跨批次再练 |
+| `5590441` | docs(task): 记录题库任务树的归档顺序约束 |
+| `c6db194` | docs(spec): 记录错题本来源契约与「无归属 upsert 不得清除归属」不变量 |
+| `7ceef10` | feat(wrong-book): 手动标记错题，并修掉会静默销毁判题来源的覆盖行为 |
+| `892cc26` | docs(agents): 禁止绕道 WSL 执行，并说明既有墙钟基准抖动 |
+
+分支：`feat/question-bank-tab`（基于 `master`）。
+
+### Testing
+
+- 后端：`ruff` / `mypy`(135 文件) / `lint-imports`(5 契约) 干净，覆盖率 **91.21%**。
+- 前端：`eslint` / `vue-tsc` 干净，12 文件 **117 用例**全过（基线 102）。
+- `alembic current == heads == 0010_wrong_record_manual_scope`。
+- **变异验证**：删 `question_count` 传递 → 2 用例失败；删在途守卫 → 1 失败；
+  页码改回长度推导 → 1 失败；路由挪到 `{id}` 之后 → 422。
+- **未通过**：`tests/unit/core/algorithms/` 下 4 处墙钟微基准在全量套件 CPU 争用下超时
+  （阈值 200/50/20/100ms），单独跑全过，与本会话改动无调用路径。已在 `AGENTS.md` 留档。
+
+### Status
+
+[PARTIAL] **里程碑达成，父任务暂缓**
+
+- 已交付：题库区块、手动标记错题（含一个既有静默数据损坏缺陷的修复）。
+- 未做：父任务自身的页面重定义（删 summary 卡、区块重排、F2 吞错误、空态三档、
+  tabBar 改名）、F1 防回归测试、**R6 举一反三覆盖率截断修复**。
+- 已知问题清单见 `09-29-question-bank-tab/prd.md` 的「里程碑收尾」小节。
+- A/B 两个子任务**未单独归档**（避免链接失效），等整树收口时一起归档。
