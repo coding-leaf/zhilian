@@ -1,0 +1,89 @@
+# 智练工程门禁流水线
+#
+# 命令**精确镜像** Taskfile.yml 的 verify-backend / verify-frontend，
+# 不另立一套门禁 —— 本地跑绿即 CI 跑绿，避免两边标准漂移。
+#
+# 无需外部服务：项目的外部能力（大模型 / OCR / 向量化 / 存储 / 队列）全部有纯内存假实现，
+# 所以这里不挂 postgres / redis service 容器，测试也不依赖网络。
+
+name: verify
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# 同一分支的重复推送取消上一次运行，省 runner 也省等待
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端门禁（ruff / mypy / import-linter / pytest）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 固定 Python 3.13
+        run: uv python install 3.13
+
+      - name: 安装依赖（锁文件冻结）
+        run: uv sync --frozen --extra dev
+
+      - name: ruff 格式检查
+        run: uv run ruff format --check .
+
+      - name: ruff 静态检查
+        run: uv run ruff check .
+
+      - name: mypy 严格类型检查
+        run: uv run mypy app
+
+      - name: import-linter 架构契约
+        run: uv run lint-imports
+
+      - name: pytest（覆盖率 ≥ 80%）
+        run: uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
+
+  frontend:
+    name: 前端门禁（eslint / vue-tsc / vitest）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: miniprogram
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: miniprogram/pnpm-lock.yaml
+
+      - name: 安装依赖（锁文件冻结）
+        run: pnpm install --frozen-lockfile
+
+      - name: eslint
+        run: pnpm run lint
+
+      - name: vue-tsc 类型检查
+        run: pnpm run type-check
+
+      - name: vitest 单元测试
+        run: pnpm run test:unit
