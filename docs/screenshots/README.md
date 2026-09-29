@@ -1,52 +1,50 @@
 # 界面截图
 
-> **状态：待补（占位）**
-> 本目录暂放截图清单，图片本身尚未归档。补齐方式见下方「采集方式」。
->
-> **采集记录（2026-09-29）**：曾自动采集一轮，因当时后端进程僵死（端口在监听但应用层不响应），
-> 多数页面落到空态或降级态，仅 5 张可用，产物未归档。**重新采集前请先确认后端健康**：
-> `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs` 应返回 `200`。
+| 项 | 值 |
+| --- | --- |
+| 采集日期 | 2026-09-29 |
+| 采集方式 | 微信开发者工具自动化（`miniprogram-automator` 驱动，非手工截图） |
+| 模拟器 | 363 × 785，统一机型 |
+| 数据 | 全部来自真实后端（账号下 2 门课程、3 份已解析资料、21 道题、2 次练习、8 条错题） |
 
-截图用于满足课程第 3 次实验课第 1 条「界面截图」的要求。**不使用交互原型图充当产品截图**——
-`docs/demo/index.html` 是设计阶段的原型，与真实运行界面不是一回事。
+不采用 `docs/demo/index.html`——那是设计阶段的原型，与真实运行界面不是一回事。
 
-## 采集方式
+## 清单
 
-微信开发者工具打开 `miniprogram/dist/build/mp-weixin`（`appid` 为 `touristappid`，免登录），
-用模拟器工具栏的截图按钮逐页采集，统一机型与分辨率。
+| # | 文件 | 页面 | 路由 | 体现的内容 |
+| --- | --- | --- | --- | --- |
+| 01 | `01-workbench.png` | 工作台 | `pages/index/index` | 课程分类与课程级操作、导入入口、**课程全景刷题（77 个核心考点）**、资料列表与解析状态 |
+| 02 | `02-material-detail.png` | 资料详情 | `subpackages/material/pages/course/index?id=<资料ID>` | 解析就绪状态、**抽取 31 个考点的拓扑图谱**（L1/L2/L3 分层）、按知识点组卷出题入口 |
+| 03 | `03-upload.png` | 导入资料 | `subpackages/material/pages/upload/index` | 支持的资料格式说明（**该页本身只有说明文案，实际上传入口在工作台卡片上**） |
+| 04 | `04-question-review.png` | 核对出题 | `subpackages/material/pages/questions/index?material_id=<资料ID>` | **考点范围 31 个全选**、题型多选、题量与难度设置、智能出题入口 |
+| 05 | `05-question-bank.png` | 题库（学情 Tab） | `pages/review/index` | 学情全景（待攻克 8 / 已消灭 0）、我的练习与判题状态、错题巩固与举一反三 |
+| 06 | `06-wrong-book.png` | 错题本 | 同上（下滚） | 错题列表：题型徽标、巩固状态、题干、记录时间、针对本考点出题 |
+| 07 | `07-profile.png` | 个人中心 | `pages/profile/index` | **学习足迹：2 已建课程 / 3 就绪讲义 / 77 涵盖考点** |
+| 08 | `08-practice-session.png` | 作答中 | `subpackages/practice/pages/session/index?practice_id=<练习ID>` | 进度 1/7、答题卡、**选项选中态**、上一题/下一题 |
+| 09 | `09-diagnosis-report.png` | 诊断报告 | `subpackages/report/pages/detail/index?practice_id=<练习ID>` | 得分 4/12、得分率 33%、错题数、**四个薄弱考点的掌握度与巩固建议** |
+| 10 | `10-login.png` | 登录页 | `pages/auth/login` | 未登录初始态 |
 
-前置条件：后端需在 `http://localhost:8000` 运行，且账号已登录（界面上的数据均来自真实后端）。
+## 采集实现要点
 
-## 采集清单
+自动化脚本放在**仓库之外**（不引入 `miniprogram-automator` 依赖到本仓库的 `package.json`，
+避免污染 CI）。三个必须知道的坑：
 
-**必备 6 张**
+1. **`miniprogram-automator` 的 `launch()` 在 Node 22 上必然失败**：Node 不允许直接 `spawn` `.bat`，
+   而该库内部正是直接 spawn `cli.bat`。绕开方式是自己用 shell 起
+   `cli.bat auto --project <产物目录> --auto-port 9420`，再用 `automator.connect({ wsEndpoint })` 连它。
+2. **开发者工具需要开启「服务端口」**（设置 → 安全设置），否则 CLI 会报「工具的服务端口已关闭」并退出。
+3. **页面参数名是 `folder_id` / `material_id` / `practice_id`**，不是 `folder` / `material` / `practice`。
+   传错名字页面**不报错**，只是渲染空态——所以脚本必须校验落点路径，否则会把上一个页面当成目标页面拍下来。
 
-| # | 页面 | 路由 | 需要体现 |
-| --- | --- | --- | --- |
-| 01 | 工作台 | `pages/index/index` | 课程分类、资料列表、每份资料的解析状态 |
-| 02 | 出题核对 | `subpackages/material/pages/questions/index` | 考点树 + **已生成出来的题目列表** |
-| 03 | 作答中 | `subpackages/practice/pages/session/index` | 题干与选项的选中交互 |
-| 04 | 判题结果 | 同上（交卷后） | 判对 / 判错的反馈横幅 |
-| 05 | 题库与错题 | `pages/review/index` | 按出题批次分组的题目、错题列表与举一反三入口 |
-| 06 | 个人中心 | `pages/profile/index` | 学习足迹统计 |
+## 三条硬要求
 
-**加分 4 张**
+1. **必须拍到真实数据，不要空态。** 空态页面无法证明功能跑通。
+2. **不得出现真实姓名。** 本仓库公开。已逐张目视核对：界面上的用户标识为昵称 `123124` 与 UUID，无姓名。
+3. **采集前确认后端健康**：`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/docs` 应返回 `200`。
+   端口在监听**不等于**应用层在响应——曾遇到进程僵死（端口 LISTENING 但不回包），
+   当时采出的图全部是空态。
 
-| # | 页面 | 路由 | 需要体现 |
-| --- | --- | --- | --- |
-| 07 | 诊断报告 | `subpackages/report/pages/detail/index?practice_id=<练习ID>` | 掌握度四档划分、薄弱与退步考点 |
-| 08 | 资料上传 | `subpackages/material/pages/upload/index` | 支持格式与上传入口 |
-| 09 | 课程文件夹 | `subpackages/material/pages/course/index?id=<课程ID>` | 资料的课程归属与归档 |
-| 10 | 登录页 | `pages/auth/login` | 未登录初始态 |
+## 已知缺陷
 
-## 两条硬要求
-
-1. **必须拍到真实数据，不要空态。** 空态页面无法证明功能跑通。采集前确认账号下至少有：
-   1 门课程、1 份 `ready` 状态的资料、1 个出题批次、1 次已判题的练习。
-2. **不得出现真实姓名。** 本仓库公开，截图里的昵称、资料名、题干内容都需要过一眼。
-   界面若出现真实姓名，该图作废重拍。
-
-## 命名
-
-按上表编号命名，如 `01-workbench.png`、`07-diagnosis-report.png`，与表格行号一一对应，
-便于正文引用。
+`05-question-bank.png` 中**「我的题目」显示为空**，而接口 `/questions/batches` 实际返回 2 个批次
+（8 题与 13 题）。这不是截图问题，是真实缺陷，已记入 `docs/后续待解决问题.md`。
