@@ -1,0 +1,19 @@
+# 代码所有权与评审要求
+#
+# 角色维度的所有权矩阵、评审级别与特别约定，见 docs/团队分工.md 第 4 节
+# （该文档是《代码管理工作介绍 V1.0》表 3-1 的角色代号投影）。
+#
+# 本文件需要 GitHub 用户名，而本仓库目前只有一个协作账号，因此所有权在这里统一落到该账号。
+# 这不表示「一人拥有全部目录」——目录级的角色归属以 docs/团队分工.md 为准。
+# 若后续有多账号协作，按该文档的矩阵逐行展开，并同步启用「必需评审人批准」的分支保护。
+
+# 默认：全部路径
+*       @coding-leaf
+
+# 高风险路径单独列出，便于将来为它们配置更严格的评审要求
+/backend/app/core/algorithms/   @coding-leaf
+/backend/app/core/security.py   @coding-leaf
+/backend/app/api/deps/          @coding-leaf
+/backend/app/repositories/      @coding-leaf
+/deploy/                        @coding-leaf
+/.github/workflows/             @coding-leaf
