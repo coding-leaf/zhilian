@@ -150,6 +150,19 @@ export function apiGetMaterialDetail(id: string): Promise<MaterialItem> {
   }).then(adaptMaterial)
 }
 
+/**
+ * 软删除资料（后端置 is_deleted=True，**保留历史作答记录**）。
+ *
+ * 刻意不透出后端响应里的 `message`：它写的是「资料已移至回收站」，而**根本没有恢复接口**，
+ * 照显示就是骗用户。要显示文案请用调用方自己的措辞。
+ */
+export function apiDeleteMaterial(id: string): Promise<{ material_id: string; is_deleted: boolean }> {
+  return request<{ material_id: string; is_deleted: boolean; permanent: boolean; message: string }>({
+    url: `/materials/${id}`,
+    method: 'DELETE',
+  }).then((res) => ({ material_id: res.material_id, is_deleted: res.is_deleted }))
+}
+
 export function apiGetMaterialList(params?: { folder_id?: string; status?: string }): Promise<MaterialItem[]> {
   let url = '/materials'
   const queryParts: string[] = []

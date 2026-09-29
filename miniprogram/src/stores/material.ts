@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import {
   apiUploadMaterial,
+  apiDeleteMaterial,
   apiGetMaterialDetail,
   apiGetMaterialList,
   apiTriggerMaterialParse,
@@ -86,6 +87,17 @@ export const useMaterialStore = defineStore('material', () => {
     }
   }
 
+  // 4.5 软删除资料：成功后就地从列表移除（后端保留历史作答记录）
+  // 失败**必须向上抛**：吞掉错误会让「删除失败」与「已删除」在界面上一样，
+  // 正是 spec 里点名禁止的「空态与故障态不可区分」。
+  const deleteMaterial = async (id: string): Promise<void> => {
+    await apiDeleteMaterial(id)
+    materialList.value = materialList.value.filter((m) => m.id !== id)
+    if (currentMaterial.value?.id === id) {
+      currentMaterial.value = null
+    }
+  }
+
   // 5. 加载知识树
   const loadKnowledgeTree = async (materialId: string, versionId?: string) => {
     try {
@@ -153,6 +165,7 @@ export const useMaterialStore = defineStore('material', () => {
     upload,
     triggerParse,
     fetchMaterialDetail,
+    deleteMaterial,
     pollMaterialStatus,
     loadMaterialList,
     loadKnowledgeTree,

@@ -131,6 +131,11 @@
             <text class="action-link-study" @tap.stop="goToDetail(item)">知识图谱 →</text>
             <text class="action-link-practice" @tap.stop="goToQuestions(item)">智能出题 →</text>
           </view>
+
+          <!-- 删除入口无条件显示：资料卡整体有 @tap 跳详情，故必须 @tap.stop -->
+          <text class="material-delete" @tap.stop="requestDelete(item)">
+            {{ deletingId === item.id ? '删除中…' : '删除' }}
+          </text>
         </view>
       </view>
 
@@ -193,11 +198,17 @@ import { useAuthStore } from '@/stores/auth'
 import { useFolderStore } from '@/stores/folder'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import { canStartMaterialParse, isMaterialParsing, materialStatusText as getStatusText } from '@/utils/materialState'
+import { useMaterialDelete } from './composables/useMaterialDelete'
 import type { MaterialItem } from '@/types'
 
 const materialStore = useMaterialStore()
 const authStore = useAuthStore()
 const folderStore = useFolderStore()
+
+// 删除的交互编排抽到 composable：页面已远超 300 行约定，且内联分支在当前测试策略下不可测
+const { deletingId, requestDelete } = useMaterialDelete({
+  deleteMaterial: materialStore.deleteMaterial,
+})
 
 const showFolderModal = ref(false)
 const newFolderName = ref('')
@@ -712,6 +723,12 @@ const goToLogin = () => {
   align-items: center;
   border-top: 1px dashed #f5f5f4;
   padding-top: 16rpx;
+}
+
+.material-delete {
+  margin-left: 28rpx;
+  color: #b91c1c;
+  font-size: 23rpx;
 }
 
 .manual-parse-btn {
