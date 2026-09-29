@@ -31,6 +31,7 @@
 | 状态管理 | 5 个域 store 的职责与网络调用边界 | `src/stores/{auth,material,folder,practice,diagnosis}.ts` | 2026-09-29 |
 | 组合式函数 | `useQuestionCompose` 的契约与命名约定 | `src/subpackages/material/composables/useQuestionCompose.ts` | 2026-09-29 |
 | 网络与契约 | `uni.request` 封装、两档超时、结构化 `RequestError`、query 串由调用方拼装、`fail` 兜底 | `src/utils/request.ts`、`src/utils/requestError.ts`、`src/api/index.ts`、[network-contract.md](./network-contract.md) | 2026-09-29 |
+| 请求体语义 | 写入类接口的字段语义陷阱（`POST /practices` 的 `question_ids`/`question_count` 等**静默**行为） | `backend/app/schemas/practice.py`、`backend/app/services/practice.py`、[api-payload-contracts.md](./api-payload-contracts.md) | 2026-09-29 |
 | 质量门禁 | ESLint（`any` 已关闭）+ vue-tsc + Vitest | `package.json`、`.eslintrc.cjs`、`vitest.config.ts`、`tests/*.spec.ts` | 2026-09-29 |
 | 视觉设计系统 | 温润学术纸质色盘与 `page` 级 CSS 变量 | `src/App.vue`（`--color-*` 变量与 `.paper-card`）、`docs/DESIGN.md` | 2026-09-29 |
 | 助教与智能交互 | 全局/局部 AI 助教抽屉，题目级与范围级两个端点 | `src/components/AiCoachDrawer.vue`、`src/api/index.ts` | 2026-09-29 |

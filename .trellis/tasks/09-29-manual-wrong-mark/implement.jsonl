@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "放宽非空约束的迁移写法（batch_alter_table）、枚举必须取自 StrEnum、迁移对称性闸门"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码标准与禁止模式（含事务边界）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "快照构造器必须抽出共用，禁止手工路径另写一份形状"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "复核失败态与空态的判定是否与 store 的重置语义冲突"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "F1 防回归测试的断言强度（items 与 groups 归属一致）"}

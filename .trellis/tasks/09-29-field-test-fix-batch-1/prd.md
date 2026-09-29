@@ -20,6 +20,8 @@
    `tool_choice`），见 [09-29-fix-llm-thinking-mode](../09-29-fix-llm-thinking-mode/prd.md)。
 7. （追加，同日实测，**登记未实现**）「生题不能按批次显示归类」——`batch_id` 在后端契约与
    接口响应中均存在，前端仅声明类型、**从未渲染**，属从未实现而非回归。
+   **2026-09-29 移交**：用户当日追加需求后，本条已由
+   [09-29-question-bank-page](../09-29-question-bank-page/prd.md) 承接（R5），**本批次不再负责**。
 8. （追加，同日实测，**判定为下游症状**）「选择题也要判题，不该秒出么」——
    交卷后判题**全部异步入队**（`services/practice.py:1145` `enqueue("grading_jobs")`），
    而 worker 在本机不可用（见子任务 2），故所有题停在「判题中」。
@@ -30,13 +32,13 @@
 
 | 子任务 | 覆盖需求 | 层 | 优先级 | 依赖 |
 | --- | --- | --- | --- | --- |
-| [09-29-fix-global-input](../09-29-fix-global-input/prd.md) | 需求 1 | 前端（全局输入层） | P0 | 无 |
+| [09-29-fix-global-input](../archive/2026-09/09-29-fix-global-input/prd.md) | 需求 1 | 前端（全局输入层） | P0 | 无 |
 | [09-29-fix-parse-stuck](../09-29-fix-parse-stuck/prd.md) | 需求 2 | 后端（队列/worker）+ 前端（状态与反馈） | P0 | 无 |
 | [09-29-fix-qgen-feedback](../09-29-fix-qgen-feedback/prd.md) | 需求 3 | 前端（组卷流程反馈与结果落点） | P1 | **无**（定案后修正，见下） |
 | [09-29-fix-llm-thinking-mode](../09-29-fix-llm-thinking-mode/prd.md) | 追加需求 6（生题 502） | 后端（LLM 结构化输出） | P0 | 无 |
-| [09-29-fix-grading-no-commit](../09-29-fix-grading-no-commit/prd.md) | 追加需求 8 的真因 | 后端（判题事务边界） | P0 | 无；worker 可用后才会显现 |
+| [09-29-fix-grading-no-commit](../archive/2026-09/09-29-fix-grading-no-commit/prd.md) | 追加需求 8 的真因 | 后端（判题事务边界） | P0 | 无；worker 可用后才会显现 |
 | [09-29-fix-learning-stats](../09-29-fix-learning-stats/prd.md) | 需求 5 | 前后端（统计聚合）+ 前端空态 | P1 | **口径缺陷独立可复现**；parse-stuck 修好后会放大其可见度 |
-| [09-29-review-page-ia](../09-29-review-page-ia/prd.md) | 需求 4 | 产品/信息架构 | P2 | **门禁**：learning-stats 完成前不启动 |
+| [09-29-review-page-ia](../archive/2026-09/09-29-review-page-ia/prd.md) | 需求 4 | 产品/信息架构 | P2 | **已归档**（2026-09-29）：用户确认重构，转由 [09-29-question-bank-tab](../09-29-question-bank-tab/prd.md) 任务树承接 |
 
 **父子不是依赖系统**：上表「依赖」是排期约束，已写进各子任务 `prd.md`；
 每个子任务仍须能独立计划、实现、验证、归档。
@@ -80,7 +82,8 @@
 
 ## 未纳入本批次（明确不做）
 
-- **学情页的界面重设计**：由 `review-page-ia` 复核后再决定是否立项，本批次不预设结论。
+- **学情页的界面重设计**：~~由 `review-page-ia` 复核后再决定是否立项，本批次不预设结论。~~
+  **2026-09-29 结论已出**：用户确认重构，立为 `09-29-question-bank-tab` 任务树，**仍不在本批次内实现**。
 - **环境侧网络问题的根治**：属本仓库外的 `xray_tun` 路由问题，本批次只保证代码不放大它。
 - **Vue / uni-app 版本升级到新 stable**：`fix-global-input` 可能在**锁定**版本（而非升级）这一侧收敛；
   是否整体升级 uni-app 需单独决策，不在本批次内。
@@ -133,13 +136,19 @@
 ### 未开工的子任务
 
 - `09-29-fix-learning-stats`（学习足迹统计漏算未分类资料）
-- `09-29-review-page-ia`（学情页信息架构复核，有门禁）
-- `09-29-question-bank-page`（**独立任务，不在本批次树下**：题库页 + 批次分组 + 跨批次再练；
-  后端已就绪，纯前端。用户已确认要做，**PRD 尚未编写**）
+- ~~`09-29-review-page-ia`（学情页信息架构复核，有门禁）~~ —— **2026-09-29 已归档**：
+  用户确认要重构学情页，且题库页与手动错题两条新需求落在同一个页面上，
+  故升级为由 [09-29-question-bank-tab](../09-29-question-bank-tab/prd.md) 持有的任务树承接
+  （内含题库区块与手动标记错题两个子任务）。原任务结论已全部无损移交，见该归档 PRD 的交接小节。
+- ~~`09-29-question-bank-page`（独立任务）~~ —— **2026-09-29 已挂到上条的新任务树下**
+  （原记「纯前端」已过期：新增了一个批次聚合接口；原记「手动记录错题暂不立项」亦已过期，
+  用户本轮明确要它，现为 `09-29-manual-wrong-mark`）。
 
 ### 未决项
 
-- **手动记录错题**：用户明确**暂不立项**，不要再创建任务。
+- **手动记录错题**：~~用户明确**暂不立项**，不要再创建任务。~~
+  **2026-09-29 用户改主意**，本轮明确要求（「最好还能记录手动错题，根据错题再次生题」），
+  已立为 `09-29-manual-wrong-mark`。**形态已澄清为「标记已有题目」而非手打外部题目。**
 - **判题改为交卷时同步判客观题**：属体验设计决策，需单独评估（见 fix-grading-no-commit 的 Out of scope）。
 - **`max_tokens` 与推理 token 的关系**：`deepseek-flash` 是推理模型，`max_tokens` 过小会拿到空
   `content`（实测 `max_tokens=8` 时 `finish_content` 为空）。留档在 fix-llm-thinking-mode 的 Notes。

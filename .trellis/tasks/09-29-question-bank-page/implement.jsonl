@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "批次聚合查询必须遵守：过滤下推 SQL、禁止 N+1、分页统一返回 (items,total)"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "判定题库状态该进 composable 而非 Pinia store（跨页面共享判据、Server State 重置语义）"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Wire 类型与适配器归一化边界，新增批次接口的响应须在适配器层归一"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "批次标签推导必须共用同一纯函数，禁止题库页与核对出题页各写一份"}

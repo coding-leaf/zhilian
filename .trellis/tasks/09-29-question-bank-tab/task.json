@@ -1,0 +1,29 @@
+{
+  "id": "question-bank-tab",
+  "name": "question-bank-tab",
+  "title": "题库 Tab 重构：我的题目与错题",
+  "description": "把学情 Tab 重新定义为题库：上部按出题批次分组展示题目并支持跨批次再练，下部保留错题与举一反三，并修掉两处已登记缺陷",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-29-manual-wrong-mark",
+    "09-29-question-bank-page"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
