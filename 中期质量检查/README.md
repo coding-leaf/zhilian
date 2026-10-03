@@ -69,7 +69,7 @@
 | `.trellis/spec/{backend,frontend}/quality-guidelines.md` | 分层编码规范的来源 |
 | `Taskfile.yml` | 门禁命令的**事实源**；CI 命令必须与之逐字一致 |
 | `.github/workflows/verify.yml` | CI 流水线；与 `Taskfile.yml` 保持镜像 |
-| `sonar-project.properties` | SonarCloud 扫描配置（第 2 步新增） |
+| `sonar-project.properties` | SonarCloud 扫描配置（第 2 步新增；**key 仍为占位符，尚未启用**，见《环境与CI准备》§5.1） |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板的仓库内落地版 |
 
 ## 三条纪律（贯穿全部文档）
@@ -81,8 +81,12 @@
 ## 下一步
 
 1. 若拿到**老师原文/评分表**，按原文条目逐条对齐（当前口径以课程第 1、2 步描述为准）。
-2. **执行基线 tag**：按《基线版本》§2 的三条命令打 `midterm-baseline-2026-10-03` 并推送。
-3. **接入 SonarCloud**：按《环境与CI准备》§5.2 完成账号侧六步，回填两个占位符。
+2. **执行基线 tag**：按《基线版本》§2 的三条命令打 `midterm-baseline-2026-10-03` 并推送 —— **尚未执行**。
+3. **补齐第 2 步的三处缺口**（汇总表见《环境与CI准备》§8.1）：
+   - **编译**：前端 `build:mp-weixin` 未进 CI。先验证 `uni build` 在无微信开发者工具的 Linux runner 上可跑通，再接入（§3.1）；
+   - **SonarCloud**：`sonar` job 只是短路保绿，**尚未真正扫描**。按 §5.2 完成账号侧六步并回填两个 key；
+   - **必需评审**：前提已具备（仓库有两个账号），去 `Settings → Branches` 勾选 `Require approvals`（§2.3）。
 4. 执行 M0「基线化」：重跑基线命令、取前端覆盖率实测值、建立缺陷台账。
-5. 剩余后续项：`diff-cover` 增量门禁接线（《单测计划》§3.1）、前端覆盖率阈值定档（M0-2）、
+5. 剩余后续项：前端覆盖率阈值定档（M0-2）、**T0 接口层 `app/api/deps/` 补测至 90%**、
    spec 刷新（易变数字纪律 + 修正过期数字）。
+6. ~~`diff-cover` 增量门禁接线~~ —— **已完成**（《单测计划》§3.1，已实测并在 CI 上跑通）。
