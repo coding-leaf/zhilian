@@ -21,15 +21,18 @@ tasks:
       - uv run ruff check .
       - uv run mypy app
       - uv run lint-imports
-      - uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
+      - uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80
 
   verify-frontend:
-    desc: Run all frontend quality gates (eslint, vue-tsc typecheck, vitest unit tests)
+    desc: Run all frontend quality gates (eslint, vue-tsc typecheck, vitest unit tests with coverage)
     dir: miniprogram
     cmds:
       - pnpm run lint
       - pnpm run type-check
-      - pnpm run test:unit
+      # 用 test:cov 而非 test:unit：一次运行同时完成「测试 + 覆盖率」，
+      # 既保证门禁语义不变（无阈值），又产出 lcov 供 CI 上传与 SonarCloud 消费。
+      # 前置条件：已执行过 pnpm install（新增了 @vitest/coverage-v8）。
+      - pnpm run test:cov
 
   verify:
     desc: Execute full-stack physical verification gates (Backend + Frontend)

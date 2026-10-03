@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/10-03-midterm-ci-baseline/research/ci-and-baseline-facts.md", "reason": "CI/覆盖率/分支保护/基线范围的实测事实与缺口清单"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端门禁与覆盖率口径的权威约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端门禁与已知偏离，用于设计 test:cov"}

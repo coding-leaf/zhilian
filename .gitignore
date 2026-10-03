@@ -19,6 +19,7 @@ ENV/
 htmlcov/
 coverage.xml
 coverage.json
+miniprogram/coverage/
 *.db
 *.sqlite3
 
