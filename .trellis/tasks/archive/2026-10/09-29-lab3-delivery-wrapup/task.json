@@ -1,0 +1,31 @@
+{
+  "id": "lab3-delivery-wrapup",
+  "name": "lab3-delivery-wrapup",
+  "title": "第3次实验课交付收尾：代码实现与版本控制",
+  "description": "承接课程第3次实验课的 4 条交付要求（代码集与截图与过程文档、代码管理平台链接、小组分工与个人小结、后续待解决问题），拆成可独立验收的子交付物并收口。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-09-29",
+  "completedAt": "2026-10-03",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-29-lab3-process-docs",
+    "09-29-lab3-ui-screenshots",
+    "09-29-lab3-team-roster",
+    "09-29-lab3-vc-evidence"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
