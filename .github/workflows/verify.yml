@@ -5,6 +5,11 @@
 #
 # 无需外部服务：项目的外部能力（大模型 / OCR / 向量化 / 存储 / 队列）全部有纯内存假实现，
 # 所以这里不挂 postgres / redis service 容器，测试也不依赖网络。
+#
+# 覆盖率留档与静态扫描（中期质量检查新增）：
+#   - backend / frontend 两个 job 各自上传覆盖率报告 artifact（保留 14 天）；
+#   - sonar job 依赖前两者，消费报告做 SonarCloud 扫描；
+#   - **未配置 SONAR_TOKEN 时 sonar job 短路并保持绿色**，不影响现有门禁绿度。
 
 name: verify
 
@@ -52,8 +57,19 @@ jobs:
       - name: import-linter 架构契约
         run: uv run lint-imports
 
+      # 与 Taskfile.yml 的 verify-backend 逐字一致：门禁语义（--cov-fail-under=80）不变，
+      # 只是额外落一份 coverage.xml 供 artifact 与 SonarCloud 消费。
       - name: pytest（覆盖率 ≥ 80%）
-        run: uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
+        run: uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+      - name: 上传后端覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: 前端门禁（eslint / vue-tsc / vitest）
@@ -85,5 +101,50 @@ jobs:
       - name: vue-tsc 类型检查
         run: pnpm run type-check
 
-      - name: vitest 单元测试
-        run: pnpm run test:unit
+      # 与 Taskfile.yml 的 verify-frontend 一致：用 test:cov 一次跑完测试与覆盖率；
+      # 覆盖率**只统计不设阈值**，因此门禁语义不变。
+      - name: vitest 单元测试（含覆盖率）
+        run: pnpm run test:cov
+
+      - name: 上传前端覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: miniprogram/coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
+  sonar:
+    name: 静态扫描（SonarCloud）
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    env:
+      # 未配置该 secret 时本 job 短路为绿色，避免「未启用」被误读成「代码有问题」。
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: 未配置 SONAR_TOKEN，跳过静态扫描
+        if: env.SONAR_TOKEN == ''
+        run: echo "::notice title=SonarCloud 未启用::未配置 SONAR_TOKEN secret，已跳过静态扫描。配置方法见 中期质量检查/环境与CI准备.md。"
+
+      # fetch-depth: 0 是必需的 —— SonarCloud 需要完整历史来判定「新代码」，
+      # 浅克隆会让新增代码覆盖率失真。
+      - name: 检出（完整历史）
+        if: env.SONAR_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载覆盖率报告
+        if: env.SONAR_TOKEN != ''
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # 版本固定 v8：v6.0.0 修复了 args 命令注入漏洞（CVE-2025-59844），
+      # 不要降级到 v5 及以下。最新为 v8.2.2（2026-09-17）。
+      - name: SonarCloud 扫描
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

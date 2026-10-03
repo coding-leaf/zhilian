@@ -8,7 +8,8 @@
     "build:mp-weixin": "uni build -p mp-weixin",
     "lint": "eslint . --ext .vue,.js,.ts",
     "type-check": "vue-tsc --noEmit",
-    "test:unit": "vitest run"
+    "test:unit": "vitest run",
+    "test:cov": "vitest run --coverage"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4020920240930001",
@@ -29,6 +30,7 @@
     "@unocss/preset-uno": "^0.58.9",
     "@unocss/vite": "^0.58.9",
     "@vitejs/plugin-vue": "^5.0.4",
+    "@vitest/coverage-v8": "1.6.1",
     "@vue/test-utils": "^2.4.5",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
