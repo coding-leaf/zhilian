@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.practice import scatter_adjacent_knowledge_questions
@@ -30,6 +31,7 @@ from app.core.errors import (
     PracticeEmptyQuestionsError,
     PracticeNotFoundError,
     PracticeStatusError,
+    QueueError,
 )
 from app.core.security import generate_user_ref
 from app.integrations.idempotency.factory import create_idempotency_adapter
@@ -1338,13 +1340,35 @@ class PracticeService:
                 priority=1,
             )
             self.session.commit()
-        except Exception:
-            # 入队失败必须回滚状态，避免练习永久停在「判题中」而无可恢复入口
+        except (QueueError, SQLAlchemyError) as exc:
+            # BUG-FIX: 之前 except Exception 太宽，会吞掉 KeyboardInterrupt 等非业务异常；
+            # 改为捕获队列与数据库两类基础设施异常。状态跃迁+入队失败必须回滚，
+            # 避免练习永久停在「判题中」而无可恢复入口。
+            self.session.rollback()
+            raise PracticeStatusError(
+                "判题任务入队失败，请稍后重试",
+                details={"reason": str(exc), "original_type": type(exc).__name__},
+            ) from exc
+        except PracticeStatusError:
+            # PracticeStatusError（并发冲突）不需要包装，原始错误向上抛
             self.session.rollback()
             raise
 
-        practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=False)
+        # BUG-FIX: get_practice_by_id 检查也必须纳入事务边界，否则并发删除导致实体消失时
+        # 状态已跃迁到 SUBMITTED 但抛错无 rollback → 练习永久卡住无法重判。
+        # 修复策略：将二次校验纳入 try 块，捕获 NotFoundError 后 rollback + 包装错误。
+        try:
+            practice = self.practice_repo.get_practice_by_id(
+                practice_id, user_id, include_items=False
+            )
+        except SQLAlchemyError as exc:
+            self.session.rollback()
+            raise PracticeNotFoundError(
+                "请求的练习不存在或无权访问",
+                details={"practice_id": str(practice_id), "reason": str(exc)},
+            ) from exc
         if practice is None:
+            # 实体在状态跃迁 commit 期间消失，包装错误便于诊断
             raise PracticeNotFoundError(
                 "请求的练习不存在或无权访问",
                 details={"practice_id": str(practice_id)},
