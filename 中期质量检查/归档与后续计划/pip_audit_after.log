@@ -1,0 +1,10 @@
+﻿uv : No known vulnerabilities found
+所在位置 C:\Users\75120\AppData\Local\Temp\genie-ps-1791108137709-dwzj9i.ps1:954 字符: 63
++ ... ktop/智练_源代码_2026-09-29/智练_源代码/backend"; uv run pip-audit 2>&1 | Out-F ...
++                                             ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (No known vulnerabilities found:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Name            Skip Reason
+--------------- ------------------------------------------------------------------------------
+zhilian-backend Dependency not found on PyPI and could not be audited: zhilian-backend (0.1.0)
