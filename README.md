@@ -41,7 +41,8 @@
 外加「算法核禁止 IO」「仓储层禁止外部框架」等契约，由 import-linter 强制，越层调用直接失败。
 
 外部能力（大模型 / OCR / 向量化 / 对象存储 / 队列）全部走协议抽象，**每个都有一套纯内存假实现**。
-因此全量测试不依赖数据库与网络——这是 548 个测试函数能在秒级跑完的原因。
+因此全量测试不依赖数据库与网络——这是 1600+ 个测试用例能在约 50 秒内跑完的原因
+（单元测试 20 秒内完成，满足「全部单元测试 30 秒内跑完」的测试纪律）。
 
 ## 3 目录结构
 
@@ -53,10 +54,11 @@ backend/            FastAPI 服务
   app/integrations/      外部能力适配（协议抽象 + 假实现 + 生产实现）
   app/api/v1/            路由层，只做校验与转发
   migrations/            10 个 Alembic 迁移
-  tests/                 91 个测试文件、548 个测试函数
-miniprogram/        uni-app 小程序端（18 个页面）
+  tests/                 100 个测试文件、1600+ 个测试用例
+miniprogram/        uni-app 小程序端（9 个页面：主包 4 + 子包 5；截图见 docs/screenshots/）
 deploy/             docker-compose：postgres+pgvector / redis / minio / worker
 docs/               设计规范、开发过程文档、待解决问题、截图、团队分工
+tooling/            工程脚本（check_coverage.py：分模块覆盖率阈值校验）
 .trellis/           开发过程记录（任务树 PRD / 设计与执行计划、规范、开发日志）
 ```
 
@@ -91,24 +93,43 @@ pnpm run dev:mp-weixin        # 产物在 dist/dev/mp-weixin
 
 ```bash
 task verify           # 全量：后端 + 前端
-task verify-backend   # ruff format/check · mypy(strict) · import-linter · pytest（覆盖率 ≥ 80%）
+task verify-backend   # ruff format/check · mypy(strict) · import-linter · bandit/pip-audit（安全扫描）
+                      # · pytest（覆盖率 ≥ 80%）· check_coverage（分模块阈值）· diff-cover（增量 ≥ 80%）
 task verify-frontend  # eslint · vue-tsc · vitest
 task format           # 自动格式化
 ```
+
+**分模块覆盖率阈值**（`tooling/check_coverage.py`，与《代码管理工作介绍 V1.0》§4.3 同步）：
+
+| 范围 | 行覆盖 | 分支覆盖 |
+| --- | ---: | ---: |
+| 全局（`backend/app`） | ≥ 80% | ≥ 70% |
+| 算法核 `app/core/algorithms` | ≥ 95% | ≥ 90% |
+| `app/core/security.py` | ≥ 95% | — |
+| 服务层 `app/services` | ≥ 85% | — |
+
+排除清单（四类：应用启动装配 / 任务消费入口 / 迁移环境装配 / Pydantic 模式目录）
+集中维护在 `backend/pyproject.toml` 的覆盖率配置中，禁止行内标注规避阈值。
 
 等价的原生命令（`task` 不可用时）：
 
 ```bash
 cd backend    && uv run ruff format --check . && uv run ruff check . && uv run mypy app \
               && uv run lint-imports \
-              && uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
+              && uv run bandit -r app -lll -q && uv run pip-audit \
+              && uv run pytest tests --cov=app --cov-branch --cov-fail-under=80 \
+              && uv run python ../tooling/check_coverage.py --report coverage.json
 cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:unit
 ```
 
-同一套门禁已接进 GitHub Actions（`.github/workflows/verify.yml`），push 与 PR 都会跑。
+同一套门禁已接进 GitHub Actions（`.github/workflows/verify.yml`），
+**PR 到 master 与 master 的 push 都会跑**（dev 分支推送不触发，需开 PR 到 master）。
 
-> **已知的测试抖动**：`backend/tests/unit/core/algorithms/` 下有 4 处墙钟微基准断言
-> （200 / 50 / 20 / 100 ms）。全量套件在 CPU 争用下可能失败，**单独跑全过**。
+提交前另有一道本地钩子（`.pre-commit-config.yaml`）：ruff 格式化、ESLint 修复、
+文件尾与私钥检查——`pre-commit install` 启用。
+
+> **已知的测试抖动**：`backend/tests/unit/core/algorithms/` 下有 6 处墙钟微基准断言
+> （200 / 100 / 100 / 50 / 20 ms 与 2 s 分块上限）。全量套件在 CPU 争用下可能失败，**单独跑全过**。
 > 这是既有的测试设计问题，不是回归——详见 `AGENTS.md` 的说明。
 
 ## 6 当前完成度
@@ -117,10 +138,10 @@ cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:unit
 
 | 指标 | 数值 |
 | --- | --- |
-| 提交 | 250 次（2026-09-23 起） |
-| 后端算法核 | 9 个纯函数模块，分支覆盖率 100% |
-| 后端测试 | 91 个文件 / 548 个测试函数 |
-| 前端单元测试 | 13 个文件 / 125 个用例 |
+| 后端算法核 | 9 个纯函数模块，行覆盖 99.9% / 分支覆盖 99.7% |
+| 后端测试 | 100 个文件 / 1600+ 个用例；单元测试 20 秒内、全量约 50 秒（不依赖数据库与网络） |
+| 后端覆盖率 | 全局行 95.5% / 分支 86.9%（四类排除清单外口径，见 §5） |
+| 前端单元测试 | 14 个测试文件 |
 | 数据库迁移 | 10 个 Alembic 版本 |
 
 ## 7 已知问题

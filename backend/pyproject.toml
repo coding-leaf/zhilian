@@ -34,6 +34,7 @@ dev = [
     "bandit>=1.7.0",
     "pip-audit>=2.7.0",
     "httpx>=0.27.0",
+    "diff-cover>=9.0.0",
 ]
 
 [build-system]
@@ -67,6 +68,42 @@ minversion = "8.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+# ============================================================================
+# 覆盖率配置（《代码管理工作介绍 V1.0》§4.3）
+# ----------------------------------------------------------------------------
+# 统计范围：仅 backend/app（测试代码与工程脚本不计入）；分支统计必开。
+# 分模块阈值由 tooling/check_coverage.py 读取 coverage.json 校验：
+#   全局 行≥80% / 分支≥70%；algorithms 行≥95% / 分支≥90%；
+#   security.py 行≥95%；services 行≥85%。
+# 排除清单（四类，2026-10-05 落地；新增排除项须走合并请求，写明行数/理由/替代验证）：
+#   1) app/main.py              应用启动装配（54 行/8 分支）——启动路径由
+#      test_app_lifespan.py 以装配断言 + e2e 冒烟替代验证
+#   2) app/worker.py            任务消费进程入口（76 行/20 分支）——进程生命周期由
+#      deploy 健康检查 + test_p0_full_chain_e2e.py 替代验证
+#   3) migrations/env.py        迁移脚本环境装配（source=app 外，显式声明防 source 调整）
+#      ——升级/降级路径由 test_migration_model_consistency.py 替代验证
+#   4) app/schemas/*            Pydantic 模式定义目录（1273 行/362 分支）——声明式模型，
+#      结构契约由 schemas 单测 + OpenAPI 快照替代验证
+# 禁止用行内标注（# pragma: no cover）规避阈值。
+# ============================================================================
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "app/main.py",
+    "app/worker.py",
+    "migrations/env.py",
+    "app/schemas/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
 
 [tool.importlinter]
 root_package = "app"

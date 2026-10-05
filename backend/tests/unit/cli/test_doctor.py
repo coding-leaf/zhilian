@@ -21,7 +21,13 @@ from app.core.config import get_settings
 
 @pytest.fixture(autouse=True)
 def _fake_provider_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """将全链路 Provider 回落为 fake/memory 并指向内存 SQLite，清除配置缓存。"""
+    """将全链路 Provider 回落为 fake/memory 并指向内存 SQLite，清除配置缓存。
+
+    同时把基础设施探测桩化为固定结果：单元测试不连接数据库、缓存与对象存储
+    （《概要设计说明书》§7.2 三条规则之一）。未桩化时，真实 PG/Redis 探测在
+    无服务环境会产生分钟级 TCP 超时（实测单用例 522s），违反「单用例毫秒级、
+    全部单元测试 30 秒内跑完」的测试纪律。
+    """
     monkeypatch.setenv("ZHILIAN_LLM__PROVIDER", "fake")
     monkeypatch.setenv("ZHILIAN_EMBEDDING__PROVIDER", "fake")
     monkeypatch.setenv("ZHILIAN_SEARCH__PROVIDER", "fake")
@@ -30,6 +36,17 @@ def _fake_provider_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("ZHILIAN_IDEMPOTENCY__PROVIDER", "memory")
     monkeypatch.setenv("ZHILIAN_DB__DB_URL", "sqlite:///:memory:")
     get_settings.cache_clear()
+
+    def _unreachable(self: CliContext) -> dict[str, str]:
+        return {"reachable": False, "detail": "unit-test stub（不发起真实探测）"}
+
+    monkeypatch.setattr(CliContext, "_probe_database", _unreachable)
+    monkeypatch.setattr(CliContext, "_probe_redis", _unreachable)
+    monkeypatch.setattr(CliContext, "_probe_minio", _unreachable)
+    # db_revision 同样会 engine.connect()：真实 PG URL 下实测 260s TCP 超时，
+    # 桩化为 None（与「表不存在或不可达」的既有语义一致）。
+    monkeypatch.setattr(CliContext, "db_revision", lambda self: None)
+
     yield
     get_settings.cache_clear()
 

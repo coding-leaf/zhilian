@@ -31,6 +31,7 @@ from app.core.errors import (
     PracticeEmptyQuestionsError,
     PracticeNotFoundError,
     PracticeStatusError,
+    QueueError,
 )
 from app.integrations.idempotency.memory import MemoryIdempotencyAdapter
 from app.integrations.queue.memory import MemoryQueueAdapter
@@ -1316,16 +1317,26 @@ class TestPracticeServiceGradingRecovery:
     def test_retry_grading_rolls_back_status_when_dispatch_fails(
         self, session: Session, test_setup: dict[str, Any]
     ) -> None:
-        """入队失败必须回滚为可恢复状态，避免练习永久停在「判题中」."""
+        """入队失败必须回滚为可恢复状态，避免练习永久停在「判题中」.
+
+        BUG-FIX: retry_grading 的异常捕获从 `except Exception` 收紧到
+        `except (QueueError, SQLAlchemyError)`，测试同步改为注入 QueueError
+        以模拟真实队列异常路径。
+        """
+
         queue = MemoryQueueAdapter()
         service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
         practice = self._create_and_submit(service, test_setup)
         user_id = test_setup["user_id"]
         service.mark_grading_failed(user_id, practice.id)
 
-        queue.set_fault_injection("enqueue", RuntimeError("redis down"))
-        with pytest.raises(RuntimeError):
+        # 注入生产中真实抛出的异常类型（QueueError），而非任意 RuntimeError
+        queue.set_fault_injection("enqueue", QueueError("redis down"))
+        with pytest.raises(PracticeStatusError) as exc_info:
             service.retry_grading(user_id, practice.id)
+        # BUG-FIX: 入队失败必须抛包装后的 PracticeStatusError 带 reason
+        assert exc_info.value.error_code == 40011
+        assert "redis down" in exc_info.value.details.get("reason", "")
 
         queue.set_fault_injection("enqueue", None)
         restored = service.practice_repo.get_practice_by_id(practice.id, user_id)

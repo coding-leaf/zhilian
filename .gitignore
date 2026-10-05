@@ -20,6 +20,7 @@ htmlcov/
 coverage.xml
 coverage.json
 miniprogram/coverage/
+backend/bandit-report.txt
 *.db
 *.sqlite3
 
@@ -65,3 +66,7 @@ miniprogram/.env*
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# 中期质量检查归档：原始日志与覆盖率快照随仓库留档（仅该目录，不影响全局忽略）
+!中期质量检查/**/*.log
+!中期质量检查/**/coverage.xml

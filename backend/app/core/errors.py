@@ -1042,13 +1042,14 @@ class AttemptItemNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if attempt_item_id is not None:
             merged_details["attempt_item_id"] = str(attempt_item_id)
+        # BUG-FIX: 不传 detail 别名给父类，否则 AppError.__init__ 会优先使用 detail 别名，
+        # 覆盖 merged_details 中已注入的 attempt_item_id。仅通过 details 通道传递即可。
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
@@ -1176,13 +1177,13 @@ class MasteryRecordNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if knowledge_point_id is not None:
             merged_details["knowledge_point_id"] = str(knowledge_point_id)
+        # BUG-FIX: 同 AttemptItemNotFoundError，不传 detail 别名以保留参数注入合并语义。
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
@@ -1203,13 +1204,13 @@ class WrongRecordNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if record_id is not None:
             merged_details["record_id"] = str(record_id)
+        # BUG-FIX: 同 AttemptItemNotFoundError，不传 detail 别名以保留参数注入合并语义。
         super().__init__(
             message=message,
             error_code=error_code,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
