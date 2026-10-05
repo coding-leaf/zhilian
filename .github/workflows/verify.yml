@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   backend:
-    name: 后端门禁（ruff / mypy / import-linter / pytest / diff-cover）
+    name: 后端门禁（ruff / mypy / import-linter / 安全扫描 / pytest / 分模块覆盖率 / diff-cover）
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -61,10 +61,29 @@ jobs:
       - name: import-linter 架构契约
         run: uv run lint-imports
 
+      # 安全扫描（《代码管理工作介绍 V1.0》表 4-2）：高危及以上为 0（阻断合并）；
+      # 中危仅登记不阻断，全量报告随 artifact 留档（当前 2 项已评估，见中期质量检查报告）。
+      - name: bandit 安全扫描（高危及以上阻断）
+        run: uv run bandit -r app -lll -q
+
+      - name: bandit 全量报告留档（中危登记，不阻断）
+        if: always()
+        run: uv run bandit -r app -ll -q -f txt -o bandit-report.txt --exit-zero
+
+      # 依赖漏洞：发现任何已知漏洞即阻断（当前 0 项，pyjwt 已升至 2.15.1）。
+      - name: pip-audit 依赖漏洞扫描
+        run: uv run pip-audit
+
       # 与 Taskfile.yml 的 verify-backend 逐字一致：门禁语义（--cov-fail-under=80）不变，
-      # 只是额外落一份 coverage.xml 供 artifact 与 SonarCloud 消费。
+      # 额外落 coverage.xml 供 artifact 与 SonarCloud 消费、coverage.json 供分模块阈值校验。
       - name: pytest（覆盖率 ≥ 80%）
-        run: uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+        run: uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-report=json --cov-fail-under=80
+
+      # 分模块覆盖率阈值（《代码管理工作介绍 V1.0》§4.3）：
+      # 全局 行≥80%/分支≥70%；algorithms 行≥95%/分支≥90%；security 行≥95%；services 行≥85%。
+      # 阈值唯一事实源在 tooling/check_coverage.py（与文档同步维护）。
+      - name: 分模块覆盖率阈值（tooling/check_coverage.py）
+        run: uv run python ../tooling/check_coverage.py --report coverage.json
 
       # 与 Taskfile.yml 的 verify-backend 逐字一致：增量覆盖率与全量口径**叠加**，
       # 全量防倒退、增量防「新代码没测」。无匹配改动时 diff-cover 退出码为 0（已实测）。
@@ -79,12 +98,15 @@ jobs:
       - name: T0 接口依赖层覆盖率（当前 ≥ 80%，目标 90%）
         run: uv run coverage report --include="app/api/deps/*" --fail-under=80
 
-      - name: 上传后端覆盖率报告
+      - name: 上传后端覆盖率与安全扫描报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
-          path: backend/coverage.xml
+          path: |
+            backend/coverage.xml
+            backend/coverage.json
+            backend/bandit-report.txt
           if-no-files-found: warn
           retention-days: 14
 
