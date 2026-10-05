@@ -1,0 +1,55 @@
+# 提交前门禁（《代码管理工作介绍 V1.0》表 4-2「提交前」档位）：
+#   ruff 格式化（后端）· ESLint 自动修复（前端）· 文件尾与密钥检查。
+# 使命：把「格式/低级错误」挡在提交之前，让合并门禁只处理真正的问题。
+#
+# 启用（每台开发机一次）：
+#   uv tool install pre-commit   # 或 pipx install pre-commit
+#   pre-commit install           # 安装 git hook
+#   pre-commit run --all-files   # 首次全量自查（可选）
+#
+# 设计说明：后端/前端格式化统一走 **项目自身工具链**（uv / pnpm），
+# 与 Taskfile.yml、CI 保持同一版本来源（uv.lock / pnpm-lock），
+# 避免 pre-commit 独立版本与门禁版本漂移。
+
+default_install_hook_types: [pre-commit]
+
+repos:
+  # 文件级通用检查（官方 hooks，与语言无关）
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+        name: 文件尾空行修正
+      - id: trailing-whitespace
+        name: 行尾空白清理
+      - id: detect-private-key
+        name: 私钥与密钥检测
+      - id: check-merge-conflict
+        name: 合并冲突标记检查
+      - id: check-added-large-files
+        name: 大文件检查
+        args: ["--maxkb=2048"]
+
+  # 后端：ruff 格式化 + 静态检查（--fix），与 verify-backend 同一 ruff 版本
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff 格式化（backend）
+        entry: uv run --directory backend ruff format
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+      - id: ruff-check-fix
+        name: ruff 静态检查自动修复（backend）
+        entry: uv run --directory backend ruff check --fix
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      # 前端：ESLint 自动修复（miniprogram）
+      - id: eslint-fix
+        name: ESLint 自动修复（miniprogram）
+        entry: pnpm --dir miniprogram exec eslint --fix
+        language: system
+        files: ^miniprogram/.*\.(ts|js|vue)$
+        pass_filenames: false
