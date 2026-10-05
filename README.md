@@ -55,7 +55,7 @@ backend/            FastAPI 服务
   app/api/v1/            路由层，只做校验与转发
   migrations/            10 个 Alembic 迁移
   tests/                 100 个测试文件、1600+ 个测试用例
-miniprogram/        uni-app 小程序端（18 个页面）
+miniprogram/        uni-app 小程序端（9 个页面：主包 4 + 子包 5；截图见 docs/screenshots/）
 deploy/             docker-compose：postgres+pgvector / redis / minio / worker
 docs/               设计规范、开发过程文档、待解决问题、截图、团队分工
 tooling/            工程脚本（check_coverage.py：分模块覆盖率阈值校验）
