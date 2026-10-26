@@ -109,6 +109,24 @@ def service(
     )
 
 
+def test_statistics_are_scoped_to_users_ready_materials(service: MaterialService) -> None:
+    user_id = uuid.uuid4()
+    for owner, status in [
+        (user_id, MaterialStatus.READY),
+        (user_id, MaterialStatus.PENDING),
+        (uuid.uuid4(), MaterialStatus.READY),
+    ]:
+        service.repo.create_material(
+            user_id=owner,
+            title="统计讲义",
+            file_format="txt",
+            file_size=1,
+            status=status.value,
+        )
+
+    assert service.get_statistics(user_id=user_id) == (1, 0)
+
+
 class TestMagicAndValidation:
     """Test suite for file magic and constraint validations."""
 

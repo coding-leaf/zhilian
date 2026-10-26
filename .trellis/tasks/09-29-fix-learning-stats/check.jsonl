@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"聚合计数口径、权限隔离与无迁移"}
+{"file":".trellis/spec/backend/material-statistics.md","reason":"本次新建的跨层可执行计数、加载和刷新契约"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"全量门禁和有意义的防回归断言"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"加载失败、账号切换与陈旧请求"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"新增 API 数据契约一致"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"小程序生命周期和组件行为"}
+{"file":".trellis/spec/frontend/network-contract.md","reason":"失败可见且可重试"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端门禁和产物验证"}

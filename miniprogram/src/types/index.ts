@@ -96,6 +96,16 @@ export interface MaterialListResult {
   offset: number
 }
 
+// 当前用户未删除且 ready 的全部资料，包含未分类与归档课程。
+export interface MaterialStatistics {
+  ready_material_count: number
+  knowledge_point_count: number
+}
+
+export type LearningStatisticsState =
+  | { status: 'logged-out' | 'loading' | 'error' }
+  | ({ status: 'ready'; course_count: number } & MaterialStatistics)
+
 export interface KnowledgeTreeNode {
   id: string
   material_id: string

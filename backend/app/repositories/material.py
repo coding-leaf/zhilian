@@ -42,6 +42,34 @@ class MaterialRepository:
     # Material 主表操作
     # ==========================================
 
+    def get_statistics(self, *, user_id: uuid.UUID) -> tuple[int, int]:
+        """统计用户未删除的就绪资料及其考点，包含未分类和归档课程资料。
+
+        考点按实体计数，不限激活版本；独立标量聚合避免 JOIN 放大资料数。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            tuple[int, int]: (就绪资料数, 考点数)。
+        """
+        material_filters = (
+            Material.user_id == user_id,
+            Material.is_deleted.is_(False),
+            Material.status == MaterialStatus.READY.value,
+        )
+        material_count = select(func.count(Material.id)).where(*material_filters).scalar_subquery()
+        knowledge_count = (
+            select(func.count(KnowledgePoint.id))
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(*material_filters, KnowledgePoint.user_id == user_id)
+            .scalar_subquery()
+        )
+        ready_material_count, knowledge_point_count = self.session.execute(
+            select(material_count, knowledge_count)
+        ).one()
+        return ready_material_count, knowledge_point_count
+
     def create_material(
         self,
         *,

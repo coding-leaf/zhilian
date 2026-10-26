@@ -22,23 +22,7 @@
     </view>
 
     <!-- 学习统计面板 -->
-    <view class="paper-card stats-card">
-      <text class="card-title">学习足迹</text>
-      <view class="stats-grid">
-        <view class="grid-item">
-          <text class="grid-num">{{ folderStore.folders.length }}</text>
-          <text class="grid-label">已建课程</text>
-        </view>
-        <view class="grid-item">
-          <text class="grid-num">{{ readyMaterialCount }}</text>
-          <text class="grid-label">就绪讲义</text>
-        </view>
-        <view class="grid-item">
-          <text class="grid-num">{{ totalKnowledgePoints }}</text>
-          <text class="grid-label">涵盖考点</text>
-        </view>
-      </view>
-    </view>
+    <LearningStatisticsCard :state="statisticsState" @retry="refreshStatistics" />
 
     <!-- 登录/退出控制卡片 -->
     <view class="action-card-section">
@@ -99,33 +83,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref } from 'vue'
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { useAuthStore } from '@/stores/auth'
-import { useFolderStore } from '@/stores/folder'
 import { uploadFile } from '@/utils/request'
+import LearningStatisticsCard from './components/LearningStatisticsCard.vue'
+import { useLearningStatistics } from './composables/useLearningStatistics'
 
 const authStore = useAuthStore()
-const folderStore = useFolderStore()
+const { state: statisticsState, refresh: refreshStatistics } = useLearningStatistics()
 
 const showEditModal = ref(false)
 const editNickname = ref('')
 const isSaving = ref(false)
 const isUploadingAvatar = ref(false)
 
-const readyMaterialCount = computed(() => {
-  return folderStore.folders.reduce((acc, f) => acc + (f.ready_material_count || 0), 0)
+onShow(() => {
+  if (authStore.isLoggedIn() && !authStore.user) {
+    void authStore.fetchProfile()
+  }
+  return refreshStatistics()
 })
 
-const totalKnowledgePoints = computed(() => {
-  return folderStore.folders.reduce((acc, f) => acc + (f.knowledge_point_count || 0), 0)
-})
-
-onMounted(async () => {
-  if (authStore.isLoggedIn()) {
-    if (!authStore.user) {
-      await authStore.fetchProfile()
-    }
-    await folderStore.loadFolders()
+onPullDownRefresh(async () => {
+  try {
+    await refreshStatistics()
+  } finally {
+    uni.stopPullDownRefresh()
   }
 })
 
@@ -285,42 +269,6 @@ const handleLogout = () => {
   margin-top: 6rpx;
 }
 
-.stats-card {
-  padding: 32rpx;
-  margin-bottom: 32rpx;
-}
-
-.card-title {
-  font-size: 28rpx;
-  font-weight: 700;
-  color: #1c1917;
-  display: block;
-  margin-bottom: 24rpx;
-}
-
-.stats-grid {
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-}
-
-.grid-item {
-  text-align: center;
-}
-
-.grid-num {
-  font-size: 38rpx;
-  font-weight: 700;
-  color: #1e3a8a;
-  display: block;
-}
-
-.grid-label {
-  font-size: 24rpx;
-  color: #78716c;
-  margin-top: 4rpx;
-}
-
 .action-card-section {
   margin-top: 48rpx;
 }
@@ -461,4 +409,3 @@ const handleLogout = () => {
   z-index: 1;
 }
 </style>
-

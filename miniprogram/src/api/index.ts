@@ -9,6 +9,7 @@ import type {
   FolderKnowledgePointsResult,
   MaterialItem,
   MaterialListResult,
+  MaterialStatistics,
   KnowledgeTreeResult,
   KnowledgePointDetail,
   PointSourceListResult,
@@ -132,6 +133,13 @@ export function apiGetFolderKnowledgePoints(folderId: string): Promise<FolderKno
 }
 
 // 3. 资料 API
+export function apiGetMaterialStatistics(): Promise<MaterialStatistics> {
+  return request<MaterialStatistics>({
+    url: '/materials/statistics',
+    method: 'GET',
+  })
+}
+
 export function apiUploadMaterial(
   filePath: string,
   title?: string,

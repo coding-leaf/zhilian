@@ -1205,6 +1205,17 @@ class MaterialService:
         material.page_count = page_count  # type: ignore[attr-defined]
         return material
 
+    def get_statistics(self, *, user_id: uuid.UUID) -> tuple[int, int]:
+        """获取当前用户学习足迹的就绪资料数与考点数。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            tuple[int, int]: (就绪资料数, 考点数)。
+        """
+        return self.repo.get_statistics(user_id=user_id)
+
     def list_materials(
         self,
         user_id: uuid.UUID | None = None,

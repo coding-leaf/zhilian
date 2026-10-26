@@ -48,6 +48,13 @@ def sanitize_material_title(
     return cleaned[:MAX_TITLE_LENGTH]
 
 
+class MaterialStatisticsResponse(BaseModel):
+    """当前用户未删除且就绪的资料统计，含未分类和归档课程资料。"""
+
+    ready_material_count: int = Field(..., ge=0, description="就绪资料总数")
+    knowledge_point_count: int = Field(..., ge=0, description="就绪资料下的考点实体总数")
+
+
 class MaterialUploadResponse(BaseModel):
     """资料上传创建成功响应模型 (201 Created)。"""
 

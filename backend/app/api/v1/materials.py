@@ -44,6 +44,7 @@ from app.schemas.material import (
     MaterialParseRequest,
     MaterialParseResponse,
     MaterialReshootResponse,
+    MaterialStatisticsResponse,
     MaterialUploadResponse,
     MaterialVersionItem,
     MaterialVersionListResponse,
@@ -335,6 +336,32 @@ async def list_materials(
         total=total,
         limit=calc_limit,
         offset=calc_offset,
+    )
+
+
+@router.get(
+    "/statistics",
+    response_model=MaterialStatisticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="获取当前用户学习资料统计",
+)
+async def get_material_statistics(
+    user: Annotated[User, Depends(get_current_user)],
+    material_service: Annotated[MaterialService, Depends(get_material_service)],
+) -> MaterialStatisticsResponse:
+    """获取全量就绪资料与考点计数，不受课程归属或分页限制。
+
+    Args:
+        user: 当前登录租户用户对象。
+        material_service: 资料领域编排服务。
+
+    Returns:
+        MaterialStatisticsResponse: 当前用户的学习资料统计。
+    """
+    ready_material_count, knowledge_point_count = material_service.get_statistics(user_id=user.id)
+    return MaterialStatisticsResponse(
+        ready_material_count=ready_material_count,
+        knowledge_point_count=knowledge_point_count,
     )
 
 
