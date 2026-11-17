@@ -633,3 +633,27 @@ Fixed UI blurriness & oversized/rigid AI coach text, fixed /coach/ask multi-scop
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: RAG P0-P2, PyMuPDF + VLM/Rerank & Adaptive Corrective LangGraph
+<!-- trellis-session: v=2 fp=d5283974f6e743cf -->
+
+**Date**: 2026-11-18
+**Task**: RAG P0-P2, PyMuPDF + VLM/Rerank & Adaptive Corrective LangGraph
+**Branch**: `master`
+
+### Summary
+
+Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM routing, math/Greek garble detection, formula/table-safe iterative chunking, contextual embeddings, SiliconFlow Reranker & full-corpus hybrid search with neighbor expansion, Adaptive+Corrective LangGraph coach with thread_id sliding-window memory, and frontend LaTeX matrix/table rendering.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fe04fbc` | feat(backend): upgrade RAG P0-P2 with PyMuPDF, SiliconFlow VLM/Rerank, and Adaptive LangGraph |
+| `fd347e7` | feat(frontend): enhance LaTeX matrix/table rendering and coach thread_id continuity |
+| `db4e792` | docs(trellis): document rerank adapter and richText LaTeX/table support |
+
+### Status
+
+[OK] **Completed**
