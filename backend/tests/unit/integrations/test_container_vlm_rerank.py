@@ -109,7 +109,7 @@ class TestCreateDefault:
 
     def test_defaults_are_offline(self) -> None:
         """默认配置：rerank=Fake，vlm=None。"""
-        registry = ProviderRegistry.create_default(AppSettings())
+        registry = ProviderRegistry.create_default(AppSettings(_env_file=None))  # type: ignore[call-arg]
 
         assert isinstance(registry.rerank, FakeRerankAdapter)
         assert registry.vlm is None

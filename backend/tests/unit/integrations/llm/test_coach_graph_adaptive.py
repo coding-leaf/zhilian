@@ -830,3 +830,75 @@ class TestCheckpointerAndCompat:
             material_ids=(MATERIAL,),
         ) == (None, [])
         search.search.assert_not_called()
+
+
+def test_coach_graph_nested_openai_structured_workflow_does_not_inherit_checkpointer() -> None:
+    """父图启用 MemorySaver 时，嵌套 agent_graph 必须禁用 checkpointer 以防序列化崩溃。"""
+    import json
+
+    import httpx
+
+    from app.integrations.llm.openai import OpenAICompatibleLLMAdapter
+
+    item = cand("奇异值分解可用于矩阵低秩近似压缩。")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        tool = body["tools"][0]["function"]
+        tool_name = tool["name"]
+        props = tool.get("parameters", {}).get("properties", {})
+        args: dict[str, Any] = {"reply": "压缩回复", "suggestions": ["追问1"]}
+        if "citation_ids" in props:
+            args["citation_ids"] = [str(item.snippet_id)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(args),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    adapter = OpenAICompatibleLLMAdapter(
+        api_key="test-key",
+        model="test-model",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    overview_res = run_coach_graph(
+        search=ScriptedSearch([item]),
+        llm=adapter,
+        query="帮我梳理本章重点",
+        user_id=USER,
+        material_ids=(MATERIAL,),
+        overview_context="- 奇异值分解",
+        thread_id="nested-overview",
+    )
+    assert overview_res.mode == "overview"
+    assert overview_res.reply == "压缩回复"
+
+    detail_res = run_coach_graph(
+        search=ScriptedSearch([item]),
+        llm=adapter,
+        query="奇异值分解怎么用于数据压缩？",
+        user_id=USER,
+        material_ids=(MATERIAL,),
+        thread_id="nested-detail",
+    )
+    assert detail_res.mode == "grounded"
+    assert detail_res.cited == [item]
