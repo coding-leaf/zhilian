@@ -137,6 +137,7 @@ describe('useCoachChat session isolation & error retry', () => {
         data: {
           knowledge_point_id: 'kp-1',
           user_prompt: '你好呀',
+          thread_id: 'kp:kp-1',
         },
       }),
     )
@@ -149,8 +150,49 @@ describe('useCoachChat session isolation & error retry', () => {
         data: {
           material_id: 'm-1',
           user_prompt: '讲义总结',
+          thread_id: 'mat:m-1',
         },
       }),
     )
+  })
+
+  it('passes the session key as thread_id for every scoped coach turn', async () => {
+    requestMock.mockResolvedValue({ reply: '多轮答复', suggestions: [], sources: [] })
+    const ctx = reactive<CoachContextParams>({ folderId: 'f-1' })
+    const coach = useCoachChat(() => ctx)
+
+    await coach.sendMessage('第一轮')
+    await coach.sendMessage('那不满足这个条件会怎样')
+    const folderCalls = requestMock.mock.calls
+      .map(([options]) => options as { url: string; data: Record<string, unknown> })
+      .filter((options) => options.url === '/coach/ask')
+    expect(folderCalls).toHaveLength(2)
+    for (const call of folderCalls) {
+      expect(call.data).toEqual({
+        folder_id: 'f-1',
+        user_prompt: expect.any(String),
+        thread_id: 'folder:f-1',
+      })
+    }
+
+    ctx.folderId = undefined
+    ctx.materialId = 'm-9'
+    await coach.sendMessage('换到讲义')
+    expect(requestMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: { material_id: 'm-9', user_prompt: '换到讲义', thread_id: 'mat:m-9' },
+      }),
+    )
+  })
+
+  it('does not send thread_id on the question-scoped coach endpoint', async () => {
+    requestMock.mockResolvedValue({ reply: '题目答复', suggestions: [] })
+    const ctx = reactive<CoachContextParams>({ questionId: 'q-7', folderId: 'f-1' })
+    const coach = useCoachChat(() => ctx)
+
+    await coach.sendMessage('为什么')
+    const options = requestMock.mock.calls[0][0] as { url: string; data: Record<string, unknown> }
+    expect(options.url).toContain('/questions/q-7/')
+    expect(options.data).not.toHaveProperty('thread_id')
   })
 })

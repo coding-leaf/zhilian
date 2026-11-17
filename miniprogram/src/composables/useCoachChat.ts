@@ -170,6 +170,7 @@ export function useCoachChat(getContext: () => CoachContextParams) {
       const response = await apiAskScopedCoach({
         ...scopePayload,
         user_prompt: query,
+        thread_id: targetKey,
       })
       appendMessage(targetKey, {
         id: nextId(),

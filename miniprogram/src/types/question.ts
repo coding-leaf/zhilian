@@ -91,6 +91,8 @@ export interface ScopedCoachParams {
   material_id?: string
   knowledge_point_id?: string
   user_prompt: string
+  /** 多轮对话线程 ID（前端传 sessionKey）；与 backend ScopedCoachRequest.thread_id 对齐，可选。 */
+  thread_id?: string
 }
 
 // 题库批次：与 backend/app/schemas/question.py::QuestionBatchSummaryResponse 一致
