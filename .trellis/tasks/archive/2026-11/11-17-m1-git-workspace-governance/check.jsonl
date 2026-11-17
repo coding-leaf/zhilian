@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/01-git-and-workspace-audit.md", "reason": "Ground-truth branch hashes, commit counts, 5f9fa5f file manifest, and forbidden workspace clutter paths to verify against"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/04-cross-layer-and-synthesis.md", "reason": "Verification ledger and T1 gate criteria"}
+{"file": ".trellis/spec/guides/index.md", "reason": "AI review 35% false-positive verification rule and guide index consistency"}
+{"file": ".trellis/spec/backend/material-statistics.md", "reason": "Verify 5f9fa5f P1-4 backend/frontend contract remains intact after origin/dev reconciliation"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend lint, mypy, import-linter, and pytest >=80% coverage gate rules"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend eslint, vue-tsc, and vitest gate rules"}

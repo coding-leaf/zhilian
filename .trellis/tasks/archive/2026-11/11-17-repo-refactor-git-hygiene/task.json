@@ -1,0 +1,31 @@
+{
+  "id": "repo-refactor-git-hygiene",
+  "name": "repo-refactor-git-hygiene",
+  "title": "全仓逻辑重构清洁与Git工作区规范治理",
+  "description": "全面诊断并清理前后端冗余代码与混乱逻辑分层，收敛Git分支并重定工作区与分支管理规范",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "coding-leaf",
+  "assignee": "coding-leaf",
+  "createdAt": "2026-11-17",
+  "completedAt": "2026-11-17",
+  "branch": "chore/m1-workspace-governance",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-17-m1-git-workspace-governance",
+    "11-17-m2-dead-code-and-p0-fixes",
+    "11-17-m3-modularization-and-layering",
+    "11-17-m4-docs-specs-and-test-hardening"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

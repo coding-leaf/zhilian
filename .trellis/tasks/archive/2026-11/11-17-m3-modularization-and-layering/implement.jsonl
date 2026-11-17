@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/02-backend-architecture-audit.md", "reason": "Oversized service AST breakdown, raw select() anchors, ORM monkey-patch anchors, and retry/metric duplication"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/03-frontend-architecture-audit.md", "reason": "6 oversized .vue decomposition map, api/types split map, polling/CSS/Emoji/Hex anchors"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Shared helper and deduplication guidelines"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Strict 5-layer import-linter boundaries"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Repository-only SQLAlchemy query rules"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Custom SFC <=300 LOC, props/emits, zero-emoji, and CSS token rules"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store and composable responsibility split"}
