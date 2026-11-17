@@ -899,6 +899,7 @@ async def test_scoped_coach_routes_authorized_scope(
         folder_id=folder_id,
         material_id=None,
         knowledge_point_id=None,
+        thread_id=None,
     )
 
 
@@ -917,6 +918,62 @@ async def test_scoped_coach_rejects_ambiguous_scope(
                 "folder_id": str(uuid.uuid4()),
                 "material_id": str(uuid.uuid4()),
                 "user_prompt": "为什么？",
+            },
+        )
+
+    assert response.status_code == 422
+    mock_question_service.ask_scoped_coach.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scoped_coach_forwards_thread_id(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    from app.schemas.question import ScopedCoachResponse
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+    material_id = uuid.uuid4()
+    mock_question_service.ask_scoped_coach.return_value = ScopedCoachResponse(reply="好的")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(material_id),
+                "user_prompt": "那它的条件呢？",
+                "thread_id": "mat:abc",
+            },
+        )
+
+    assert response.status_code == 200
+    mock_question_service.ask_scoped_coach.assert_called_once_with(
+        user_id=mock_user.id,
+        user_prompt="那它的条件呢？",
+        folder_id=None,
+        material_id=material_id,
+        knowledge_point_id=None,
+        thread_id="mat:abc",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", ["", "x" * 129])
+async def test_scoped_coach_rejects_invalid_thread_id(
+    mock_user: User, mock_question_service: MagicMock, thread_id: str
+) -> None:
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(uuid.uuid4()),
+                "user_prompt": "问题",
+                "thread_id": thread_id,
             },
         )
 

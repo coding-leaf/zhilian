@@ -151,6 +151,10 @@ class MaterialService:
         folder_repo: FolderRepository | None = None,
         llm_adapter: LLMProtocol | None = None,
         bucket: str = DEFAULT_MATERIAL_BUCKET,
+        vlm_adapter: LLMProtocol | None = None,
+        vlm_dpi: int = 150,
+        vlm_max_concurrency: int = 3,
+        vlm_timeout: float = 45.0,
     ) -> None:
         self.session = session
         self.storage = storage_adapter
@@ -163,6 +167,10 @@ class MaterialService:
         self.knowledge_repo = KnowledgeRepository(session)
         self.knowledge_service = knowledge_service
         self.llm = llm_adapter
+        self.vlm = vlm_adapter
+        self.vlm_dpi = vlm_dpi
+        self.vlm_max_concurrency = vlm_max_concurrency
+        self.vlm_timeout = vlm_timeout
         self.bucket = bucket
         self._progress_redis = resolve_progress_redis_client(queue_adapter, idempotency_adapter)
 
@@ -411,6 +419,10 @@ class MaterialService:
                 file_bytes,
                 ocr=self.ocr,
                 llm=self.llm,
+                vlm=self.vlm,
+                vlm_dpi=self.vlm_dpi,
+                vlm_max_concurrency=self.vlm_max_concurrency,
+                vlm_timeout=self.vlm_timeout,
             )
             return paragraphs, extracted_text, None
 

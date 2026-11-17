@@ -18,9 +18,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import AppSettings, get_settings
 from app.integrations.container import ProviderRegistry
+from app.integrations.llm.coach_memory import CoachSessionMemory
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
+from app.services._material_pipeline import resolve_progress_redis_client
 from app.services.auth import AuthService
 from app.services.diagnosis import DiagnosisService
 from app.services.folder import FolderService
@@ -68,6 +70,10 @@ class AppContainer:
         self.engine = engine
         self.session_factory = session_factory
         self.providers = providers
+        # 助教多轮会话记忆：进程内单例，复用队列/幂等适配器的 Redis 客户端（无则内存 LRU）。
+        self.coach_memory = CoachSessionMemory(
+            redis_client=resolve_progress_redis_client(providers.queue, providers.idempotency)
+        )
 
     @classmethod
     def create(
@@ -198,6 +204,10 @@ class AppContainer:
             knowledge_service=resolved_knowledge_service,
             llm_adapter=self.providers.llm,
             bucket=self.settings.storage.bucket_name,
+            vlm_adapter=self.providers.vlm,
+            vlm_dpi=self.settings.vlm.dpi,
+            vlm_max_concurrency=self.settings.vlm.max_concurrency,
+            vlm_timeout=self.settings.vlm.timeout,
         )
 
     def create_knowledge_service(self, session: Session) -> KnowledgeService:
@@ -226,6 +236,9 @@ class AppContainer:
             search_adapter=self.providers.search,
             queue=self.providers.queue,
             session_factory=self.session_factory,
+            reranker=self.providers.rerank if self.settings.rerank.enabled else None,
+            rerank_settings=self.settings.rerank,
+            memory_store=self.coach_memory,
         )
 
     def create_practice_service(self, session: Session) -> PracticeService:

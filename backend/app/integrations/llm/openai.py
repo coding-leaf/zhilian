@@ -39,6 +39,19 @@ from app.integrations.llm.protocol import (
 T = TypeVar("T", bound=BaseModel)
 
 
+def _serialize_message(message: LLMMessage) -> dict[str, Any]:
+    """将 LLMMessage 序列化为 OpenAI Chat Completions 消息体。
+
+    无图片附件时保持纯字符串 content（与既有行为完全一致）；存在 ``image_urls`` 时
+    输出 OpenAI vision 兼容的内容块数组 (text + image_url)。
+    """
+    if not message.image_urls:
+        return {"role": message.role, "content": message.content}
+    parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+    parts.extend({"type": "image_url", "image_url": {"url": url}} for url in message.image_urls)
+    return {"role": message.role, "content": parts}
+
+
 class OpenAICompatibleLLMAdapter(LLMProtocol):
     """OpenAI / DashScope 兼容大语言模型接口适配器。"""
 
@@ -174,7 +187,7 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
 
         payload: dict[str, Any] = {
             "model": model_name,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_serialize_message(m) for m in messages],
         }
         if options:
             payload["temperature"] = options.temperature

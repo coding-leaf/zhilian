@@ -337,6 +337,12 @@ class ScopedCoachRequest(BaseModel):
     material_id: uuid.UUID | None = None
     knowledge_point_id: uuid.UUID | None = None
     user_prompt: str = Field(min_length=1, max_length=1000)
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="可选会话线程标识；同一线程的追问共享最近 6 轮对话记忆（服务端按用户隔离）",
+    )
 
     @model_validator(mode="after")
     def validate_scope(self) -> "ScopedCoachRequest":

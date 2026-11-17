@@ -1,15 +1,19 @@
 """Internal pipeline helpers and typed view models for MaterialService."""
 
+import base64
 import logging
+import re
 import threading
 import time
 import uuid
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.algorithms.markdown_blocks import split_markdown_blocks
 from app.core.algorithms.material_chunking import (
     ParagraphInput,
     split_material_into_snippets,
@@ -21,7 +25,7 @@ from app.core.algorithms.ocr_quality import (
     verify_ocr_quality,
 )
 from app.core.errors import MaterialInvalidError
-from app.core.extractors import PdfPageExtraction
+from app.core.extractors import PdfPageExtraction, render_pdf_page_png
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.ocr.protocol import OCRProtocol
@@ -372,36 +376,178 @@ def _repair_pdf_page_text(
     return sanitize_symbol_garble(ocr_hint or base_text)
 
 
+_VLM_TRANSCRIBE_SYSTEM_PROMPT: str = (
+    "你是学术文档页面转录器。输入是一页 PDF 的截图，请逐字转录页面上的全部可见内容。\n"
+    "【严格约束】:\n"
+    "1. 只做忠实转录：保持原文语言、顺序与段落结构，输出 Markdown；\n"
+    "2. 行内公式用 `$...$`，独立成行的展示公式用 `$$...$$`，"
+    "矩阵/分段函数使用标准 LaTeX 环境；\n"
+    "3. 表格输出为 Markdown 管道表格（| a | b |）；标题用 # 标记；\n"
+    "4. 严禁总结、改写、翻译、扩写或补充页面上没有出现的任何概念、结论、数值或公式；\n"
+    "5. 看不清的内容宁可省略，也不要猜测；不要输出页码、水印或任何额外解释，"
+    "不要用代码块包裹结果。"
+)
+
+_VLM_TRANSCRIBE_USER_PROMPT: str = "请严格按要求转录第 {page_number} 页的全部内容。"
+
+_CODE_FENCE_WRAPPER = re.compile(r"^\s*```(?:markdown|md|latex|text)?\s*\n(.*?)\n\s*```\s*$", re.S)
+
+
+def _strip_vlm_code_fence(text: str) -> str:
+    """去除 VLM 偶发包裹整页输出的 Markdown 代码围栏。"""
+    stripped = text.strip()
+    match = _CODE_FENCE_WRAPPER.match(stripped)
+    return match.group(1).strip() if match else stripped
+
+
+def _transcribe_page_with_vlm(
+    vlm: LLMProtocol,
+    png_bytes: bytes,
+    page_number: int,
+    *,
+    timeout: float,
+) -> str:
+    """把单页 PNG 编码为 data URI 送 VLM 转录；返回 Markdown+LaTeX 文本（空串表示无结果）。"""
+    data_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+    resp = vlm.generate(
+        messages=[
+            LLMMessage(role="system", content=_VLM_TRANSCRIBE_SYSTEM_PROMPT),
+            LLMMessage(
+                role="user",
+                content=_VLM_TRANSCRIBE_USER_PROMPT.format(page_number=page_number),
+                image_urls=(data_uri,),
+            ),
+        ],
+        options=LLMOptions(temperature=0.0, max_tokens=4096, timeout=timeout),
+    )
+    transcript = _strip_vlm_code_fence(resp.content) if resp and resp.content else ""
+    if not transcript:
+        return ""
+    still_garbled, _, _ = detect_symbol_garble(transcript)
+    return sanitize_symbol_garble(transcript) if still_garbled else transcript
+
+
+def _page_needs_vlm(page: PdfPageExtraction) -> bool:
+    """仅公式乱码 / 缺字库 / 无文字（扫描图）的脏页才送 VLM；干净页零成本。"""
+    return page.needs_repair or not page.text.strip()
+
+
+def transcribe_dirty_pages_with_vlm(
+    pages: Sequence[PdfPageExtraction],
+    pdf_bytes: bytes,
+    vlm: LLMProtocol,
+    *,
+    dpi: int = 150,
+    max_concurrency: int = 3,
+    timeout: float = 45.0,
+) -> dict[int, str]:
+    """并发把脏页渲染为 PNG 并交 VLM 转录；单页失败只记录告警并从结果中缺席。
+
+    渲染在调用线程内串行完成（PyMuPDF 非线程安全），HTTP 调用在受限线程池内并发。
+
+    Returns:
+        dict[int, str]: 页码 -> 转录 Markdown（仅包含成功且非空的页）。
+    """
+    rendered: dict[int, bytes] = {}
+    for page in pages:
+        if not _page_needs_vlm(page):
+            continue
+        try:
+            rendered[page.page_number] = render_pdf_page_png(pdf_bytes, page.page_number, dpi=dpi)
+        except Exception as exc:
+            _pipeline_logger.warning(
+                "pdf page render for VLM degraded: page=%s error=%s",
+                page.page_number,
+                type(exc).__name__,
+            )
+    if not rendered:
+        return {}
+
+    results: dict[int, str] = {}
+    workers = max(1, min(max_concurrency, len(rendered)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vlm-page") as pool:
+        futures = {
+            pool.submit(_transcribe_page_with_vlm, vlm, png, page_number, timeout=timeout): (
+                page_number
+            )
+            for page_number, png in rendered.items()
+        }
+        for future, page_number in futures.items():
+            try:
+                transcript = future.result()
+            except Exception as exc:
+                _pipeline_logger.warning(
+                    "pdf page VLM transcription degraded: page=%s error=%s",
+                    page_number,
+                    type(exc).__name__,
+                )
+                continue
+            if transcript.strip():
+                results[page_number] = transcript
+    return results
+
+
 def repair_garbled_pdf_pages(
     pages: Sequence[PdfPageExtraction],
     pdf_bytes: bytes,
     *,
     ocr: OCRProtocol | None,
     llm: LLMProtocol | None,
+    vlm: LLMProtocol | None = None,
+    vlm_dpi: int = 150,
+    vlm_max_concurrency: int = 3,
+    vlm_timeout: float = 45.0,
 ) -> tuple[list[ParagraphInput], str]:
-    """逐页检测修复 PDF 符号乱码，产出保留页码溯源的段落列表与合并全文。"""
+    """逐页检测修复 PDF 乱码，产出保留页码溯源的段落列表与合并全文。
+
+    混合路由：干净页直接使用 PyMuPDF 文本（零成本）；脏页（公式乱码/缺字库/扫描图）
+    在配置了 VLM 时并发渲染 150 DPI PNG 送 VLM 转录为 Markdown+LaTeX，单页失败回退到
+    OCR+LLM 文本修复 / 清洗后的 PyMuPDF 文本，不阻断整份文档。
+    """
+    vlm_transcripts: dict[int, str] = {}
+    if vlm is not None:
+        vlm_transcripts = transcribe_dirty_pages_with_vlm(
+            pages,
+            pdf_bytes,
+            vlm,
+            dpi=vlm_dpi,
+            max_concurrency=vlm_max_concurrency,
+            timeout=vlm_timeout,
+        )
+
     paragraphs: list[ParagraphInput] = []
     page_texts: list[str] = []
     for page in pages:
-        repaired_text = _repair_pdf_page_text(page, pdf_bytes, ocr, llm).strip()
+        repaired_text = (
+            vlm_transcripts.get(page.page_number)
+            or _repair_pdf_page_text(page, pdf_bytes, ocr, llm)
+        ).strip()
         if not repaired_text:
             continue
         page_texts.append(repaired_text)
-        chunks = (
-            repaired_text.split("\n\n") if "\n\n" in repaired_text else repaired_text.split("\n")
-        )
-        for para in chunks:
-            stripped = para.strip()
-            if stripped:
-                paragraphs.append(
-                    ParagraphInput(
-                        text=stripped,
-                        source_ref=f"第 {page.page_number} 页",
-                        doc_type="pdf",
-                        page_number=page.page_number,
-                    )
+        for block in split_markdown_blocks(repaired_text):
+            paragraphs.append(
+                ParagraphInput(
+                    text=block,
+                    source_ref=f"第 {page.page_number} 页",
+                    doc_type="pdf",
+                    page_number=page.page_number,
                 )
+            )
     return paragraphs, "\n\n".join(page_texts)
+
+
+_GENERIC_SOURCE_REF: str = "段落"
+
+
+def build_contextual_snippet_text(*, chapter_title: str, source_ref: str, content: str) -> str:
+    """生成仅用于向量化的 Contextual Retrieval 文本：``[章节 · 页码]\\n正文``。
+
+    数据库存储的 ``MaterialSnippet.content`` 保持原文干净，前缀只参与 embedding。
+    """
+    ref = "" if source_ref.strip() == _GENERIC_SOURCE_REF else source_ref
+    label = " · ".join(part.strip() for part in (chapter_title, ref) if part and part.strip())
+    return f"[{label}]\n{content}" if label else content
 
 
 def prepare_material_snippets(
@@ -418,7 +564,14 @@ def prepare_material_snippets(
     if require_non_empty and not chunk_result.snippets:
         raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
 
-    snippet_texts = [snip.content for snip in chunk_result.snippets]
+    snippet_texts = [
+        build_contextual_snippet_text(
+            chapter_title=snip.chapter_title,
+            source_ref=snip.source_ref,
+            content=snip.content,
+        )
+        for snip in chunk_result.snippets
+    ]
     vectors = embedding.embed_documents(snippet_texts)
     snippets_to_save: list[MaterialSnippet] = []
     for i, snip in enumerate(chunk_result.snippets):
@@ -503,6 +656,7 @@ def mark_pipeline_failed(
 __all__ = [
     "ACTIVE_PARSE_STATUSES",
     "MaterialDetailView",
+    "build_contextual_snippet_text",
     "chunk_embed_and_replace_snippets",
     "clear_cached_parse_progress",
     "get_cached_parse_progress",
@@ -513,4 +667,5 @@ __all__ = [
     "repair_garbled_pdf_pages",
     "resolve_progress_redis_client",
     "set_cached_parse_progress",
+    "transcribe_dirty_pages_with_vlm",
 ]

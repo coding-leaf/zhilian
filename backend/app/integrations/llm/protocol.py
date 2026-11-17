@@ -17,10 +17,18 @@ T = TypeVar("T", bound=BaseModel)
 
 @dataclass(frozen=True)
 class LLMMessage:
-    """对话消息数据传输对象。"""
+    """对话消息数据传输对象。
+
+    Attributes:
+        role: 消息角色 (system / user / assistant)。
+        content: 文本内容。
+        image_urls: 可选图片附件（HTTPS URL 或 ``data:`` URI），用于多模态 (VLM) 请求；
+            仅 OpenAI 兼容适配器会序列化为 ``image_url`` 内容块，其余适配器忽略。
+    """
 
     role: str
     content: str
+    image_urls: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """防御性参数校验。"""
@@ -29,6 +37,8 @@ class LLMMessage:
             raise ValueError(f"role 必须为 {valid_roles} 之一，实际为: '{self.role}'")
         if not self.content.strip():
             raise ValueError("content 不能为空字符串")
+        if any(not url.strip() for url in self.image_urls):
+            raise ValueError("image_urls 不能包含空字符串")
 
 
 @dataclass(frozen=True)

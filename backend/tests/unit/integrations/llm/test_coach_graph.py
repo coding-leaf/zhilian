@@ -3,7 +3,11 @@
 import uuid
 from unittest.mock import MagicMock
 
-from app.integrations.llm.coach_graph import CoachDraft, answer_with_course_evidence
+from app.integrations.llm.coach_graph import (
+    CoachDraft,
+    RewrittenQuery,
+    answer_with_course_evidence,
+)
 from app.integrations.search.fake import FakeSearchAdapter
 from app.integrations.search.protocol import SearchResult, SearchSnippetCandidate
 
@@ -53,6 +57,7 @@ def test_coach_abstains_without_relevant_evidence() -> None:
     search = FakeSearchAdapter()
     search.set_canned_candidates([candidate(material_id, score=0.1)])
     llm = MagicMock()
+    llm.generate_structured.return_value = (RewrittenQuery(query="更精确的查询"), MagicMock())
 
     answer, cited = answer_with_course_evidence(
         search=search,
@@ -64,19 +69,21 @@ def test_coach_abstains_without_relevant_evidence() -> None:
 
     assert answer is None
     assert cited == []
-    llm.generate_structured.assert_not_called()
+    # 证据不足：仅允许一次查询改写调用，绝不进入生成阶段
+    assert llm.generate_structured.call_count == 1
+    assert llm.generate_structured.call_args.kwargs["response_model"] is RewrittenQuery
 
 
-def test_coach_repairs_bad_citation_once() -> None:
+def test_coach_repairs_bad_citation_deterministically_without_retry() -> None:
     material_id = uuid.uuid4()
     item = candidate(material_id)
     search = FakeSearchAdapter()
     search.set_canned_candidates([item])
     llm = MagicMock()
-    llm.generate_structured.side_effect = [
-        (CoachDraft(reply="First answer", citation_ids=[uuid.uuid4()]), MagicMock()),
-        (CoachDraft(reply="Repaired answer", citation_ids=[item.snippet_id]), MagicMock()),
-    ]
+    llm.generate_structured.return_value = (
+        CoachDraft(reply="First answer", citation_ids=[uuid.uuid4()]),
+        MagicMock(),
+    )
 
     answer, cited = answer_with_course_evidence(
         search=search,
@@ -87,12 +94,14 @@ def test_coach_repairs_bad_citation_once() -> None:
     )
 
     assert answer is not None
-    assert answer.reply == "Repaired answer"
-    assert len(cited) == 1
-    assert llm.generate_structured.call_count == 2
+    # 幻觉引用由纯 Python 校验回填 Top 候选，不再二次调用 LLM
+    assert answer.reply == "First answer"
+    assert [source.snippet_id for source in cited] == [item.snippet_id]
+    assert answer.citation_ids == [item.snippet_id]
+    assert llm.generate_structured.call_count == 1
 
 
-def test_coach_abstains_after_second_bad_citation() -> None:
+def test_coach_backfills_when_every_citation_is_invalid() -> None:
     material_id = uuid.uuid4()
     item = candidate(material_id)
     search = FakeSearchAdapter()
@@ -111,9 +120,10 @@ def test_coach_abstains_after_second_bad_citation() -> None:
         material_ids=(material_id,),
     )
 
-    assert answer is None
-    assert cited == []
-    assert llm.generate_structured.call_count == 2
+    assert answer is not None
+    assert answer.reply == "Unsupported"
+    assert [source.snippet_id for source in cited] == [item.snippet_id]
+    assert llm.generate_structured.call_count == 1
 
 
 def test_coach_excludes_stale_versions_from_evidence() -> None:

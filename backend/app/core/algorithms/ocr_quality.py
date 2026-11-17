@@ -57,6 +57,61 @@ _MARKDOWN_DECORATION_RE: re.Pattern[str] = re.compile(
 _MARKDOWN_BOLD_INLINE_RE: re.Pattern[str] = re.compile(r"\*\*([^*]+)\*\*")
 _REPEATED_SAME_SYMBOL_RE: re.Pattern[str] = re.compile(r"^([!\"#$%&'*=?@^~`\-_])\1+$")
 
+# ---------------------------------------------------------------------------
+# 数学排版损坏探测（希腊/西里尔字母映射错乱、公式被拆成超短碎行）
+# 依据：research/rag-pdf-fragmentation-and-formulas.md —— 子集化数学字体缺失 /ToUnicode 时，
+# 求和号/下标常被抽成 `σi=1`、`σpiupi`、`ђvpi` 等混合字符碎片，ASCII 符号簇探测对此无感。
+# ---------------------------------------------------------------------------
+_CYRILLIC_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0400-\u04ff]")
+# 连续 >= 3 个西里尔字母视为"真实西里尔词"（俄/塞尔维亚语正文），不触发错位判定
+_CYRILLIC_WORD_RE: re.Pattern[str] = re.compile(r"[\u0400-\u04ff]{3,}")
+# 拉丁/希腊字母（希腊字母块 U+0370-03FF）
+_LATIN_GREEK_LETTER_RE: re.Pattern[str] = re.compile(r"[A-Za-z\u0370-\u03ff]")
+_LATIN_GREEK_CJK_RE: re.Pattern[str] = re.compile(r"[A-Za-z\u0370-\u03ff\u4e00-\u9fff]")
+# 希腊字母直接粘连 >= 3 个拉丁小写字母（如 `σpiupi`：σ π υ π 被抽成拉丁名）
+_GREEK_LATIN_GLUE_RE: re.Pattern[str] = re.compile(
+    r"(?<![A-Za-z\u0370-\u03ff])[\u0391-\u03a9\u03b1-\u03c9][a-z]{3,}"
+)
+# 合法的"希腊字母 + 拉丁缩写"后缀白名单（σmax / λmin / μmol 等），不应误报
+_LEGIT_GREEK_SUFFIXES: tuple[str, ...] = (
+    "max",
+    "min",
+    "sup",
+    "inf",
+    "exp",
+    "log",
+    "lim",
+    "sin",
+    "cos",
+    "tan",
+    "std",
+    "var",
+    "dim",
+    "rank",
+    "mean",
+    "avg",
+    "eff",
+    "ref",
+    "tot",
+    "sat",
+    "mol",
+    "sec",
+    "rad",
+    "deg",
+    "ohm",
+)
+_EDGE_STRIP_CHARS: str = ".,;:!?()[]{}<>\"'`"
+_CJK_RE: re.Pattern[str] = re.compile(r"[\u4e00-\u9fff]")
+_GREEK_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0391-\u03a9\u03b1-\u03c9]")
+_MATH_SYMBOL_CHARS: frozenset[str] = frozenset(
+    "=+-\u2212\u2013\u00d7\u00f7\u2211\u222b\u221a\u221e\u2248\u2264\u2265\u2260\u00b1^_/\u2202\u2207\u2208\u2200\u2203\u00b7\u220f"
+)
+
+# 公式碎片页判定：非空行 >= 6 且超短公式碎行占比 > 45%
+_FORMULA_FRAGMENT_MAX_LINE_CHARS: int = 8
+_FORMULA_FRAGMENT_MIN_LINES: int = 6
+_FORMULA_FRAGMENT_LINE_RATIO: float = 0.45
+
 
 class UnqualifiedReasonCode(enum.StrEnum):
     """不合格原因代码枚举，严格遵循命名白名单与规范。"""
@@ -206,6 +261,41 @@ def _is_short_symbol_burst_token(token: str) -> bool:
     )
 
 
+def _is_glued_greek_latin_token(token: str) -> bool:
+    """判断 token 是否含有希腊字母粘连拉丁名的损坏簇（如 `σpiupi`），白名单缩写除外。"""
+    for match in _GREEK_LATIN_GLUE_RE.finditer(token):
+        suffix = match.group()[1:]
+        if not suffix.startswith(_LEGIT_GREEK_SUFFIXES):
+            return True
+    return False
+
+
+def _math_garble_tokens(tokens: Sequence[str]) -> list[str]:
+    """返回单行 token 中属于数学字体映射错乱的碎片（希腊字母粘连、西里尔字母混入）。
+
+    西里尔判定仅在整行没有"真实西里尔词"（连续 >= 3 个西里尔字母）且行内存在
+    拉丁/希腊/汉字时生效，以免误伤俄语、塞尔维亚语等真实西里尔正文。
+    """
+    if not tokens:
+        return []
+    line = " ".join(tokens)
+    stray_cyrillic_applies = (
+        _CYRILLIC_CHAR_RE.search(line) is not None
+        and _CYRILLIC_WORD_RE.search(line) is None
+        and _LATIN_GREEK_CJK_RE.search(line) is not None
+    )
+    garbled: list[str] = []
+    for tok in tokens:
+        core = tok.strip(_EDGE_STRIP_CHARS)
+        if not core:
+            continue
+        if _is_glued_greek_latin_token(core) or (
+            stray_cyrillic_applies and _CYRILLIC_CHAR_RE.search(core) is not None
+        ):
+            garbled.append(tok)
+    return garbled
+
+
 def _collect_line_garble_fragments(line: str) -> tuple[list[str], bool]:
     """提取单行内的 ASCII 符号乱码簇并判断是否整行为孤立符号噪声行。"""
     stripped = line.strip()
@@ -217,6 +307,7 @@ def _collect_line_garble_fragments(line: str) -> tuple[list[str], bool]:
         tokens = tokens[1:]
 
     fragments: list[str] = [tok for tok in tokens if _is_garble_cluster_token(tok)]
+    fragments.extend(tok for tok in _math_garble_tokens(tokens) if tok not in fragments)
 
     burst: list[str] = []
     for tok in tokens:
@@ -271,8 +362,10 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
         if is_sym_line:
             sym_only_lines += 1
 
+    # ASCII 符号簇按符号字符计；数学字体错乱碎片（σpiupi/ђvpi，不含 ASCII 符号）按整段长度计
     garble_char_total = sum(
-        sum(1 for ch in frag if ch in _ALL_ASCII_SYMBOL_CHARS) for frag in all_fragments
+        sum(1 for ch in frag if ch in _ALL_ASCII_SYMBOL_CHARS) or len(frag)
+        for frag in all_fragments
     )
     garble_ratio = min(1.0, garble_char_total / non_ws_total)
     is_garbled = (
@@ -285,17 +378,66 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
 
 
 def sanitize_symbol_garble(text: str) -> str:
-    """在缺少视觉/大模型修复时确定性清除不可读 ASCII 符号乱码噪声。"""
+    """在缺少视觉/大模型修复时确定性清除不可读符号乱码噪声。
+
+    除 ASCII 符号簇外，同样移除数学字体映射错乱的碎片（`σpiupi`、`ђvpi` 等）。
+    """
     cleaned_lines: list[str] = []
     for line in text.splitlines():
         _frags, is_sym_line = _collect_line_garble_fragments(line)
         if is_sym_line:
             continue
-        kept_tokens = [tok for tok in line.split() if not _is_garble_cluster_token(tok)]
+        tokens = line.split()
+        math_garbled = set(_math_garble_tokens(tokens))
+        kept_tokens = [
+            tok for tok in tokens if tok not in math_garbled and not _is_garble_cluster_token(tok)
+        ]
         rebuilt = " ".join(kept_tokens).strip()
         if rebuilt:
             cleaned_lines.append(rebuilt)
     return "\n".join(cleaned_lines)
+
+
+def _is_formula_fragment_line(line: str) -> bool:
+    """判断单行是否为超短公式碎片（<= 8 字符、不含汉字、含希腊字母/数学符号/数字）。"""
+    if len(line) > _FORMULA_FRAGMENT_MAX_LINE_CHARS or _CJK_RE.search(line):
+        return False
+    return any(
+        ch.isdigit() or ch in _MATH_SYMBOL_CHARS or _GREEK_CHAR_RE.match(ch) is not None
+        for ch in line
+    )
+
+
+def detect_broken_math_layout(text: str) -> bool:
+    """探测 PDF 文本层中数学公式排版/字体映射损坏的页面。
+
+    命中任一条件即返回 True（调用方据此触发视觉/大模型修复）：
+
+    1. 希腊字母粘连 >= 3 个拉丁小写字母（`σpiupi`，`\\b[α-ωΑ-Ω][a-z]{3,}`），
+       ``σmax``/``μmol`` 等合法缩写除外；
+    2. 西里尔字母（如 `ђ`）混入拉丁/希腊/汉字文本，且整行没有真实西里尔词；
+    3. 稠密超短公式碎片页：非空行 >= 6 且 > 45% 的行 <= 8 字符、不含汉字、
+       含希腊字母/数学符号/数字（上下标、求和上下限被拆成独立短行）。
+
+    正常中英文段落与 ``E=mc^2``、``σ = 0.5`` 这类独立短公式不会命中。
+
+    Args:
+        text: 待检测的页面文本。
+
+    Returns:
+        bool: 是否检测到数学排版损坏。
+    """
+    if not text or not text.strip():
+        return False
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if any(_math_garble_tokens(ln.split()) for ln in lines):
+        return True
+
+    if len(lines) < _FORMULA_FRAGMENT_MIN_LINES:
+        return False
+    fragment_lines = sum(1 for ln in lines if _is_formula_fragment_line(ln))
+    return fragment_lines / len(lines) > _FORMULA_FRAGMENT_LINE_RATIO
 
 
 def calculate_median_length(lengths: Sequence[int]) -> float:

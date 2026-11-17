@@ -25,7 +25,8 @@ class TestTokenizeText:
         """测试中英文混合、标点符号过滤与小写转换。"""
         text = "智练 AI 平台 v1.0 架构！"
         tokens = tokenize_text(text)
-        expected = ["智", "练", "ai", "平", "台", "v1", "0", "架", "构"]
+        # 每个汉字段：先输出全部单字，再输出相邻双字
+        expected = ["智", "练", "智练", "ai", "平", "台", "平台", "v1", "0", "架", "构", "架构"]
         assert tokens == expected
 
     def test_tokenize_text_empty_and_spaces(self) -> None:

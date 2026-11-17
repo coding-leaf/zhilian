@@ -12,14 +12,74 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 
-# 中英文轻量分词正则：单个汉字或连续英文字母数字序列
-_TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fa5]|[a-z0-9]+")
+# 分词正则（对已 lower() 的文本匹配，按优先级依次尝试）：
+# 1. 汉字连续段（后续展开为 unigram + bigram）
+# 2. LaTeX 命令 `\sigma`
+# 3. 字母数字标识符，可含下划线连接（`snake_case`、`x_1`），至少含一个字母数字
+# 4. 单个希腊字母（含带调符号的希腊小写字母）
+_TOKEN_PATTERN = re.compile(
+    r"[\u4e00-\u9fff]+"
+    r"|\\[a-z]+"
+    r"|[a-z0-9]+(?:_[a-z0-9]+)*"
+    r"|[\u03b1-\u03c9\u03ac-\u03ce]"
+)
+
+# LaTeX 希腊字母命令名 -> 希腊字母，使 `\sigma`（Markdown 公式）与 `σ`（PDF 文本层）可互相召回
+_LATEX_GREEK_LETTERS: dict[str, str] = {
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "epsilon": "ε",
+    "varepsilon": "ε",
+    "zeta": "ζ",
+    "eta": "η",
+    "theta": "θ",
+    "vartheta": "θ",
+    "iota": "ι",
+    "kappa": "κ",
+    "lambda": "λ",
+    "mu": "μ",
+    "nu": "ν",
+    "xi": "ξ",
+    "omicron": "ο",
+    "pi": "π",
+    "varpi": "π",
+    "rho": "ρ",
+    "varrho": "ρ",
+    "sigma": "σ",
+    "varsigma": "σ",
+    "tau": "τ",
+    "upsilon": "υ",
+    "phi": "φ",
+    "varphi": "φ",
+    "chi": "χ",
+    "psi": "ψ",
+    "omega": "ω",
+}
+
+# BM25 有效文档长度下限（词元数）：避免 2~6 词元的公式碎片因长度归一化被过度加权
+MIN_EFFECTIVE_DOC_LENGTH: float = 25.0
+
+
+def _expand_cjk_run(run: str) -> list[str]:
+    """把汉字连续段展开为全部单字（unigram），再追加相邻双字（bigram）。"""
+    tokens = list(run)
+    tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+    return tokens
 
 
 def tokenize_text(text: str) -> list[str]:
-    """对中英文字符串进行轻量分词与标准化。
+    """对中英文/希腊字母/LaTeX 混合字符串进行轻量分词与标准化。
 
-    按单字切分中文汉字，按单词切分英文与数字，统一转换为小写，过滤空白与标点。
+    规则（统一先转小写，过滤空白与标点）：
+
+    - 汉字：每个连续汉字段先输出全部单字，再输出相邻双字，如 ``智练`` -> ``智, 练, 智练``；
+    - 英文数字：连续字母数字序列为一个词元，下划线连接的标识符保持整体
+      （``snake_case``、``x_1``）；
+    - 希腊字母：每个希腊字母单独成词元（``σi`` -> ``σ, i``），大写 ``Σ`` 归一化为 ``σ``；
+    - LaTeX 命令：去掉反斜杠成词元（``\\sigma`` -> ``sigma``）；若为希腊字母命令，
+      再追加对应希腊字母（``\\sigma`` -> ``sigma, σ``），与 PDF 文本层的 ``σ`` 互通。
 
     Args:
         text: 待分词的原始字符串。
@@ -29,8 +89,21 @@ def tokenize_text(text: str) -> list[str]:
     """
     if not text:
         return []
-    lowered = text.lower()
-    return _TOKEN_PATTERN.findall(lowered)
+    lowered = text.lower().replace("ς", "σ")
+    tokens: list[str] = []
+    for match in _TOKEN_PATTERN.findall(lowered):
+        first = match[0]
+        if "\u4e00" <= first <= "\u9fff":
+            tokens.extend(_expand_cjk_run(match))
+        elif first == "\\":
+            name = match[1:]
+            tokens.append(name)
+            greek = _LATEX_GREEK_LETTERS.get(name)
+            if greek is not None:
+                tokens.append(greek)
+        else:
+            tokens.append(match)
+    return tokens
 
 
 def compute_bm25_score(
@@ -41,9 +114,14 @@ def compute_bm25_score(
     doc_frequencies: dict[str, int],
     total_docs: int,
     k1: float = 1.5,
-    b: float = 0.75,
+    b: float = 0.45,
+    min_doc_length: float = MIN_EFFECTIVE_DOC_LENGTH,
 ) -> float:
     """计算单个文档相对于查询项的 Okapi BM25 相关度得分。
+
+    长度归一化已平滑：有效文档长度不低于 ``min(min_doc_length, avg_doc_length)``，
+    且默认 ``b = 0.45``（低于经典 0.75），避免 `σi\\n2` 之类 2~6 词元的碎片
+    仅因命中单个词元就压过内容丰富的段落。
 
     Args:
         query_tokens: 查询词元列表。
@@ -53,7 +131,9 @@ def compute_bm25_score(
         doc_frequencies: 词元在语料候选库中出现的文档频次映射字典。
         total_docs: 语料候选库总文档数。
         k1: 词频饱和度控制参数，默认 1.5（依据信息检索标准经验取值）。
-        b: 文档长度归一化惩罚参数，默认 0.75（依据信息检索标准经验取值）。
+        b: 文档长度归一化惩罚参数，默认 0.45（平滑后的取值，经典值为 0.75）。
+        min_doc_length: 有效文档长度下限（词元数），默认 25；
+            实际下限不会超过 ``avg_doc_length``，以免小语料整体被惩罚。
 
     Returns:
         float: BM25 得分（非负数）。
@@ -63,11 +143,12 @@ def compute_bm25_score(
 
     actual_doc_length = doc_length if doc_length > 0 else len(doc_tokens)
     avg_len = avg_doc_length if avg_doc_length > 0 else 1.0
+    effective_length = max(float(actual_doc_length), min(min_doc_length, avg_len))
     doc_counter = Counter(doc_tokens)
     score = 0.0
 
-    # 文档长度归一化分母项
-    len_norm = 1.0 - b + b * (actual_doc_length / avg_len)
+    # 文档长度归一化分母项（平滑：短文档按下限长度计）
+    len_norm = 1.0 - b + b * (effective_length / avg_len)
 
     for token in query_tokens:
         freq = doc_counter.get(token, 0)

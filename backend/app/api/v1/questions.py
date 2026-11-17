@@ -385,6 +385,7 @@ def ask_scoped_coach(
         folder_id=payload.folder_id,
         material_id=payload.material_id,
         knowledge_point_id=payload.knowledge_point_id,
+        thread_id=payload.thread_id,
     )
 
 

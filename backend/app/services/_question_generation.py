@@ -12,6 +12,7 @@ from app.core.algorithms.question_quality import (
     QuestionQualityReport,
     filter_qualified_questions,
 )
+from app.core.algorithms.text_excerpt import trim_excerpt_cleanly
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.models.knowledge import KnowledgePoint
@@ -137,7 +138,7 @@ def aggregate_snippet_context(
         if current_length + len(part) > max_chars:
             remaining = max_chars - current_length - len(header) - 4
             if remaining > 20:
-                truncated_body = body[:remaining] + "..."
+                truncated_body = trim_excerpt_cleanly(body, max_chars=remaining)
                 context_parts.append(header + truncated_body + "\n\n")
                 metadata_list.append(
                     {

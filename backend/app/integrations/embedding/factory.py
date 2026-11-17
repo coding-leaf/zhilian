@@ -12,6 +12,8 @@ from app.integrations.embedding.fake import FakeEmbeddingAdapter
 from app.integrations.embedding.openai import OpenAICompatibleEmbeddingAdapter
 from app.integrations.embedding.protocol import EmbeddingProtocol
 
+SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+
 
 def create_embedding_adapter(
     adapter_type: str = "fake",
@@ -27,7 +29,7 @@ def create_embedding_adapter(
     """根据类型与配置创建向量化适配器实例。
 
     Args:
-        adapter_type: 适配器类型 ("fake", "openai", "dashscope")。
+        adapter_type: 适配器类型 ("fake", "openai", "dashscope", "siliconflow")。
         api_key: 大模型访问密钥 (非 fake 模式下必须提供)。
         base_url: 接口基础 URL。
         model: 模型名称。
@@ -46,12 +48,15 @@ def create_embedding_adapter(
     normalized_type = adapter_type.strip().lower()
     if normalized_type == "fake":
         return FakeEmbeddingAdapter()
-    if normalized_type in ("openai", "dashscope"):
+    if normalized_type in ("openai", "dashscope", "siliconflow"):
         if not api_key:
             raise EmbeddingAuthError("OpenAI 兼容向量化适配器必须提供 api_key")
+        effective_base_url = base_url
+        if effective_base_url is None and normalized_type == "siliconflow":
+            effective_base_url = SILICONFLOW_BASE_URL
         return OpenAICompatibleEmbeddingAdapter(
             api_key=api_key,
-            base_url=base_url,
+            base_url=effective_base_url,
             model=model,
             dimensions=dimensions,
             timeout=timeout,

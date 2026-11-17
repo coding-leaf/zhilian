@@ -2,14 +2,20 @@
 
 import io
 import zipfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 from xml.etree import ElementTree
 
+import pymupdf
 import pypdf
 
-from app.core.algorithms.ocr_quality import detect_symbol_garble
+from app.core.algorithms.ocr_quality import detect_broken_math_layout, detect_symbol_garble
 from app.core.errors import MaterialInvalidError
+
+# PyMuPDF 仅提供部分类型标注，统一以 Any 访问以满足 mypy --strict。
+_pymupdf: Any = pymupdf
 
 # 依据：文件类型二进制魔数定义
 MAGIC_NUMBERS: dict[str, list[bytes]] = {
@@ -90,11 +96,16 @@ class PdfPageExtraction:
     has_symbol_garble: bool
     suspicious_fragments: tuple[str, ...] = ()
     embedded_images: tuple[bytes, ...] = ()
+    has_broken_math_layout: bool = False
 
     @property
     def needs_repair(self) -> bool:
-        """是否存在字体缺失 ToUnicode 或高密度 ASCII 符号乱码问题。"""
-        return self.lacks_tounicode_symbol_font or self.has_symbol_garble
+        """是否存在字体缺失 ToUnicode、ASCII/希腊西里尔符号乱码或公式版面破碎问题。"""
+        return (
+            self.lacks_tounicode_symbol_font
+            or self.has_symbol_garble
+            or self.has_broken_math_layout
+        )
 
 
 def _dereference(obj: Any) -> Any:
@@ -150,38 +161,31 @@ def _extract_page_embedded_images(page: Any) -> tuple[bytes, ...]:
     return tuple(collected)
 
 
-def extract_pdf_pages_with_diagnostics(content: bytes) -> list[PdfPageExtraction]:
-    """按页提取 PDF 文本，并检测缺失 `/ToUnicode` 符号字体及 ASCII 乱码簇。"""
-    try:
-        reader = pypdf.PdfReader(io.BytesIO(content))
-        pages_out: list[PdfPageExtraction] = []
-        for idx, page in enumerate(reader.pages, start=1):
-            raw_text = (page.extract_text() or "").strip()
-            lacks_tounicode = _inspect_page_symbol_fonts_missing_tounicode(page)
-            has_garble, _ratio, frags = detect_symbol_garble(raw_text)
-            embedded_images = (
-                _extract_page_embedded_images(page)
-                if (lacks_tounicode or has_garble or not raw_text)
-                else ()
-            )
-            pages_out.append(
-                PdfPageExtraction(
-                    page_number=idx,
-                    text=raw_text,
-                    lacks_tounicode_symbol_font=lacks_tounicode,
-                    has_symbol_garble=has_garble,
-                    suspicious_fragments=frags,
-                    embedded_images=embedded_images,
-                )
-            )
-    except Exception as exc:
-        if isinstance(exc, MaterialInvalidError):
-            raise
-        raise MaterialInvalidError(
-            f"PDF 文件解析失败: {exc}",
-            details={"error": str(exc)},
-        ) from exc
+def _build_page_extraction(
+    *,
+    page_number: int,
+    raw_text: str,
+    lacks_tounicode: bool,
+    image_loader: Callable[[], tuple[bytes, ...]],
+) -> PdfPageExtraction:
+    """基于单页文本与字体诊断构造 PdfPageExtraction（pypdf / PyMuPDF 共用）。"""
+    has_garble, _ratio, frags = detect_symbol_garble(raw_text)
+    broken_math = detect_broken_math_layout(raw_text)
+    dirty = lacks_tounicode or has_garble or broken_math
+    embedded_images = image_loader() if (dirty or not raw_text) else ()
+    return PdfPageExtraction(
+        page_number=page_number,
+        text=raw_text,
+        lacks_tounicode_symbol_font=lacks_tounicode,
+        has_symbol_garble=has_garble,
+        suspicious_fragments=frags,
+        embedded_images=embedded_images,
+        has_broken_math_layout=broken_math,
+    )
 
+
+def _enforce_valid_text_gate(pages_out: Sequence[PdfPageExtraction]) -> None:
+    """全文有效字符门禁：既无文字又无内嵌图片的 PDF 视为无效扫描件。"""
     total_valid_chars = sum(1 for page in pages_out for ch in page.text if not ch.isspace())
     has_embedded_images = any(bool(page.embedded_images) for page in pages_out)
     if total_valid_chars < 10 and not has_embedded_images:
@@ -190,7 +194,195 @@ def extract_pdf_pages_with_diagnostics(content: bytes) -> list[PdfPageExtraction
             details={"valid_char_count": total_valid_chars},
         )
 
+
+def _order_blocks_reading_order(blocks: Sequence[Any], page_width: float) -> list[Any]:
+    """将 PyMuPDF 文本块按阅读顺序排序：双栏页先左栏后右栏，其余自上而下、自左而右。"""
+    text_blocks = [b for b in blocks if len(b) >= 5 and str(b[4]).strip()]
+    if not text_blocks or page_width <= 0:
+        return list(text_blocks)
+
+    mid = page_width / 2.0
+    narrow = [b for b in text_blocks if (float(b[2]) - float(b[0])) < page_width * 0.55]
+    left = [b for b in narrow if float(b[2]) <= mid * 1.08]
+    right = [b for b in narrow if float(b[0]) >= mid * 0.92]
+    is_two_column = (
+        len(left) >= 2 and len(right) >= 2 and len(left) + len(right) >= len(text_blocks) * 0.6
+    )
+    if not is_two_column:
+        return sorted(text_blocks, key=lambda b: (round(float(b[1]), 1), float(b[0])))
+
+    left_ids = {id(b) for b in left}
+    right_ids = {id(b) for b in right}
+    full_width = [b for b in text_blocks if id(b) not in left_ids and id(b) not in right_ids]
+    # 跨栏块（标题/页眉/页脚）作为分隔，把页面切成上下带，带内先左后右。
+    ordered: list[Any] = []
+    cursor_y = float("-inf")
+    for separator in [*sorted(full_width, key=lambda b: float(b[1])), None]:
+        limit_y = float("inf") if separator is None else float(separator[1])
+        for column in (left, right):
+            ordered.extend(
+                sorted(
+                    (b for b in column if cursor_y <= float(b[1]) < limit_y),
+                    key=lambda b: float(b[1]),
+                )
+            )
+        if separator is not None:
+            ordered.append(separator)
+            cursor_y = float(separator[1]) + 0.01
+    return ordered
+
+
+def _pymupdf_page_text(page: Any) -> str:
+    """用 PyMuPDF 块级坐标抽取单页文本，按阅读顺序以空行分隔段落块。"""
+    blocks = page.get_text("blocks")
+    ordered = _order_blocks_reading_order(
+        [b for b in blocks if len(b) < 7 or int(b[6]) == 0], float(page.rect.width)
+    )
+    parts = [str(b[4]).strip() for b in ordered]
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _pymupdf_page_lacks_tounicode(doc: Any, page: Any) -> bool:
+    """检测页内是否存在缺失 /ToUnicode 的符号/数学字体（PyMuPDF 版）。"""
+    try:
+        fonts = page.get_fonts(full=True)
+    except Exception:
+        return False
+    for font in fonts:
+        xref = int(font[0])
+        base_font = str(font[3]).lower()
+        if not any(marker in base_font for marker in _SYMBOL_FONT_MARKERS):
+            continue
+        try:
+            key_type = doc.xref_get_key(xref, "ToUnicode")[0]
+        except Exception:
+            key_type = "unknown"
+        if key_type == "null":
+            return True
+    return False
+
+
+def _pymupdf_page_images(doc: Any, page: Any) -> tuple[bytes, ...]:
+    """提取 PyMuPDF 页面内嵌位图（至多 3 张）。"""
+    collected: list[bytes] = []
+    try:
+        for img in page.get_images(full=True):
+            extracted = doc.extract_image(int(img[0]))
+            data = extracted.get("image") if isinstance(extracted, dict) else None
+            if isinstance(data, bytes) and data:
+                collected.append(data)
+            if len(collected) >= 3:
+                break
+    except Exception:
+        return tuple(collected)
+    return tuple(collected)
+
+
+def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | None:
+    """PyMuPDF 优先通道：坐标/块感知阅读顺序抽取。无法打开或无任何文本时返回 None 让调用方降级。"""
+    try:
+        _pymupdf.TOOLS.mupdf_display_errors(False)
+        doc = _pymupdf.open(stream=content, filetype="pdf")
+    except Exception:
+        return None
+    try:
+        if doc.needs_pass or doc.page_count == 0:
+            return None
+        pages_out: list[PdfPageExtraction] = []
+        for idx in range(doc.page_count):
+            page = doc.load_page(idx)
+            raw_text = _pymupdf_page_text(page)
+            pages_out.append(
+                _build_page_extraction(
+                    page_number=idx + 1,
+                    raw_text=raw_text,
+                    lacks_tounicode=_pymupdf_page_lacks_tounicode(doc, page),
+                    image_loader=partial(_pymupdf_page_images, doc, page),
+                )
+            )
+    except Exception:
+        return None
+    finally:
+        doc.close()
+    if not any(p.text.strip() or p.embedded_images for p in pages_out):
+        return None
     return pages_out
+
+
+def _extract_pages_with_pypdf(content: bytes) -> list[PdfPageExtraction]:
+    """pypdf 降级通道（PyMuPDF 无法解析时使用）。"""
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(content))
+        return [
+            _build_page_extraction(
+                page_number=idx,
+                raw_text=(page.extract_text() or "").strip(),
+                lacks_tounicode=_inspect_page_symbol_fonts_missing_tounicode(page),
+                image_loader=partial(_extract_page_embedded_images, page),
+            )
+            for idx, page in enumerate(reader.pages, start=1)
+        ]
+    except Exception as exc:
+        if isinstance(exc, MaterialInvalidError):
+            raise
+        raise MaterialInvalidError(
+            f"PDF 文件解析失败: {exc}",
+            details={"error": str(exc)},
+        ) from exc
+
+
+def extract_pdf_pages_with_diagnostics(content: bytes) -> list[PdfPageExtraction]:
+    """按页提取 PDF 文本，并检测缺失 `/ToUnicode` 符号字体、ASCII 乱码簇与公式版面破碎。
+
+    优先使用 PyMuPDF 的块级坐标阅读顺序抽取；PyMuPDF 无法解析（或未取得任何文本，
+    例如纯扫描件）时降级为 pypdf，保证既有兼容性。
+    """
+    pages_out = _extract_pages_with_pymupdf(content)
+    if pages_out is None:
+        pages_out = _extract_pages_with_pypdf(content)
+    _enforce_valid_text_gate(pages_out)
+    return pages_out
+
+
+def render_pdf_page_png(pdf_bytes: bytes, page_number: int, dpi: int = 150) -> bytes:
+    """将 PDF 指定页（1 起始）渲染为 PNG 字节流，供云端 VLM 转录脏页。
+
+    Args:
+        pdf_bytes: PDF 原始二进制。
+        page_number: 页码（从 1 开始）。
+        dpi: 渲染分辨率，缺省 150。
+
+    Returns:
+        bytes: PNG 图片二进制。
+
+    Raises:
+        MaterialInvalidError: PDF 无法打开、页码越界或渲染失败。
+    """
+    try:
+        doc = _pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise MaterialInvalidError(
+            "PDF 页面渲染失败：文件无法打开",
+            details={"error": type(exc).__name__},
+        ) from exc
+    try:
+        if page_number < 1 or page_number > doc.page_count:
+            raise MaterialInvalidError(
+                "PDF 页面渲染失败：页码越界",
+                details={"page_number": page_number, "page_count": doc.page_count},
+            )
+        pixmap = doc.load_page(page_number - 1).get_pixmap(dpi=dpi)
+        png_bytes: bytes = pixmap.tobytes("png")
+        return png_bytes
+    except MaterialInvalidError:
+        raise
+    except Exception as exc:
+        raise MaterialInvalidError(
+            "PDF 页面渲染失败",
+            details={"page_number": page_number, "error": type(exc).__name__},
+        ) from exc
+    finally:
+        doc.close()
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -352,5 +544,6 @@ __all__ = [
     "detect_image_type",
     "extract_pdf_pages_with_diagnostics",
     "extract_text_from_raw_content",
+    "render_pdf_page_png",
     "validate_file_magic",
 ]
