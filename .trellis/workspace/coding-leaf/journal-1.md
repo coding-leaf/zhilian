@@ -609,3 +609,27 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: UX Clarity, AI Coach Tone, Reparse Recovery & KP Picker Drawer
+<!-- trellis-session: v=2 fp=e05f72b6bbdf124c -->
+
+**Date**: 2026-11-17
+**Task**: UX Clarity, AI Coach Tone, Reparse Recovery & KP Picker Drawer
+**Branch**: `master`
+
+### Summary
+
+Fixed UI blurriness & oversized/rigid AI coach text, fixed /coach/ask multi-scope 500 bug, eliminated 60% reparse freeze with staged polling & non-destructive worker recovery, and added KnowledgePointPickerDrawer with smart_sample vs full_coverage compose modes.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8585c68` | feat(backend): refine AI coach tone, reparse recovery, and 422 serialization |
+| `63fecb6` | feat(frontend): fix text clarity, compact coach, parse polling, and KP picker drawer |
+| `4dd0f0b` | docs(trellis): update frontend specs for smart compose and long parse polling |
+
+### Status
+
+[OK] **Completed**
