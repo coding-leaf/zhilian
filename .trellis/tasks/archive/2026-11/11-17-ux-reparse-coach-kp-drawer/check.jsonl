@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/prd.md", "reason": "Verify all requirements and acceptance criteria are met"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/design.md", "reason": "Verify implementation matches agreed architecture and constraints"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Check SFC line budget, props/emits, virtualHost, zero emoji, CSS tokens"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Check frontend lint, type-check, vitest, backdrop/scroll-view rules"}
+{"file": ".trellis/spec/frontend/api-payload-contracts.md", "reason": "Check question job and practice creation payload invariants"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Check ruff, mypy, import-linter, pytest, and retry/multi-KP contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check exception handling and worker failure state transitions"}
