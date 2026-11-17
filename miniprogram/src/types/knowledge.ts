@@ -1,3 +1,10 @@
+export interface KnowledgeStructuredContent {
+  core_summary: string
+  key_takeaways: string[]
+  key_formulas: string[]
+  boundary_notes: string[]
+}
+
 export interface KnowledgeTreeNode {
   id: string
   material_id: string
@@ -5,6 +12,8 @@ export interface KnowledgeTreeNode {
   parent_id?: string | null
   name: string
   description?: string | null
+  structured_content?: KnowledgeStructuredContent | null
+  sort_order?: number
   level: number
   is_low_confidence?: boolean
   children?: KnowledgeTreeNode[]
@@ -23,6 +32,8 @@ export interface KnowledgePointDetail {
   parent_id?: string | null
   name: string
   description?: string | null
+  structured_content?: KnowledgeStructuredContent | null
+  sort_order?: number
   level: number
   is_low_confidence?: boolean
   batch_id?: string

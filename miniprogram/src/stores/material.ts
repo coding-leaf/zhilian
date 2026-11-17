@@ -31,9 +31,9 @@ export const useMaterialStore = defineStore('material', () => {
     return item
   }
 
-  // 2. 手动触发资料解析流水线
-  const triggerParse = async (materialId: string) => {
-    return apiTriggerMaterialParse(materialId)
+  // 2. 手动触发/强制重新触发资料解析流水线
+  const triggerParse = async (materialId: string, force = false) => {
+    return apiTriggerMaterialParse(materialId, force)
   }
 
   // 3. 单次拉取资料详情（不做终态判定，非终态也返回，供详情页直接渲染）

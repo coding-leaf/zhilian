@@ -3,6 +3,7 @@ import type { QuestionOption, QuestionType } from './question'
 export interface WrongQuestionSnapshot {
   stem?: string
   question_type?: QuestionType
+  knowledge_point_name?: string | null
   options?: QuestionOption[]
   answer?: string | string[] | number | null
   analysis?: string
@@ -14,11 +15,13 @@ export interface WrongRecordItem {
   id: string
   folder_id?: string | null
   material_id?: string | null
+  material_title?: string | null
   /** NULL = 手工标记（题库「记入错题」），无练习归属；非空 = 判题写入的真实来源。 */
   practice_id: string | null
   attempt_item_id: string | null
   question_id?: string | null
   knowledge_point_id: string
+  knowledge_point_name?: string | null
   error_type?: string
   is_mastered: boolean
   wrong_count?: number

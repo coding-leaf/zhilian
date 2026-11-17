@@ -3,6 +3,7 @@ import type {
   GradingStatus,
   PracticeItem,
   PracticeSession,
+  QuestionType,
 } from '@/types'
 import { adaptQuestion, isSubjectiveType, type WireQuestion } from './question'
 
@@ -32,6 +33,27 @@ export interface WirePracticeDetail {
   items: WirePracticeItem[]
 }
 
+function normalizeUserAnswer(questionType: QuestionType | string | undefined, rawAnswer: unknown): unknown {
+  if (questionType !== 'multiple_choice') return rawAnswer
+  if (Array.isArray(rawAnswer)) {
+    return rawAnswer.map((item) => String(item))
+  }
+  if (typeof rawAnswer === 'string') {
+    const trimmed = rawAnswer.trim()
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) {
+          return parsed.map((item) => String(item))
+        }
+      } catch {
+        return rawAnswer
+      }
+    }
+  }
+  return rawAnswer
+}
+
 /**
  * 练习详情归一化：把 items[].question_snapshot 投影为统一卷面模型。
  * 新建练习与续练共用此入口，页面/Store 只消费归一化结果。
@@ -39,14 +61,18 @@ export interface WirePracticeDetail {
 export function adaptPractice(session: WirePracticeDetail): PracticeSession {
   const practiceId = session.id || session.practice_id
   if (!practiceId) throw new Error('练习详情缺少练习标识')
-  const items: PracticeItem[] = (session.items || []).map((item) => ({
-    ...item,
-    grading_status: (item.grading_status ?? null) as GradingStatus | null,
-    question_snapshot: adaptQuestion({
+  const items: PracticeItem[] = (session.items || []).map((item) => {
+    const snapshot = adaptQuestion({
       ...item.question_snapshot,
       id: item.question_id || item.question_snapshot.id || '',
-    }),
-  }))
+    })
+    return {
+      ...item,
+      user_answer: normalizeUserAnswer(snapshot.type, item.user_answer),
+      grading_status: (item.grading_status ?? null) as GradingStatus | null,
+      question_snapshot: snapshot,
+    }
+  })
 
   return {
     ...session,
@@ -92,6 +118,7 @@ export function buildAttemptResults(session: PracticeSession | null): AttemptRes
       attemptItemId: item.attempt_item_id,
       questionId: item.question_id || snapshot.id,
       knowledgePointId: snapshot.knowledge_point_id,
+      knowledgePointName: snapshot.knowledge_point_name || snapshot.knowledge_point || undefined,
       orderIndex: item.order_index ?? index + 1,
       type: snapshot.type,
       stem: snapshot.stem,

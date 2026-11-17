@@ -1,4 +1,4 @@
-// 共享浮层与弹窗基础样式（使用独立 backdrop 热区，兼容 mp-weixin 事件编译）。
+// 共享浮层与弹窗基础样式（使用独立 backdrop 热区与纯色暖墨遮罩，无模糊滤镜）。
 
 .modal-overlay {
   position: fixed;
@@ -7,8 +7,7 @@
   left: 0;
   right: 0;
   background: var(--color-overlay);
-  backdrop-filter: blur(2px);
-  z-index: 999;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -22,8 +21,7 @@
   left: 0;
   right: 0;
   background: var(--color-overlay-strong);
-  backdrop-filter: blur(2px);
-  z-index: 999;
+  z-index: var(--z-sheet);
   display: flex;
   justify-content: flex-end;
   flex-direction: column;
@@ -44,14 +42,21 @@
   width: 100%;
   max-width: 600rpx;
   padding: 36rpx 32rpx;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 20rpx;
+  box-shadow: var(--shadow-modal);
 }
 
 .sheet-panel {
   position: relative;
   z-index: 1;
-  background: var(--color-paper-card);
+  background: var(--color-bg-card);
+  border-top: 1px solid var(--color-paper-border);
   border-top-left-radius: 28rpx;
   border-top-right-radius: 28rpx;
+  box-shadow: var(--shadow-sheet);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }

@@ -85,3 +85,32 @@ export interface CoachSource {
   chapter_title?: string | null
   excerpt: string
 }
+
+export type KnowledgeMasteryLevel = 'unlearned' | 'weak' | 'basic' | 'proficient'
+
+export interface KnowledgeMasterySummary {
+  knowledge_point_id: string
+  knowledge_name: string
+  mastery_score: number
+  level: KnowledgeMasteryLevel
+  practice_count: number
+  correct_count: number
+  last_practiced_at?: string | null
+}
+
+export interface UserMasteryOverview {
+  material_id?: string | null
+  total_points: number
+  total_knowledge_points: number
+  mastered_count: number
+  proficient_count: number
+  learning_count: number
+  basic_count: number
+  weak_count: number
+  unlearned_count: number
+  overall_score: number
+  overall_mastery_score: number
+  points: KnowledgeMasterySummary[]
+  weak_knowledge_points: KnowledgeMasterySummary[]
+  weak_points: KnowledgeMasterySummary[]
+}

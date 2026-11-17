@@ -44,6 +44,7 @@ export interface QuestionItem {
   source_snippet_ids?: Array<Record<string, unknown>>
   source_snippet?: SourceSnippet | null
   knowledge_point?: string
+  knowledge_point_name?: string | null
   difficulty?: number
   grading_points?: string[]
   scoring_criteria?: Record<string, unknown>
@@ -130,5 +131,34 @@ export interface QuestionBankItem {
 
 export interface QuestionBankListResult {
   items: QuestionBankItem[]
+  total: number
+}
+
+export type QuestionGenerationJobStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+export interface QuestionGenerationJob {
+  id: string
+  status: QuestionGenerationJobStatus
+  material_id?: string | null
+  folder_id?: string | null
+  total_kps: number
+  completed_kps: number
+  generated_count: number
+  batch_id?: string | null
+  question_ids: string[]
+  error_message?: string | null
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}
+
+export interface QuestionGenerationJobQuery {
+  active_only?: boolean
+  material_id?: string
+  folder_id?: string
+}
+
+export interface QuestionGenerationJobListResult {
+  items: QuestionGenerationJob[]
   total: number
 }

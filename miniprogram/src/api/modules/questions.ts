@@ -8,6 +8,9 @@ import type {
   QuestionBatchListResult,
   QuestionBatchQuery,
   QuestionGenerateResult,
+  QuestionGenerationJob,
+  QuestionGenerationJobListResult,
+  QuestionGenerationJobQuery,
   QuestionItem,
   ScopedCoachParams,
 } from '@/types'
@@ -15,9 +18,12 @@ import {
   adaptQuestion,
   adaptQuestionBankList,
   adaptQuestionBatchList,
+  adaptQuestionGenerationJob,
+  adaptQuestionGenerationJobList,
   type WireQuestion,
   type WireQuestionBankList,
   type WireQuestionBatchList,
+  type WireQuestionGenerationJob,
 } from '../adapters'
 
 export type {
@@ -25,6 +31,9 @@ export type {
   QuestionGenerateResult,
   QuestionBatchQuery,
   QuestionBankQuery,
+  QuestionGenerationJob,
+  QuestionGenerationJobQuery,
+  QuestionGenerationJobListResult,
   ScopedCoachParams,
 }
 
@@ -53,6 +62,37 @@ export function apiGetQuestionsByMaterial(materialId: string): Promise<QuestionI
     if (res && 'items' in res) return res.items.map(adaptQuestion)
     return ((res as WireQuestion[]) || []).map(adaptQuestion)
   })
+}
+
+export function apiCreateQuestionJob(
+  params: GenerateQuestionsParams,
+): Promise<QuestionGenerationJob> {
+  return request<WireQuestionGenerationJob>({
+    url: '/questions/jobs',
+    method: 'POST',
+    data: params,
+  }).then(adaptQuestionGenerationJob)
+}
+
+export function apiListQuestionJobs(
+  query: QuestionGenerationJobQuery = {},
+): Promise<QuestionGenerationJobListResult> {
+  const queryParts: string[] = []
+  if (query.active_only !== undefined) queryParts.push(`active_only=${query.active_only}`)
+  if (query.material_id) queryParts.push(`material_id=${encodeURIComponent(query.material_id)}`)
+  if (query.folder_id) queryParts.push(`folder_id=${encodeURIComponent(query.folder_id)}`)
+  const qs = queryParts.length ? `?${queryParts.join('&')}` : ''
+  return request<{ items?: WireQuestionGenerationJob[] | null; total?: number | null } | WireQuestionGenerationJob[]>({
+    url: `/questions/jobs${qs}`,
+    method: 'GET',
+  }).then(adaptQuestionGenerationJobList)
+}
+
+export function apiGetQuestionJob(jobId: string): Promise<QuestionGenerationJob> {
+  return request<WireQuestionGenerationJob>({
+    url: `/questions/jobs/${jobId}`,
+    method: 'GET',
+  }).then(adaptQuestionGenerationJob)
 }
 
 /** 题库批次聚合（服务端 group by，一次请求渲染一页批次，不做前端拼装）。 */

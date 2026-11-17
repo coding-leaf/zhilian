@@ -63,9 +63,12 @@ export function apiGetMaterialList(params?: MaterialListQuery): Promise<Material
   })
 }
 
-export function apiTriggerMaterialParse(materialId: string): Promise<{ message: string }> {
+export function apiParseMaterial(materialId: string, force = false): Promise<{ message: string }> {
+  const qs = force ? '?force=true' : ''
   return request({
-    url: `/materials/${materialId}/parse`,
+    url: `/materials/${materialId}/parse${qs}`,
     method: 'POST',
   })
 }
+
+export const apiTriggerMaterialParse = apiParseMaterial

@@ -4,22 +4,29 @@ import type {
   KnowledgeTreeResult,
   PointSourceListResult,
 } from '@/types'
-import { adaptPointSourceList, type WirePointSourceList } from '../adapters'
+import {
+  adaptKnowledgePointDetail,
+  adaptKnowledgeTree,
+  adaptPointSourceList,
+  type WireKnowledgePointDetail,
+  type WireKnowledgeTreeResult,
+  type WirePointSourceList,
+} from '../adapters'
 
 export function apiGetKnowledgeTree(materialId: string, versionId?: string): Promise<KnowledgeTreeResult> {
   let url = `/materials/${materialId}/knowledge-tree`
   if (versionId) url += `?version_id=${encodeURIComponent(versionId)}`
-  return request<KnowledgeTreeResult>({
+  return request<WireKnowledgeTreeResult>({
     url,
     method: 'GET',
-  })
+  }).then(adaptKnowledgeTree)
 }
 
 export function apiGetKnowledgePointDetail(id: string): Promise<KnowledgePointDetail> {
-  return request<KnowledgePointDetail>({
+  return request<WireKnowledgePointDetail>({
     url: `/knowledge/${id}`,
     method: 'GET',
-  })
+  }).then(adaptKnowledgePointDetail)
 }
 
 export function apiGetKnowledgePointSnippets(id: string): Promise<PointSourceListResult> {

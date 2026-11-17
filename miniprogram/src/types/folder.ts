@@ -1,3 +1,5 @@
+import type { KnowledgeStructuredContent } from './knowledge'
+
 // 课程文件夹
 export interface FolderItem {
   id: string
@@ -26,6 +28,8 @@ export interface FolderKnowledgePointItem {
   name: string
   level: number
   parent_id?: string | null
+  structured_content?: KnowledgeStructuredContent | null
+  sort_order?: number
 }
 
 export interface FolderKnowledgePointGroup {

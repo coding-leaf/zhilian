@@ -2,6 +2,7 @@
 
 $color-paper-bg: var(--color-paper-bg);
 $color-paper-card: var(--color-paper-card);
+$color-bg-card: var(--color-bg-card);
 $color-ink-primary: var(--color-ink-primary);
 $color-ink-body: var(--color-ink-body);
 $color-ink-secondary: var(--color-ink-secondary);
@@ -27,6 +28,13 @@ $color-warning-bg: var(--color-warning-bg);
 $color-wrong: var(--color-wrong);
 $color-danger: var(--color-danger);
 $color-danger-bg: var(--color-danger-bg);
+
+$z-sticky: var(--z-sticky);
+$z-bottom-bar: var(--z-bottom-bar);
+$z-fab: var(--z-fab);
+$z-sheet: var(--z-sheet);
+$z-coach: var(--z-coach);
+$z-modal: var(--z-modal);
 
 @mixin safe-bottom-padding($base: 24rpx) {
   padding-bottom: calc(#{$base} + env(safe-area-inset-bottom));

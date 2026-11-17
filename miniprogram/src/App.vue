@@ -19,6 +19,7 @@ onHide(() => {
 page {
   --color-paper-bg: #F7F5F0;
   --color-paper-card: #FFFFFF;
+  --color-bg-card: #FFFFFF;
   --color-ink-primary: #1C1917;
   --color-ink-body: #44403C;
   --color-ink-secondary: #57534E;
@@ -88,11 +89,22 @@ page {
   --color-purple: #7E22CE;
   --color-purple-bg: #F3E8FF;
 
-  --color-overlay: rgba(0, 0, 0, 0.4);
-  --color-overlay-strong: rgba(0, 0, 0, 0.45);
-  --color-bar-bg: rgba(255, 255, 255, 0.95);
-  --color-scrim-light: rgba(0, 0, 0, 0.08);
+  --color-overlay: rgba(28, 25, 23, 0.45);
+  --color-overlay-strong: rgba(28, 25, 23, 0.45);
+  --color-bar-bg: #FFFFFF;
+  --color-scrim-light: rgba(28, 25, 23, 0.08);
   --color-white-translucent: rgba(255, 255, 255, 0.2);
+
+  --shadow-bar: 0 -6rpx 20rpx rgba(28, 25, 23, 0.06);
+  --shadow-sheet: 0 -12rpx 36rpx rgba(28, 25, 23, 0.12);
+  --shadow-modal: 0 12rpx 36rpx rgba(28, 25, 23, 0.14);
+
+  --z-sticky: 20;
+  --z-bottom-bar: 40;
+  --z-fab: 60;
+  --z-sheet: 200;
+  --z-coach: 300;
+  --z-modal: 400;
 
   background-color: var(--color-paper-bg);
   color: var(--color-ink-primary);
@@ -100,7 +112,7 @@ page {
   -webkit-font-smoothing: antialiased;
 }
 
-view, text, button, input {
+view, text, scroll-view, textarea, button, input {
   box-sizing: border-box;
 }
 

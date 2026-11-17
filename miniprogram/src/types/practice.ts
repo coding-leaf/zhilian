@@ -1,5 +1,7 @@
 import type { QuestionItem, QuestionOption, QuestionType, SourceSnippet } from './question'
 
+export type PracticeQuestionItem = QuestionItem
+
 /** 单次练习题数上限（对齐后端 PracticeCreateRequest.question_count le=50）。 */
 export const MAX_PRACTICE_QUESTIONS = 50
 
@@ -60,6 +62,8 @@ export interface PracticeSummary {
   practice_id?: string | null
   material_id?: string | null
   folder_id?: string | null
+  folder_name?: string | null
+  material_title?: string | null
   title: string
   status: PracticeStatus
   question_count: number
@@ -68,6 +72,9 @@ export interface PracticeSummary {
   mode?: string | null
   total_score?: number | null
   max_score?: number | null
+  score_rate?: number | null
+  graded_count?: number
+  pending_regrade_count?: number
   source_type?: string
   created_at?: string | null
   submitted_at?: string | null
@@ -110,6 +117,7 @@ export interface AttemptResult {
   attemptItemId: string
   questionId: string
   knowledgePointId?: string
+  knowledgePointName?: string
   orderIndex: number
   type: QuestionType
   stem: string

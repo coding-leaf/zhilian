@@ -1,12 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { DiagnosisReport } from '@/types'
-import { apiGetPracticeSession, apiTriggerDiagnosis } from '@/api'
+import type { DiagnosisReport, UserMasteryOverview } from '@/types'
+import { apiGetMasteryOverview, apiGetPracticeSession, apiTriggerDiagnosis } from '@/api'
 import { createPoller, type PollerHandle } from '@/utils/poller'
 
 export const useDiagnosisStore = defineStore('diagnosis', () => {
   const currentReport = ref<DiagnosisReport | null>(null)
+  const masteryOverview = ref<UserMasteryOverview | null>(null)
   const isLoading = ref<boolean>(false)
+  const isLoadingMastery = ref<boolean>(false)
   /** 全卷尚未判完，正式诊断还不存在（结果页显示“判题中”）。 */
   const isPending = ref<boolean>(false)
 
@@ -44,6 +46,20 @@ export const useDiagnosisStore = defineStore('diagnosis', () => {
     }
   }
 
+  const loadMasteryOverview = async (
+    folderId?: string | null,
+    materialId?: string | null,
+  ): Promise<UserMasteryOverview> => {
+    isLoadingMastery.value = true
+    try {
+      const overview = await apiGetMasteryOverview(folderId, materialId)
+      masteryOverview.value = overview
+      return overview
+    } finally {
+      isLoadingMastery.value = false
+    }
+  }
+
   const reset = () => {
     currentReport.value = null
     isPending.value = false
@@ -51,9 +67,12 @@ export const useDiagnosisStore = defineStore('diagnosis', () => {
 
   return {
     currentReport,
+    masteryOverview,
     isLoading,
+    isLoadingMastery,
     isPending,
     loadReport,
+    loadMasteryOverview,
     reset,
   }
 })

@@ -10,7 +10,12 @@ export * from './modules/wrong'
 
 export {
   adaptDiagnosisReport,
+  adaptKnowledgePointDetail,
   adaptKnowledgeSnippet,
+  adaptKnowledgeTree,
+  adaptKnowledgeTreeNode,
+  adaptMasteryOverview,
+  adaptMasterySummary,
   adaptMaterial,
   adaptPointSourceList,
   adaptPractice,
@@ -18,6 +23,9 @@ export {
   adaptQuestionBankList,
   adaptQuestionBatch,
   adaptQuestionBatchList,
+  adaptQuestionGenerationJob,
+  adaptQuestionGenerationJobList,
+  adaptStructuredContent,
   buildAttemptResults,
   computeKnowledgeCoverage,
   dedupeQuestions,
@@ -27,14 +35,21 @@ export {
   optionKey,
   planGenerationBatches,
   questionTypeLabel,
+  wrongSnapshotKnowledgePointName,
   MAX_QUESTION_BATCH,
 } from './adapters'
 export type { AttemptResult } from '@/types'
 export type { CoverageResult, GenerationBatch } from './adapters'
 export type {
+  WireKnowledgeMasterySummary,
+  WireKnowledgePointDetail,
+  WireKnowledgeTreeNode,
+  WireKnowledgeTreeResult,
   WireQuestion,
   WireQuestionBankList,
   WireQuestionBatchList,
   WireQuestionBatchSource,
   WireQuestionBatchSummary,
+  WireQuestionGenerationJob,
+  WireUserMasteryOverview,
 } from './adapters'

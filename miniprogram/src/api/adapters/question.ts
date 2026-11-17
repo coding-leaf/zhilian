@@ -4,6 +4,9 @@ import type {
   QuestionBankListResult,
   QuestionBatchListResult,
   QuestionBatchSummary,
+  QuestionGenerationJob,
+  QuestionGenerationJobListResult,
+  QuestionGenerationJobStatus,
   QuestionItem,
   QuestionOption,
   QuestionType,
@@ -21,6 +24,8 @@ export interface WireQuestion {
   material_id?: string
   version_id?: string
   knowledge_point_id?: string
+  knowledge_point?: string
+  knowledge_point_name?: string | null
   batch_id?: string | null
   /** 后端 QuestionStatus：available 可选 / pending_review 待处理区 */
   status?: string | null
@@ -38,11 +43,18 @@ export interface WireQuestion {
   source_snippet?: SourceSnippet | null
 }
 
+function normalizeQuestionOption(option: { key?: string; content?: string }, index: number): QuestionOption {
+  const cleanKey = String(option.key ?? '')
+    .trim()
+    .replace(/[.。:：、)）]+$/, '')
+  const key = cleanKey || String.fromCharCode(65 + index)
+  const rawContent = String(option.content ?? '').trim()
+  const content = rawContent.replace(/^(?:(?:[(（][A-Z][)）]|[A-Z][.。、:：)）])\s*)+/i, '')
+  return { key, content }
+}
+
 export function adaptQuestion(question: WireQuestion): QuestionItem {
-  const options: QuestionOption[] = (question.options || []).map((option) => ({
-    key: option.key,
-    content: option.content,
-  }))
+  const options: QuestionOption[] = (question.options || []).map(normalizeQuestionOption)
   const rubric = question.grading_rubric
   const rubricPoints = rubric?.points ?? rubric?.key_points
   const gradingPoints = Array.isArray(rubricPoints)
@@ -56,6 +68,7 @@ export function adaptQuestion(question: WireQuestion): QuestionItem {
     })
     : []
   const rubricTotal = typeof rubric?.total_score === 'number' ? rubric.total_score : undefined
+  const kpName = question.knowledge_point_name ?? question.knowledge_point ?? null
 
   return {
     ...question,
@@ -64,6 +77,8 @@ export function adaptQuestion(question: WireQuestion): QuestionItem {
     options,
     explanation: question.explanation ?? question.analysis,
     analysis: question.analysis,
+    knowledge_point_name: kpName,
+    knowledge_point: question.knowledge_point ?? kpName ?? undefined,
     grading_points: gradingPoints,
     scoring_criteria: question.grading_rubric,
     max_score: question.max_score ?? rubricTotal,
@@ -184,6 +199,60 @@ export function optionKey(option: QuestionOption, index: number): string {
 /** 选项展示文本（核对页与练习页共用，避免页面自行猜测字段）。 */
 export function optionDisplayText(option: QuestionOption, index: number): string {
   return `${optionKey(option, index)}. ${option.content}`
+}
+
+export interface WireQuestionGenerationJob {
+  id: string
+  status?: string | null
+  material_id?: string | null
+  folder_id?: string | null
+  total_kps?: number | null
+  completed_kps?: number | null
+  generated_count?: number | null
+  batch_id?: string | null
+  question_ids?: unknown[] | null
+  error_message?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  completed_at?: string | null
+}
+
+const JOB_STATUSES: QuestionGenerationJobStatus[] = ['queued', 'running', 'completed', 'failed']
+
+export function adaptQuestionGenerationJob(job: WireQuestionGenerationJob): QuestionGenerationJob {
+  const rawStatus = String(job.status ?? '').toLowerCase()
+  const status = (JOB_STATUSES as string[]).includes(rawStatus)
+    ? (rawStatus as QuestionGenerationJobStatus)
+    : 'queued'
+  const questionIds = Array.isArray(job.question_ids)
+    ? job.question_ids.map((id) => String(id)).filter(Boolean)
+    : []
+  return {
+    id: job.id,
+    status,
+    material_id: job.material_id ?? null,
+    folder_id: job.folder_id ?? null,
+    total_kps: Math.max(0, job.total_kps ?? 0),
+    completed_kps: Math.max(0, job.completed_kps ?? 0),
+    generated_count: Math.max(0, job.generated_count ?? 0),
+    batch_id: job.batch_id ?? null,
+    question_ids: questionIds,
+    error_message: job.error_message ?? null,
+    created_at: job.created_at ?? '',
+    updated_at: job.updated_at ?? '',
+    completed_at: job.completed_at ?? null,
+  }
+}
+
+export function adaptQuestionGenerationJobList(
+  res: { items?: WireQuestionGenerationJob[] | null; total?: number | null } | WireQuestionGenerationJob[] | null,
+): QuestionGenerationJobListResult {
+  if (Array.isArray(res)) {
+    const items = res.map(adaptQuestionGenerationJob)
+    return { items, total: items.length }
+  }
+  const items = (res?.items ?? []).map(adaptQuestionGenerationJob)
+  return { items, total: res?.total ?? items.length }
 }
 
 export {
