@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/11-17-learning-flow-and-ux-redesign/research/04-flow-redesign-synthesis.md", "reason": "Verify all 6 root causes and 4 cross-layer bugs are resolved without fake exam-frequency tags or rigid presets"}
+{"file": ".trellis/spec/guides/index.md", "reason": "35% AI review false-positive verification rule"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend ruff max-complexity=15, mypy, import-linter, migration check, and pytest >=80% gates"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend eslint, vue-tsc (src + tests), vitest, <=300L SFC, and mp-weixin build gates"}

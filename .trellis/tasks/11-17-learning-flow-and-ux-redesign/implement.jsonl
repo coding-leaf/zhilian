@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/11-17-learning-flow-and-ux-redesign/research/04-flow-redesign-synthesis.md", "reason": "Verified root-cause matrix and cross-layer contracts across all 6 failure chains"}
+{"file": ".trellis/tasks/11-17-learning-flow-and-ux-redesign/research/01-ui-modal-coach-and-question-rendering.md", "reason": "Exact anchors for backdrop-filter removal, showLoading collisions, CoachMessageList virtualHost/box-sizing, and RichContent AST"}
+{"file": ".trellis/tasks/11-17-learning-flow-and-ux-redesign/research/02-knowledge-architecture-and-async-generation.md", "reason": "Exact anchors for 66 async def routes, QuestionGenerationJob RQ pipeline, PDF SymbolMT garble detection, and KP dedup"}
+{"file": ".trellis/tasks/11-17-learning-flow-and-ux-redesign/research/03-practice-grading-and-review-loop.md", "reason": "Exact anchors for true_false 0-score bug, multi-choice JSON.parse, automatic sync_practice_learning_state, and review onShow"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer wire and adapter contract discipline"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "6-contract import-linter boundaries and max-complexity = 15 rule"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Alembic migration consistency gate and repository-only SQL rules"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Custom SFC <= 300 lines, CSS token, and zero-emoji rules"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "Request timeout and structured error/toast handling rules"}

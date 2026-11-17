@@ -15,9 +15,10 @@
 工程现状（2026-11-17 核对值）：
 
 - **零冗余第三方 UI 库**：已彻底清退未使用的 `wot-design-uni`、`unocss` 与 `prettier` 插件；全部页面与组件采用自定义 `.vue` SFC + `src/styles/{tokens,modal,common}.scss` 与 `App.vue` `--color-*` 设计 Token（全仓 387 处 `var(--color-*)` 引用，业务 CSS 规则零裸 Hex、零 Emoji、固定底栏全量适配 `env(safe-area-inset-bottom)`）。
-- **按域模块化类型与 API**：`src/types/` 与 `src/api/modules/` 按 8 大业务域（auth/folder/material/knowledge/question/practice/diagnosis/wrong）拆分，由 `src/types/index.ts` 与 `src/api/index.ts` 提供轻量 barrel 聚合导出。
-- 全局状态为 **5 个 Pinia store**：`auth` / `material` / `folder` / `practice` / `diagnosis`。
-- **单元测试与类型全覆盖**：共 **21 个 spec 文件 / 172 个用例**（全部位于 `miniprogram/tests/`），且通过 `tsconfig.test.json` 纳入 `pnpm run type-check` 静态类型检查。
+- **按域模块化类型与 API**：`src/types/` 与 `src/api/modules/` 按业务域（auth/folder/material/knowledge/question/practice/diagnosis/wrong）拆分，由 `src/types/index.ts` 与 `src/api/index.ts` 提供轻量 barrel 聚合导出。
+- **跨页共享底座**：`src/components/` 包含 `AiCoachDrawer.vue`、`CoachMessageList.vue`（`virtualHost: true` + 上下文隔离）、`RichContent.vue`（零外部依赖富文本/公式 AST 渲染）与 `BackgroundTaskBar.vue`（全局非阻塞后台任务条）。
+- 全局状态为 **6 个 Pinia store**：`auth` / `material` / `folder` / `practice` / `diagnosis` / `backgroundTask`。
+- **单元测试与类型全覆盖**：共 **28 个 spec 文件 / 207 个用例**（全部位于 `miniprogram/tests/`），且通过 `tsconfig.test.json` 纳入 `pnpm run type-check` 静态类型检查。
 
 ---
 

@@ -77,7 +77,8 @@ backend/
 
 新增后端能力时的落位约定：
 
-- **新增一个 HTTP 端点**：在 `app/api/v1/<domain>.py` 定义 `APIRouter`，路由内 `Depends` 获取 Service，禁止直接 import 仓储或开事务；服务装配走 `app/api/deps/<domain>.py` 的 `get_<domain>_service`。
+- **新增一个 HTTP 端点**：在 `app/api/v1/<domain>.py` 定义 `APIRouter`，路由内 `Depends` 获取 Service，禁止直接 import 仓储或开事务；服务装配走 `app/api/deps/<domain>.py` 的 `get_<domain>_service`。**关键并发红线：本项目使用同步 SQLAlchemy `Session` 与同步 `httpx.Client`，路由函数必须声明为普通 `def`（由 FastAPI 自动派发线程池），严禁声明为 `async def` 阻塞主 asyncio 事件循环**；`async def` 依赖（如 `get_current_user`）若需查库，必须通过 `starlette.concurrency.run_in_threadpool` 卸载。
+- **新增后台异步队列任务**：在 `app/worker.py` 注册顶层可序列化入口（如 `parse_material_job`、`generate_questions_job`）并接入终态错误兜底处理器；本地使用 `deploy/docker-compose.yml` 启动的 `deploy-worker-1` 运行于独立构建镜像，改动 `app/worker.py` 或 `app/services/**` 后必须执行 `docker compose -f deploy/docker-compose.yml up -d --build worker` 重建 Worker 容器。
 - **新增业务规则/事务**：写在 `app/services/<domain>.py`，Service 只依赖 `app.repositories`、`app.core` 与构造注入的 `app.integrations` 适配器。
 - **新增数据访问**：写在 `app/repositories/<domain>.py`，只使用 SQLAlchemy 表达式，返回 ORM 实体或标量，不得 import `fastapi`/`app.services`/`app.api`/`app.integrations`。
 - **新增表/字段**：先改 `app/models/<domain>.py`，再补 `migrations/versions/NNNN_*.py`，并补对称的 `downgrade()`。

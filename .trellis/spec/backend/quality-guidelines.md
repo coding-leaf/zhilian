@@ -1568,3 +1568,23 @@ if mapper.class_.__module__.startswith("app.models."):
 - `backend/tests/conftest.py::block_external_network`（守卫放行 `127.0.0.1`，挡不住真库）
 - `backend/tests/unit/models/test_avatar_object_key_migration.py`（单条迁移的 upgrade/downgrade 对称性测试：**不覆盖**全链一致性）
 - `backend/tests/integration/test_p0_full_chain_e2e.py::db_session`（`Base.metadata.create_all()` 建表：**同样不覆盖**漂移）
+
+---
+
+### Scenario: 事件循环防冻结、异步出题作业与判题后学情自动同步（2026-11-17 实测沉淀）
+
+#### 1. Scope / Trigger
+- 新增或修改 `backend/app/api/v1/*.py` 路由、`POST /api/v1/questions/jobs` 后台出题作业、PDF/PPT 提取（`app/core/extractors/`）及练习交卷/重判链路（`PracticeService.submit_practice`、`GradingService`）。
+
+#### 2. Contracts
+- **同步 IO 严禁 `async def` 路由**：所有调用同步 `Session` 或同步 `httpx.Client` 的 FastAPI 路由必须用普通 `def`（由 `tests/unit/api/test_routes_nonblocking.py` 守卫）；`get_current_user` 等 `async` 依赖内部查库必须经 `run_in_threadpool`。
+- **耗时多考点生题统一走异步作业**：`POST /api/v1/questions/jobs`（HTTP 202）立即落库 `QuestionGenerationJob(status="queued")` 并投递 `worker.generate_questions_job`，`QuestionService` 对纯 LLM/Embedding 网络调用使用有界 `ThreadPoolExecutor(max_workers=3)` 并发，但 **SQLAlchemy `Session` 读写严格限制在主工作线程串行提交**（严禁跨线程共享同一 `Session`）。
+- **PDF 符号字体防乱码与结构化考点禁伪造考频**：遇到无 `/ToUnicode` 的 `SymbolMT` 等字体或 `detect_symbol_garble_ratio` 检出 ASCII 标点汤（如 `AB&A& "#$"$`）时，必须按页回退 OCR，严禁将乱码切片原样喂入生题 Prompt；`KnowledgePoint.structured_content` 仅允许源于讲义原文的客观字段（`core_summary`、`key_takeaways`、`key_formulas`、`boundary_notes`），**严禁编造「高频必考 / 考频权重」标签**；建树前先做归一化名称确定性合并再做向量去重。
+- **判题完成即刻同步学情**：`submit_practice`（纯客观题即时判完）及 `GradingService.grade_practice` / `regrade_attempt` / `self_evaluate_attempt` 必须在服务端自动调用 `DiagnosisService.sync_practice_learning_state` 更新 `WrongRecord` 与 `MasteryRecord`（不依赖前端停留在结果页手动调 `/diagnosis`）。
+
+#### 代码锚点
+- `backend/app/api/v1/questions.py::create_question_generation_job`
+- `backend/app/worker.py::generate_questions_job`
+- `backend/app/core/algorithms/ocr_quality.py`、`backend/app/core/algorithms/knowledge_tree.py`
+- `backend/app/services/diagnosis.py::DiagnosisService.sync_practice_learning_state`
+- `backend/tests/unit/api/test_routes_nonblocking.py`
