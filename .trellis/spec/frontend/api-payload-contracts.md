@@ -1,8 +1,8 @@
 # API Payload Contracts（写入类接口的请求体语义）
 
-> **事实源**：`backend/app/schemas/practice.py`、`backend/app/services/practice.py`、`backend/app/api/v1/practices.py`、`miniprogram/src/api/index.ts`、`miniprogram/src/stores/practice.ts`、`miniprogram/src/pages/review/composables/useQuestionBank.ts`
-> **最后核对**：2026-09-29
-> **核对方式**：逐条读 `services/practice.py` 的 `create_practice` 全路径（**不是读到一半**，见 §7）+ 实测 12 题显式建练习
+> **事实源**：`backend/app/schemas/practice.py`、`backend/app/services/practice.py`、`backend/app/api/v1/practices.py`、`miniprogram/src/api/modules/practices.ts`、`miniprogram/src/types/practice.ts`、`miniprogram/src/stores/practice.ts`、`miniprogram/src/pages/review/composables/useQuestionBank.ts`
+> **最后核对**：2026-11-17
+> **核对方式**：对照 `PracticeCreateRequest._sync_question_count_with_ids`、`CreatePracticeParams` 必填 `title`、`MAX_PRACTICE_QUESTIONS = 50` 及单次往返 `apiCreatePractice` 实测核对
 
 ---
 
@@ -40,12 +40,14 @@ source_type: str | None = None
 ```
 
 ```typescript
-// miniprogram/src/types/index.ts
+// miniprogram/src/types/practice.ts (re-exported via src/types/index.ts)
+export const MAX_PRACTICE_QUESTIONS = 50
+
 export interface CreatePracticeParams {
-  title?: string          // 注意：后端必填，前端类型却是可选
+  title: string           // 必填（与后端 min_length=1 对齐）
   material_id?: string; folder_id?: string
   knowledge_point_ids?: string[]; question_ids?: string[]
-  question_count?: number // ← 传 question_ids 时必须一起传
+  question_count?: number // 传 question_ids 时调用方统一显式传 min(length, MAX_PRACTICE_QUESTIONS)
   // ...
 }
 ```

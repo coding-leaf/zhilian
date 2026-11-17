@@ -1,8 +1,8 @@
 # Directory Structure
 
-> **事实源**：`miniprogram/src/**`、`miniprogram/src/pages.json`、`miniprogram/vite.config.ts`、`miniprogram/tsconfig.json`、`miniprogram/vitest.config.ts`
-> **最后核对**：2026-09-29
-> **核对方式**：`find miniprogram/src -type f` 全量枚举 + 逐项对照 `pages.json` 注册表
+> **事实源**：`miniprogram/src/**`、`miniprogram/src/pages.json`、`miniprogram/vite.config.ts`、`miniprogram/tsconfig.json`、`miniprogram/tsconfig.test.json`、`miniprogram/vitest.config.ts`
+> **最后核对**：2026-11-17
+> **核对方式**：全量枚举 `miniprogram/src` + 逐项对照 `pages.json` 注册表
 
 > How frontend code is organized in this project. 本文档描述 `miniprogram/` 工程的**真实**布局，不描述理想态。
 
@@ -10,12 +10,11 @@
 
 ## Overview
 
-本前端是 **uni-app + Vue 3 + Pinia** 的微信小程序（`mp-weixin`），构建工具为 Vite，样式预处理器为 SCSS，单元测试为 Vitest，类型检查为 `vue-tsc`。所有命令在 `miniprogram/` 目录下用 `pnpm` 执行（`pnpm run lint` / `type-check` / `test:unit`）。
+本前端是 **uni-app + Vue 3 + Pinia** 的微信小程序（`mp-weixin`），构建工具为 Vite，样式预处理器为 SCSS，单元测试为 Vitest，类型检查为 `vue-tsc`（同时校验 `src/**` 与 `tests/**`）。所有命令在 `miniprogram/` 目录下用 `pnpm` 执行（`pnpm run lint` / `type-check` / `test:cov` / `build:mp-weixin`）。
 
-- 应用入口：`main.ts` 的 `createApp()` 使用 `createSSRApp(App)` + `Pinia.createPinia()`；应用级生命周期（`onLaunch` / `onShow` / `onHide`）在 `App.vue` 内（当前只打日志）。
-- 页面与分包注册、`easycom` 规则集中在 `pages.json`。`easycom` 声明的 `^wd-(.*)` 规则当前**没有使用点**。
-- 路径别名 `@` 由 `vite.config.ts`（`'@': '/src'`）与 `tsconfig.json`（`"@/*": ["./src/*"]`）双处声明。
-- 设计参数的事实源是 `docs/DESIGN.md`；代码侧只有 `App.vue` 在 `page` 上定义的一组 `--color-*` CSS 变量（无 `src/uni.scss`、无 `src/styles/`）。
+- 应用入口：`main.ts` 的 `createApp()` 使用 `createSSRApp(App)` + `Pinia.createPinia()`；全局 `--color-*` Token 与基础纸质样式在 `App.vue` 与 `src/styles/{tokens,modal,common}.scss` 中维护。
+- 页面与分包注册集中在 `pages.json`（共 8 个真实业务页，已清退废弃 `wot-design-uni` `easycom` 规则与 `upload/index` 死占位页）。
+- `src/api/modules/*` 与 `src/types/*` 均按业务域拆分，经各自的 `index.ts` barrel 统一重导出；全仓所有 `.vue` 单文件均严格保持 `<= 300` 行（当前最高 270 行）。
 
 **代码锚点**
 - `miniprogram/src/main.ts::createApp`

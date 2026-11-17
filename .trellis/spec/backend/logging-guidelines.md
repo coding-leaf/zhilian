@@ -2,9 +2,9 @@
 
 > 本项目后端的日志约定（以真实 logging 用法与配置为准）。
 
-> **事实源**：`backend/app/services/*.py`、`backend/app/core/config.py`、`backend/app/core/security.py`、`backend/app/cli/main.py`、`backend/app/api/v1/materials.py`、`backend/alembic.ini`
-> **最后核对**：2026-09-28 @ ca062a1
-> **核对方式**：`rg "logging|getLogger|logger\.|_log_metric|generate_user_ref" backend/app`
+> **事实源**：`backend/app/core/logging.py`、`backend/app/services/*.py`、`backend/app/core/config.py`、`backend/app/core/security.py`、`backend/app/cli/main.py`、`backend/app/api/v1/materials.py`、`backend/alembic.ini`
+> **最后核对**：2026-11-17
+> **核对方式**：`rg "logging|getLogger|logger\.|log_metric|generate_user_ref" backend/app`
 
 ---
 

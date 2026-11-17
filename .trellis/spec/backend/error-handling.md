@@ -3,7 +3,7 @@
 > 本项目后端的错误处理约定（以真实异常定义与处理器为准）。
 
 > **事实源**：`backend/app/core/errors.py`、`backend/app/main.py`、`backend/app/api/v1/*.py`、`backend/app/cli/errors.py`、`backend/app/cli/main.py`
-> **最后核对**：2026-09-28 @ ca062a1
+> **最后核对**：2026-11-17
 > **核对方式**：`rg "class .*Error|exception_handler|status_code=" backend/app/core/errors.py backend/app/main.py backend/app/cli/errors.py`
 
 ---
@@ -28,7 +28,7 @@
 | 10xxx | 参数校验/请求格式 | `RequestValidationError` → `code=10001` |
 | 20xxx | 鉴权/权限 | `AuthenticationError`(20001/401)、`PermissionDeniedError`(20002/403) |
 | 30xxx | 外部能力/网络 | `StorageError`(30001)、`OCRError`(30004)、`EmbeddingError`(30007)、`SearchError`(30010)、`LLMError`(30011)、`LLMResponseFormatError`(30014)、`QueueError`(30015)、`IdempotencyConflictError`(30017/409) |
-| 40xxx | 算法/质量门禁 | `MaterialInvalidError`(40001/400)、`ReshootLimitExceededError`(40002)、`MaterialParseError`(40003/500)、`MaterialNotFoundError`(40004/404)、`KnowledgePointQualityError`(40005)、`KnowledgeNotFoundError`(40007/404)、`MissingSourceSnippetError`(40003/400)、`QuestionQualityCheckError`(40008)、`QuestionNotFoundError`(40009/404)、`PracticeNotFoundError`(40010/404)、`PracticeStatusError`(40011/400)、`PracticeEmptyQuestionsError`(40012/400)、`GradingNotAllowedError`(40014/400)、`PracticeNotGradedError`(40016/400)、`WrongRecordNotFoundError`(40019/404)、`FolderNotFoundError`(40020/404)、`FolderNameConflictError`(40021/409) |
+| 40xxx | 算法/质量门禁 | `MaterialInvalidError`(40001/400)、`ReshootLimitExceededError`(40002)、`MaterialNotFoundError`(40004/404)、`KnowledgeNotFoundError`(40007/404)、`MissingSourceSnippetError`(40003/400)、`QuestionNotFoundError`(40009/404)、`PracticeNotFoundError`(40010/404)、`PracticeStatusError`(40011/400)、`PracticeEmptyQuestionsError`(40012/400)、`GradingNotAllowedError`(40014/400)、`PracticeNotGradedError`(40016/400)、`WrongRecordNotFoundError`(40019/404)、`FolderNotFoundError`(40020/404)、`FolderNameConflictError`(40021/409) |
 | 50xxx | 内部/数据库 | 通用 `AppError` 默认 `40000/400` |
 
 `AppError.to_dict()` 输出 `{"code", "message", "details"}`；`code` / `detail` 为兼容别名属性。
