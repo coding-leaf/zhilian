@@ -94,6 +94,8 @@ def build_knowledge_hierarchy(
             parent_id=node.parent_id,
             name=node.name,
             description=node.description,
+            structured_content=node.structured_content,
+            sort_order=node.sort_order,
             level=node.level,
             batch_id=batch_id,
             is_low_confidence=is_low_confidence,
@@ -137,12 +139,14 @@ class KnowledgeService:
         self,
         snippets: Sequence[MaterialSnippet],
         feedback: str | None = None,
+        existing_outline: Sequence[dict[str, Any]] | None = None,
     ) -> list[LLMMessage]:
         """构建知识点抽取的大模型输入消息序列。
 
         Args:
             snippets: 当前批次的切片序列。
             feedback: 上一轮质检失败反馈（若有）。
+            existing_outline: 前序批次已抽取的知识点骨架列表 ``{temp_id, name, level}``。
 
         Returns:
             list[LLMMessage]: 大模型上下文消息列表。
@@ -153,12 +157,28 @@ class KnowledgeService:
             "1. 每个知识点必须有 2~30 字符规范名称，严禁数字编号前缀与占位词；\n"
             "2. 正确标注父节点 temp_id，无父节点设为 null，层级深度 1~5 级；\n"
             "3. 记录来源片段序号 (source_snippet_indices)；\n"
-            "4. 输出严格符合 JSON Schema 规范。"
+            "4. 必须 strictly 基于原文切片填写真实结构化内容：\n"
+            "   - core_summary：<=60 字符的一句话核心摘要（不扩写、不重复标题）；\n"
+            "   - key_takeaways：关键要点短句列表（必须直接源自原文切片，无则 []）；\n"
+            "   - key_formulas：核心公式或符号定义列表（无则 []）；\n"
+            "   - boundary_notes：适用条件与易错边界提示列表（无则 []）；\n"
+            "   - **严禁捏造任何考试频次、重要度星级或'高频必考'等原文不存在的标签**；\n"
+            "5. 输出严格符合 JSON Schema 规范。"
         )
         if feedback:
             system_content += f"\n\n【上一轮质检未通过反馈与整改要求】\n{feedback}"
 
-        user_content_lines = ["请从以下切片内容中抽取知识点："]
+        user_content_lines = []
+        if existing_outline:
+            outline_lines = [
+                f"- temp_id={node['temp_id']} | name={node['name']} | level={node['level']}"
+                for node in existing_outline
+            ]
+            user_content_lines.append(
+                "【已抽取知识点骨架（若本批内容属于上述节点的下级分支，请直接引用对应 temp_id 作为 "
+                "parent_temp_id，避免重复定义同名父节点）】\n" + "\n".join(outline_lines)
+            )
+        user_content_lines.append("请从以下切片内容中抽取知识点：")
         for s in snippets:
             ch_info = f" [章节: {s.chapter_title}]" if s.chapter_title else ""
             user_content_lines.append(f"片段 #{s.snippet_index}{ch_info}:\n{s.content}")
@@ -172,17 +192,19 @@ class KnowledgeService:
         self,
         snippets: Sequence[MaterialSnippet],
         feedback: str | None = None,
+        existing_outline: Sequence[dict[str, Any]] | None = None,
     ) -> list[ExtractedKnowledgeItem]:
         """调用大模型抽取单批次切片的候选知识点。
 
         Args:
             snippets: 单批切片序列。
             feedback: 上一轮质检反馈。
+            existing_outline: 前序批次已抽取知识点骨架。
 
         Returns:
             list[ExtractedKnowledgeItem]: 抽取的知识点项。
         """
-        messages = self._build_batch_prompt(snippets, feedback)
+        messages = self._build_batch_prompt(snippets, feedback, existing_outline=existing_outline)
         options = LLMOptions(temperature=0.3, timeout=60.0)
 
         output, _ = self.llm.generate_structured(
@@ -240,8 +262,22 @@ class KnowledgeService:
                 for i in range(0, len(snippets), current_batch_size)
             ]
             raw_extracted: list[ExtractedKnowledgeItem] = []
-            for batch in batches:
-                raw_extracted.extend(self._extract_batch_points(batch, prompt_feedback))
+            outline_skeleton: list[dict[str, Any]] = []
+            for batch_idx, batch in enumerate(batches):
+                batch_items = self._extract_batch_points(
+                    batch,
+                    prompt_feedback,
+                    existing_outline=outline_skeleton if batch_idx > 0 else None,
+                )
+                raw_extracted.extend(batch_items)
+                for kp_item in batch_items:
+                    outline_skeleton.append(
+                        {
+                            "temp_id": kp_item.temp_id,
+                            "name": kp_item.name,
+                            "level": kp_item.level,
+                        }
+                    )
 
             if not raw_extracted:
                 if re_extract_count >= 2:
@@ -500,6 +536,8 @@ class KnowledgeService:
                 "parent_id": str(p.parent_id) if p.parent_id else None,
                 "name": p.name,
                 "description": p.description,
+                "structured_content": p.structured_content,
+                "sort_order": p.sort_order,
                 "level": p.level,
                 "is_low_confidence": p.is_low_confidence,
                 "children": [],

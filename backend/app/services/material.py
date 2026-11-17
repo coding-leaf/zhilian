@@ -42,6 +42,9 @@ from app.core.extractors import (
     _extract_text_from_pdf as _extract_text_from_pdf,
 )
 from app.core.extractors import (
+    extract_pdf_pages_with_diagnostics,
+)
+from app.core.extractors import (
     extract_text_from_raw_content as extract_text_from_raw_content,
 )
 from app.core.extractors import (
@@ -51,6 +54,7 @@ from app.core.idempotency import validate_idempotency_key
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.idempotency.protocol import IdempotencyProtocol
+from app.integrations.llm.protocol import LLMProtocol
 from app.integrations.ocr.protocol import OCRProtocol
 from app.integrations.queue.protocol import QueueProtocol
 from app.integrations.storage.protocol import StorageProtocol
@@ -63,12 +67,14 @@ from app.models.material import (
     SourceType,
 )
 from app.repositories.folder import FolderRepository
+from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.services._material_pipeline import (
     MaterialDetailView,
     chunk_embed_and_replace_snippets,
     mark_pipeline_failed,
     process_initial_ocr_page,
+    repair_garbled_pdf_pages,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +137,7 @@ class MaterialService:
         material_repo: MaterialRepository | None = None,
         knowledge_service: "KnowledgeService | None" = None,
         folder_repo: FolderRepository | None = None,
+        llm_adapter: LLMProtocol | None = None,
         bucket: str = DEFAULT_MATERIAL_BUCKET,
     ) -> None:
         self.session = session
@@ -141,7 +148,9 @@ class MaterialService:
         self.idempotency = idempotency_adapter
         self.repo = material_repo or MaterialRepository(session)
         self.folder_repo = folder_repo or FolderRepository(session)
+        self.knowledge_repo = KnowledgeRepository(session)
         self.knowledge_service = knowledge_service
+        self.llm = llm_adapter
         self.bucket = bucket
 
     def create_material(
@@ -343,6 +352,7 @@ class MaterialService:
         material_id: uuid.UUID,
         version_id: uuid.UUID,
         user_id: uuid.UUID,
+        force: bool = False,
     ) -> MaterialVersion:
         """异步/同步资料解析调度流水线主入口。
 
@@ -350,6 +360,7 @@ class MaterialService:
             material_id: 资料标识。
             version_id: 版本标识。
             user_id: 租户用户标识。
+            force: 为 True 时清理该版本旧知识点/切片并强制重新提取。
 
         Returns:
             MaterialVersion: 完成或失败后的版本状态实体。
@@ -365,7 +376,7 @@ class MaterialService:
             raise MaterialNotFoundError("学习资料或对应版本不存在")
         if version.material_id != material_id:
             raise MaterialNotFoundError("资料版本不属于指定资料")
-        if version.parse_status == ParseStatus.READY.value:
+        if not force and version.parse_status == ParseStatus.READY.value:
             return version
 
         clean_format = material.file_format.lower().lstrip(".")
@@ -375,7 +386,18 @@ class MaterialService:
 
         try:
             self.repo.update_material_status(material_id, user_id, MaterialStatus.PARSING.value)
-            self.repo.update_version_status(version_id, user_id, current_stage)
+            self.repo.update_version_status(
+                version_id,
+                user_id,
+                current_stage,
+                failed_stage=None,
+                error_message=None,
+            )
+            if force:
+                self.knowledge_repo.delete_knowledge_points_by_version(
+                    material_id, version_id, user_id
+                )
+                self.repo.delete_snippets_by_version(version_id, user_id)
             self.session.commit()
             file_bytes = self.storage.get_object(self.bucket, version.storage_key)
 
@@ -412,7 +434,15 @@ class MaterialService:
                     return version
 
                 extracted_text = ocr_page.raw_text
-                paragraphs = [p.strip() for p in extracted_text.split("\n") if p.strip()]
+                paragraphs: Any = [p.strip() for p in extracted_text.split("\n") if p.strip()]
+            elif clean_format == "pdf":
+                pdf_pages = extract_pdf_pages_with_diagnostics(file_bytes)
+                paragraphs, extracted_text = repair_garbled_pdf_pages(
+                    pdf_pages,
+                    file_bytes,
+                    ocr=self.ocr,
+                    llm=self.llm,
+                )
             else:
                 paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
                 extracted_text = "\n\n".join(paragraphs)
@@ -1112,6 +1142,7 @@ class MaterialService:
         version_id: uuid.UUID | None = None,
         *,
         sync: bool = False,
+        force: bool = False,
     ) -> MaterialVersion:
         """触发或重新调度资料解析流水线。
 
@@ -1120,6 +1151,7 @@ class MaterialService:
             material_id: 资料主键。
             version_id: 可选指定版本标识，默认当前激活版本或最新版本。
             sync: 是否同步阻塞执行。
+            force: 为 True 时允许强制重新解析已就绪版本并清理旧知识点与切片。
 
         Returns:
             MaterialVersion: 目标版本实体。
@@ -1152,17 +1184,20 @@ class MaterialService:
                 material_id=material_id,
                 version_id=target_version.id,
                 user_id=user_id,
+                force=force,
             )
 
-        if target_version.parse_status in {
+        active_statuses = {
             ParseStatus.QUEUED.value,
             ParseStatus.PARSING_DOC.value,
             ParseStatus.OCR_PROCESSING.value,
             ParseStatus.EXTRACTING_KNOWLEDGE.value,
             ParseStatus.AUDITING_KNOWLEDGE.value,
             ParseStatus.EMBEDDING_GENERATION.value,
-            ParseStatus.READY.value,
-        }:
+        }
+        if target_version.parse_status in active_statuses or (
+            target_version.parse_status == ParseStatus.READY.value and not force
+        ):
             return target_version
 
         # 派发必须是原子的：两个并发请求不能凭同一次陈旧读各入队一次，否则同一版本
@@ -1184,21 +1219,29 @@ class MaterialService:
         )
         self.session.commit()
 
-        self._enqueue_parse(material_id, target_version.id, user_id)
+        self._enqueue_parse(material_id, target_version.id, user_id, force=force)
         return target_version
 
     def _enqueue_parse(
-        self, material_id: uuid.UUID, version_id: uuid.UUID, user_id: uuid.UUID
+        self,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        force: bool = False,
     ) -> None:
         """Dispatch one explicit parse request and expose dispatch failure in DB."""
+        payload: dict[str, str] = {
+            "material_id": str(material_id),
+            "version_id": str(version_id),
+            "user_id": str(user_id),
+        }
+        if force:
+            payload["force"] = "true"
         try:
             self.queue.enqueue(
                 task_name="parse_material_pipeline",
-                payload={
-                    "material_id": str(material_id),
-                    "version_id": str(version_id),
-                    "user_id": str(user_id),
-                },
+                payload=payload,
                 user_id=str(user_id),
             )
         except Exception:

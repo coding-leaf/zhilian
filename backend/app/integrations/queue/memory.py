@@ -64,6 +64,11 @@ class MemoryQueueAdapter(QueueProtocol):
         with self._lock:
             self._handlers[task_name] = handler
 
+    def has_handler(self, task_name: str) -> bool:
+        """判断指定任务名是否已注册执行处理器。"""
+        with self._lock:
+            return task_name in self._handlers
+
     def set_fault_injection(self, operation: str, exception: Exception | None) -> None:
         """配置模拟故障注入。
 

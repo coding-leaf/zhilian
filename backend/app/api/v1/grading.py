@@ -42,7 +42,7 @@ router = APIRouter(tags=["grading"])
     status_code=status.HTTP_200_OK,
     summary="主观题用户自主评分",
 )
-async def self_evaluate(
+def self_evaluate(
     request: SelfEvaluateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     grading_service: Annotated[GradingService, Depends(get_grading_service)],
@@ -104,7 +104,7 @@ async def self_evaluate(
     status_code=status.HTTP_200_OK,
     summary="申请重新判题",
 )
-async def regrade(
+def regrade(
     request: RegradeRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     grading_service: Annotated[GradingService, Depends(get_grading_service)],
@@ -159,7 +159,7 @@ async def regrade(
     status_code=status.HTTP_200_OK,
     summary="作答题目判题明细与历史记录查询",
 )
-async def get_attempt_grading_detail(
+def get_attempt_grading_detail(
     attempt_item_id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     grading_service: Annotated[GradingService, Depends(get_grading_service)],

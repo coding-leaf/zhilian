@@ -15,7 +15,7 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
-from app.models.material import MaterialSnippet
+from app.models.material import Material, MaterialFolder, MaterialSnippet
 
 
 class KnowledgeRepository:
@@ -93,6 +93,52 @@ class KnowledgeRepository:
         """get_by_id 别名方法。"""
         return self.get_by_id(knowledge_point_id, user_id)
 
+    def list_by_ids(
+        self,
+        knowledge_point_ids: Sequence[uuid.UUID],
+        user_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """按知识点主键集合与租户用户批量查询知识点。"""
+        if not knowledge_point_ids:
+            return []
+        stmt = select(KnowledgePoint).where(
+            KnowledgePoint.user_id == user_id,
+            KnowledgePoint.id.in_(knowledge_point_ids),
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def list_by_folder_scope(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> list[KnowledgePoint]:
+        """按课程文件夹或未分类范围查询当前用户的全部知识点。"""
+        stmt = (
+            select(KnowledgePoint)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
+        )
+        if unclassified:
+            stmt = stmt.where(Material.folder_id.is_(None))
+        elif folder_id is not None:
+            stmt = stmt.where(
+                Material.folder_id == folder_id,
+                (MaterialFolder.id.is_(None)) | (MaterialFolder.archived_at.is_(None)),
+            )
+        stmt = stmt.order_by(
+            KnowledgePoint.level.asc(),
+            KnowledgePoint.sort_order.asc(),
+            KnowledgePoint.created_at.asc(),
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
     def list_by_material_id(
         self,
         material_id: uuid.UUID,
@@ -113,7 +159,11 @@ class KnowledgeRepository:
                 KnowledgePoint.material_id == material_id,
                 KnowledgePoint.user_id == user_id,
             )
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 
@@ -135,7 +185,11 @@ class KnowledgeRepository:
         stmt = (
             select(KnowledgePoint)
             .where(KnowledgePoint.user_id == user_id)
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 
@@ -162,7 +216,11 @@ class KnowledgeRepository:
                 KnowledgePoint.version_id == version_id,
                 KnowledgePoint.user_id == user_id,
             )
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 

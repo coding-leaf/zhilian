@@ -6,10 +6,12 @@
 
 import enum
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -414,4 +416,106 @@ class QuestionAuditLog(Base, TimestampMixin, TenantModelMixin):
         return (
             f"<QuestionAuditLog id={self.id} q_id={self.question_id} "
             f"action={self.action} fields={self.changed_fields}>"
+        )
+
+
+class QuestionGenerationJobStatus(enum.StrEnum):
+    """异步出题任务状态生命周期枚举。"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class QuestionGenerationJob(Base, TimestampMixin, TenantModelMixin):
+    """异步出题队列任务持久化状态实体模型。"""
+
+    __tablename__ = "question_generation_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="异步出题任务主键 UUIDv4",
+    )
+    material_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="目标学习资料主键 (单资料出题时非空)",
+    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="目标课程文件夹主键 (按课程出题时非空)",
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=QuestionGenerationJobStatus.QUEUED.value,
+        index=True,
+        comment="任务执行状态 (queued|running|completed|failed)",
+    )
+    request_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=dict,
+        comment="归一化后的出题请求载荷快照",
+    )
+    total_kps: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="本次出题涉及的总知识点数",
+    )
+    completed_kps: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="已完成生成的知识点计数",
+    )
+    generated_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="成功生成入库的题目总数",
+    )
+    batch_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        default=None,
+        comment="关联出题批次标识",
+    )
+    question_ids: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=False,
+        default=list,
+        comment="已生成的题目 UUID 字符串列表",
+    )
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        comment="任务失败原因摘要 (脱敏无敏感明文)",
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        comment="任务终态完成时间 (UTC)",
+    )
+
+    __table_args__ = (
+        Index("ix_question_generation_jobs_user_status", "user_id", "status"),
+        Index("ix_question_generation_jobs_user_created", "user_id", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<QuestionGenerationJob id={self.id} user_id={self.user_id} "
+            f"status={self.status} progress={self.completed_kps}/{self.total_kps}>"
         )

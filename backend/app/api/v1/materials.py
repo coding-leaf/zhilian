@@ -65,7 +65,7 @@ _UPLOAD_CHUNK_BYTES: int = 64 * 1024
 _HTTP_413_PAYLOAD_TOO_LARGE: int = 413
 
 
-async def _read_upload_content_guarded(file: UploadFile, request: Request) -> bytes:
+def _read_upload_content_guarded(file: UploadFile, request: Request) -> bytes:
     """在读取请求体之前与读取过程中双重执行体积门禁，杜绝内存放大 DoS。
 
     先校验 ``Content-Length`` 声明体积，超限立即拒绝且不读取任何字节；
@@ -98,7 +98,7 @@ async def _read_upload_content_guarded(file: UploadFile, request: Request) -> by
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+        chunk = file.file.read(_UPLOAD_CHUNK_BYTES)
         if not chunk:
             break
         total += len(chunk)
@@ -195,7 +195,7 @@ def run_material_pipeline_background(
     status_code=status.HTTP_201_CREATED,
     summary="上传并创建学习资料",
 )
-async def upload_material(
+def upload_material(
     request: Request,
     file: Annotated[UploadFile, File(description="待解析学习资料文件二进制流")],
     user: Annotated[User, Depends(get_current_user)],
@@ -225,7 +225,7 @@ async def upload_material(
     Returns:
         MaterialUploadResponse: 创建就绪的资料与版本初始元数据。
     """
-    content = await _read_upload_content_guarded(file, request)
+    content = _read_upload_content_guarded(file, request)
     material, version = material_service.import_material_file(
         user_id=user.id,
         file_content=content,
@@ -253,7 +253,7 @@ async def upload_material(
     status_code=status.HTTP_200_OK,
     summary="分页检索资料列表",
 )
-async def list_materials(
+def list_materials(
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
     pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
@@ -335,7 +335,7 @@ async def list_materials(
     status_code=status.HTTP_200_OK,
     summary="获取当前用户学习资料统计",
 )
-async def get_material_statistics(
+def get_material_statistics(
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
 ) -> MaterialStatisticsResponse:
@@ -361,7 +361,7 @@ async def get_material_statistics(
     status_code=status.HTTP_200_OK,
     summary="获取指定学习资料详情",
 )
-async def get_material_detail(
+def get_material_detail(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -412,7 +412,7 @@ async def get_material_detail(
     status_code=status.HTTP_200_OK,
     summary="查询资料页级 OCR 质检记录",
 )
-async def list_material_ocr_pages(
+def list_material_ocr_pages(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -457,11 +457,12 @@ async def list_material_ocr_pages(
     status_code=status.HTTP_200_OK,
     summary="触发或重新调度资料解析流水线",
 )
-async def trigger_material_parse(
+def trigger_material_parse(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
     payload: Annotated[MaterialParseRequest | None, Body()] = None,
+    force: Annotated[bool, Query(description="是否强制重新解析已就绪资料")] = False,
 ) -> MaterialParseResponse:
     """触发指定资料及版本的文本抽取、质量评估与切片向量化流水线。
 
@@ -470,16 +471,20 @@ async def trigger_material_parse(
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
         payload: 解析调度参数配置。
+        force: 强制重新解析标记，支持 Query `?force=true` 或请求体传入。
 
     Returns:
         MaterialParseResponse: 调度入队或同步完成结果。
     """
     request_dto = payload or MaterialParseRequest()
+    effective_force = force or request_dto.force
+    extra_kwargs: dict[str, bool] = {"force": True} if effective_force else {}
     version = material_service.trigger_parse(
         user_id=user.id,
         material_id=material_id,
         version_id=request_dto.version_id,
         sync=request_dto.sync,
+        **extra_kwargs,
     )
     message = "解析流水线同步执行完成" if request_dto.sync else "解析流水线任务已加入队列"
     return MaterialParseResponse(
@@ -497,7 +502,7 @@ async def trigger_material_parse(
     status_code=status.HTTP_200_OK,
     summary="查询资料历史版本列表",
 )
-async def list_material_versions(
+def list_material_versions(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -539,7 +544,7 @@ async def list_material_versions(
     status_code=status.HTTP_200_OK,
     summary="切换当前激活版本",
 )
-async def switch_material_version(
+def switch_material_version(
     material_id: uuid.UUID,
     version_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
@@ -587,7 +592,7 @@ async def switch_material_version(
     status_code=status.HTTP_200_OK,
     summary="就地重拍替换指定页面图片并重检",
 )
-async def reshoot_material_page(
+def reshoot_material_page(
     material_id: uuid.UUID,
     page_index: Annotated[int, Form(ge=1, description="重拍目标页码序号 (从 1 开始)")],
     file: Annotated[UploadFile, File(description="重新拍摄的高清图片数据流")],
@@ -610,7 +615,7 @@ async def reshoot_material_page(
     Returns:
         MaterialReshootResponse: 单页重检达标状态与累计重拍次数。
     """
-    content = await file.read()
+    content = file.file.read()
     page = material_service.reshoot_material_page(
         user_id=user.id,
         material_id=material_id,
@@ -641,7 +646,7 @@ async def reshoot_material_page(
     status_code=status.HTTP_200_OK,
     summary="一键重试学习资料解析流水线",
 )
-async def retry_material_pipeline(
+def retry_material_pipeline(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -689,7 +694,7 @@ async def retry_material_pipeline(
     status_code=status.HTTP_200_OK,
     summary="移动资料归属课程",
 )
-async def move_material_folder(
+def move_material_folder(
     material_id: uuid.UUID,
     payload: MaterialFolderMoveRequest,
     user: Annotated[User, Depends(get_current_user)],
@@ -745,7 +750,7 @@ async def move_material_folder(
     status_code=status.HTTP_200_OK,
     summary="物理级联销毁资料及其关联资源",
 )
-async def hard_delete_material(
+def hard_delete_material(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
@@ -780,7 +785,7 @@ async def hard_delete_material(
     status_code=status.HTTP_200_OK,
     summary="软删除学习资料 (移至回收站)",
 )
-async def soft_delete_material(
+def soft_delete_material(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],

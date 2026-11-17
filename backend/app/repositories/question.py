@@ -20,6 +20,8 @@ from app.models.material import Material, MaterialFolder, MaterialStatus
 from app.models.question import (
     Question,
     QuestionAuditLog,
+    QuestionGenerationJob,
+    QuestionGenerationJobStatus,
     QuestionQualityCheck,
     QuestionStatus,
 )
@@ -449,7 +451,11 @@ class QuestionRepository:
                 Material.status == MaterialStatus.READY.value,
                 MaterialFolder.archived_at.is_(None),
             )
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 
@@ -486,6 +492,7 @@ class QuestionRepository:
             .order_by(
                 Material.created_at.asc(),
                 KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
                 KnowledgePoint.created_at.asc(),
             )
         )
@@ -725,3 +732,60 @@ class QuestionRepository:
         return list(self.session.execute(stmt).scalars().all())
 
     list_edit_logs = list_audit_logs_by_question
+
+    # ==========================================
+    # QuestionGenerationJob 异步出题任务操作
+    # ==========================================
+
+    def create_generation_job(
+        self,
+        job: QuestionGenerationJob,
+        user_id: uuid.UUID,
+    ) -> QuestionGenerationJob:
+        """创建异步出题任务记录并注入租户隔离标识。"""
+        job.user_id = user_id
+        self.session.add(job)
+        self.session.flush()
+        return job
+
+    def get_generation_job_by_id(
+        self,
+        job_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> QuestionGenerationJob | None:
+        """按主键与租户用户过滤获取出题任务详情。"""
+        stmt = select(QuestionGenerationJob).where(
+            QuestionGenerationJob.id == job_id,
+            QuestionGenerationJob.user_id == user_id,
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_generation_jobs(
+        self,
+        user_id: uuid.UUID,
+        *,
+        active_only: bool = False,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+    ) -> tuple[list[QuestionGenerationJob], int]:
+        """按条件过滤并按创建时间倒序查询出题任务列表。"""
+        stmt = select(QuestionGenerationJob).where(QuestionGenerationJob.user_id == user_id)
+        if active_only:
+            stmt = stmt.where(
+                QuestionGenerationJob.status.in_(
+                    (
+                        QuestionGenerationJobStatus.QUEUED.value,
+                        QuestionGenerationJobStatus.RUNNING.value,
+                    )
+                )
+            )
+        if material_id is not None:
+            stmt = stmt.where(QuestionGenerationJob.material_id == material_id)
+        if folder_id is not None:
+            stmt = stmt.where(QuestionGenerationJob.folder_id == folder_id)
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = int(self.session.execute(count_stmt).scalar_one())
+        ordered = stmt.order_by(QuestionGenerationJob.created_at.desc())
+        items = list(self.session.execute(ordered).scalars().all())
+        return items, total

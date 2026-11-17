@@ -31,7 +31,7 @@ router = APIRouter(prefix="/users", tags=["users"])
     status_code=status.HTTP_200_OK,
     summary="获取当前登录用户画像资料",
 )
-async def get_current_user_profile(
+def get_current_user_profile(
     current_user: Annotated[User, Depends(get_current_user)],
     user_service: Annotated[AuthService, Depends(get_user_service)],
 ) -> UserProfileResponse:
@@ -53,7 +53,7 @@ async def get_current_user_profile(
     status_code=status.HTTP_200_OK,
     summary="更新当前登录用户画像资料",
 )
-async def update_current_user_profile(
+def update_current_user_profile(
     payload: UpdateUserProfileRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     user_service: Annotated[AuthService, Depends(get_user_service)],
@@ -81,13 +81,13 @@ async def update_current_user_profile(
     status_code=status.HTTP_200_OK,
     summary="上传当前用户头像",
 )
-async def upload_current_user_avatar(
+def upload_current_user_avatar(
     current_user: Annotated[User, Depends(get_current_user)],
     user_service: Annotated[AuthService, Depends(get_user_service)],
     file: Annotated[UploadFile, File()],
 ) -> UserProfileResponse:
     """Upload a bounded image and persist its app-managed object key."""
-    data = await file.read(5 * 1024 * 1024 + 1)
+    data = file.file.read(5 * 1024 * 1024 + 1)
     return user_service.upload_user_avatar(user_id=current_user.id, data=data)
 
 
@@ -97,7 +97,7 @@ async def upload_current_user_avatar(
     status_code=status.HTTP_200_OK,
     summary="注销当前登录用户账号",
 )
-async def delete_current_user_account(
+def delete_current_user_account(
     current_user: Annotated[User, Depends(get_current_user)],
     user_service: Annotated[AuthService, Depends(get_user_service)],
 ) -> UserActionResponse:

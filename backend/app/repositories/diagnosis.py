@@ -378,6 +378,7 @@ class DiagnosisRepository:
         error_type: str,
         question_snapshot: dict[str, Any],
         last_wrong_answer: str | None = None,
+        count_if_same_attempt: bool = True,
     ) -> WrongRecord:
         """防重插入或累加更新错题记录。
 
@@ -421,7 +422,9 @@ class DiagnosisRepository:
             )
             self.session.add(record)
         else:
-            record.error_count += 1
+            same_attempt = attempt_item_id is not None and record.attempt_item_id == attempt_item_id
+            if count_if_same_attempt or not same_attempt:
+                record.error_count += 1
             record.is_mastered = False
             record.mastered_at = None
             record.knowledge_point_id = knowledge_point_id
@@ -636,6 +639,32 @@ class DiagnosisRepository:
             )
         ).all()
         return {point_id: (material_id, folder_id) for point_id, material_id, folder_id in rows}
+
+    def get_wrong_record_display_meta(
+        self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None, str, str]]:
+        """Batch-resolve material_id, folder_id, knowledge_point_name, material_title."""
+        if not knowledge_point_ids:
+            return {}
+        rows = self.session.execute(
+            select(
+                KnowledgePoint.id,
+                Material.id,
+                Material.folder_id,
+                KnowledgePoint.name,
+                Material.title,
+            )
+            .join(Material, Material.id == KnowledgePoint.material_id)
+            .where(
+                KnowledgePoint.id.in_(knowledge_point_ids),
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+            )
+        ).all()
+        return {
+            point_id: (material_id, folder_id, kp_name, material_title)
+            for point_id, material_id, folder_id, kp_name, material_title in rows
+        }
 
     def list_wrong_record_groups(
         self, user_id: uuid.UUID, is_mastered: bool | None = None

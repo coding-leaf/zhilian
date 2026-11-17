@@ -12,6 +12,7 @@ from collections.abc import Generator
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -189,18 +190,26 @@ async def get_current_user(
         raise AuthenticationError("用户标识格式无效") from exc
 
     if isinstance(auth_service, AuthService):
-        user = auth_service.get_user_by_id(user_uuid)
-        token_version = payload.get("token_version", 1)
-        return validate_user_status(user, token_version)
+
+        def _load_from_service(svc: AuthService = auth_service) -> User:
+            user = svc.get_user_by_id(user_uuid)
+            token_version = payload.get("token_version", 1)
+            return validate_user_status(user, token_version)
+
+        return await run_in_threadpool(_load_from_service)
 
     if request is not None and getattr(request, "app", None) is not None:
         container: AppContainer | None = getattr(request.app.state, "container", None)
         if container is not None:
-            with container.get_session() as managed_session:
-                active_auth_svc = container.create_auth_service(session=managed_session)
-                user = active_auth_svc.get_user_by_id(user_uuid)
-                token_version = payload.get("token_version", 1)
-                return validate_user_status(user, token_version)
+
+            def _load_from_container(active_container: AppContainer = container) -> User:
+                with active_container.get_session() as managed_session:
+                    active_auth_svc = active_container.create_auth_service(session=managed_session)
+                    user = active_auth_svc.get_user_by_id(user_uuid)
+                    token_version = payload.get("token_version", 1)
+                    return validate_user_status(user, token_version)
+
+            return await run_in_threadpool(_load_from_container)
 
     raise NotImplementedError(
         "用户服务数据加载器尚未装配，"

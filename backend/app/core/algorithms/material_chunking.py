@@ -36,6 +36,12 @@ PRIMARY_PUNCTUATION_CHARS: str = "。！？!?\n"
 SECONDARY_PUNCTUATION_CHARS: str = "，；、,;"
 
 
+# Wingdings/Symbol 等 PPT 伪列表符号在 PDF/文本抽出后常呈现为行首孤立 l/n/ü 或私用区字符
+PSEUDO_BULLET_LINE_PATTERN: re.Pattern[str] = re.compile(
+    r"(?m)^([ \t]*)(?:l|n|ü|[\uf06c\uf06e\uf0fc\uf0a7\uf0b7\uf0d8\uf076])\s+"
+)
+
+
 @dataclass(frozen=True)
 class ParagraphInput:
     """输入段落结构化描述（可选扩展格式）。"""
@@ -45,6 +51,7 @@ class ParagraphInput:
     doc_type: str = "txt"
     is_title: bool = False
     title_level: int = 0
+    page_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,7 @@ class Snippet:
     chapter_title: str
     source_ref: str
     doc_type: str
+    page_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,13 @@ class ChunkingResult:
     overlap_chars: int
     cleaned_chars_count: int
     warnings: tuple[str, ...]
+
+
+def clean_pseudo_bullet_glyphs(text: str) -> str:
+    """将 PPT 导出的 Wingdings 伪项目符号（l / n / ü 等）规范化为 Markdown 列表 `- `。"""
+    if not text:
+        return text
+    return PSEUDO_BULLET_LINE_PATTERN.sub(r"\1- ", text)
 
 
 def clean_text_and_count_removals(text: str) -> tuple[str, int]:
@@ -212,6 +227,11 @@ def merge_isolated_short_snippets(
                     chapter_title=pending_short.chapter_title or snippet.chapter_title,
                     source_ref=pending_short.source_ref,
                     doc_type=pending_short.doc_type,
+                    page_number=(
+                        pending_short.page_number
+                        if pending_short.page_number is not None
+                        else snippet.page_number
+                    ),
                 )
                 merged.append(merged_snippet)
                 pending_short = None
@@ -243,6 +263,11 @@ def merge_isolated_short_snippets(
                     chapter_title=prev.chapter_title or pending_short.chapter_title,
                     source_ref=prev.source_ref,
                     doc_type=prev.doc_type,
+                    page_number=(
+                        prev.page_number
+                        if prev.page_number is not None
+                        else pending_short.page_number
+                    ),
                 )
                 merged.append(tail_merged)
             else:
@@ -263,6 +288,7 @@ def merge_isolated_short_snippets(
                 chapter_title=item.chapter_title,
                 source_ref=item.source_ref,
                 doc_type=item.doc_type,
+                page_number=item.page_number,
             )
         )
     return reindexed
@@ -324,13 +350,16 @@ def split_material_into_snippets(
             source_ref = item.source_ref
             doc_type = item.doc_type
             is_title = item.is_title
+            page_number = item.page_number
         else:
             raw_text = item
             source_ref = default_source_ref
             doc_type = default_doc_type
             is_title = False
+            page_number = None
 
         cleaned_text, removed_count = clean_text_and_count_removals(raw_text)
+        cleaned_text = clean_pseudo_bullet_glyphs(cleaned_text)
         total_cleaned_chars += removed_count
 
         if not cleaned_text.strip():
@@ -355,6 +384,7 @@ def split_material_into_snippets(
                     chapter_title=current_chapter_title,
                     source_ref=source_ref,
                     doc_type=doc_type,
+                    page_number=page_number,
                 )
             )
 

@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.algorithms.grading import OBJECTIVE_QUESTION_TYPES
 from app.core.algorithms.practice import scatter_adjacent_knowledge_questions
 from app.core.errors import (
     FolderNotFoundError,
@@ -45,6 +46,7 @@ from app.models.practice import (
 )
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.folder import FolderRepository
+from app.repositories.grading import GradingRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.practice import PracticeRepository
@@ -55,6 +57,7 @@ from app.schemas.practice import (
     PracticeItemDetailResponse,
     QuestionSnapshotDTO,
 )
+from app.services._grading_llm import grade_offline_attempt_item
 from app.services._practice_assembler import (
     PracticeItemView,
     PracticeView,
@@ -475,7 +478,18 @@ class PracticeService:
             selected_questions,
             knowledge_id_getter=lambda q: q.knowledge_point_id,
         )
-        snapshots = build_validated_snapshots(scattered_questions)
+        kp_ids_for_names = {
+            q.knowledge_point_id for q in scattered_questions if q.knowledge_point_id is not None
+        }
+        kp_name_map = (
+            {
+                kp.id: kp.name
+                for kp in self.knowledge_repo.list_by_ids(list(kp_ids_for_names), user_id)
+            }
+            if kp_ids_for_names and hasattr(self, "knowledge_repo")
+            else {}
+        )
+        snapshots = build_validated_snapshots(scattered_questions, kp_name_map=kp_name_map)
 
         resolved_material_id = options.material_id
         if resolved_material_id is None and options.folder_id is None:
@@ -609,34 +623,81 @@ class PracticeService:
 
         return build_source_snippet_map(self.material_repo, snippet_ids, user_id)
 
+    @staticmethod
+    def _snapshot_missing_kp_id(
+        item: PracticeItemDetailResponse | AttemptItem,
+    ) -> uuid.UUID | None:
+        """提取尚未携带知识点名称的快照中的 knowledge_point_id。"""
+        snapshot = item.question_snapshot
+        if isinstance(snapshot, QuestionSnapshotDTO):
+            if snapshot.knowledge_point_name:
+                return None
+            raw = snapshot.knowledge_point_id
+        elif isinstance(snapshot, dict):
+            if snapshot.get("knowledge_point_name"):
+                return None
+            raw = snapshot.get("knowledge_point_id")
+        else:
+            raw = None
+        if not raw:
+            return None
+        try:
+            return uuid.UUID(str(raw))
+        except (ValueError, TypeError):
+            return None
+
+    def _build_kp_name_map(
+        self,
+        items: Sequence[PracticeItemDetailResponse | AttemptItem],
+        user_id: uuid.UUID,
+    ) -> dict[uuid.UUID, str]:
+        """批量装载作答项快照缺失的知识点名称映射。"""
+        if not hasattr(self, "knowledge_repo"):
+            return {}
+        kp_ids: set[uuid.UUID] = set()
+        for item in items:
+            kp_id = self._snapshot_missing_kp_id(item)
+            if kp_id is not None:
+                kp_ids.add(kp_id)
+        if not kp_ids:
+            return {}
+        return {kp.id: kp.name for kp in self.knowledge_repo.list_by_ids(list(kp_ids), user_id)}
+
     def _attach_source_snippets(
         self,
         detail: PracticeDetailResponse,
         user_id: uuid.UUID,
     ) -> None:
-        """按 source_snippet_id 批量关联切片摘要，填充原文溯源对象 (BUG-GRADE-004)。
+        """按 source_snippet_id 批量关联切片摘要，并补齐历史快照缺失的知识点名称。
 
         Args:
-            detail: 已装配的练习详情 DTO (就地补全 source_snippet)。
+            detail: 已装配的练习详情 DTO (就地补全 source_snippet 与 knowledge_point_name)。
             user_id: 租户用户标识。
         """
         snippet_map = self._build_source_snippet_map(detail.items, user_id)
-        if not snippet_map:
+        kp_name_map = self._build_kp_name_map(detail.items, user_id)
+        if not snippet_map and not kp_name_map:
             return
 
         for item in detail.items:
             snippet_id = self._snapshot_source_snippet_id(item)
-            if snippet_id is None:
-                continue
-            snippet_dto = snippet_map.get(snippet_id)
-            if snippet_dto is None:
-                continue
-            item.source_snippet = snippet_dto
-            snapshot = item.question_snapshot
-            if isinstance(snapshot, QuestionSnapshotDTO):
-                snapshot.source_snippet = snippet_dto
-            elif isinstance(snapshot, dict):
-                snapshot["source_snippet"] = snippet_dto
+            snippet_dto = snippet_map.get(snippet_id) if snippet_id is not None else None
+            if snippet_dto is not None:
+                item.source_snippet = snippet_dto
+                snapshot = item.question_snapshot
+                if isinstance(snapshot, QuestionSnapshotDTO):
+                    snapshot.source_snippet = snippet_dto
+                elif isinstance(snapshot, dict):
+                    snapshot["source_snippet"] = snippet_dto
+
+            kp_id = self._snapshot_missing_kp_id(item)
+            kp_name = kp_name_map.get(kp_id) if kp_id is not None else None
+            if kp_name is not None:
+                snapshot = item.question_snapshot
+                if isinstance(snapshot, QuestionSnapshotDTO):
+                    snapshot.knowledge_point_name = kp_name
+                elif isinstance(snapshot, dict):
+                    snapshot["knowledge_point_name"] = kp_name
 
     def _attach_source_snippets_to_items(
         self,
@@ -975,33 +1036,36 @@ class PracticeService:
                     },
                 )
 
-            # 4. 事务原子更新练习状态与交卷时间
+            # 4. 事务原子更新交卷时间与同步/异步判题分流
             now = datetime.now(UTC)
-            self.practice_repo.update_practice_status(
+            updated_practice = self.practice_repo.update_practice_status(
                 dto.practice_id,
                 user_id,
                 PracticeStatus.SUBMITTED.value,
                 submit_idempotency_key=clean_key,
                 submitted_at=now,
             )
-
-            # 5. 异步派发判题任务
-            task_id = self.queue.enqueue(
-                task_name="grading_jobs",
-                payload={
-                    "practice_id": str(dto.practice_id),
-                    "user_id": str(user_id),
-                },
-                user_id=str(user_id),
+            final_status, task_id, enqueued_async = self._process_submission_grading(
+                practice=updated_practice or practice,
+                practice_id=dto.practice_id,
+                user_id=user_id,
+                submitted_at=now,
             )
 
             self.session.commit()
+            if not enqueued_async and isinstance(self.session, Session):
+                from app.services.diagnosis import DiagnosisService
+
+                DiagnosisService(self.session).ensure_diagnosis_report(
+                    user_id=user_id,
+                    practice_id=dto.practice_id,
+                )
 
             answered_count = total_questions - unanswered_count
             result = PracticeSubmissionResult(
                 practice_id=dto.practice_id,
                 task_id=task_id,
-                status=PracticeStatus.SUBMITTED.value,
+                status=final_status,
                 unanswered_count=unanswered_count,
                 total_questions=total_questions,
                 submitted_at=now,
@@ -1054,6 +1118,80 @@ class PracticeService:
             self.session.rollback()
             self.idempotency.release_lock(clean_key, str(user_id))
             raise
+
+    def _process_submission_grading(
+        self,
+        *,
+        practice: Practice,
+        practice_id: uuid.UUID,
+        user_id: uuid.UUID,
+        submitted_at: datetime,
+    ) -> tuple[str, str, bool]:
+        """交卷即时客观题判分、学习状态联动及主观题队列派发分流。"""
+        items = self.practice_repo.list_attempt_items(practice_id, user_id)
+        grading_repo = GradingRepository(self.session)
+        needs_async_grading = False
+        graded_any = False
+
+        for item in items:
+            snapshot = item.question_snapshot or {}
+            q_type = str(snapshot.get("question_type") or "").strip().lower()
+            if q_type not in OBJECTIVE_QUESTION_TYPES:
+                needs_async_grading = True
+                continue
+            try:
+                record, requires_llm = grade_offline_attempt_item(
+                    item,
+                    practice_id=practice_id,
+                    user_id=user_id,
+                    grading_repo=grading_repo,
+                    allow_high_confidence_subjective=False,
+                )
+            except Exception:
+                logger.warning("交卷同步判客观题降级至异步队列 item_id=%s", item.id)
+                needs_async_grading = True
+                continue
+            if requires_llm or record is None:
+                needs_async_grading = True
+            else:
+                graded_any = True
+
+        if not needs_async_grading:
+            practice.total_score = round(sum(it.score or 0.0 for it in items), 2)
+            practice.status = PracticeStatus.COMPLETED.value
+            practice.completed_at = submitted_at
+            self.session.flush()
+            if isinstance(self.session, Session):
+                from app.services.diagnosis import DiagnosisService
+
+                DiagnosisService(self.session).sync_practice_learning_state(
+                    user_id=user_id,
+                    practice_id=practice_id,
+                    partial_ok=True,
+                    commit=False,
+                )
+            return PracticeStatus.COMPLETED.value, "", False
+
+        if graded_any and isinstance(self.session, Session):
+            self.session.flush()
+            from app.services.diagnosis import DiagnosisService
+
+            DiagnosisService(self.session).sync_practice_learning_state(
+                user_id=user_id,
+                practice_id=practice_id,
+                partial_ok=True,
+                commit=False,
+            )
+
+        task_id = self.queue.enqueue(
+            task_name="grading_jobs",
+            payload={
+                "practice_id": str(practice_id),
+                "user_id": str(user_id),
+            },
+            user_id=str(user_id),
+        )
+        return PracticeStatus.SUBMITTED.value, task_id, True
 
     # --------------------------------------------------------------------------
     # 判题任务终态失败回写与主动重试 (AC-9 / design.md 第 19 条)

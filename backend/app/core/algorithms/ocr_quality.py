@@ -45,6 +45,18 @@ VALID_PRINTABLE_CHAR_PATTERN: re.Pattern[str] = re.compile(
     r"[\u4e00-\u9fff\w\s，。！？；：“”‘’（）【】《》、…—·\.,!?:;'\"()\[\]{}/\\-_+=*&%$#@~^<>|`]"
 )
 
+# 符号乱码探测集合：覆盖 SymbolMT 等缺失 ToUnicode 映射时常见的 ASCII 伪符号字符
+_GARBLE_SYMBOL_CHARS: frozenset[str] = frozenset("!\"#$%&'*=?@^~")
+_ALL_ASCII_SYMBOL_CHARS: frozenset[str] = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+_NON_DOLLAR_CLUSTER_RE: re.Pattern[str] = re.compile(
+    r"(?:[!\"#$%&'*=?@^~]{2,}|(?:[A-Za-z0-9]?[!\"#%&'*=?@^~]){2,}[A-Za-z0-9]?)"
+)
+_MARKDOWN_DECORATION_RE: re.Pattern[str] = re.compile(
+    r"^(?:\|[-:|]+\||[-=*#~_]{2,}|\*\*[^*]+\*\*[.,:;!?]?|#{1,6}|\$\$?|```.*)$"
+)
+_MARKDOWN_BOLD_INLINE_RE: re.Pattern[str] = re.compile(r"\*\*([^*]+)\*\*")
+_REPEATED_SAME_SYMBOL_RE: re.Pattern[str] = re.compile(r"^([!\"#$%&'*=?@^~`\-_])\1+$")
+
 
 class UnqualifiedReasonCode(enum.StrEnum):
     """不合格原因代码枚举，严格遵循命名白名单与规范。"""
@@ -170,6 +182,120 @@ def calculate_gibberish_ratio(text: str) -> float:
         1 for char in non_space_chars if not VALID_PRINTABLE_CHAR_PATTERN.match(char)
     )
     return gibberish_count / len(non_space_chars)
+
+
+def _is_garble_cluster_token(token: str) -> bool:
+    """判断单个空白分隔 token 是否包含高密度符号乱码簇。"""
+    if not token or token.startswith(("http://", "https://")):
+        return False
+    stripped_md = _MARKDOWN_BOLD_INLINE_RE.sub(r"\1", token)
+    if _MARKDOWN_DECORATION_RE.match(stripped_md) or _REPEATED_SAME_SYMBOL_RE.match(stripped_md):
+        return False
+    non_dollar_count = sum(1 for ch in stripped_md if ch in _GARBLE_SYMBOL_CHARS and ch != "$")
+    if non_dollar_count < 2:
+        return False
+    return bool(_NON_DOLLAR_CLUSTER_RE.search(stripped_md))
+
+
+def _is_short_symbol_burst_token(token: str) -> bool:
+    """判断是否为跨空白符乱码碎片中的短符号 token。"""
+    if len(token) > 4 or token in {"|", "-", "*", "$$", "$"}:
+        return False
+    return all(ch in _ALL_ASCII_SYMBOL_CHARS for ch in token) and any(
+        ch in _GARBLE_SYMBOL_CHARS for ch in token
+    )
+
+
+def _collect_line_garble_fragments(line: str) -> tuple[list[str], bool]:
+    """提取单行内的 ASCII 符号乱码簇并判断是否整行为孤立符号噪声行。"""
+    stripped = line.strip()
+    if not stripped or _MARKDOWN_DECORATION_RE.match(stripped):
+        return [], False
+
+    tokens = stripped.split()
+    if tokens and tokens[0].startswith("#") and len(set(tokens[0])) == 1:
+        tokens = tokens[1:]
+
+    fragments: list[str] = [tok for tok in tokens if _is_garble_cluster_token(tok)]
+
+    burst: list[str] = []
+    for tok in tokens:
+        if _is_short_symbol_burst_token(tok):
+            burst.append(tok)
+            continue
+        if len(burst) >= 2 and sum(len(b) for b in burst) >= 3:
+            fragments.append(" ".join(burst))
+        burst.clear()
+    if len(burst) >= 2 and sum(len(b) for b in burst) >= 3:
+        fragments.append(" ".join(burst))
+
+    non_ws = [ch for ch in stripped if not ch.isspace()]
+    sym_only_line = False
+    if len(non_ws) >= 2:
+        sym_count = sum(1 for ch in non_ws if ch in _ALL_ASCII_SYMBOL_CHARS)
+        garble_count = sum(1 for ch in non_ws if ch in _GARBLE_SYMBOL_CHARS and ch != "$")
+        if sym_count / len(non_ws) >= 0.8 and garble_count >= 2:
+            sym_only_line = True
+            if not fragments:
+                fragments.append(stripped)
+
+    return fragments, sym_only_line
+
+
+def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
+    """探测文档/页面文本中是否存在缺失字体编码导致的 ASCII 符号乱码簇。
+
+    专门识别 SymbolMT/Wingdings 等符号字体缺失 `/ToUnicode` 映射时产生的
+    ``AB&A&``、``"#$``、``!" ! #`` 等噪声簇及孤立符号噪声行，同时避免对正常 LaTeX
+    或 Markdown 装饰符误报。
+
+    Args:
+        text: 待检测文本。
+
+    Returns:
+        tuple[bool, float, tuple[str, ...]]:
+            (是否检测到符号乱码, 乱码符号占比估算, 命中的典型乱码片段元组)。
+    """
+    if not text or not text.strip():
+        return False, 0.0, ()
+
+    non_ws_total = sum(1 for ch in text if not ch.isspace())
+    if non_ws_total == 0:
+        return False, 0.0, ()
+
+    all_fragments: list[str] = []
+    sym_only_lines = 0
+    for line in text.splitlines():
+        line_frags, is_sym_line = _collect_line_garble_fragments(line)
+        all_fragments.extend(line_frags)
+        if is_sym_line:
+            sym_only_lines += 1
+
+    garble_char_total = sum(
+        sum(1 for ch in frag if ch in _ALL_ASCII_SYMBOL_CHARS) for frag in all_fragments
+    )
+    garble_ratio = min(1.0, garble_char_total / non_ws_total)
+    is_garbled = (
+        sym_only_lines >= 1
+        or len(all_fragments) >= 2
+        or (len(all_fragments) == 1 and garble_ratio >= 0.15)
+    )
+    dedup_frags = tuple(dict.fromkeys(all_fragments[:10]))
+    return is_garbled, round(garble_ratio, 4), dedup_frags
+
+
+def sanitize_symbol_garble(text: str) -> str:
+    """在缺少视觉/大模型修复时确定性清除不可读 ASCII 符号乱码噪声。"""
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        _frags, is_sym_line = _collect_line_garble_fragments(line)
+        if is_sym_line:
+            continue
+        kept_tokens = [tok for tok in line.split() if not _is_garble_cluster_token(tok)]
+        rebuilt = " ".join(kept_tokens).strip()
+        if rebuilt:
+            cleaned_lines.append(rebuilt)
+    return "\n".join(cleaned_lines)
 
 
 def calculate_median_length(lengths: Sequence[int]) -> float:

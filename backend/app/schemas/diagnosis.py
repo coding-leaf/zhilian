@@ -406,6 +406,8 @@ class WrongRecordItemResponse(BaseModel):
     knowledge_point_id: uuid.UUID = Field(..., description="关联知识点标识 UUID")
     material_id: uuid.UUID | None = Field(default=None, description="归属资料标识")
     folder_id: uuid.UUID | None = Field(default=None, description="归属课程标识，未分类为空")
+    knowledge_point_name: str | None = Field(default=None, description="所属知识点名称")
+    material_title: str | None = Field(default=None, description="来源资料标题")
     error_type: str = Field(default="conceptual", description="错误类型分类 (ErrorType)")
     is_mastered: bool = Field(default=False, description="是否已攻克掌握")
     wrong_count: int = Field(default=1, description="连续答错累计次数")
@@ -432,6 +434,8 @@ class WrongRecordItemResponse(BaseModel):
                 "practice_id",
                 "attempt_item_id",
                 "knowledge_point_id",
+                "knowledge_point_name",
+                "material_title",
                 "error_type",
                 "is_mastered",
                 "error_count",
@@ -456,6 +460,11 @@ class WrongRecordItemResponse(BaseModel):
             data["wrong_count"] = data["error_count"]
         if not data.get("user_answer") and data.get("last_wrong_answer") is not None:
             data["user_answer"] = data["last_wrong_answer"]
+        snap = data.get("question_snapshot")
+        if not data.get("knowledge_point_name") and isinstance(snap, dict):
+            kp_name = snap.get("knowledge_point_name")
+            if isinstance(kp_name, str) and kp_name.strip():
+                data["knowledge_point_name"] = kp_name
         return data
 
     @model_validator(mode="after")

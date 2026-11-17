@@ -11,20 +11,25 @@
 
 import json
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.algorithms.question_quality import extract_keywords
+from app.core.algorithms.question_quality import (
+    ExistingQuestionReference,
+    extract_keywords,
+)
 from app.core.errors import (
     FolderNotFoundError,
     KnowledgeNotFoundError,
     MaterialNotFoundError,
     MissingSourceSnippetError,
+    QuestionGenerationJobNotFoundError,
     QuestionNotFoundError,
     SearchError,
 )
@@ -32,13 +37,17 @@ from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.coach_graph import answer_with_course_evidence
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
+from app.integrations.queue.memory import MemoryQueueAdapter
+from app.integrations.queue.protocol import QueueProtocol
 from app.integrations.search.protocol import SearchProtocol
 from app.models.knowledge import KnowledgePoint
-from app.models.material import MaterialStatus
+from app.models.material import Material, MaterialStatus
 from app.models.question import (
     AuditAction,
     Question,
     QuestionAuditLog,
+    QuestionGenerationJob,
+    QuestionGenerationJobStatus,
     QuestionQualityCheck,
     QuestionStatus,
 )
@@ -53,10 +62,20 @@ from app.schemas.question import (
     QuestionBatchSourceDTO,
     QuestionBatchSummaryResponse,
     QuestionDetailResponse,
+    QuestionGenerateRequest,
     ScopedCoachResponse,
 )
 from app.services._question_generation import (
     GenerateQuestionsOptions as GenerateQuestionsOptions,
+)
+from app.services._question_generation import (
+    GenerationLoopOutcome,
+    KnowledgePointGenerationWorkSpec,
+    build_existing_question_refs,
+    build_question_entity,
+    execute_concurrent_kp_generation,
+    resolve_effective_version_id,
+    run_question_generation_loop,
 )
 from app.services._question_generation import (
     MultiKnowledgePointGenerationResult as MultiKnowledgePointGenerationResult,
@@ -69,12 +88,6 @@ from app.services._question_generation import (
 )
 from app.services._question_generation import (
     aggregate_snippet_context as aggregate_snippet_context,
-)
-from app.services._question_generation import (
-    build_existing_question_refs,
-    build_question_entity,
-    resolve_effective_version_id,
-    run_question_generation_loop,
 )
 from app.services._question_generation import (
     build_generation_prompt as build_generation_prompt,
@@ -105,6 +118,41 @@ from app.services.source_snippets import build_source_snippet_map
 logger = logging.getLogger(__name__)
 
 
+def _is_in_memory_sqlite(session: Session) -> bool:
+    """Return True when session is bound to an in-memory SQLite engine."""
+    try:
+        bind = session.get_bind()
+    except Exception:
+        return True
+    url_str = str(getattr(bind, "url", "") or "")
+    return ":memory:" in url_str
+
+
+def _run_generation_job_in_background(
+    session_factory: sessionmaker[Session],
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+    llm: LLMProtocol,
+    embedding: EmbeddingProtocol,
+    search_adapter: SearchProtocol | None,
+) -> None:
+    """Execute one QuestionGenerationJob inside a dedicated background Session."""
+    try:
+        with session_factory() as bg_session:
+            bg_service = QuestionService(
+                session=bg_session,
+                llm=llm,
+                embedding=embedding,
+                search_adapter=search_adapter,
+            )
+            bg_service.run_generation_job(job_id=job_id, user_id=user_id)
+    except Exception:
+        logger.exception(
+            "background question generation job failed: job_id=%s",
+            job_id,
+        )
+
+
 # ==============================================================================
 # QuestionService 服务主类实现
 # ==============================================================================
@@ -123,6 +171,8 @@ class QuestionService:
         llm: LLMProtocol,
         embedding: EmbeddingProtocol,
         search_adapter: SearchProtocol | None = None,
+        queue: QueueProtocol | None = None,
+        session_factory: sessionmaker[Session] | None = None,
     ) -> None:
         """初始化题目服务实例。
 
@@ -131,11 +181,15 @@ class QuestionService:
             llm: 大模型网关适配器。
             embedding: 向量化网关适配器。
             search_adapter: 可选的混合检索适配器。
+            queue: 可选的异步任务队列适配器。
+            session_factory: 可选的 SQLAlchemy 会话工厂（供内存队列后台线程执行）。
         """
         self.session = session
         self.llm = llm
         self.embedding = embedding
         self.search_adapter = search_adapter
+        self.queue = queue
+        self.session_factory = session_factory
         self.question_repo = QuestionRepository(session)
         self.knowledge_repo = KnowledgeRepository(session)
         self.material_repo = MaterialRepository(session)
@@ -470,43 +524,95 @@ class QuestionService:
         total_retry = 0
         aligned_version_id: uuid.UUID | None = None
 
-        # 单事务原子编排：所有考点在同一事务内仅 flush（defer_commit=True），
-        # 全部成功后一次性提交；任一考点失败则整批回滚，不遗留部分题目。
-        try:
-            for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True):
-                per_kp_options = GenerateQuestionsOptions(
-                    question_types=effective_options.question_types,
-                    count=kp_count,
-                    difficulty=effective_options.difficulty,
-                    max_retries=effective_options.max_retries,
-                )
-                result = self.generate_questions(
+        # 单事务原子编排：当调用方未在实例上 monkeypatch generate_questions 时，
+        # 先在调用线程单线程预取全部上下文与参考基准，再用受控 3 并发执行纯 LLM/Embedding 阶段，
+        # 最后在调用线程统一构造与刷盘；任一环节失败则整批回滚。
+        if "generate_questions" in self.__dict__:
+            try:
+                for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True):
+                    per_kp_options = GenerateQuestionsOptions(
+                        question_types=effective_options.question_types,
+                        count=kp_count,
+                        difficulty=effective_options.difficulty,
+                        max_retries=effective_options.max_retries,
+                    )
+                    result = self.generate_questions(
+                        user_id=user_id,
+                        material_id=material_id,
+                        version_id=version_id,
+                        knowledge_point_id=kp_id,
+                        options=per_kp_options,
+                        defer_commit=True,
+                        batch_id=effective_batch_id,
+                    )
+                    if aligned_version_id is None:
+                        aligned_version_id = result.version_id
+                    total_generated += result.total_generated
+                    total_retry += result.retry_count
+                    aggregated_qualified.extend(result.qualified_questions)
+                    aggregated_pending.extend(result.pending_questions)
+                    aggregated_checks.extend(result.quality_checks)
+
+                if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
+                    raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+
+                if not defer_commit:
+                    self.session.commit()
+            except Exception:
+                if not defer_commit:
+                    self.session.rollback()
+                raise
+        else:
+            try:
+                plan = [
+                    (material_id, version_id, kp_id, kp_count)
+                    for kp_id, kp_count in zip(ordered_kp_ids, counts, strict=True)
+                ]
+                specs = self._prepare_kp_work_specs(
                     user_id=user_id,
-                    material_id=material_id,
-                    version_id=version_id,
-                    knowledge_point_id=kp_id,
-                    options=per_kp_options,
-                    defer_commit=True,
-                    batch_id=effective_batch_id,
+                    plan=plan,
+                    base_options=effective_options,
                 )
-                if aligned_version_id is None:
-                    aligned_version_id = result.version_id
-                total_generated += result.total_generated
-                total_retry += result.retry_count
-                aggregated_qualified.extend(result.qualified_questions)
-                aggregated_pending.extend(result.pending_questions)
-                aggregated_checks.extend(result.quality_checks)
+                outcomes = execute_concurrent_kp_generation(
+                    specs,
+                    llm=self.llm,
+                    embedding=self.embedding,
+                    user_id=user_id,
+                    batch_id=effective_batch_id,
+                    max_workers=3,
+                )
+                if outcomes:
+                    aligned_version_id = outcomes[0][0].version_id
+                if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
+                    raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
 
-            if aligned_version_id is None:  # pragma: no cover - 非空列表保证首轮必赋值
-                raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+                all_entities, all_checks, total_retry = self._materialize_kp_outcomes(
+                    user_id=user_id,
+                    batch_id=effective_batch_id,
+                    outcomes=outcomes,
+                )
+                with self.session.begin_nested():
+                    saved_questions = self.question_repo.batch_create_questions(
+                        all_entities, user_id
+                    )
+                    saved_checks = self.question_repo.batch_create_quality_checks(
+                        all_checks, user_id
+                    )
+                total_generated = len(saved_questions)
+                aggregated_qualified = [
+                    q for q in saved_questions if q.status == QuestionStatus.AVAILABLE.value
+                ]
+                aggregated_pending = [
+                    q for q in saved_questions if q.status == QuestionStatus.PENDING_REVIEW.value
+                ]
+                aggregated_checks = saved_checks
 
-            # 全部考点成功：单次提交，保证多考点批次原子落库。
-            if not defer_commit:
-                self.session.commit()
-        except Exception:
-            if not defer_commit:
-                self.session.rollback()
-            raise
+                if not defer_commit:
+                    self.session.commit()
+            except Exception:
+                if not defer_commit:
+                    self.session.rollback()
+                raise
 
         logger.info(
             "multi knowledge point question generation completed",
@@ -708,6 +814,377 @@ class QuestionService:
                 )
             resolved.append(point)
         return resolved
+
+    def _prepare_kp_work_specs(
+        self,
+        *,
+        user_id: uuid.UUID,
+        plan: Sequence[tuple[uuid.UUID, uuid.UUID | None, uuid.UUID, int]],
+        base_options: GenerateQuestionsOptions,
+    ) -> list[KnowledgePointGenerationWorkSpec]:
+        """在调用线程统一预检实体并构造纯值对象工作规范列表。"""
+        material_cache: dict[uuid.UUID, Material] = {}
+        refs_cache: dict[uuid.UUID, tuple[ExistingQuestionReference, ...]] = {}
+        specs: list[KnowledgePointGenerationWorkSpec] = []
+
+        for idx, (material_id, requested_version_id, kp_id, kp_count) in enumerate(plan):
+            material = material_cache.get(material_id)
+            if material is None:
+                fetched_mat = self.material_repo.get_material_by_id(material_id, user_id)
+                if fetched_mat is None:
+                    raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
+                material_cache[material_id] = fetched_mat
+                material = fetched_mat
+
+            kp = self.knowledge_repo.get_by_id(kp_id, user_id)
+            if kp is None or kp.material_id != material_id:
+                raise KnowledgeNotFoundError("请求的知识点不存在或无权访问")
+
+            effective_version_id = resolve_effective_version_id(material, kp, requested_version_id)
+            if effective_version_id is None:
+                raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
+
+            snippets = self._retrieve_and_gate_snippets(
+                user_id=user_id,
+                material_id=material_id,
+                version_id=effective_version_id,
+                knowledge_point_id=kp_id,
+                kp_name=kp.name,
+                kp_description=kp.description,
+            )
+            context_text, snippet_metadata = aggregate_snippet_context(snippets, max_chars=2400)
+
+            existing_refs = refs_cache.get(material_id)
+            if existing_refs is None:
+                recent_questions = self.question_repo.list_recent_for_deduplication(
+                    material_id, user_id, limit=500
+                )
+                existing_refs = tuple(build_existing_question_refs(recent_questions))
+                refs_cache[material_id] = existing_refs
+
+            specs.append(
+                KnowledgePointGenerationWorkSpec(
+                    index=idx,
+                    material_id=material_id,
+                    version_id=effective_version_id,
+                    knowledge_point_id=kp_id,
+                    kp_name=kp.name,
+                    kp_description=kp.description,
+                    context_text=context_text,
+                    snippet_metadata=tuple(snippet_metadata),
+                    existing_refs=existing_refs,
+                    options=GenerateQuestionsOptions(
+                        question_types=base_options.question_types,
+                        count=kp_count,
+                        difficulty=base_options.difficulty,
+                        max_retries=base_options.max_retries,
+                    ),
+                )
+            )
+
+        return specs
+
+    @staticmethod
+    def _materialize_kp_outcomes(
+        *,
+        user_id: uuid.UUID,
+        batch_id: str,
+        outcomes: Sequence[tuple[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome]],
+    ) -> tuple[list[Question], list[QuestionQualityCheck], int]:
+        """在调用线程将并发生成结果映射为 Question 与质检 ORM 实体列表。"""
+        all_entities: list[Question] = []
+        all_checks: list[QuestionQualityCheck] = []
+        total_retry = 0
+
+        for spec, outcome in outcomes:
+            target_count = spec.options.count
+            snippet_meta_list = list(spec.snippet_metadata)
+            qualified = [
+                build_question_entity(
+                    cand,
+                    outcome.candidate_items_map[cand.question_id],
+                    user_id=user_id,
+                    material_id=spec.material_id,
+                    version_id=spec.version_id,
+                    knowledge_point_id=spec.knowledge_point_id,
+                    batch_id=batch_id,
+                    status=QuestionStatus.AVAILABLE.value,
+                    snippet_metadata=snippet_meta_list,
+                )
+                for cand in outcome.qualified_questions[:target_count]
+            ]
+            remaining_needed = target_count - len(qualified)
+            pending = [
+                build_question_entity(
+                    cand,
+                    outcome.candidate_items_map[cand.question_id],
+                    user_id=user_id,
+                    material_id=spec.material_id,
+                    version_id=spec.version_id,
+                    knowledge_point_id=spec.knowledge_point_id,
+                    batch_id=batch_id,
+                    status=QuestionStatus.PENDING_REVIEW.value,
+                    snippet_metadata=snippet_meta_list,
+                )
+                for cand in outcome.last_unqualified_questions[:remaining_needed]
+            ]
+            kp_entities = qualified + pending
+            all_entities.extend(kp_entities)
+            for q in kp_entities:
+                all_checks.extend(outcome.candidate_checks_map.get(str(q.id), ()))
+            total_retry += outcome.retry_count
+
+        return all_entities, all_checks, total_retry
+
+    def _resolve_generation_plan(
+        self,
+        *,
+        user_id: uuid.UUID,
+        payload: QuestionGenerateRequest,
+    ) -> list[tuple[uuid.UUID, uuid.UUID | None, uuid.UUID, int]]:
+        """解析单资料/文件夹范围的目标知识点出题配额计划。"""
+        target_kp_ids = list(payload.knowledge_point_ids)
+        if not target_kp_ids and payload.knowledge_point_id is not None:
+            target_kp_ids = [payload.knowledge_point_id]
+
+        if payload.folder_id is not None:
+            folder = self.folder_repo.get_by_id(payload.folder_id, user_id, include_archived=False)
+            if folder is None:
+                raise FolderNotFoundError()
+            resolved_points = self._resolve_folder_knowledge_points(
+                user_id=user_id,
+                folder_id=payload.folder_id,
+                knowledge_point_ids=target_kp_ids or None,
+            )
+            if not resolved_points:
+                raise KnowledgeNotFoundError(
+                    "课程文件夹下没有可用的知识点",
+                    details={"folder_id": str(payload.folder_id)},
+                )
+            groups: dict[tuple[uuid.UUID, uuid.UUID], list[KnowledgePoint]] = {}
+            for pt in resolved_points:
+                groups.setdefault((pt.material_id, pt.version_id), []).append(pt)
+            group_keys = list(groups.keys())
+            group_counts = distribute_count(payload.count, len(group_keys))
+            plan: list[tuple[uuid.UUID, uuid.UUID | None, uuid.UUID, int]] = []
+            for key, g_count in zip(group_keys, group_counts, strict=True):
+                mat_id, ver_id = key
+                kps_in_group = groups[key]
+                kp_counts = distribute_count(g_count, len(kps_in_group))
+                for kp, k_count in zip(kps_in_group, kp_counts, strict=True):
+                    plan.append((mat_id, ver_id, kp.id, k_count))
+            return plan
+
+        material_id = payload.material_id
+        if material_id is None:
+            raise ValueError("material_id 必须指定")
+        material = self.material_repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
+
+        ordered_kp_ids = list(dict.fromkeys(target_kp_ids))
+        if not ordered_kp_ids:
+            raise KnowledgeNotFoundError("未指定目标知识点")
+        for kp_id in ordered_kp_ids:
+            fetched_kp = self.knowledge_repo.get_by_id(kp_id, user_id)
+            if fetched_kp is None or fetched_kp.material_id != material_id:
+                raise KnowledgeNotFoundError("请求的知识点不存在或无权访问")
+
+        kp_counts = distribute_count(payload.count, len(ordered_kp_ids))
+        return [
+            (material_id, payload.version_id, kp_id, k_count)
+            for kp_id, k_count in zip(ordered_kp_ids, kp_counts, strict=True)
+        ]
+
+    def create_generation_job(
+        self,
+        *,
+        user_id: uuid.UUID,
+        payload: QuestionGenerateRequest,
+    ) -> QuestionGenerationJob:
+        """创建异步出题任务并入队调度。"""
+        plan = self._resolve_generation_plan(user_id=user_id, payload=payload)
+        job = QuestionGenerationJob(
+            user_id=user_id,
+            material_id=payload.material_id,
+            folder_id=payload.folder_id,
+            status=QuestionGenerationJobStatus.QUEUED.value,
+            request_payload=payload.model_dump(mode="json"),
+            total_kps=len(plan),
+            completed_kps=0,
+            generated_count=0,
+            question_ids=[],
+        )
+        self.question_repo.create_generation_job(job, user_id)
+        self.session.commit()
+        self.session.refresh(job)
+
+        if self.queue is not None:
+            try:
+                self.queue.enqueue(
+                    task_name="generate_questions_job",
+                    payload={"job_id": str(job.id), "user_id": str(user_id)},
+                    user_id=str(user_id),
+                    task_id=str(job.id),
+                )
+            except Exception as exc:
+                job.status = QuestionGenerationJobStatus.FAILED.value
+                job.error_message = f"任务入队失败: {str(exc)[:300]}"
+                job.completed_at = datetime.now(UTC)
+                self.session.commit()
+                raise
+
+            if (
+                isinstance(self.queue, MemoryQueueAdapter)
+                and not self.queue.has_handler("generate_questions_job")
+                and self.session_factory is not None
+                and not _is_in_memory_sqlite(self.session)
+            ):
+                thread = threading.Thread(
+                    target=_run_generation_job_in_background,
+                    args=(
+                        self.session_factory,
+                        job.id,
+                        user_id,
+                        self.llm,
+                        self.embedding,
+                        self.search_adapter,
+                    ),
+                    daemon=True,
+                )
+                thread.start()
+
+        return job
+
+    def list_generation_jobs(
+        self,
+        *,
+        user_id: uuid.UUID,
+        active_only: bool = False,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+    ) -> tuple[list[QuestionGenerationJob], int]:
+        """查询当前用户的异步出题任务列表。"""
+        return self.question_repo.list_generation_jobs(
+            user_id=user_id,
+            active_only=active_only,
+            material_id=material_id,
+            folder_id=folder_id,
+        )
+
+    def get_generation_job(
+        self,
+        *,
+        user_id: uuid.UUID,
+        job_id: uuid.UUID,
+    ) -> QuestionGenerationJob:
+        """查询单个异步出题任务详情，越权或不存在抛 404。"""
+        job = self.question_repo.get_generation_job_by_id(job_id, user_id)
+        if job is None:
+            raise QuestionGenerationJobNotFoundError()
+        return job
+
+    def mark_generation_job_failed(
+        self,
+        *,
+        user_id: uuid.UUID,
+        job_id: uuid.UUID,
+        error_message: str,
+    ) -> QuestionGenerationJob | None:
+        """幂等将非终态的异步出题任务标记为 failed。"""
+        job = self.question_repo.get_generation_job_by_id(job_id, user_id)
+        if job is None or job.status == QuestionGenerationJobStatus.COMPLETED.value:
+            return job
+        job.status = QuestionGenerationJobStatus.FAILED.value
+        job.error_message = error_message[:500]
+        if job.completed_at is None:
+            job.completed_at = datetime.now(UTC)
+        self.session.commit()
+        return job
+
+    def run_generation_job(
+        self,
+        *,
+        job_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> QuestionGenerationJob:
+        """执行异步出题队列任务：受控 3 并发跑纯 LLM 阶段并实时更新 KP 进度。"""
+        job = self.question_repo.get_generation_job_by_id(job_id, user_id)
+        if job is None:
+            raise QuestionGenerationJobNotFoundError()
+        if job.status == QuestionGenerationJobStatus.COMPLETED.value:
+            return job
+
+        job.status = QuestionGenerationJobStatus.RUNNING.value
+        job.error_message = None
+        job.completed_kps = 0
+        self.session.commit()
+
+        batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+        try:
+            payload = QuestionGenerateRequest.model_validate(job.request_payload)
+            base_options = GenerateQuestionsOptions(
+                question_types=tuple(payload.question_types),
+                count=payload.count,
+                difficulty=payload.difficulty,
+                max_retries=payload.max_retries,
+            )
+            plan = self._resolve_generation_plan(user_id=user_id, payload=payload)
+            job.total_kps = len(plan)
+            self.session.commit()
+
+            specs = self._prepare_kp_work_specs(
+                user_id=user_id,
+                plan=plan,
+                base_options=base_options,
+            )
+
+            def _on_kp_done(
+                _spec: KnowledgePointGenerationWorkSpec,
+                _outcome: GenerationLoopOutcome,
+            ) -> None:
+                job.completed_kps += 1
+                self.session.commit()
+
+            outcomes = execute_concurrent_kp_generation(
+                specs,
+                llm=self.llm,
+                embedding=self.embedding,
+                user_id=user_id,
+                batch_id=batch_id,
+                on_kp_done=_on_kp_done,
+                max_workers=3,
+            )
+            all_entities, all_checks, _ = self._materialize_kp_outcomes(
+                user_id=user_id,
+                batch_id=batch_id,
+                outcomes=outcomes,
+            )
+            with self.session.begin_nested():
+                saved_questions = self.question_repo.batch_create_questions(all_entities, user_id)
+                self.question_repo.batch_create_quality_checks(all_checks, user_id)
+
+            job.status = QuestionGenerationJobStatus.COMPLETED.value
+            job.batch_id = batch_id
+            job.generated_count = len(saved_questions)
+            job.question_ids = [str(q.id) for q in saved_questions]
+            job.completed_kps = len(specs)
+            job.completed_at = datetime.now(UTC)
+            self.session.commit()
+            self.session.refresh(job)
+            return job
+        except Exception as exc:
+            self.session.rollback()
+            refreshed = self.question_repo.get_generation_job_by_id(job_id, user_id)
+            if (
+                refreshed is not None
+                and refreshed.status != QuestionGenerationJobStatus.COMPLETED.value
+            ):
+                refreshed.status = QuestionGenerationJobStatus.FAILED.value
+                refreshed.error_message = str(exc)[:500]
+                refreshed.completed_at = datetime.now(UTC)
+                self.session.commit()
+            raise
 
     def get_question(
         self,

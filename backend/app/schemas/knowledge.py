@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class KnowledgeTreeNodeResponse(BaseModel):
@@ -24,12 +24,22 @@ class KnowledgeTreeNodeResponse(BaseModel):
     parent_id: uuid.UUID | None = Field(default=None, description="父知识点主键")
     name: str = Field(..., description="知识点规范名称")
     description: str = Field(default="", description="知识点概念简述")
+    structured_content: dict[str, Any] | None = Field(
+        default=None,
+        description="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+    )
+    sort_order: int = Field(default=0, description="资料内顺序序号")
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
     is_low_confidence: bool = Field(default=False, description="是否标记为低置信度")
     children: list["KnowledgeTreeNodeResponse"] = Field(
         default_factory=list,
         description="递归子知识点列表",
     )
+
+    @field_validator("sort_order", mode="before")
+    @classmethod
+    def _coerce_sort_order(cls, value: Any) -> int:
+        return 0 if value is None else int(value)
 
 
 class KnowledgeTreeResponse(BaseModel):
@@ -56,11 +66,21 @@ class KnowledgePointDetailResponse(BaseModel):
     parent_id: uuid.UUID | None = Field(default=None, description="父知识点主键")
     name: str = Field(..., description="知识点规范名称")
     description: str = Field(default="", description="知识点概念简述")
+    structured_content: dict[str, Any] | None = Field(
+        default=None,
+        description="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+    )
+    sort_order: int = Field(default=0, description="资料内顺序序号")
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
     is_low_confidence: bool = Field(default=False, description="是否标记为低置信度")
     batch_id: str = Field(default="", description="抽取批次号")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")
+
+    @field_validator("sort_order", mode="before")
+    @classmethod
+    def _coerce_sort_order(cls, value: Any) -> int:
+        return 0 if value is None else int(value)
 
 
 class SnippetSourceResponse(BaseModel):

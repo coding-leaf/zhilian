@@ -1180,6 +1180,29 @@ class FolderNameConflictError(AppError):
         )
 
 
+class QuestionGenerationJobNotFoundError(AppError):
+    """异步出题任务不存在或无权访问异常 (错误码 40022, HTTP 404)。"""
+
+    def __init__(
+        self,
+        message: str = "请求的出题任务不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40022,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AttemptItemNotFoundError",
@@ -1216,6 +1239,7 @@ __all__ = [
     "PracticeSessionNotFoundError",
     "PracticeSessionStatusError",
     "PracticeStatusError",
+    "QuestionGenerationJobNotFoundError",
     "QuestionNotFoundError",
     "QueueError",
     "QueueTimeoutError",

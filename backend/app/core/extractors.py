@@ -2,10 +2,13 @@
 
 import io
 import zipfile
+from dataclasses import dataclass
+from typing import Any
 from xml.etree import ElementTree
 
 import pypdf
 
+from app.core.algorithms.ocr_quality import detect_symbol_garble
 from app.core.errors import MaterialInvalidError
 
 # 依据：文件类型二进制魔数定义
@@ -64,6 +67,130 @@ def validate_file_magic(content: bytes, declared_format: str) -> bool:
         return any(content.startswith(magic) for magic in MAGIC_NUMBERS[normalized_format])
 
     return False
+
+
+_SYMBOL_FONT_MARKERS: tuple[str, ...] = (
+    "symbol",
+    "mt-extra",
+    "mtex",
+    "wingding",
+    "webding",
+    "math",
+    "zapfdingbats",
+)
+
+
+@dataclass(frozen=True)
+class PdfPageExtraction:
+    """单页 PDF 解析及字体/符号乱码诊断结果。"""
+
+    page_number: int
+    text: str
+    lacks_tounicode_symbol_font: bool
+    has_symbol_garble: bool
+    suspicious_fragments: tuple[str, ...] = ()
+    embedded_images: tuple[bytes, ...] = ()
+
+    @property
+    def needs_repair(self) -> bool:
+        """是否存在字体缺失 ToUnicode 或高密度 ASCII 符号乱码问题。"""
+        return self.lacks_tounicode_symbol_font or self.has_symbol_garble
+
+
+def _dereference(obj: Any) -> Any:
+    """安全展开 pypdf IndirectObject 引用。"""
+    get_obj = getattr(obj, "get_object", None)
+    if callable(get_obj):
+        try:
+            return get_obj()
+        except Exception:
+            return obj
+    return obj
+
+
+def _inspect_page_symbol_fonts_missing_tounicode(page: Any) -> bool:
+    """检测 PDF 页级 `/Resources/Font` 中是否存在缺失 `/ToUnicode` 的符号/数学字体。"""
+    page_get = getattr(page, "get", None)
+    if not callable(page_get):
+        return False
+    resources = _dereference(page_get("/Resources"))
+    if not isinstance(resources, dict):
+        return False
+    fonts = _dereference(resources.get("/Font"))
+    if not isinstance(fonts, dict):
+        return False
+
+    for raw_font in fonts.values():
+        font_dict = _dereference(raw_font)
+        if not isinstance(font_dict, dict):
+            continue
+        base_font = str(font_dict.get("/BaseFont", "")).lower()
+        if any(marker in base_font for marker in _SYMBOL_FONT_MARKERS) and (
+            "/ToUnicode" not in font_dict
+        ):
+            return True
+    return False
+
+
+def _extract_page_embedded_images(page: Any) -> tuple[bytes, ...]:
+    """安全提取 PDF 页面内嵌位图字节序列（供可选 OCR 补识）。"""
+    raw_images = getattr(page, "images", None)
+    if not raw_images:
+        return ()
+    collected: list[bytes] = []
+    try:
+        for img in raw_images:
+            data = getattr(img, "data", None)
+            if isinstance(data, bytes) and data:
+                collected.append(data)
+            if len(collected) >= 3:
+                break
+    except Exception:
+        return ()
+    return tuple(collected)
+
+
+def extract_pdf_pages_with_diagnostics(content: bytes) -> list[PdfPageExtraction]:
+    """按页提取 PDF 文本，并检测缺失 `/ToUnicode` 符号字体及 ASCII 乱码簇。"""
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(content))
+        pages_out: list[PdfPageExtraction] = []
+        for idx, page in enumerate(reader.pages, start=1):
+            raw_text = (page.extract_text() or "").strip()
+            lacks_tounicode = _inspect_page_symbol_fonts_missing_tounicode(page)
+            has_garble, _ratio, frags = detect_symbol_garble(raw_text)
+            embedded_images = (
+                _extract_page_embedded_images(page)
+                if (lacks_tounicode or has_garble or not raw_text)
+                else ()
+            )
+            pages_out.append(
+                PdfPageExtraction(
+                    page_number=idx,
+                    text=raw_text,
+                    lacks_tounicode_symbol_font=lacks_tounicode,
+                    has_symbol_garble=has_garble,
+                    suspicious_fragments=frags,
+                    embedded_images=embedded_images,
+                )
+            )
+    except Exception as exc:
+        if isinstance(exc, MaterialInvalidError):
+            raise
+        raise MaterialInvalidError(
+            f"PDF 文件解析失败: {exc}",
+            details={"error": str(exc)},
+        ) from exc
+
+    total_valid_chars = sum(1 for page in pages_out for ch in page.text if not ch.isspace())
+    has_embedded_images = any(bool(page.embedded_images) for page in pages_out)
+    if total_valid_chars < 10 and not has_embedded_images:
+        raise MaterialInvalidError(
+            "PDF文件无有效文字内容，扫描件请直接上传图片",
+            details={"valid_char_count": total_valid_chars},
+        )
+
+    return pages_out
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -218,10 +345,12 @@ def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]
 
 __all__ = [
     "MAGIC_NUMBERS",
+    "PdfPageExtraction",
     "_extract_paragraphs_from_docx",
     "_extract_paragraphs_from_pptx",
     "_extract_text_from_pdf",
     "detect_image_type",
+    "extract_pdf_pages_with_diagnostics",
     "extract_text_from_raw_content",
     "validate_file_magic",
 ]

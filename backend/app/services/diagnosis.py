@@ -40,6 +40,7 @@ from app.core.logging import log_structured_metric
 from app.models.practice import (
     DiagnosisReport,
     ErrorType,
+    GradingStatus,
     MasteryLevel,
     MasteryRecord,
     PracticeStatus,
@@ -56,6 +57,8 @@ from app.services._diagnosis_report import (
     build_diagnosis_report_entity,
     build_evaluation_inputs_and_mistakes,
     collect_involved_point_ids,
+    ensure_utc,
+    evaluate_graded_items_partial,
     evaluate_practice_items,
     sync_wrong_records_from_evaluations,
 )
@@ -257,7 +260,7 @@ class DiagnosisService:
         """
         start_time = time.perf_counter()
         request_id = request_id or str(uuid.uuid4())
-        evaluation_time = current_time if current_time is not None else datetime.now(UTC)
+        evaluation_time = ensure_utc(current_time) or datetime.now(UTC)
         evaluation_timestamp = evaluation_time.timestamp()
 
         updated_records: list[MasteryRecord] = []
@@ -290,17 +293,18 @@ class DiagnosisService:
                     channel = "offline"
                     record_created_at = item.created_at
 
+                normalized_created_at = ensure_utc(record_created_at)
                 source = resolve_channel_to_source(channel)
                 answered_timestamp = (
-                    record_created_at.timestamp()
-                    if record_created_at is not None
+                    normalized_created_at.timestamp()
+                    if normalized_created_at is not None
                     else evaluation_timestamp
                 )
 
                 if last_practiced_at is None or (
-                    record_created_at is not None and record_created_at > last_practiced_at
+                    normalized_created_at is not None and normalized_created_at > last_practiced_at
                 ):
-                    last_practiced_at = record_created_at
+                    last_practiced_at = normalized_created_at
 
                 if item_score >= 1.0:
                     correct_count += 1
@@ -320,7 +324,7 @@ class DiagnosisService:
                         "score": round(item_score, 4),
                         "source": str(source),
                         "answered_at": (
-                            record_created_at.isoformat() if record_created_at else None
+                            normalized_created_at.isoformat() if normalized_created_at else None
                         ),
                     }
                 )
@@ -368,6 +372,107 @@ class DiagnosisService:
             },
         )
         return updated_records
+
+    def sync_practice_learning_state(
+        self,
+        *,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        partial_ok: bool = True,
+        current_time: datetime | None = None,
+        commit: bool = True,
+    ) -> None:
+        """同步练习已判分作答项至错题本 (WrongRecord) 与知识点掌握度 (MasteryRecord)。"""
+        evaluation_time = current_time if current_time is not None else datetime.now(UTC)
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if practice is None:
+            return
+
+        items = self.practice_repo.list_attempt_items(practice_id=practice_id, user_id=user_id)
+        grading_records = self.grading_repo.list_final_records_by_practice(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        if partial_ok:
+            item_evaluations, *_ = evaluate_graded_items_partial(
+                items=items,
+                grading_records=grading_records,
+            )
+            if not item_evaluations:
+                return
+            sorted_point_ids = collect_involved_point_ids(None, item_evaluations)
+        else:
+            item_evaluations, *_ = evaluate_practice_items(
+                practice_id=practice_id,
+                items=items,
+                grading_records=grading_records,
+            )
+            sorted_point_ids = collect_involved_point_ids(
+                practice.knowledge_point_ids, item_evaluations
+            )
+
+        if sorted_point_ids:
+            self.calculate_and_update_mastery(
+                user_id=user_id,
+                knowledge_point_ids=sorted_point_ids,
+                current_time=evaluation_time,
+            )
+
+        fallback_point_id = sorted_point_ids[0] if sorted_point_ids else None
+        sync_wrong_records_from_evaluations(
+            diagnosis_repo=self.diagnosis_repo,
+            user_id=user_id,
+            practice_id=practice_id,
+            item_evaluations=item_evaluations,
+            fallback_point_id=fallback_point_id,
+        )
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
+
+    def ensure_diagnosis_report(
+        self,
+        *,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+    ) -> DiagnosisReport | None:
+        """若练习已达成 COMPLETED、全部作答项已有终态成功判分且尚无报告，则幂等预生成。"""
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if (
+            practice is None
+            or practice.status != PracticeStatus.COMPLETED.value
+            or practice.completed_at is None
+        ):
+            return None
+        existing = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        if existing is not None:
+            return existing
+        items = self.practice_repo.list_attempt_items(practice_id=practice_id, user_id=user_id)
+        grading_records = self.grading_repo.list_final_records_by_practice(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        grading_map = {record.attempt_item_id: record for record in grading_records}
+        if not items or any(
+            item.id not in grading_map
+            or grading_map[item.id].status != GradingStatus.SUCCESS.value
+            or grading_map[item.id].score is None
+            for item in items
+        ):
+            return None
+        return self.generate_diagnosis_report(user_id=user_id, practice_id=practice_id)
 
     def generate_diagnosis_report(
         self,
@@ -723,16 +828,21 @@ class DiagnosisService:
         user_id: uuid.UUID,
         material_id: uuid.UUID | None = None,
         request_id: str | None = None,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> UserMasteryOverviewDTO:
         """获取用户的知识点掌握度宏观全景。
 
-        当 ``material_id`` 缺省为 None 时，聚合该用户全部知识点与其掌握度记录
-        （跨资料），而非退化为 ``material_id IS NULL`` 查询（该列 NOT NULL 会恒空）。
+        当 ``material_id`` 缺省为 None 时，支持按 ``folder_id`` 或未分类过滤，
+        否则聚合该用户全部知识点与其掌握度记录（跨资料）。
 
         Args:
             user_id: 租户用户主键。
-            material_id: 可选资料主键；None 表示聚合该用户全部资料知识点。
+            material_id: 可选资料主键；None 表示聚合课程范围或全部资料知识点。
             request_id: 请求追踪标识。
+            folder_id: 可选课程文件夹主键过滤。
+            unclassified: 为 True 时仅统计未归类（``folder_id IS NULL``）资料下的知识点。
 
         Returns:
             UserMasteryOverviewDTO: 包含薄弱点清单与四档统计的总览实体。
@@ -747,6 +857,16 @@ class DiagnosisService:
             )
             mastery_records = self.diagnosis_repo.list_mastery_records_by_material(
                 material_id=material_id,
+                user_id=user_id,
+            )
+        elif folder_id is not None or unclassified:
+            knowledge_points = self.knowledge_repo.list_by_folder_scope(
+                user_id=user_id,
+                folder_id=folder_id,
+                unclassified=unclassified,
+            )
+            mastery_records = self.diagnosis_repo.list_mastery_records_by_knowledge_point_ids(
+                [kp.id for kp in knowledge_points],
                 user_id=user_id,
             )
         else:
@@ -997,6 +1117,12 @@ class DiagnosisService:
     ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None]]:
         """Resolve material and course for a page of wrong records."""
         return self.diagnosis_repo.get_wrong_record_scopes(user_id, knowledge_point_ids)
+
+    def get_wrong_record_display_meta(
+        self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None, str, str]]:
+        """Resolve material, course, knowledge point name, and material title for wrong records."""
+        return self.diagnosis_repo.get_wrong_record_display_meta(user_id, knowledge_point_ids)
 
     def list_wrong_record_groups(
         self, user_id: uuid.UUID, is_mastered: bool | None = None

@@ -1,7 +1,8 @@
 """Internal generation DTOs, prompt assembly, and quality-retry loop for QuestionService."""
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -452,9 +453,104 @@ def build_question_entity(
     )
 
 
+@dataclass(frozen=True)
+class KnowledgePointGenerationWorkSpec:
+    """Pure thread-safe specification for generating questions for a single KP."""
+
+    index: int
+    material_id: uuid.UUID
+    version_id: uuid.UUID
+    knowledge_point_id: uuid.UUID
+    kp_name: str
+    kp_description: str
+    context_text: str
+    snippet_metadata: tuple[dict[str, Any], ...]
+    existing_refs: tuple[ExistingQuestionReference, ...]
+    options: GenerateQuestionsOptions
+
+
+def _run_spec_generation_loop(
+    spec: KnowledgePointGenerationWorkSpec,
+    *,
+    llm: LLMProtocol,
+    embedding: EmbeddingProtocol,
+    user_id: uuid.UUID,
+    batch_id: str,
+) -> GenerationLoopOutcome:
+    """Execute the pure LLM/Embedding/quality loop for one prepared KP spec."""
+    return run_question_generation_loop(
+        llm=llm,
+        embedding=embedding,
+        user_id=user_id,
+        batch_id=batch_id,
+        kp_name=spec.kp_name,
+        kp_description=spec.kp_description,
+        context_text=spec.context_text,
+        snippet_metadata=list(spec.snippet_metadata),
+        existing_refs=spec.existing_refs,
+        options=spec.options,
+    )
+
+
+def execute_concurrent_kp_generation(
+    specs: Sequence[KnowledgePointGenerationWorkSpec],
+    *,
+    llm: LLMProtocol,
+    embedding: EmbeddingProtocol,
+    user_id: uuid.UUID,
+    batch_id: str,
+    on_kp_done: Callable[[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome], None]
+    | None = None,
+    max_workers: int = 3,
+) -> list[tuple[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome]]:
+    """Run pure LLM/Embedding KP generation loops concurrently without touching ORM Session."""
+    if not specs:
+        return []
+    if len(specs) == 1:
+        outcome = _run_spec_generation_loop(
+            specs[0],
+            llm=llm,
+            embedding=embedding,
+            user_id=user_id,
+            batch_id=batch_id,
+        )
+        if on_kp_done is not None:
+            on_kp_done(specs[0], outcome)
+        return [(specs[0], outcome)]
+
+    worker_count = max(1, min(max_workers, len(specs)))
+    ordered: dict[int, tuple[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map: dict[Future[GenerationLoopOutcome], KnowledgePointGenerationWorkSpec] = {
+            executor.submit(
+                _run_spec_generation_loop,
+                spec,
+                llm=llm,
+                embedding=embedding,
+                user_id=user_id,
+                batch_id=batch_id,
+            ): spec
+            for spec in specs
+        }
+        try:
+            for future in as_completed(future_map):
+                spec = future_map[future]
+                outcome = future.result()
+                ordered[spec.index] = (spec, outcome)
+                if on_kp_done is not None:
+                    on_kp_done(spec, outcome)
+        except Exception:
+            for pending_future in future_map:
+                pending_future.cancel()
+            raise
+
+    return [ordered[spec.index] for spec in specs]
+
+
 __all__ = [
     "GenerateQuestionsOptions",
     "GenerationLoopOutcome",
+    "KnowledgePointGenerationWorkSpec",
     "MultiKnowledgePointGenerationResult",
     "QuestionGenerationResult",
     "SnippetCandidate",
@@ -464,6 +560,7 @@ __all__ = [
     "build_question_entity",
     "convert_llm_items_to_candidates",
     "distribute_count",
+    "execute_concurrent_kp_generation",
     "resolve_effective_version_id",
     "run_question_generation_loop",
 ]

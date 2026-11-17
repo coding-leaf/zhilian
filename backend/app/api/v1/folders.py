@@ -59,7 +59,7 @@ def _to_detail_response(aggregate: FolderAggregate) -> FolderDetailResponse:
     status_code=status.HTTP_201_CREATED,
     summary="创建课程文件夹",
 )
-async def create_folder(
+def create_folder(
     payload: FolderCreateRequest,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
@@ -84,7 +84,7 @@ async def create_folder(
     status_code=status.HTTP_200_OK,
     summary="分页检索课程文件夹列表",
 )
-async def list_folders(
+def list_folders(
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
     include_archived: Annotated[bool, Query(description="是否包含已归档课程")] = False,
@@ -138,6 +138,8 @@ def _group_folder_knowledge_points(
                 name=point.name,
                 level=point.level,
                 parent_id=point.parent_id,
+                structured_content=getattr(point, "structured_content", None),
+                sort_order=getattr(point, "sort_order", 0) or 0,
             )
         )
     return FolderKnowledgePointsResponse(
@@ -153,7 +155,7 @@ def _group_folder_knowledge_points(
     status_code=status.HTTP_200_OK,
     summary="获取课程内按资料分组的考点列表",
 )
-async def list_folder_knowledge_points(
+def list_folder_knowledge_points(
     folder_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
@@ -178,7 +180,7 @@ async def list_folder_knowledge_points(
     status_code=status.HTTP_200_OK,
     summary="获取课程文件夹详情",
 )
-async def get_folder(
+def get_folder(
     folder_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
@@ -203,7 +205,7 @@ async def get_folder(
     status_code=status.HTTP_200_OK,
     summary="重命名课程文件夹",
 )
-async def rename_folder(
+def rename_folder(
     folder_id: uuid.UUID,
     payload: FolderUpdateRequest,
     user: Annotated[User, Depends(get_current_user)],
@@ -232,7 +234,7 @@ async def rename_folder(
     status_code=status.HTTP_200_OK,
     summary="归档课程文件夹",
 )
-async def archive_folder(
+def archive_folder(
     folder_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
@@ -263,7 +265,7 @@ async def archive_folder(
     status_code=status.HTTP_200_OK,
     summary="恢复已归档课程文件夹",
 )
-async def restore_folder(
+def restore_folder(
     folder_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],
@@ -288,7 +290,7 @@ async def restore_folder(
     status_code=status.HTTP_200_OK,
     summary="立即物理清理课程文件夹",
 )
-async def purge_folder(
+def purge_folder(
     folder_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     folder_service: Annotated[FolderService, Depends(get_folder_service)],

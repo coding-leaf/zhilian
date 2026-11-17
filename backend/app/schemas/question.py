@@ -353,6 +353,44 @@ class CoachSourceResponse(BaseModel):
     source_info: dict[str, Any] = Field(default_factory=dict)
 
 
+class QuestionGenerationJobResponse(BaseModel):
+    """异步出题队列任务状态与进度响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(..., description="异步出题任务主键 UUIDv4")
+    status: str = Field(..., description="任务状态 (queued|running|completed|failed)")
+    material_id: uuid.UUID | None = Field(default=None, description="目标学习资料主键")
+    folder_id: uuid.UUID | None = Field(default=None, description="目标课程文件夹主键")
+    total_kps: int = Field(default=0, ge=0, description="总知识点数")
+    completed_kps: int = Field(default=0, ge=0, description="已完成知识点数")
+    generated_count: int = Field(default=0, ge=0, description="成功生成的题目数量")
+    batch_id: str | None = Field(default=None, description="关联出题批次标识")
+    question_ids: list[uuid.UUID] = Field(
+        default_factory=list, description="已生成的题目 UUID 列表"
+    )
+    error_message: str | None = Field(default=None, description="失败原因摘要")
+    created_at: datetime = Field(..., description="任务创建时间")
+    updated_at: datetime = Field(..., description="任务最后更新时间")
+    completed_at: datetime | None = Field(default=None, description="任务完成时间")
+
+    @field_validator("question_ids", mode="before")
+    @classmethod
+    def _coerce_question_ids(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        return list(value)
+
+
+class QuestionGenerationJobListResponse(BaseModel):
+    """异步出题任务列表响应模型。"""
+
+    items: list[QuestionGenerationJobResponse] = Field(
+        default_factory=list, description="任务记录列表"
+    )
+    total: int = Field(..., ge=0, description="符合条件的总任务数")
+
+
 class ScopedCoachResponse(AskCoachResponse):
     sources: list[CoachSourceResponse] = Field(default_factory=list)
 
@@ -372,6 +410,8 @@ __all__ = [
     "QuestionEditLogResponse",
     "QuestionGenerateRequest",
     "QuestionGenerateResponse",
+    "QuestionGenerationJobListResponse",
+    "QuestionGenerationJobResponse",
     "QuestionListQuery",
     "QuestionListResponse",
     "QuestionQualityCheckListResponse",

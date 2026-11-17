@@ -1,8 +1,25 @@
 """Internal Pydantic LLM output normalization schemas for QuestionService."""
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
+
+_OPTION_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^(?:\([A-Za-z]\)|（[A-Za-z]）|[A-Za-z][.、:：)）])\s*"
+)
+_OPTION_KEY_TOKEN_RE: re.Pattern[str] = re.compile(r"^[(\[（]?\s*([A-Za-z])\s*[)\]）.、:：]?$")
+
+
+def _strip_option_label_prefix(text: str) -> str:
+    """剥离选项正文前端重复出现的字母序号前缀（如 A. / A、 / (A) / A:）。"""
+    cleaned = text.strip()
+    for _ in range(2):
+        updated = _OPTION_PREFIX_RE.sub("", cleaned, count=1).strip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned
 
 
 def _parse_int_score(raw_value: Any, *, fallback: int, minimum: int = 1) -> int:
@@ -69,6 +86,15 @@ def _normalize_llm_options(raw_options: Any) -> Any:
             if "content" not in opt_dict and "text" in opt_dict:
                 opt_dict["content"] = opt_dict["text"]
             opt_dict.setdefault("key", chr(ord("A") + idx))
+            if isinstance(opt_dict.get("key"), str):
+                raw_key = opt_dict["key"].strip()
+                key_match = _OPTION_KEY_TOKEN_RE.match(raw_key)
+                if key_match:
+                    opt_dict["key"] = key_match.group(1).upper()
+                else:
+                    opt_dict["key"] = raw_key.upper() or chr(ord("A") + idx)
+            if isinstance(opt_dict.get("content"), str):
+                opt_dict["content"] = _strip_option_label_prefix(opt_dict["content"])
             normalized.append(opt_dict)
         else:
             normalized.append(opt)

@@ -119,7 +119,7 @@ app.include_router(api_v1_router)
 
 
 @app.get("/health", tags=["system"], summary="服务健康检查")
-async def health_check(request: Request) -> JSONResponse:
+def health_check(request: Request) -> JSONResponse:
     """多组件结构化健康检查端点。
 
     根据 AppContainer 诊断结果返回系统就绪状态：

@@ -48,7 +48,7 @@ router = APIRouter(prefix="/practices", tags=["Practices"])
     status_code=status.HTTP_201_CREATED,
     summary="创建练习并组卷",
 )
-async def create_practice(
+def create_practice(
     request: PracticeCreateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -101,7 +101,7 @@ async def create_practice(
     status_code=status.HTTP_200_OK,
     summary="练习列表查询",
 )
-async def list_practices(
+def list_practices(
     status: Annotated[str | None, Query(description="按练习生命周期状态过滤")] = None,
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
     offset: Annotated[int, Query(ge=0, description="分页游标偏移量")] = 0,
@@ -159,7 +159,7 @@ async def list_practices(
     status_code=status.HTTP_200_OK,
     summary="练习详情查询",
 )
-async def get_practice(
+def get_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -197,7 +197,7 @@ async def get_practice(
     status_code=status.HTTP_200_OK,
     summary="逐题作答草稿实时暂存",
 )
-async def save_answer(
+def save_answer(
     id: uuid.UUID,
     request: SaveAnswerRequest,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -249,7 +249,7 @@ async def save_answer(
     status_code=status.HTTP_200_OK,
     summary="暂停练习",
 )
-async def pause_practice(
+def pause_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -290,7 +290,7 @@ async def pause_practice(
     status_code=status.HTTP_200_OK,
     summary="恢复练习",
 )
-async def resume_practice(
+def resume_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -331,7 +331,7 @@ async def resume_practice(
     status_code=status.HTTP_200_OK,
     summary="交卷提交强幂等",
 )
-async def submit_practice(
+def submit_practice(
     id: uuid.UUID,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -406,7 +406,7 @@ async def submit_practice(
     status_code=status.HTTP_200_OK,
     summary="重试未完成的整卷判题",
 )
-async def retry_practice_grading(
+def retry_practice_grading(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],

@@ -37,7 +37,7 @@ router = APIRouter(tags=["knowledge"])
     status_code=status.HTTP_200_OK,
     summary="获取学习资料知识树拓扑",
 )
-async def get_knowledge_tree(
+def get_knowledge_tree(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
@@ -85,7 +85,7 @@ async def get_knowledge_tree(
     status_code=status.HTTP_200_OK,
     summary="获取知识点详情",
 )
-async def get_knowledge_point_detail(
+def get_knowledge_point_detail(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
@@ -113,7 +113,7 @@ async def get_knowledge_point_detail(
     status_code=status.HTTP_200_OK,
     summary="知识点反向溯源关联切片列表",
 )
-async def get_knowledge_point_snippets(
+def get_knowledge_point_snippets(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
@@ -144,7 +144,7 @@ async def get_knowledge_point_snippets(
     status_code=status.HTTP_200_OK,
     summary="切片正向溯源关联知识点列表",
 )
-async def get_snippet_knowledge_points(
+def get_snippet_knowledge_points(
     snippet_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
@@ -175,7 +175,7 @@ async def get_snippet_knowledge_points(
     status_code=status.HTTP_200_OK,
     summary="触发知识点结构化抽取与建树",
 )
-async def trigger_knowledge_extraction(
+def trigger_knowledge_extraction(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],

@@ -141,6 +141,7 @@ class MaterialParseRequest(BaseModel):
 
     version_id: uuid.UUID | None = Field(default=None, description="指定待解析版本，默认最新")
     sync: bool = Field(default=False, description="是否以同步阻塞模式执行解析")
+    force: bool = Field(default=False, description="是否强制重新解析已就绪资料并清理旧知识点/切片")
 
 
 class MaterialParseResponse(BaseModel):

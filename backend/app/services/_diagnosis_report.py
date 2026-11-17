@@ -2,7 +2,7 @@
 
 import contextlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.algorithms.diagnosis import (
@@ -25,6 +25,13 @@ from app.repositories.knowledge import KnowledgeRepository
 _SUBJECTIVE_TYPES: frozenset[str] = frozenset(("short_answer", "essay", "subjective"))
 
 
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """将数据库回读的 naive datetime 统一补全为 UTC aware datetime。"""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+
+
 def _resolve_item_score(
     item: AttemptItem,
     grading: GradingRecord | None,
@@ -35,6 +42,62 @@ def _resolve_item_score(
     if item.score is not None:
         return float(item.score), (float(item.max_score) if item.max_score > 0.0 else 1.0)
     return 0.0, 1.0
+
+
+def _build_item_evaluation(
+    item: AttemptItem,
+    grading: GradingRecord | None,
+) -> dict[str, Any]:
+    """构建单个已判题作答项的评估结构字典。"""
+    item_score, item_max_score = _resolve_item_score(item, grading)
+    is_answered = bool(item.is_answered)
+    is_correct = is_answered and (item_score >= item_max_score)
+    point_id: uuid.UUID | None = None
+    if item.question_snapshot and "knowledge_point_id" in item.question_snapshot:
+        with contextlib.suppress(ValueError, TypeError):
+            point_id = uuid.UUID(str(item.question_snapshot["knowledge_point_id"]))
+    return {
+        "item": item,
+        "grading": grading,
+        "score": item_score,
+        "max_score": item_max_score,
+        "is_answered": is_answered,
+        "is_correct": is_correct,
+        "point_id": point_id,
+    }
+
+
+def evaluate_graded_items_partial(
+    *,
+    items: list[AttemptItem],
+    grading_records: list[GradingRecord],
+) -> tuple[list[dict[str, Any]], int, int, float, float]:
+    """聚合作答项中已达成 SUCCESS 终态的判题项，允许存在未判完的主观题。"""
+    grading_map = {record.attempt_item_id: record for record in grading_records}
+    unanswered_count = 0
+    wrong_count = 0
+    total_scored = 0.0
+    total_maximum = 0.0
+    item_evaluations: list[dict[str, Any]] = []
+
+    for item in items:
+        grading = grading_map.get(item.id)
+        if (
+            grading is None
+            or grading.status != GradingStatus.SUCCESS.value
+            or grading.score is None
+        ):
+            continue
+        eval_info = _build_item_evaluation(item, grading)
+        total_scored += eval_info["score"]
+        total_maximum += eval_info["max_score"]
+        if not eval_info["is_answered"]:
+            unanswered_count += 1
+        if not eval_info["is_correct"]:
+            wrong_count += 1
+        item_evaluations.append(eval_info)
+
+    return item_evaluations, unanswered_count, wrong_count, total_scored, total_maximum
 
 
 def evaluate_practice_items(
@@ -56,44 +119,7 @@ def evaluate_practice_items(
             details={"practice_id": str(practice_id)},
         )
 
-    unanswered_count = 0
-    wrong_count = 0
-    total_scored = 0.0
-    total_maximum = 0.0
-    item_evaluations: list[dict[str, Any]] = []
-
-    for item in items:
-        grading = grading_map.get(item.id)
-        item_score, item_max_score = _resolve_item_score(item, grading)
-        total_scored += item_score
-        total_maximum += item_max_score
-
-        is_answered = bool(item.is_answered)
-        if not is_answered:
-            unanswered_count += 1
-
-        is_correct = is_answered and (item_score >= item_max_score)
-        if not is_correct:
-            wrong_count += 1
-
-        point_id: uuid.UUID | None = None
-        if item.question_snapshot and "knowledge_point_id" in item.question_snapshot:
-            with contextlib.suppress(ValueError, TypeError):
-                point_id = uuid.UUID(str(item.question_snapshot["knowledge_point_id"]))
-
-        item_evaluations.append(
-            {
-                "item": item,
-                "grading": grading,
-                "score": item_score,
-                "max_score": item_max_score,
-                "is_answered": is_answered,
-                "is_correct": is_correct,
-                "point_id": point_id,
-            }
-        )
-
-    return item_evaluations, unanswered_count, wrong_count, total_scored, total_maximum
+    return evaluate_graded_items_partial(items=items, grading_records=grading_records)
 
 
 def collect_involved_point_ids(
@@ -136,7 +162,9 @@ def build_evaluation_inputs_and_mistakes(
         curr_record = current_record_map.get(point_id)
         days_since: float | None = None
         if prev_record and prev_record.last_practiced_at:
-            delta_seconds = (evaluation_time - prev_record.last_practiced_at).total_seconds()
+            eval_utc = ensure_utc(evaluation_time) or evaluation_time
+            prev_utc = ensure_utc(prev_record.last_practiced_at) or prev_record.last_practiced_at
+            delta_seconds = (eval_utc - prev_utc).total_seconds()
             days_since = max(0.0, delta_seconds / 86400.0)
 
         point_items = [
@@ -220,6 +248,7 @@ def sync_wrong_records_from_evaluations(
                 error_type=error_type_val,
                 question_snapshot=item_entity.question_snapshot or {},
                 last_wrong_answer=item_entity.user_answer,
+                count_if_same_attempt=False,
             )
         elif item_entity.question_id is not None:
             diagnosis_repo.mark_wrong_record_mastered(
@@ -306,6 +335,7 @@ __all__ = [
     "build_diagnosis_report_entity",
     "build_evaluation_inputs_and_mistakes",
     "collect_involved_point_ids",
+    "evaluate_graded_items_partial",
     "evaluate_practice_items",
     "sync_wrong_records_from_evaluations",
 ]

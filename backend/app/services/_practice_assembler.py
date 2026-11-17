@@ -319,11 +319,19 @@ def rank_candidates_by_mode(
     return candidates[:question_count]
 
 
-def build_validated_snapshots(questions: Sequence[Question]) -> list[dict[str, Any]]:
+def build_validated_snapshots(
+    questions: Sequence[Question],
+    kp_name_map: dict[uuid.UUID, str] | None = None,
+) -> list[dict[str, Any]]:
     """为选中题目构造并校验 6 要素不可变快照列表。"""
     snapshots: list[dict[str, Any]] = []
     for question in questions:
-        snapshot = build_question_snapshot(question)
+        kp_name = (
+            kp_name_map.get(question.knowledge_point_id)
+            if kp_name_map is not None and question.knowledge_point_id is not None
+            else None
+        )
+        snapshot = build_question_snapshot(question, knowledge_point_name=kp_name)
         is_valid, err_msg = validate_question_snapshot(snapshot)
         if not is_valid:
             raise AppError(

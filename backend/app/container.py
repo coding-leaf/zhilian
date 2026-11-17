@@ -196,6 +196,7 @@ class AppContainer:
             queue_adapter=self.providers.queue,
             idempotency_adapter=self.providers.idempotency,
             knowledge_service=resolved_knowledge_service,
+            llm_adapter=self.providers.llm,
             bucket=self.settings.storage.bucket_name,
         )
 
@@ -223,6 +224,8 @@ class AppContainer:
             llm=self.providers.llm,
             embedding=self.providers.embedding,
             search_adapter=self.providers.search,
+            queue=self.providers.queue,
+            session_factory=self.session_factory,
         )
 
     def create_practice_service(self, session: Session) -> PracticeService:

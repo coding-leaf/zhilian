@@ -42,11 +42,14 @@ FAILURE_CALLBACK_TIMEOUT = 60
 
 
 def _parse_material(container: AppContainer, payload: dict[str, str], user_id: uuid.UUID) -> None:
+    force = str(payload.get("force", "")).lower() == "true"
+    extra_kwargs: dict[str, bool] = {"force": True} if force else {}
     with container.get_session() as session:
         container.create_material_service(session).parse_material_pipeline(
             material_id=uuid.UUID(payload["material_id"]),
             version_id=uuid.UUID(payload["version_id"]),
             user_id=user_id,
+            **extra_kwargs,
         )
 
 
@@ -58,9 +61,20 @@ def _grade_practice(container: AppContainer, payload: dict[str, str], user_id: u
         )
 
 
+def _generate_questions(
+    container: AppContainer, payload: dict[str, str], user_id: uuid.UUID
+) -> None:
+    with container.get_session() as session:
+        container.create_question_service(session).run_generation_job(
+            job_id=uuid.UUID(payload["job_id"]),
+            user_id=user_id,
+        )
+
+
 REGISTERED_TASKS: dict[str, Callable[[AppContainer, dict[str, str], uuid.UUID], None]] = {
     "parse_material_pipeline": _parse_material,
     "grading_jobs": _grade_practice,
+    "generate_questions_job": _generate_questions,
 }
 
 
@@ -134,6 +148,25 @@ def _mark_grading_failed(payload: dict[str, str], user_id: str) -> None:
         asyncio.run(container.shutdown())
 
 
+def _mark_generation_job_failed(
+    payload: dict[str, str],
+    user_id: str,
+    exception_name: str,
+) -> None:
+    """以短生命周期会话回写异步出题任务终态失败。"""
+    job_id = uuid.UUID(payload["job_id"])
+    container = AppContainer.create()
+    try:
+        with container.get_session() as session:
+            container.create_question_service(session).mark_generation_job_failed(
+                user_id=uuid.UUID(user_id),
+                job_id=job_id,
+                error_message=f"后台出题任务执行失败 ({exception_name})",
+            )
+    finally:
+        asyncio.run(container.shutdown())
+
+
 def handle_job_terminal_failure(
     job: Job,
     connection: Redis,
@@ -147,7 +180,7 @@ def handle_job_terminal_failure(
     ``should_retry`` 判定后续是否仍会重试；只有重试已耗尽或任务被判定为终态失败时
     才回写，避免把仍在重试中的任务误标为失败。解析链路已在
     ``MaterialService.parse_material_pipeline`` / ``_enqueue_parse`` 内自行回写
-    ``failed`` 终态，故此处只做运维日志；判题链路原本缺失回写，此处补齐。
+    ``failed`` 终态，故此处只做运维日志；判题与出题链路在此补齐终态失败回写。
 
     Args:
         job: 失败的 RQ 任务对象。
@@ -174,6 +207,13 @@ def handle_job_terminal_failure(
         task_name or "unknown",
         exception_name,
     )
+
+    if task_name == "generate_questions_job" and user_id and payload.get("job_id"):
+        try:
+            _mark_generation_job_failed(payload, user_id, exception_name)
+        except Exception:
+            logger.exception("异步出题任务失败状态回写异常: job_id=%s", job.id)
+        return
 
     if task_name != "grading_jobs" or not user_id or not payload.get("practice_id"):
         # 解析链路的失败回写由 MaterialService 内部负责，这里只保留运维日志

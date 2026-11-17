@@ -202,6 +202,10 @@ class QuestionSnapshotDTO(BaseModel):
         default=None,
         description="出题瞬间所属知识点标识 (用于错题溯源与考点归因)",
     )
+    knowledge_point_name: str | None = Field(
+        default=None,
+        description="所属知识点名称快照",
+    )
     options: list[dict[str, Any]] = Field(
         default_factory=list,
         description="客观选择题选项列表 (包含 key 和 content)",
