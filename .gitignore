@@ -29,8 +29,11 @@ miniprogram/coverage/
 *.swp
 *.swo
 .serena/
+.pi/
+.opencode/
 *.docx
 *.doc
+delivery_lab5_6/
 
 # Node & Frontend
 node_modules/
@@ -60,6 +63,9 @@ miniprogram/.env*
 *.tmp
 *.bak
 *.orig
+
+# Git Worktrees
+.worktrees/
 
 # OS & Filesystem Artifacts
 .DS_Store

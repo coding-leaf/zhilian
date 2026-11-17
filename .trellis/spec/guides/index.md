@@ -23,6 +23,7 @@
 | --- | --- | --- |
 | [跨层思维指南](./cross-layer-thinking-guide.md) | 梳理 backend ↔ miniprogram 的数据流与层边界契约 | 功能跨越 API / Service / 数据库 / store / 组件多层时 |
 | [代码复用思维指南](./code-reuse-thinking-guide.md) | 发现重复模式、抽到共享处、避免两套机制漂移 | 你发现相似代码、要新增工具函数或改常量时 |
+| [Git 分支与工作区治理指南](./git-and-workspace-governance.md) | 单主干分支模型、Swarm/Worktree 生命周期与工作区清洁红线 | 切新分支、调度并行子代理、清理环境或归档任务前 |
 
 ---
 
