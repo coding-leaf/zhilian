@@ -120,4 +120,37 @@ describe('useCoachChat session isolation & error retry', () => {
       content: '重试成功答复',
     })
   })
+
+  it('sends only the highest-priority scope field when multiple context IDs exist', async () => {
+    requestMock.mockResolvedValue({ reply: '单一范围答复', suggestions: [], sources: [] })
+    const ctx = reactive<CoachContextParams>({
+      folderId: 'f-1',
+      materialId: 'm-1',
+      knowledgePointId: 'kp-1',
+    })
+    const coach = useCoachChat(() => ctx)
+
+    await coach.sendMessage('你好呀')
+    expect(requestMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: '/coach/ask',
+        data: {
+          knowledge_point_id: 'kp-1',
+          user_prompt: '你好呀',
+        },
+      }),
+    )
+
+    ctx.knowledgePointId = undefined
+    await coach.sendMessage('讲义总结')
+    expect(requestMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: '/coach/ask',
+        data: {
+          material_id: 'm-1',
+          user_prompt: '讲义总结',
+        },
+      }),
+    )
+  })
 })

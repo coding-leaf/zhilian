@@ -22,12 +22,17 @@ export function useCourseDetail() {
   const showPointModal = ref(false)
   const selectedPoint = ref<KnowledgeTreeNode | null>(null)
   const pointSnippets = ref<KnowledgeSnippet[]>([])
+  const isLoading = ref(false)
+  const isRefreshing = ref(false)
   const isLoadingSnippets = ref(false)
   const snippetLoadFailed = ref(false)
 
   const selectedPointDetail = computed(() => materialStore.activeKnowledgePoint)
   const canStartParse = computed(() => canStartMaterialParse(material.value))
   const isParsing = computed(() => isMaterialParsing(material.value))
+  const isParseTimedOut = computed(() =>
+    Boolean(materialId.value && taskStore.materialTasks.get(materialId.value)?.timedOut),
+  )
 
   const parseProgressText = computed(() => {
     const progress = material.value?.progress_percentage
@@ -86,6 +91,7 @@ export function useCourseDetail() {
 
   const loadDetail = async () => {
     if (!materialId.value) return
+    isLoading.value = true
     try {
       const fetched = await materialStore.fetchMaterialDetail(materialId.value)
       material.value = fetched
@@ -96,6 +102,31 @@ export function useCourseDetail() {
       }
     } catch (err) {
       console.error(err)
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  const refreshParseProgress = async () => {
+    if (!materialId.value || isRefreshing.value) return
+    isRefreshing.value = true
+    try {
+      const refreshed = await taskStore.refreshMaterialTask(materialId.value)
+      if (!refreshed) {
+        safeShowToast('刷新进度失败，请稍后重试')
+        return
+      }
+      material.value = refreshed
+      if (refreshed.status === 'ready') {
+        await loadReadyAssets()
+        safeShowToast('讲义已解析完成', 'success')
+      } else if (refreshed.status === 'failed' || refreshed.status === 'retake_required') {
+        safeShowToast(refreshed.error_message || '解析未能完成')
+      } else {
+        safeShowToast('已同步最新解析进度')
+      }
+    } finally {
+      isRefreshing.value = false
     }
   }
 
@@ -150,7 +181,7 @@ export function useCourseDetail() {
     }
     uni.showModal({
       title: '重新解析讲义',
-      content: '重新解析将更新章节结构、公式编码与知识点卡片（已有练习记录会保留），确定继续？',
+      content: '重新解析将重新提取原文切片，并重建本讲义的知识点、关联题库与考点掌握度（历史练习作答记录仍会保留），确定继续？',
       confirmText: '重新解析',
       success: ({ confirm }) => {
         if (confirm) void startParse(true)
@@ -190,13 +221,17 @@ export function useCourseDetail() {
     selectedPointDetail,
     pointHierarchy,
     pointSnippets,
+    isLoading,
+    isRefreshing,
     isLoadingSnippets,
     snippetLoadFailed,
     canStartParse,
     isParsing,
+    isParseTimedOut,
     parseProgressText,
     initCourse,
     loadDetail,
+    refreshParseProgress,
     refreshMastery,
     startParse,
     confirmAndReparse,

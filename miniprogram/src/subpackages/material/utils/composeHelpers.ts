@@ -1,4 +1,6 @@
-import type { QuestionItem } from '@/types'
+import type { KnowledgeTreeNode, QuestionItem } from '@/types'
+
+export type ComposeMode = 'smart_sample' | 'full_coverage'
 
 export interface ComposeScope {
   folderId?: string
@@ -63,14 +65,40 @@ function sortOptionsByOrder(list: KnowledgePointOption[]): KnowledgePointOption[
     .map((entry) => entry.item)
 }
 
+export function mapTreeNodesToComposeOptions(
+  nodes: readonly KnowledgeTreeNode[],
+): KnowledgePointOption[] {
+  return nodes.map((node) => ({
+    id: node.id,
+    name: node.name,
+    level: node.level,
+    parent_id: node.parent_id ?? null,
+    sort_order: node.sort_order ?? 0,
+  }))
+}
+
+/** 过滤已有子节点的 L1 章节容器节点，仅保留可出题的叶子/独立考点。 */
+export function selectLeafComposePoints(
+  list: readonly KnowledgePointOption[],
+): KnowledgePointOption[] {
+  const parentIdsWithChildren = new Set<string>()
+  for (const item of list) {
+    if (item.parent_id) parentIdsWithChildren.add(item.parent_id)
+  }
+  return list.filter(
+    (item) => !((item.level ?? 1) === 1 && parentIdsWithChildren.has(item.id)),
+  )
+}
+
 /** 将考点按资料或章节分组，方便多考点自主选择与按章全选。 */
 export function groupComposeKps(list: readonly KnowledgePointOption[]): ComposeKpGroup[] {
   if (!list.length) return []
 
   const hasMaterialGroups = list.some((item) => Boolean(item.material_title))
   if (hasMaterialGroups) {
+    const leafList = selectLeafComposePoints(list)
     const byMaterial = new Map<string, ComposeKpGroup>()
-    for (const item of list) {
+    for (const item of leafList) {
       const key = item.material_id || item.material_title || '__material__'
       const existing = byMaterial.get(key)
       if (existing) {
@@ -133,7 +161,7 @@ export function groupComposeKps(list: readonly KnowledgePointOption[]): ComposeK
       groups.push({
         id: root.id,
         title: root.name,
-        points: sortOptionsByOrder([root, ...descendants]),
+        points: sortOptionsByOrder(descendants),
       })
     } else {
       flatLeaves.push(root)
@@ -150,6 +178,63 @@ export function groupComposeKps(list: readonly KnowledgePointOption[]): ComposeK
   }
 
   return groups
+}
+
+/** 跨讲义/章节分组确定性均匀抽样 targetCount 个已选考点，避免单一章节独占题量。 */
+export function sampleKnowledgePointIds(
+  groups: readonly ComposeKpGroup[],
+  selectedIds: readonly string[],
+  targetCount: number,
+): string[] {
+  const uniqueSelected = Array.from(new Set(selectedIds.filter(Boolean)))
+  if (targetCount <= 0 || uniqueSelected.length === 0) return []
+  if (uniqueSelected.length <= targetCount) return uniqueSelected
+
+  const selectedSet = new Set(uniqueSelected)
+  const buckets: string[][] = []
+  const placed = new Set<string>()
+
+  for (const group of groups) {
+    const groupSelected = group.points
+      .map((point) => point.id)
+      .filter((id) => selectedSet.has(id) && !placed.has(id))
+    if (groupSelected.length > 0) {
+      buckets.push(groupSelected)
+      groupSelected.forEach((id) => placed.add(id))
+    }
+  }
+
+  const remaining = uniqueSelected.filter((id) => !placed.has(id))
+  if (remaining.length > 0) {
+    buckets.push(remaining)
+  }
+  if (buckets.length === 0) return uniqueSelected.slice(0, targetCount)
+
+  if (buckets.length > targetCount) {
+    const sampled: string[] = []
+    for (let i = 0; i < targetCount; i += 1) {
+      const bucketIdx = Math.min(buckets.length - 1, Math.floor((i * buckets.length) / targetCount))
+      sampled.push(buckets[bucketIdx][0])
+    }
+    return sampled
+  }
+
+  const sampled: string[] = []
+  const cursors = buckets.map(() => 0)
+  while (sampled.length < targetCount) {
+    let progressed = false
+    for (let b = 0; b < buckets.length && sampled.length < targetCount; b += 1) {
+      const bucket = buckets[b]
+      const idx = cursors[b]
+      if (idx < bucket.length) {
+        sampled.push(bucket[idx])
+        cursors[b] = idx + 1
+        progressed = true
+      }
+    }
+    if (!progressed) break
+  }
+  return sampled
 }
 
 export function formatQuestionAnswer(question: Pick<QuestionItem, 'type' | 'answer'>): string {

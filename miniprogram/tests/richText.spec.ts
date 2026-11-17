@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
+import CoachMessageList from '@/components/CoachMessageList.vue'
 import RichContent from '@/components/RichContent.vue'
 import {
   escapeHtml,
@@ -147,5 +148,38 @@ describe('RichContent component', () => {
     expect(wrapper.find('.rich-content.compact.muted').exists()).toBe(true)
     expect(wrapper.find('.stub-rich-text').attributes('data-count')).toBe('1')
     wrapper.unmount()
+  })
+
+  it('uses tightened heading sizes and passes compact prop in CoachMessageList assistant bubbles', () => {
+    const h1 = parseRichContent('# 标题1')[0]
+    const h2 = parseRichContent('## 标题2')[0]
+    const h3 = parseRichContent('### 标题3')[0]
+    const h4 = parseRichContent('#### 标题4')[0]
+
+    expect('attrs' in h1 && h1.attrs?.style).toContain('font-size:1.10em;')
+    expect('attrs' in h2 && h2.attrs?.style).toContain('font-size:1.06em;')
+    expect('attrs' in h3 && h3.attrs?.style).toContain('font-size:1.03em;')
+    expect('attrs' in h4 && h4.attrs?.style).toContain('font-size:1.0em;')
+
+    const coachWrapper = mount(CoachMessageList, {
+      props: {
+        isThinking: false,
+        messages: [
+          { id: 'u1', role: 'user', content: '用大白话解释一下' },
+          { id: 'a1', role: 'assistant', content: '**核心结论**：先看边界条件。' },
+        ],
+      },
+      global: {
+        stubs: {
+          'scroll-view': { template: '<div><slot /></div>' },
+          'rich-text': { template: '<div class="stub-rich-text" />' },
+        },
+      },
+    })
+
+    const richContents = coachWrapper.findAllComponents(RichContent)
+    expect(richContents).toHaveLength(1)
+    expect(richContents[0].props('compact')).toBe(true)
+    coachWrapper.unmount()
   })
 })

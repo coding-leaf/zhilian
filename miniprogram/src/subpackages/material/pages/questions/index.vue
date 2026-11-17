@@ -33,19 +33,23 @@
     <QuestionConfigPanel
       v-if="isConfigMode"
       :available-kp-list="compose.availableKpList.value"
+      :kp-groups="compose.kpGroups.value"
       :selected-kp-ids="compose.selectedKpIds.value"
+      :effective-kp-count="compose.effectiveKpIds.value.length"
+      :compose-mode="compose.composeMode.value"
       :selected-types="compose.selectedTypes.value"
       :question-count="compose.questionCount.value"
       :difficulty="compose.difficulty.value"
       :planned-count="compose.plannedCount.value"
+      :exceeds-practice-limit="compose.exceedsPracticeLimit.value"
       :is-all-kp-selected="compose.isAllKpSelected.value"
       :is-loading-kp="isLoadingKp"
       :is-generating="compose.isGenerating.value"
       :is-job-in-flight="compose.isJobInFlight.value"
+      @open-picker="showKpDrawer = true"
       @toggle-select-all="compose.toggleSelectAllKp"
-      @toggle-group="compose.toggleKpGroup"
-      @toggle-kp="compose.toggleKp"
       @toggle-type="compose.toggleType"
+      @update:compose-mode="compose.setComposeMode"
       @update:question-count="compose.questionCount.value = $event"
       @update:difficulty="compose.difficulty.value = $event"
       @generate="handleGenerate"
@@ -67,6 +71,16 @@
       @reconfig="isConfigMode = true"
       @start="handleStartPractice"
     />
+
+    <KnowledgePointPickerDrawer
+      v-model:visible="showKpDrawer"
+      :groups="compose.kpGroups.value"
+      :selected-ids="compose.selectedKpIds.value"
+      :is-all-selected="compose.isAllKpSelected.value"
+      @toggle-kp="compose.toggleKp"
+      @toggle-group="compose.toggleKpGroup"
+      @toggle-select-all="compose.toggleSelectAllKp"
+    />
   </view>
 </template>
 
@@ -81,9 +95,11 @@ import { usePracticeStore } from '@/stores/practice'
 import { useFolderStore } from '@/stores/folder'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { describeFailure, RequestError } from '@/utils/requestError'
+import KnowledgePointPickerDrawer from '../../components/KnowledgePointPickerDrawer.vue'
 import QuestionConfigPanel from '../../components/QuestionConfigPanel.vue'
 import QuestionPreviewPanel from '../../components/QuestionPreviewPanel.vue'
 import { useQuestionCompose } from '../../composables/useQuestionCompose'
+import { mapTreeNodesToComposeOptions } from '../../utils/composeHelpers'
 import { flattenTreeWithParents } from '../../utils/courseStudy'
 
 const materialStore = useMaterialStore()
@@ -94,6 +110,7 @@ const compose = useQuestionCompose()
 
 const isConfigMode = ref(true)
 const isLoadingKp = ref(false)
+const showKpDrawer = ref(false)
 
 watch(
   () => compose.activeJob.value?.status,
@@ -159,16 +176,7 @@ const loadKpFromMaterial = async (materialId: string, preselectedKpId?: string) 
   try {
     const tree = await materialStore.loadKnowledgeTree(materialId)
     const nodes = flattenTreeWithParents(tree?.nodes)
-    compose.setKnowledgePoints(
-      nodes.map((node) => ({
-        id: node.id,
-        name: node.name,
-        level: node.level,
-        parent_id: node.parent_id ?? null,
-        sort_order: node.sort_order ?? 0,
-      })),
-      preselectedKpId,
-    )
+    compose.setKnowledgePoints(mapTreeNodesToComposeOptions(nodes), preselectedKpId)
   } finally {
     isLoadingKp.value = false
   }
@@ -233,17 +241,11 @@ const handleGenerate = async () => {
 const goBrowseMaterial = () => {
   const materialId = compose.scope.value.materialId
   if (!materialId) return
-  uni.navigateTo({
-    url: `/subpackages/material/pages/course/index?id=${materialId}`,
-    fail: () => safeShowToast('打开讲义详情失败'),
-  })
+  uni.navigateTo({ url: `/subpackages/material/pages/course/index?id=${materialId}`, fail: () => safeShowToast('打开讲义详情失败') })
 }
 
 const goToWorkbench = () => {
-  uni.switchTab({
-    url: '/pages/index/index',
-    fail: () => safeShowToast('返回工作台失败'),
-  })
+  uni.switchTab({ url: '/pages/index/index', fail: () => safeShowToast('返回工作台失败') })
 }
 
 const handleStartPractice = async () => {
@@ -261,7 +263,7 @@ const handleStartPractice = async () => {
         title: compose.scope.value.folderId ? '课程针对性测验' : '讲义专题测验',
         folder_id: compose.scope.value.folderId,
         material_id: compose.scope.value.folderId ? undefined : compose.scope.value.materialId,
-        knowledge_point_ids: compose.selectedKpIds.value,
+        knowledge_point_ids: compose.targetKpIdsForCoverage.value,
         question_types: compose.selectedTypes.value,
         question_ids: questionIds.length > 0 ? questionIds : undefined,
         question_count: questionIds.length > 0 ? questionIds.length : undefined,

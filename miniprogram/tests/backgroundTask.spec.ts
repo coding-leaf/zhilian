@@ -229,4 +229,61 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
     expect(store.visibleTasks).toEqual([])
     wrapper2.unmount()
   })
+
+  it('uses >=15m staged polling, flags timedOut on exhaustion, and resumes via refreshMaterialTask', async () => {
+    vi.useFakeTimers()
+    try {
+      let detailCalls = 0
+      let readyAfterRefresh = false
+      requestMock.mockImplementation(async ({ url, method }: { url: string; method?: string }) => {
+        if (url.startsWith('/materials/m-slow/parse') && method === 'POST') {
+          return { message: 'queued' }
+        }
+        if (url === '/materials/m-slow' && method === 'GET') {
+          detailCalls += 1
+          return {
+            id: 'm-slow',
+            title: '长文档.pdf',
+            status: readyAfterRefresh ? 'ready' : 'parsing',
+            parse_status: readyAfterRefresh ? 'ready' : 'extracting_knowledge',
+            progress_percentage: readyAfterRefresh ? 100 : 60,
+            created_at: '',
+          }
+        }
+        throw new Error(`unexpected: ${url}`)
+      })
+
+      const store = useBackgroundTaskStore()
+      await store.startMaterialParse('m-slow', '长文档.pdf', false)
+      // 取消 schedulePolling 的初始延迟 timer，直接测试 ensurePolling 分段退避
+      store.stopPolling()
+
+      const pollPromise = store.ensurePolling()
+      // 48 * 2500ms + 157 * 5000ms = 905,000ms (> 15 分钟)
+      await vi.advanceTimersByTimeAsync(910_000)
+      await pollPromise
+
+      expect(detailCalls).toBe(205)
+      expect(store.materialTasks.get('m-slow')?.timedOut).toBe(true)
+      expect(store.visibleTasks[0]).toMatchObject({
+        key: 'mat:m-slow',
+        timedOut: true,
+        actionLabel: '刷新',
+      })
+      expect(store.visibleTasks[0].detailText).toContain('进度同步已暂停')
+
+      // 手动刷新一次仍在解析中 -> 清除 timedOut 并重新调度轮询
+      const stillParsing = await store.refreshMaterialTask('m-slow')
+      expect(stillParsing?.status).toBe('parsing')
+      expect(store.materialTasks.get('m-slow')?.timedOut).toBe(false)
+
+      // 再次手动刷新且后端已就绪 -> 变为 ready
+      readyAfterRefresh = true
+      const done = await store.refreshMaterialTask('m-slow')
+      expect(done?.status).toBe('ready')
+      expect(store.activeMaterialIds).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -5,7 +5,7 @@ export type PollerRunResult<T> =
 
 export interface PollerRunOptions<T> {
   maxAttempts: number
-  intervalMs: number
+  intervalMs: number | ((attempt: number) => number)
   isDone: (value: T) => boolean
   onAttempt?: (value: T) => void
 }
@@ -87,7 +87,9 @@ export function createPoller(): PollerHandle {
         if (options.isDone(value)) return { status: 'completed', value }
         options.onAttempt?.(value)
         if (attempt < options.maxAttempts - 1) {
-          await waitInterval(options.intervalMs, token)
+          const delayMs =
+            typeof options.intervalMs === 'function' ? options.intervalMs(attempt) : options.intervalMs
+          await waitInterval(delayMs, token)
           if (disposed || token.cancelled) return { status: 'stopped', lastValue }
         }
       }

@@ -28,8 +28,24 @@
     </view>
 
     <view v-else-if="isParsing" class="status-box loading-box">
-      <view class="loading-spinner" />
-      <text class="loading-tips">{{ parseProgressText }}</text>
+      <view class="loading-row">
+        <view class="loading-spinner" />
+        <text class="loading-tips">{{ parseProgressText }}</text>
+        <button
+          class="refresh-progress-btn"
+          :disabled="isRefreshing"
+          @tap="emit('refresh')"
+        >
+          {{ isRefreshing ? '刷新中' : '刷新进度' }}
+        </button>
+      </view>
+      <text class="loading-subtips">
+        {{
+          isParseTimedOut
+            ? '后台仍在处理中，自动同步已暂停，请点击「刷新进度」获取最新状态。'
+            : '大讲义需提取公式与结构化考点，通常耗时数分钟，可离开页面稍后查看。'
+        }}
+      </text>
     </view>
 
     <view v-else-if="material.status === 'failed'" class="status-box error-box">
@@ -66,6 +82,8 @@ const props = defineProps<{
   material: MaterialItem | null
   canStartParse: boolean
   isParsing: boolean
+  isParseTimedOut?: boolean
+  isRefreshing?: boolean
   parseProgressText: string
   generatedQuestionCount: number
 }>()
@@ -74,6 +92,7 @@ const emit = defineEmits<{
   (e: 'start-parse'): void
   (e: 'reparse'): void
   (e: 'reparse-direct'): void
+  (e: 'refresh'): void
   (e: 'review-generated'): void
 }>()
 
@@ -98,9 +117,17 @@ const statusText = computed(() => materialStatusText(props.material))
 .waiting-box { background: var(--color-surface-subtle); border: 1px dashed var(--color-border-strong); }
 .status-tips { display: block; font-size: 24rpx; color: var(--color-ink-subtle); margin-bottom: 16rpx; }
 .parse-btn { height: 72rpx; font-size: 26rpx; }
-.loading-box { background: var(--color-surface-warm); color: var(--color-warm-amber); display: flex; align-items: center; }
-.loading-spinner { width: 16rpx; height: 16rpx; border-radius: 8rpx; background: var(--color-warm-amber); margin-right: 14rpx; flex-shrink: 0; }
-.loading-tips { flex: 1; font-size: 24rpx; line-height: 1.5; }
+.loading-box { background: var(--color-surface-warm); color: var(--color-warm-amber); display: flex; flex-direction: column; gap: 10rpx; }
+.loading-row { display: flex; align-items: center; gap: 12rpx; }
+.loading-spinner { width: 16rpx; height: 16rpx; border-radius: 8rpx; background: var(--color-warm-amber); flex-shrink: 0; }
+.loading-tips { flex: 1; min-width: 0; font-size: 24rpx; line-height: 1.5; }
+.loading-subtips { font-size: 22rpx; color: var(--color-ink-subtle); line-height: 1.45; }
+.refresh-progress-btn {
+  flex-shrink: 0; height: 54rpx; padding: 0 18rpx; margin: 0;
+  font-size: 22rpx; font-weight: 600; color: var(--color-academic-blue);
+  background: var(--color-bg-card); border: 1px solid var(--color-blue-border);
+  border-radius: 999rpx; display: flex; align-items: center; justify-content: center;
+}
 .ready-box { background: var(--color-success-bg-soft); color: var(--color-success-strong); }
 .ready-tips { display: block; font-size: 24rpx; line-height: 1.5; }
 .review-existing-btn {

@@ -19,17 +19,17 @@ export interface RichTextElementNode {
 export type RichTextNode = RichTextElementNode | RichTextTextNode
 
 const STYLES = {
-  headingBase: 'font-weight:700;color:rgb(28,25,23);line-height:1.45;margin:14rpx 0 8rpx;',
-  paragraph: 'margin:0 0 10rpx 0;line-height:1.65;word-break:break-word;',
-  list: 'margin:6rpx 0 10rpx 0;',
-  listItem: 'display:flex;align-items:flex-start;margin:4rpx 0;line-height:1.6;word-break:break-word;',
+  headingBase: 'font-weight:700;color:rgb(28,25,23);line-height:1.4;margin:10rpx 0 6rpx;',
+  paragraph: 'margin:0 0 8rpx 0;line-height:1.55;word-break:break-word;',
+  list: 'margin:4rpx 0 8rpx 0;',
+  listItem: 'display:flex;align-items:flex-start;margin:3rpx 0;line-height:1.55;word-break:break-word;',
   listMarker: 'color:rgb(30,58,138);font-weight:700;margin-right:10rpx;flex-shrink:0;',
   listContent: 'flex:1;min-width:0;word-break:break-word;',
-  quote: 'margin:10rpx 0;padding:12rpx 18rpx;background:rgb(248,250,252);border-left:6rpx solid rgb(30,58,138);color:rgb(71,85,105);border-radius:0 8rpx 8rpx 0;line-height:1.6;',
-  codeBlock: 'margin:10rpx 0;padding:16rpx 18rpx;background:rgb(245,245,244);border:1px solid rgb(231,229,228);border-radius:10rpx;overflow-x:auto;',
-  codeBlockInner: 'font-family:monospace;font-size:24rpx;line-height:1.55;color:rgb(51,65,85);white-space:pre-wrap;word-break:break-all;',
+  quote: 'margin:8rpx 0;padding:10rpx 14rpx;background:rgb(248,250,252);border-left:5rpx solid rgb(30,58,138);color:rgb(71,85,105);border-radius:0 8rpx 8rpx 0;line-height:1.55;',
+  codeBlock: 'margin:8rpx 0;padding:12rpx 14rpx;background:rgb(245,245,244);border:1px solid rgb(231,229,228);border-radius:10rpx;overflow-x:auto;',
+  codeBlockInner: 'font-family:monospace;font-size:22rpx;line-height:1.5;color:rgb(51,65,85);white-space:pre-wrap;word-break:break-all;',
   inlineCode: 'font-family:monospace;font-size:0.9em;padding:2rpx 8rpx;margin:0 4rpx;background:rgb(245,245,244);color:rgb(30,58,138);border-radius:6rpx;',
-  mathBlock: 'margin:12rpx 0;padding:14rpx 18rpx;background:rgb(239,246,255);border:1px solid rgb(191,219,254);border-radius:10rpx;color:rgb(28,25,23);line-height:1.65;word-break:break-word;',
+  mathBlock: 'margin:10rpx 0;padding:12rpx 16rpx;background:rgb(239,246,255);border:1px solid rgb(191,219,254);border-radius:10rpx;color:rgb(28,25,23);line-height:1.6;word-break:break-word;',
   mathInline: 'color:rgb(30,58,138);font-weight:500;',
   strong: 'font-weight:700;color:rgb(28,25,23);',
   em: 'font-style:italic;',
@@ -38,10 +38,10 @@ const STYLES = {
 } as const
 
 const HEADING_SIZES: Record<number, string> = {
-  1: 'font-size:1.18em;',
-  2: 'font-size:1.12em;',
-  3: 'font-size:1.06em;',
-  4: 'font-size:1.02em;',
+  1: 'font-size:1.10em;',
+  2: 'font-size:1.06em;',
+  3: 'font-size:1.03em;',
+  4: 'font-size:1.0em;',
 }
 
 const LATEX_SYMBOL_MAP: Record<string, string> = {

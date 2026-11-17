@@ -498,11 +498,17 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
     await mocks.loadCallbacks[0]({ material_id: 'm-1', kp_id: 'kp-3' })
     await flushPromises()
 
-    // 去重后只剩 2 个考点芯片，且仅 kp-3 被预选，无死板预设模式
-    expect(wrapper.findAll('.kp-chip')).toHaveLength(2)
+    // 考点范围收拢进摘要卡并支持打开抽屉，仅 kp-3 被预选，无死板预设模式
+    expect(wrapper.find('.kp-summary-meta').text()).toContain('已选 1 个考点')
     expect(wrapper.findAll('.kp-chip.active')).toHaveLength(1)
     expect(wrapper.find('.kp-chip.active').text()).toContain('拉普拉斯平滑')
     expect(wrapper.text()).not.toContain('闪电速刷')
+
+    await wrapper.find('.picker-open-btn').trigger('tap')
+    await flushPromises()
+    expect(wrapper.findAll('.acc-body .kp-chip')).toHaveLength(2)
+    await wrapper.find('.footer-confirm-btn').trigger('tap')
+    await flushPromises()
 
     await wrapper.find('.full-btn').trigger('tap')
     await flushPromises()

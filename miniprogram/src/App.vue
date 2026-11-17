@@ -109,7 +109,6 @@ page {
   background-color: var(--color-paper-bg);
   color: var(--color-ink-primary);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  -webkit-font-smoothing: antialiased;
 }
 
 view, text, scroll-view, textarea, button, input {

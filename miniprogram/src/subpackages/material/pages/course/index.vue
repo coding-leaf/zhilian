@@ -6,11 +6,14 @@
       :material="course.material.value"
       :can-start-parse="course.canStartParse.value"
       :is-parsing="course.isParsing.value"
+      :is-parse-timed-out="course.isParseTimedOut.value"
+      :is-refreshing="course.isRefreshing.value"
       :parse-progress-text="course.parseProgressText.value"
       :generated-question-count="course.generatedQuestionCount.value"
       @start-parse="course.startParse(false)"
       @reparse="course.confirmAndReparse"
       @reparse-direct="course.startParse(true)"
+      @refresh="course.refreshParseProgress"
       @review-generated="goToGeneratedQuestions"
     />
 
@@ -48,7 +51,7 @@
       v-model:visible="showCoach"
       :title="coachTitle"
       :context-text="coachContext"
-      :material-id="course.materialId.value"
+      :material-id="coachPointId ? undefined : course.materialId.value"
       :knowledge-point-id="coachPointId"
     />
   </view>
@@ -59,7 +62,7 @@ import { computed, nextTick, onUnmounted, ref } from 'vue'
 import { onLoad, onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
-import type { BackgroundTaskItem } from '@/stores/backgroundTask'
+import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
 import { safeShowToast } from '@/utils/loadingGuard'
 import type { KnowledgeTreeNode } from '@/types'
 import MaterialCourseHeader from '../../components/MaterialCourseHeader.vue'
@@ -69,6 +72,7 @@ import { useCourseDetail } from '../../composables/useCourseDetail'
 import { formatKpSummaryPreview } from '../../utils/courseStudy'
 
 const course = useCourseDetail()
+const taskStore = useBackgroundTaskStore()
 
 const showCoach = ref(false)
 const coachTitle = ref('讲义专属助教')
@@ -89,6 +93,9 @@ onLoad(async (options) => {
 onShow(() => {
   if (course.material.value?.status === 'ready') {
     void course.refreshMastery()
+  } else if (!course.isLoading.value && course.materialId.value) {
+    void course.loadDetail()
+    void taskStore.refreshActiveTasks()
   }
 })
 

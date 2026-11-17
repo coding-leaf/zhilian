@@ -73,6 +73,10 @@ const navigateToTask = (task: BackgroundTaskItem) => {
 
 const handleOpenTask = (task: BackgroundTaskItem) => {
   emit('open-task', task)
+  if (task.timedOut && task.kind === 'material_parse' && task.materialId) {
+    void taskStore.refreshMaterialTask(task.materialId)
+    return
+  }
   if (!props.disableAutoNavigate) navigateToTask(task)
   if (task.dismissible) taskStore.dismissTask(task.key)
 }

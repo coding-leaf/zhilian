@@ -1,13 +1,17 @@
 import { computed, ref } from 'vue'
-import type { FolderKnowledgePointItem, QuestionType } from '@/types'
+import { MAX_PRACTICE_QUESTIONS, type FolderKnowledgePointItem, type QuestionType } from '@/types'
 import {
   dedupeKnowledgePointOptions,
+  groupComposeKps,
   normalizeKpName,
+  sampleKnowledgePointIds,
+  selectLeafComposePoints,
+  type ComposeMode,
   type ComposeScope,
   type KnowledgePointOption,
 } from '../utils/composeHelpers'
 
-export type { ComposeScope, KnowledgePointOption }
+export type { ComposeMode, ComposeScope, KnowledgePointOption }
 
 const DEFAULT_TYPES: QuestionType[] = [
   'single_choice',
@@ -16,17 +20,49 @@ const DEFAULT_TYPES: QuestionType[] = [
   'short_answer',
 ]
 
-/** 组卷配置状态：作用域、去重考点勾选、题型、题量与难度。 */
+/** 组卷配置状态：作用域、去重考点勾选、组卷策略、题型、题量与难度。 */
 export function useComposeConfig() {
   const scope = ref<ComposeScope>({})
+  const rawKpList = ref<KnowledgePointOption[]>([])
   const availableKpList = ref<KnowledgePointOption[]>([])
   const selectedKpIds = ref<string[]>([])
   const selectedTypes = ref<QuestionType[]>([...DEFAULT_TYPES])
   const questionCount = ref<number>(5)
   const difficulty = ref<number>(3)
+  const composeMode = ref<ComposeMode>('smart_sample')
 
-  const plannedCount = computed(() =>
-    Math.max(selectedKpIds.value.length, questionCount.value),
+  const kpGroups = computed(() => {
+    const allowedIds = new Set(availableKpList.value.map((point) => point.id))
+    const source = rawKpList.value.length > 0 ? rawKpList.value : availableKpList.value
+    return groupComposeKps(source)
+      .map((group) => ({
+        ...group,
+        points: group.points.filter((point) => allowedIds.has(point.id)),
+      }))
+      .filter((group) => group.points.length > 0)
+  })
+
+  const effectiveKpIds = computed<string[]>(() => {
+    if (
+      composeMode.value === 'smart_sample'
+      && selectedKpIds.value.length > questionCount.value
+    ) {
+      return sampleKnowledgePointIds(kpGroups.value, selectedKpIds.value, questionCount.value)
+    }
+    return selectedKpIds.value
+  })
+
+  const plannedCount = computed(() => {
+    if (composeMode.value === 'full_coverage') {
+      return Math.max(selectedKpIds.value.length, questionCount.value)
+    }
+    return questionCount.value
+  })
+
+  const exceedsPracticeLimit = computed(
+    () =>
+      composeMode.value === 'full_coverage'
+      && selectedKpIds.value.length > MAX_PRACTICE_QUESTIONS,
   )
 
   const isAllKpSelected = computed(
@@ -39,8 +75,14 @@ export function useComposeConfig() {
     scope.value = next
   }
 
+  const setComposeMode = (mode: ComposeMode) => {
+    composeMode.value = mode
+  }
+
   const setKnowledgePoints = (list: KnowledgePointOption[], preselectedKpId?: string) => {
-    const deduped = dedupeKnowledgePointOptions(list, preselectedKpId)
+    rawKpList.value = list
+    const leafList = selectLeafComposePoints(list)
+    const deduped = dedupeKnowledgePointOptions(leafList, preselectedKpId)
     availableKpList.value = deduped
     if (preselectedKpId) {
       const matched =
@@ -53,6 +95,13 @@ export function useComposeConfig() {
         })()
       if (matched) {
         selectedKpIds.value = [matched.id]
+        return
+      }
+      const childIds = deduped
+        .filter((point) => point.parent_id === preselectedKpId)
+        .map((point) => point.id)
+      if (childIds.length > 0) {
+        selectedKpIds.value = childIds
         return
       }
     }
@@ -119,11 +168,16 @@ export function useComposeConfig() {
     scope,
     setScope,
     availableKpList,
+    kpGroups,
     selectedKpIds,
+    effectiveKpIds,
+    composeMode,
+    setComposeMode,
     selectedTypes,
     questionCount,
     difficulty,
     plannedCount,
+    exceedsPracticeLimit,
     isAllKpSelected,
     setKnowledgePoints,
     flattenKnowledgePoints,

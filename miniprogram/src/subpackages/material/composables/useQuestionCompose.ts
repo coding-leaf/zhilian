@@ -5,6 +5,9 @@ import {
   apiListQuestionBatches,
   computeKnowledgeCoverage,
   dedupeQuestions,
+  MAX_QUESTION_BATCH,
+  planGenerationBatches,
+  type GenerationBatch,
   type WireQuestion,
 } from '@/api'
 import type { CoverageResult } from '@/api/adapters/question'
@@ -18,17 +21,33 @@ import type {
   QuestionGenerationJob,
   QuestionItem,
 } from '@/types'
-import { useComposeConfig, type ComposeScope, type KnowledgePointOption } from './useComposeConfig'
+import {
+  useComposeConfig,
+  type ComposeMode,
+  type ComposeScope,
+  type KnowledgePointOption,
+} from './useComposeConfig'
 
-export type { ComposeScope, KnowledgePointOption }
+export type { ComposeMode, ComposeScope, KnowledgePointOption }
 
 export function useQuestionCompose() {
   const config = useComposeConfig()
   const taskStore = useBackgroundTaskStore()
-  const { scope, selectedKpIds, selectedTypes, questionCount, difficulty, plannedCount } = config
+  const {
+    scope,
+    selectedKpIds,
+    effectiveKpIds,
+    composeMode,
+    selectedTypes,
+    questionCount,
+    difficulty,
+    plannedCount,
+    exceedsPracticeLimit,
+  } = config
 
   const questions = ref<QuestionItem[]>([])
   const removedIds = ref<string[]>([])
+  const activeTargetKpIds = ref<string[]>([])
   const hasGenerated = ref(false)
   const isGenerating = ref(false)
   const isStarting = ref(false)
@@ -37,8 +56,16 @@ export function useQuestionCompose() {
   const replacingQuestionId = ref<string | null>(null)
   const pendingReviewNoticeCount = ref(0)
 
+  const pendingBatches = ref<GenerationBatch[]>([])
+  const batchAvailableBuffer = ref<QuestionItem[]>([])
+  const batchPendingCountBuffer = ref(0)
+  const batchIdsBuffer = ref<string[]>([])
+  const totalBatchKps = ref(0)
+  const completedBatchKps = ref(0)
+
   const generatedBatches = ref<QuestionBatchSummary[]>([])
   const generatedBatchFallback = ref('')
+  const applyingJobIds = new Set<string>()
 
   const activeJob = computed<QuestionGenerationJob | null>(() =>
     activeJobId.value ? taskStore.questionJobs.get(activeJobId.value) ?? null : null,
@@ -51,21 +78,32 @@ export function useQuestionCompose() {
   const jobProgressText = computed(() => {
     const job = activeJob.value
     if (!job || !isQuestionJobActive(job)) return ''
-    return `正在后台生成题目 (${job.completed_kps} / ${job.total_kps} 考点)... 您可以留在当前页等待，或随时返回浏览讲义`
+    const totalKps = totalBatchKps.value > 0 ? totalBatchKps.value : job.total_kps
+    const doneKps =
+      totalBatchKps.value > 0 ? completedBatchKps.value + job.completed_kps : job.completed_kps
+    return `正在后台生成题目 (${doneKps} / ${totalKps} 考点)... 您可以留在当前页等待，或随时返回浏览讲义`
   })
 
   const jobProgressPercent = computed(() => {
     const job = activeJob.value
-    if (!job || job.total_kps <= 0) return 0
-    return Math.min(100, Math.round((job.completed_kps / job.total_kps) * 100))
+    if (!job) return 0
+    const totalKps = totalBatchKps.value > 0 ? totalBatchKps.value : job.total_kps
+    if (totalKps <= 0) return 0
+    const doneKps =
+      totalBatchKps.value > 0 ? completedBatchKps.value + job.completed_kps : job.completed_kps
+    return Math.min(100, Math.round((doneKps / totalKps) * 100))
   })
 
   const remainingQuestions = computed(() =>
     questions.value.filter((question) => question.id && !removedIds.value.includes(question.id)),
   )
 
+  const targetKpIdsForCoverage = computed(() =>
+    activeTargetKpIds.value.length > 0 ? activeTargetKpIds.value : effectiveKpIds.value,
+  )
+
   const coverage = computed<CoverageResult>(() =>
-    computeKnowledgeCoverage(remainingQuestions.value, selectedKpIds.value),
+    computeKnowledgeCoverage(remainingQuestions.value, targetKpIdsForCoverage.value),
   )
 
   const canStart = computed(
@@ -75,8 +113,17 @@ export function useQuestionCompose() {
   const generationNotice = computed(() => {
     if (!hasGenerated.value) return ''
     const parts: string[] = []
-    if (plannedCount.value > questionCount.value) {
-      parts.push(`为覆盖全部 ${selectedKpIds.value.length} 个考点，本次按 ${plannedCount.value} 题目标生成`)
+    if (
+      composeMode.value === 'smart_sample'
+      && selectedKpIds.value.length > targetKpIdsForCoverage.value.length
+    ) {
+      parts.push(
+        `已从所选 ${selectedKpIds.value.length} 个考点中均匀抽取 ${targetKpIdsForCoverage.value.length} 个考点出题`,
+      )
+    } else if (composeMode.value === 'full_coverage' && plannedCount.value > questionCount.value) {
+      parts.push(
+        `为覆盖全部 ${targetKpIdsForCoverage.value.length} 个考点，本次按 ${plannedCount.value} 题目标生成`,
+      )
     }
     if (pendingReviewNoticeCount.value > 0) {
       parts.push(`另有 ${pendingReviewNoticeCount.value} 道题待审核，本次展示全部可作答题目`)
@@ -104,13 +151,22 @@ export function useQuestionCompose() {
   const fetchBatchQuestions = async (
     batchId: string,
   ): Promise<{ available: QuestionItem[]; pendingCount: number }> => {
-    const res = await request<{ items?: WireQuestion[] } | WireQuestion[]>({
-      url: `/questions?batch_id=${encodeURIComponent(batchId)}&page=1&page_size=50`,
-      method: 'GET',
-    })
-    const rawList = Array.isArray(res) ? res : res?.items || []
-    const pendingCount = rawList.filter((item) => item.status === 'pending_review').length
-    const usable = rawList.filter((item) => !item.status || item.status === 'available')
+    const pageSize = 100
+    const allRaw: WireQuestion[] = []
+    let page = 1
+    while (page <= 10) {
+      const res = await request<{ items?: WireQuestion[]; total?: number } | WireQuestion[]>({
+        url: `/questions?batch_id=${encodeURIComponent(batchId)}&page=${page}&page_size=${pageSize}`,
+        method: 'GET',
+      })
+      const pageItems = Array.isArray(res) ? res : res?.items || []
+      allRaw.push(...pageItems)
+      const total = Array.isArray(res) ? pageItems.length : (res?.total ?? pageItems.length)
+      if (pageItems.length < pageSize || allRaw.length >= total) break
+      page += 1
+    }
+    const pendingCount = allRaw.filter((item) => item.status === 'pending_review').length
+    const usable = allRaw.filter((item) => !item.status || item.status === 'available')
     return { available: enrichKpNames(usable.map(adaptQuestion)), pendingCount }
   }
 
@@ -147,11 +203,31 @@ export function useQuestionCompose() {
     return generatedBatchFallback.value
   })
 
+  const resetBatchPipeline = () => {
+    pendingBatches.value = []
+    batchAvailableBuffer.value = []
+    batchPendingCountBuffer.value = 0
+    batchIdsBuffer.value = []
+    totalBatchKps.value = 0
+    completedBatchKps.value = 0
+  }
+
   const clearActiveJob = () => {
     activeJobId.value = null
     replacingQuestionId.value = null
     jobMode.value = 'compose'
+    resetBatchPipeline()
   }
+
+  const startBatchJob = (batch: GenerationBatch) =>
+    taskStore.startQuestionJob({
+      folder_id: scope.value.folderId,
+      material_id: scope.value.folderId ? undefined : scope.value.materialId,
+      knowledge_point_ids: [...batch.knowledgePointIds],
+      question_types: [...selectedTypes.value],
+      count: batch.count,
+      difficulty: difficulty.value,
+    })
 
   const loadJobResultItems = async (
     job: QuestionGenerationJob,
@@ -169,45 +245,84 @@ export function useQuestionCompose() {
   }
 
   const applyCompletedJob = async (job: QuestionGenerationJob): Promise<number> => {
+    if (applyingJobIds.has(job.id)) return 0
+    applyingJobIds.add(job.id)
     const mode = jobMode.value
     const targetReplaceId = replacingQuestionId.value
     try {
       const { available, pendingCount } = await loadJobResultItems(job)
-      if (mode === 'fill_gap') {
-        questions.value = dedupeQuestions([...questions.value, ...available])
-        const addedIds = new Set(available.map((item) => item.id))
-        removedIds.value = removedIds.value.filter((id) => !addedIds.has(id))
-        hasGenerated.value = true
-      } else if (mode === 'regenerate' && targetReplaceId) {
+      taskStore.dismissTask(`job:${job.id}`)
+
+      if (mode === 'regenerate' && targetReplaceId) {
         const replacement = available.find((item) => item.id !== targetReplaceId) || available[0]
         if (!replacement) {
           safeShowToast('未能生成替代题目，请稍后重试')
+          clearActiveJob()
           return 0
         }
         questions.value = questions.value.map((item) =>
           item.id === targetReplaceId ? replacement : item,
         )
         removedIds.value = removedIds.value.filter((id) => id !== targetReplaceId)
-      } else {
-        if (available.length === 0) {
-          safeShowToast('未生成合格题目，请调整配置后重试')
+        clearActiveJob()
+        return available.length
+      }
+
+      batchAvailableBuffer.value = dedupeQuestions([...batchAvailableBuffer.value, ...available])
+      batchPendingCountBuffer.value += pendingCount
+      if (job.batch_id) batchIdsBuffer.value = [...batchIdsBuffer.value, job.batch_id]
+      completedBatchKps.value += job.total_kps || 0
+
+      if (pendingBatches.value.length > 0) {
+        const [nextBatch, ...rest] = pendingBatches.value
+        pendingBatches.value = rest
+        const nextJob = await startBatchJob(nextBatch)
+        if (nextJob.status === 'completed') {
+          return await applyCompletedJob(nextJob)
+        }
+        if (nextJob.status === 'failed') {
+          safeShowToast(nextJob.error_message || '后台出题失败，请重试')
+          clearActiveJob()
           return 0
         }
-        questions.value = available
-        removedIds.value = []
-        hasGenerated.value = true
-        pendingReviewNoticeCount.value = pendingCount
-        if (job.batch_id) await loadGeneratedBatches([job.batch_id])
+        activeJobId.value = nextJob.id
+        return 0
       }
-      return available.length
+
+      const mergedAvailable = batchAvailableBuffer.value
+      const totalPending = batchPendingCountBuffer.value
+      const allBatchIds = [...batchIdsBuffer.value]
+
+      if (mode === 'fill_gap') {
+        questions.value = dedupeQuestions([...questions.value, ...mergedAvailable])
+        const addedIds = new Set(mergedAvailable.map((item) => item.id))
+        removedIds.value = removedIds.value.filter((id) => !addedIds.has(id))
+        hasGenerated.value = true
+        clearActiveJob()
+        return mergedAvailable.length
+      }
+
+      if (mergedAvailable.length === 0) {
+        safeShowToast('未生成合格题目，请调整配置后重试')
+        clearActiveJob()
+        return 0
+      }
+      questions.value = mergedAvailable
+      removedIds.value = []
+      hasGenerated.value = true
+      pendingReviewNoticeCount.value = totalPending
+      clearActiveJob()
+      if (allBatchIds.length > 0) await loadGeneratedBatches(allBatchIds)
+      return mergedAvailable.length
     } catch (error: any) {
       if (!(error instanceof RequestError)) {
         safeShowToast(describeFailure(error, '加载生成题目失败'))
       }
-      return 0
-    } finally {
       taskStore.dismissTask(`job:${job.id}`)
       clearActiveJob()
+      return 0
+    } finally {
+      applyingJobIds.delete(job.id)
     }
   }
 
@@ -217,20 +332,27 @@ export function useQuestionCompose() {
       safeShowToast('请至少勾选一个知识点')
       return 0
     }
+    if (exceedsPracticeLimit.value) {
+      safeShowToast('单次练习最多 50 题，请改用按题量抽考或缩减至 50 个考点以内')
+      return 0
+    }
+    const targetIds = [...effectiveKpIds.value]
+    const targetTotal = Math.max(1, plannedCount.value)
+    const batches: GenerationBatch[] =
+      targetIds.length > MAX_QUESTION_BATCH
+        ? planGenerationBatches(targetIds, targetTotal)
+        : [{ knowledgePointIds: targetIds, count: Math.min(MAX_QUESTION_BATCH, targetTotal) }]
+
     isGenerating.value = true
     try {
-      const job = await taskStore.startQuestionJob({
-        folder_id: scope.value.folderId,
-        material_id: scope.value.folderId ? undefined : scope.value.materialId,
-        knowledge_point_ids: [...selectedKpIds.value],
-        question_types: [...selectedTypes.value],
-        count: Math.min(20, Math.max(1, plannedCount.value)),
-        difficulty: difficulty.value,
-      })
+      resetBatchPipeline()
+      activeTargetKpIds.value = targetIds
+      pendingBatches.value = batches.slice(1)
+      totalBatchKps.value = batches.length > 1 ? targetIds.length : 0
       jobMode.value = 'compose'
       replacingQuestionId.value = null
-      activeJobId.value = job.id
 
+      const job = await startBatchJob(batches[0])
       if (job.status === 'completed') {
         return await applyCompletedJob(job)
       }
@@ -239,11 +361,13 @@ export function useQuestionCompose() {
         clearActiveJob()
         return 0
       }
+      activeJobId.value = job.id
       return 0
     } catch (error: any) {
       if (!(error instanceof RequestError)) {
         safeShowToast(describeFailure(error, '创建出题任务失败'))
       }
+      clearActiveJob()
       return 0
     } finally {
       isGenerating.value = false
@@ -268,13 +392,15 @@ export function useQuestionCompose() {
   const loadBatchQuestions = async (batchId: string): Promise<number> => {
     const { available, pendingCount } = await fetchBatchQuestions(batchId)
     if (available.length === 0) return 0
-    selectedKpIds.value = Array.from(
+    const loadedKpIds = Array.from(
       new Set(
         available
           .map((item) => item.knowledge_point_id)
           .filter((id): id is string => Boolean(id)),
       ),
     )
+    selectedKpIds.value = loadedKpIds
+    activeTargetKpIds.value = loadedKpIds
     questions.value = available
     removedIds.value = []
     hasGenerated.value = true
@@ -287,13 +413,15 @@ export function useQuestionCompose() {
   const loadExistingQuestions = async (materialId: string): Promise<number> => {
     const loaded = enrichKpNames(await apiGetQuestionsByMaterial(materialId))
     if (loaded.length === 0) return 0
-    selectedKpIds.value = Array.from(
+    const loadedKpIds = Array.from(
       new Set(
         loaded
           .map((item) => item.knowledge_point_id)
           .filter((id): id is string => Boolean(id)),
       ),
     )
+    selectedKpIds.value = loadedKpIds
+    activeTargetKpIds.value = loadedKpIds
     questions.value = loaded
     removedIds.value = []
     hasGenerated.value = true
@@ -321,12 +449,13 @@ export function useQuestionCompose() {
       })
       jobMode.value = 'regenerate'
       replacingQuestionId.value = question.id
-      activeJobId.value = job.id
       if (job.status === 'completed') {
         await applyCompletedJob(job)
       } else if (job.status === 'failed') {
         safeShowToast(job.error_message || '重新生成失败')
         clearActiveJob()
+      } else {
+        activeJobId.value = job.id
       }
     } catch (error: any) {
       if (!(error instanceof RequestError)) {
@@ -340,29 +469,33 @@ export function useQuestionCompose() {
   const fillCoverageGap = async () => {
     const missing = coverage.value.missing
     if (missing.length === 0) return
+    const batches: GenerationBatch[] =
+      missing.length > MAX_QUESTION_BATCH
+        ? planGenerationBatches(missing, missing.length)
+        : [{ knowledgePointIds: missing, count: Math.min(MAX_QUESTION_BATCH, Math.max(1, missing.length)) }]
+
     isGenerating.value = true
     try {
-      const job = await taskStore.startQuestionJob({
-        folder_id: scope.value.folderId,
-        material_id: scope.value.folderId ? undefined : scope.value.materialId,
-        knowledge_point_ids: missing,
-        question_types: [...selectedTypes.value],
-        count: Math.min(20, Math.max(1, missing.length)),
-        difficulty: difficulty.value,
-      })
+      resetBatchPipeline()
+      pendingBatches.value = batches.slice(1)
+      totalBatchKps.value = batches.length > 1 ? missing.length : 0
       jobMode.value = 'fill_gap'
       replacingQuestionId.value = null
-      activeJobId.value = job.id
+
+      const job = await startBatchJob(batches[0])
       if (job.status === 'completed') {
         await applyCompletedJob(job)
       } else if (job.status === 'failed') {
         safeShowToast(job.error_message || '补齐失败')
         clearActiveJob()
+      } else {
+        activeJobId.value = job.id
       }
     } catch (error: any) {
       if (!(error instanceof RequestError)) {
         safeShowToast(describeFailure(error, '补齐失败'))
       }
+      clearActiveJob()
     } finally {
       isGenerating.value = false
     }
@@ -373,6 +506,8 @@ export function useQuestionCompose() {
     questions,
     remainingQuestions,
     removedIds,
+    activeTargetKpIds,
+    targetKpIdsForCoverage,
     generationNotice,
     generatedBatches,
     generatedBatchLabels,

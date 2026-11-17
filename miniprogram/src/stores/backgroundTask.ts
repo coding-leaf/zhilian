@@ -25,6 +25,7 @@ export interface MaterialParseTask {
   parseStatus?: string | null
   progressPercentage: number
   updatedAt: number
+  timedOut?: boolean
 }
 
 export interface BackgroundTaskItem {
@@ -39,8 +40,14 @@ export interface BackgroundTaskItem {
   folderId?: string | null
   batchId?: string | null
   actionLabel?: string
+  timedOut?: boolean
   dismissible: boolean
 }
+
+export const FAST_POLL_INTERVAL_MS = 2500
+export const FAST_POLL_ATTEMPTS = 48
+export const SLOW_POLL_INTERVAL_MS = 5000
+export const SLOW_POLL_ATTEMPTS = 157
 
 const TERMINAL_MATERIAL_STATUSES = new Set<MaterialStatus>([
   'ready',
@@ -131,6 +138,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       parseStatus: material.parse_status ?? null,
       progressPercentage: Math.max(0, Math.min(100, material.progress_percentage ?? 0)),
       updatedAt: Date.now(),
+      timedOut: false,
     })
     if (!TERMINAL_MATERIAL_STATUSES.has(material.status)) {
       schedulePolling()
@@ -162,6 +170,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       parseStatus: 'queued',
       progressPercentage: 0,
       updatedAt: Date.now(),
+      timedOut: false,
     })
     schedulePolling()
     return res
@@ -192,6 +201,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
             parseStatus: item.parse_status ?? null,
             progressPercentage: Math.max(0, Math.min(100, item.progress_percentage ?? 0)),
             updatedAt: Date.now(),
+            timedOut: false,
           })
         } catch (err) {
           console.error('[backgroundTask] poll material failed', materialId, err)
@@ -210,16 +220,66 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     return !hasActiveTasks.value
   }
 
-  const ensurePolling = async (intervalMs = 2500, maxAttempts = 120): Promise<void> => {
+  const markActiveMaterialTasksTimedOut = (): void => {
+    const next = new Map(materialTasks.value)
+    let changed = false
+    for (const [id, task] of next.entries()) {
+      if (!TERMINAL_MATERIAL_STATUSES.has(task.status) && !task.timedOut) {
+        next.set(id, { ...task, timedOut: true, updatedAt: Date.now() })
+        changed = true
+      }
+    }
+    if (changed) materialTasks.value = next
+  }
+
+  const refreshMaterialTask = async (materialId: string): Promise<MaterialItem | null> => {
+    try {
+      const item = await apiGetMaterialDetail(materialId)
+      syncMaterialStoreItem(item)
+      const existing = materialTasks.value.get(materialId)
+      setMaterialTask({
+        materialId: item.id,
+        title: item.title || existing?.title || '学习资料',
+        status: item.status,
+        parseStatus: item.parse_status ?? null,
+        progressPercentage: Math.max(0, Math.min(100, item.progress_percentage ?? 0)),
+        updatedAt: Date.now(),
+        timedOut: false,
+      })
+      if (!TERMINAL_MATERIAL_STATUSES.has(item.status)) {
+        schedulePolling()
+      }
+      return item
+    } catch (err) {
+      console.error('[backgroundTask] refresh material failed', materialId, err)
+      return null
+    }
+  }
+
+  const ensurePolling = async (
+    intervalMs = FAST_POLL_INTERVAL_MS,
+    maxAttempts?: number,
+  ): Promise<void> => {
     clearScheduleTimer()
     if (!hasActiveTasks.value || isPolling.value) return
     isPolling.value = true
     try {
-      await poller.run(() => pollOnce(), {
-        maxAttempts,
-        intervalMs,
+      const useStagedSchedule = maxAttempts === undefined
+      const resolvedAttempts = useStagedSchedule
+        ? FAST_POLL_ATTEMPTS + SLOW_POLL_ATTEMPTS
+        : maxAttempts
+      const resolvedInterval = useStagedSchedule
+        ? (attempt: number) =>
+            attempt < FAST_POLL_ATTEMPTS ? intervalMs : Math.max(intervalMs, SLOW_POLL_INTERVAL_MS)
+        : intervalMs
+      const result = await poller.run(() => pollOnce(), {
+        maxAttempts: resolvedAttempts,
+        intervalMs: resolvedInterval,
         isDone: (allDone) => allDone,
       })
+      if (result.status === 'timeout' && hasActiveTasks.value) {
+        markActiveMaterialTasksTimedOut()
+      }
     } finally {
       isPolling.value = false
     }
@@ -308,8 +368,9 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       if (dismissedKeys.value.has(key)) continue
       const isActive = !TERMINAL_MATERIAL_STATUSES.has(task.status)
       if (isActive) {
-        const stageText =
-          task.parseStatus === 'queued'
+        const stageText = task.timedOut
+          ? '进度同步已暂停（点击刷新）'
+          : task.parseStatus === 'queued'
             ? '排队解析中...'
             : `解析中${task.progressPercentage > 0 ? ` (${task.progressPercentage}%)` : '...'}`
         list.push({
@@ -321,6 +382,8 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
           detailText: `${task.title} · ${stageText}`,
           progressPercent: task.progressPercentage,
           materialId: task.materialId,
+          actionLabel: task.timedOut ? '刷新' : undefined,
+          timedOut: Boolean(task.timedOut),
           dismissible: false,
         })
       } else if (task.status === 'ready') {
@@ -436,6 +499,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     startMaterialParse,
     startQuestionJob,
     refreshActiveTasks,
+    refreshMaterialTask,
     pollOnce,
     ensurePolling,
     stopPolling,

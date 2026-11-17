@@ -24,7 +24,7 @@
         <view v-for="msg in messages" :key="msg.id" :class="['msg-row', `msg-${msg.role}`]">
           <view :class="['msg-bubble', { 'msg-bubble-error': msg.error }]">
             <text v-if="msg.role === 'user'" class="msg-text">{{ msg.content }}</text>
-            <RichContent v-else :content="msg.content" />
+            <RichContent v-else :content="msg.content" compact />
 
             <view v-if="msg.prompt" class="next-prompt-box">
               <text class="next-prompt-label">启发延伸</text>
@@ -130,7 +130,7 @@ const copyContent = (content: string) => {
 .msg-user { justify-content: flex-end; }
 .msg-assistant { justify-content: flex-start; }
 .msg-bubble {
-  max-width: 82%; padding: 20rpx 24rpx; border-radius: 16rpx; line-height: 1.55;
+  max-width: 86%; padding: 16rpx 20rpx; border-radius: 16rpx; line-height: 1.5;
   word-break: break-word; overflow-wrap: anywhere; box-sizing: border-box;
 }
 .msg-user .msg-bubble {
@@ -140,7 +140,7 @@ const copyContent = (content: string) => {
   background: var(--color-surface-muted); color: var(--color-ink-primary); border-bottom-left-radius: 4rpx;
 }
 .msg-bubble-error { background: var(--color-danger-bg) !important; border: 1px solid var(--color-danger-border); }
-.msg-text { font-size: 28rpx; white-space: pre-wrap; word-break: break-word; }
+.msg-text { font-size: 25rpx; white-space: pre-wrap; word-break: break-word; }
 .next-prompt-box { margin-top: 14rpx; padding-top: 12rpx; border-top: 1px dashed var(--color-border-strong); }
 .next-prompt-label { font-size: 22rpx; font-weight: 600; color: var(--color-warning-strong); display: block; margin-bottom: 4rpx; }
 .msg-actions, .error-actions { display: flex; justify-content: flex-end; margin-top: 10rpx; }

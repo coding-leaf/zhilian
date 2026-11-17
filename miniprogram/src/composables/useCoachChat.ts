@@ -161,10 +161,14 @@ export function useCoachChat(getContext: () => CoachContextParams) {
         return
       }
 
+      const scopePayload = ctx.knowledgePointId
+        ? { knowledge_point_id: ctx.knowledgePointId }
+        : ctx.materialId
+          ? { material_id: ctx.materialId }
+          : { folder_id: ctx.folderId }
+
       const response = await apiAskScopedCoach({
-        ...(ctx.folderId ? { folder_id: ctx.folderId } : {}),
-        ...(ctx.materialId ? { material_id: ctx.materialId } : {}),
-        ...(ctx.knowledgePointId ? { knowledge_point_id: ctx.knowledgePointId } : {}),
+        ...scopePayload,
         user_prompt: query,
       })
       appendMessage(targetKey, {
