@@ -584,3 +584,28 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: 即时备考学习全流程重设计与移动端体验重构
+<!-- trellis-session: v=2 fp=0fd5a3e628d2c6c3 -->
+
+**Date**: 2026-11-17
+**Task**: 即时备考学习全流程重设计与移动端体验重构
+**Branch**: `feat/exam-prep-flow-redesign`
+
+### Summary
+
+围绕即时备考定位完成端到端重构：解冻FastAPI同步IO路由并新增202后台生题作业与全局任务条，修复PDF符号字体乱码、结构化考点与同名去重（零编造考频），清零全仓毛玻璃与showLoading冲突，落地RichContent富文本公式AST、上下文隔离可滚动AI助教、判断题判分修复及学情Tab四段闭环。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5c981b0` | feat(backend): add async question jobs, structured KPs, PDF garble repair, and non-blocking routes |
+| `d422efe` | feat(frontend): add zero-blur z-index system, RichContent AST, context-scoped coach, and background task bar |
+| `b6cf493` | feat(frontend): redesign exam-prep study cards, async compose, practice grading fixes, and review loop |
+| `bec4a25` | docs(trellis): update cross-layer coding specs and record 11-17 redesign task artifacts |
+
+### Status
+
+[OK] **Completed**

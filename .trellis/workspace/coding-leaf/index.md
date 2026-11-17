@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-11-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~586 | Active |
+| `journal-1.md` | ~611 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-11-17 | 即时备考学习全流程重设计与移动端体验重构 | `5c981b0`, `d422efe`, `b6cf493`, `bec4a25` | `feat/exam-prep-flow-redesign` |
 | 15 | 2026-11-17 | 全仓逻辑重构清洁与Git工作区规范治理 (M1-M4) | `ca621c3`, `6abaf4e`, `8c21cba`, `653ad17`, `065c819` | `chore/m1-workspace-governance` |
 | 13 | 2026-09-29 | 实测缺陷修复：输入框点即关闭、判题不落库、生题 502、浮层热区 | `b5f205a`, `78befe2`, `6c3ffcd`, `fb9788a`, `22d708f`, `6b9832c`, `d0e759b`, `eef64e6`, `a4ce6ec`, `800c475`, `7f45062`, `61c1de1`, `214cf7e` | `master` |
 | 12 | 2026-09-29 | 登录请求链路加固：超时收敛与失败可诊断 | `6e843ae`, `a30110e`, `84c22e4` | `master` |
