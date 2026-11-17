@@ -3,11 +3,14 @@ import {
   RequestError,
   classifyTransportFailure,
 } from './requestError'
+import { dismissBlockingLoading } from './loadingGuard'
+import { ACCESS_TOKEN_KEY } from './storageKeys'
 
 export const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
 
 function handleUnauthorized(): void {
-  uni.removeStorageSync('access_token')
+  dismissBlockingLoading()
+  uni.removeStorageSync(ACCESS_TOKEN_KEY)
   void import('@/stores/auth').then(({ useAuthStore }) => {
     const auth = useAuthStore()
     auth.clearAuth()
@@ -26,16 +29,20 @@ export interface RequestOptions {
   header?: Record<string, string>
   /** 覆盖默认超时（毫秒）。同步调用大模型的接口应传 `LONG_REQUEST_TIMEOUT_MS`。 */
   timeout?: number
+  /** 静默错误弹窗（当调用方使用 withBlockingLoading 并自行处理错误提示时设为 true，避免与 showLoading 抢占冲突）。 */
+  silentToast?: boolean
 }
 
-/** 失败时的统一收尾：把结构化细节交给 console，把短文案交给 toast。 */
-function reportFailure(error: RequestError, toastTitle: string): void {
+/** 失败时的统一收尾：把结构化细节交给 console，按需把短文案交给 toast。 */
+function reportFailure(error: RequestError, toastTitle: string, silentToast = false): void {
   console.error(`[request] ${error.describe()}`)
+  if (silentToast) return
+  dismissBlockingLoading()
   uni.showToast({ title: toastTitle, icon: 'none' })
 }
 
 export function request<T = any>(options: RequestOptions): Promise<T> {
-  const token = uni.getStorageSync('access_token')
+  const token = uni.getStorageSync(ACCESS_TOKEN_KEY)
   const header: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -77,7 +84,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
             statusCode: res.statusCode,
             detail: errData?.detail || errData?.message,
           })
-          reportFailure(error, errMsg)
+          reportFailure(error, errMsg, Boolean(options.silentToast))
           reject(error)
         }
       },
@@ -87,7 +94,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
           errMsg: (err as any)?.errMsg,
           errno: (err as any)?.errno,
         })
-        reportFailure(error, userMessage)
+        reportFailure(error, userMessage, Boolean(options.silentToast))
         reject(error)
       },
     })
@@ -104,9 +111,10 @@ export function uploadFile<T = any>(
   filePath: string,
   name: string = 'file',
   formData?: Record<string, any>,
-  endpoint: string = '/materials/upload'
+  endpoint: string = '/materials/upload',
+  options?: { silentToast?: boolean },
 ): Promise<T> {
-  const token = uni.getStorageSync('access_token')
+  const token = uni.getStorageSync(ACCESS_TOKEN_KEY)
   const header: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
@@ -151,7 +159,7 @@ export function uploadFile<T = any>(
             statusCode: res.statusCode,
             detail,
           })
-          reportFailure(error, error.userMessage)
+          reportFailure(error, error.userMessage, Boolean(options?.silentToast))
           reject(error)
         }
       },
@@ -161,7 +169,7 @@ export function uploadFile<T = any>(
           errMsg: (err as any)?.errMsg,
           errno: (err as any)?.errno,
         })
-        reportFailure(error, userMessage)
+        reportFailure(error, userMessage, Boolean(options?.silentToast))
         reject(error)
       },
     })

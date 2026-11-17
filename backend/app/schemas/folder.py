@@ -9,8 +9,9 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # 依据：数据库 material_folders 表 name 字段长度上限 100 字符
 MAX_FOLDER_NAME_LENGTH: int = 100
@@ -91,6 +92,16 @@ class FolderKnowledgePointItem(BaseModel):
     name: str = Field(..., description="知识点名称")
     level: int = Field(default=1, ge=1, description="知识点层级深度 (根节点为 1)")
     parent_id: uuid.UUID | None = Field(default=None, description="父知识点主键 (根节点为空)")
+    structured_content: dict[str, Any] | None = Field(
+        default=None,
+        description="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+    )
+    sort_order: int = Field(default=0, description="知识点顺序序号")
+
+    @field_validator("sort_order", mode="before")
+    @classmethod
+    def _coerce_sort_order(cls, value: Any) -> int:
+        return 0 if value is None else int(value)
 
 
 class FolderKnowledgePointGroup(BaseModel):

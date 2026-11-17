@@ -523,63 +523,64 @@ class TestMaterialRepositorySecurity:
         )
         session.commit()
 
-        # Test bulk_create_snippets & list_snippets_by_version
-        snippets_payload = [
-            {
-                "material_id": mat.id,
-                "version_id": ver.id,
-                "snippet_index": 0,
-                "content": "切片一",
-                "char_length": 3,
-                "start_offset": 0,
-                "end_offset": 3,
-                "chapter_title": "第一章",
-                "source_info": {"page": 1},
-                "embedding": [0.1] * 1024,
-            },
-            {
-                "material_id": mat.id,
-                "version_id": ver.id,
-                "snippet_index": 1,
-                "content": "切片二",
-                "char_length": 3,
-                "start_offset": 3,
-                "end_offset": 6,
-                "chapter_title": "第一章",
-                "source_info": {"page": 1},
-                "embedding": [0.2] * 1024,
-            },
+        # Test create_snippets & get_snippets
+        snippets_models = [
+            MaterialSnippet(
+                user_id=user_id,
+                material_id=mat.id,
+                version_id=ver.id,
+                snippet_index=0,
+                content="切片一",
+                char_length=3,
+                start_offset=0,
+                end_offset=3,
+                chapter_title="第一章",
+                source_info={"page": 1},
+                embedding=[0.1] * 1024,
+            ),
+            MaterialSnippet(
+                user_id=user_id,
+                material_id=mat.id,
+                version_id=ver.id,
+                snippet_index=1,
+                content="切片二",
+                char_length=3,
+                start_offset=3,
+                end_offset=6,
+                chapter_title="第一章",
+                source_info={"page": 1},
+                embedding=[0.2] * 1024,
+            ),
         ]
-        created_snippets_count = repo.bulk_create_snippets(snippets_payload, user_id)
+        repo.create_snippets(snippets_models)
         session.commit()
-        assert created_snippets_count == 2
 
-        listed_snippets = repo.list_snippets_by_version(ver.id, user_id)
+        listed_snippets = repo.get_snippets(ver.id, user_id)
         assert len(listed_snippets) == 2
 
-        # Test bulk_create_ocr_pages & list_ocr_pages_by_version & update_ocr_page_result
-        pages_payload = [
-            {
-                "material_id": mat.id,
-                "version_id": ver.id,
-                "page_number": 1,
-                "image_storage_key": "pages/p1.png",
-                "raw_text": "页1",
-                "gibberish_ratio": 0.0,
-                "valid_char_count": 10,
-                "is_qualified": True,
-                "reshoot_count": 0,
-            }
+        # Test create_ocr_pages & get_ocr_pages & update_ocr_page
+        pages_models = [
+            MaterialOCRPage(
+                user_id=user_id,
+                material_id=mat.id,
+                version_id=ver.id,
+                page_number=1,
+                image_storage_key="pages/p1.png",
+                raw_text="页1",
+                gibberish_ratio=0.0,
+                valid_char_count=10,
+                is_qualified=True,
+                reshoot_count=0,
+            )
         ]
-        created_pages_count = repo.bulk_create_ocr_pages(pages_payload, user_id)
+        repo.create_ocr_pages(pages_models)
         session.commit()
-        assert created_pages_count == 1
 
-        listed_pages = repo.list_ocr_pages_by_version(ver.id, user_id)
+        listed_pages = repo.get_ocr_pages(ver.id, user_id)
         assert len(listed_pages) == 1
 
-        # Test update_ocr_page_result
-        updated = repo.update_ocr_page_result(
+        # Test update_ocr_page
+        updated = repo.update_ocr_page(
             page_id=listed_pages[0].id,
             user_id=user_id,
             raw_text="更新后的页1",
@@ -593,8 +594,8 @@ class TestMaterialRepositorySecurity:
         session.commit()
         assert updated is True
 
-        # Test get_latest_version_by_hash
-        latest_ver = repo.get_latest_version_by_hash(user_id, "bulk_hash_123")
+        # Test find_version_by_hash
+        latest_ver = repo.find_version_by_hash(user_id, "bulk_hash_123")
         assert latest_ver is not None
         assert latest_ver.id == ver.id
 

@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.question_types import QuestionType as QuestionType
+
 # ==============================================================================
 # 题目质检门禁核心常量与决策基准
 # 严格遵循《概要设计说明书》第 6.4 节与《软件需求规格说明书》FR-24、FR-25、FR-28
@@ -71,18 +73,6 @@ class QualityCheckType(enum.StrEnum):
 
 # 别名以保持与规范命名契约完全兼容
 UnqualifiedReason = QualityCheckType
-
-
-class QuestionType(enum.StrEnum):
-    """题目类型枚举（覆盖 FR-20 规定的七大题型）。"""
-
-    SINGLE_CHOICE = "single_choice"
-    MULTIPLE_CHOICE = "multiple_choice"
-    TRUE_FALSE = "true_false"
-    FILL_IN_BLANK = "fill_in_blank"
-    TERM_EXPLANATION = "term_explanation"
-    SHORT_ANSWER = "short_answer"
-    CASE_ANALYSIS = "case_analysis"
 
 
 # 客观题类型集合

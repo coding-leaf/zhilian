@@ -99,6 +99,16 @@ def test_doctor_output_redacts_secrets(
         "ZHILIAN_DB__DB_URL",
         "postgresql+psycopg://cli_user:cli-db-password@localhost:5432/cli_db",
     )
+    monkeypatch.setattr(
+        CliContext,
+        "probe_infra",
+        lambda _self: {
+            "database": {"reachable": False, "detail": "stub"},
+            "redis": {"reachable": False, "detail": "stub"},
+            "minio": {"reachable": False, "detail": "stub"},
+        },
+    )
+    monkeypatch.setattr(CliContext, "db_revision", lambda _self: None)
     get_settings.cache_clear()
 
     code = main(["doctor", "--json"])

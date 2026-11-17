@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/04-cross-layer-and-synthesis.md", "reason": "Section 1.4 exact doc drift inventory for DESIGN.md, README.md, and 后续待解决问题.md"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/03-frontend-architecture-audit.md", "reason": "Section 4 untested reportView.ts, reviewView.ts, and tsconfig tests/** blind spot"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/02-backend-architecture-audit.md", "reason": "Section 4.1 test_storage.py flaky wall-clock check vs AGENTS.md algorithms rule"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend test & type-check conventions"}

@@ -11,7 +11,6 @@
 - create_storage_adapter 工厂函数类型分发与参数校验。
 """
 
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from unittest.mock import MagicMock
@@ -294,23 +293,30 @@ def test_memory_adapter_fault_injection() -> None:
     assert adapter.get_object("b", "k") == b"hello"
 
 
-def test_memory_adapter_latency_injection() -> None:
-    """测试通过 inject_latency 注入延时。"""
+def test_memory_adapter_latency_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """测试通过 inject_latency 注入延时（确定性验证 sleep 调用而非墙钟竞争）。"""
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(
+        "app.integrations.storage.memory.time.sleep",
+        lambda seconds: sleep_calls.append(seconds),
+    )
+
     adapter = MemoryStorageAdapter()
+    adapter.ensure_bucket_exists("b")
+    assert sleep_calls == []
+
     adapter.inject_latency(0.05)
-
-    start_time = time.perf_counter()
     adapter.ensure_bucket_exists("b")
-    elapsed = time.perf_counter() - start_time
+    assert sleep_calls == [0.05]
 
-    assert elapsed >= 0.045
+    adapter.inject_latency(0.0)
+    adapter.ensure_bucket_exists("b")
+    assert sleep_calls == [0.05]
 
-    # 清空适配器状态
+    adapter.inject_latency(0.05)
     adapter.clear()
-    start_time2 = time.perf_counter()
     adapter.ensure_bucket_exists("b")
-    elapsed2 = time.perf_counter() - start_time2
-    assert elapsed2 < 0.04
+    assert sleep_calls == [0.05]
 
 
 # ============================================================================

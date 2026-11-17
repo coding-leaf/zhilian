@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/prd.md", "reason": "Verify all acceptance criteria AC-1 through AC-6"}
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/design.md", "reason": "Verify architectural adherence and integration boundaries"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify 6 import-linter contracts and sync def routes"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify ruff, mypy strict, lint-imports, and pytest >=80% cov"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify no prompt/snippet/secret leaks in logs"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify frontend lint, vue-tsc, vitest, and build"}

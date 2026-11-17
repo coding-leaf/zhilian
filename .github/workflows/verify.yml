@@ -26,13 +26,17 @@ concurrency:
 
 jobs:
   backend:
-    name: 后端门禁（ruff / mypy / import-linter / pytest）
+    name: 后端门禁（ruff / mypy / import-linter / pytest / diff-cover）
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
+      # fetch-depth: 0 是必需的 —— diff-cover 要拿 origin/master 算 merge-base，
+      # 默认的浅克隆里没有这个 ref，增量门禁会退化成空 diff（静默放行）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 安装 uv
         uses: astral-sh/setup-uv@v5
@@ -61,6 +65,19 @@ jobs:
       # 只是额外落一份 coverage.xml 供 artifact 与 SonarCloud 消费。
       - name: pytest（覆盖率 ≥ 80%）
         run: uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+      # 与 Taskfile.yml 的 verify-backend 逐字一致：增量覆盖率与全量口径**叠加**，
+      # 全量防倒退、增量防「新代码没测」。无匹配改动时 diff-cover 退出码为 0（已实测）。
+      # ⚠️ 不要给 diff-cover 加 --include：实测在本项目布局下永不匹配，
+      #    会输出 "No lines with coverage information" 并 exit 0（静默放行）。
+      - name: 增量覆盖率 · 改动行（≥ 80%）
+        run: uv run diff-cover coverage.xml --compare-branch=origin/master --fail-under=80
+
+      - name: T0 核心模块覆盖率（≥ 90%）
+        run: uv run coverage report --include="app/core/algorithms/*,app/core/security.py,app/core/errors.py" --fail-under=90
+
+      - name: T0 接口依赖层覆盖率（当前 ≥ 80%，目标 90%）
+        run: uv run coverage report --include="app/api/deps/*" --fail-under=80
 
       - name: 上传后端覆盖率报告
         if: always()

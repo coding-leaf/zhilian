@@ -4,6 +4,9 @@ import type {
   QuestionBankListResult,
   QuestionBatchListResult,
   QuestionBatchSummary,
+  QuestionGenerationJob,
+  QuestionGenerationJobListResult,
+  QuestionGenerationJobStatus,
   QuestionItem,
   QuestionOption,
   QuestionType,
@@ -21,6 +24,8 @@ export interface WireQuestion {
   material_id?: string
   version_id?: string
   knowledge_point_id?: string
+  knowledge_point?: string
+  knowledge_point_name?: string | null
   batch_id?: string | null
   /** 后端 QuestionStatus：available 可选 / pending_review 待处理区 */
   status?: string | null
@@ -38,11 +43,18 @@ export interface WireQuestion {
   source_snippet?: SourceSnippet | null
 }
 
+function normalizeQuestionOption(option: { key?: string; content?: string }, index: number): QuestionOption {
+  const cleanKey = String(option.key ?? '')
+    .trim()
+    .replace(/[.。:：、)）]+$/, '')
+  const key = cleanKey || String.fromCharCode(65 + index)
+  const rawContent = String(option.content ?? '').trim()
+  const content = rawContent.replace(/^(?:(?:[(（][A-Z][)）]|[A-Z][.。、:：)）])\s*)+/i, '')
+  return { key, content }
+}
+
 export function adaptQuestion(question: WireQuestion): QuestionItem {
-  const options: QuestionOption[] = (question.options || []).map((option) => ({
-    key: option.key,
-    content: option.content,
-  }))
+  const options: QuestionOption[] = (question.options || []).map(normalizeQuestionOption)
   const rubric = question.grading_rubric
   const rubricPoints = rubric?.points ?? rubric?.key_points
   const gradingPoints = Array.isArray(rubricPoints)
@@ -56,6 +68,7 @@ export function adaptQuestion(question: WireQuestion): QuestionItem {
     })
     : []
   const rubricTotal = typeof rubric?.total_score === 'number' ? rubric.total_score : undefined
+  const kpName = question.knowledge_point_name ?? question.knowledge_point ?? null
 
   return {
     ...question,
@@ -64,6 +77,8 @@ export function adaptQuestion(question: WireQuestion): QuestionItem {
     options,
     explanation: question.explanation ?? question.analysis,
     analysis: question.analysis,
+    knowledge_point_name: kpName,
+    knowledge_point: question.knowledge_point ?? kpName ?? undefined,
     grading_points: gradingPoints,
     scoring_criteria: question.grading_rubric,
     max_score: question.max_score ?? rubricTotal,
@@ -147,10 +162,12 @@ export function adaptQuestionBankItem(question: WireQuestion): QuestionBankItem 
   }
 }
 
-export function adaptQuestionBankList(result: {
+export interface WireQuestionBankList {
   items?: WireQuestion[] | null
   total?: number | null
-}): QuestionBankListResult {
+}
+
+export function adaptQuestionBankList(result: WireQuestionBankList): QuestionBankListResult {
   const items = (result?.items ?? []).map(adaptQuestionBankItem)
   return { items, total: result?.total ?? items.length }
 }
@@ -174,77 +191,75 @@ export function isSubjectiveType(type: QuestionType | string | undefined): boole
   return SUBJECTIVE_QUESTION_TYPES.includes(type as QuestionType)
 }
 
+/** 选项键归一化（核对页与练习页共用）。 */
+export function optionKey(option: QuestionOption, index: number): string {
+  return option.key || String.fromCharCode(65 + index)
+}
+
 /** 选项展示文本（核对页与练习页共用，避免页面自行猜测字段）。 */
 export function optionDisplayText(option: QuestionOption, index: number): string {
-  const key = option.key || String.fromCharCode(65 + index)
-  return `${key}. ${option.content}`
+  return `${optionKey(option, index)}. ${option.content}`
 }
 
-export const MAX_QUESTION_BATCH = 20
-
-export interface GenerationBatch {
-  knowledgePointIds: string[]
-  count: number
+export interface WireQuestionGenerationJob {
+  id: string
+  status?: string | null
+  material_id?: string | null
+  folder_id?: string | null
+  total_kps?: number | null
+  completed_kps?: number | null
+  generated_count?: number | null
+  batch_id?: string | null
+  question_ids?: unknown[] | null
+  error_message?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  completed_at?: string | null
 }
 
-/**
- * 按后端单次 count ∈ [1, 20] 的限制，把「覆盖全部已选考点、尽量满足指定题量」拆成若干批。
- * 目标题量：max(已选考点数, 用户指定题量)。
- */
-export function planGenerationBatches(
-  knowledgePointIds: string[],
-  desiredCount: number,
-): GenerationBatch[] {
-  const unique = Array.from(new Set(knowledgePointIds.filter(Boolean)))
-  if (unique.length === 0) return []
-  const chunkSize = MAX_QUESTION_BATCH
-  const chunks: string[][] = []
-  for (let i = 0; i < unique.length; i += chunkSize) {
-    chunks.push(unique.slice(i, i + chunkSize))
+const JOB_STATUSES: QuestionGenerationJobStatus[] = ['queued', 'running', 'completed', 'failed']
+
+export function adaptQuestionGenerationJob(job: WireQuestionGenerationJob): QuestionGenerationJob {
+  const rawStatus = String(job.status ?? '').toLowerCase()
+  const status = (JOB_STATUSES as string[]).includes(rawStatus)
+    ? (rawStatus as QuestionGenerationJobStatus)
+    : 'queued'
+  const questionIds = Array.isArray(job.question_ids)
+    ? job.question_ids.map((id) => String(id)).filter(Boolean)
+    : []
+  return {
+    id: job.id,
+    status,
+    material_id: job.material_id ?? null,
+    folder_id: job.folder_id ?? null,
+    total_kps: Math.max(0, job.total_kps ?? 0),
+    completed_kps: Math.max(0, job.completed_kps ?? 0),
+    generated_count: Math.max(0, job.generated_count ?? 0),
+    batch_id: job.batch_id ?? null,
+    question_ids: questionIds,
+    error_message: job.error_message ?? null,
+    created_at: job.created_at ?? '',
+    updated_at: job.updated_at ?? '',
+    completed_at: job.completed_at ?? null,
   }
-  const target = Math.max(unique.length, desiredCount)
-  const batches: GenerationBatch[] = []
-  let remaining = Math.min(target, chunks.length * MAX_QUESTION_BATCH)
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i]
-    const share = Math.ceil(remaining / (chunks.length - i))
-    const count = Math.min(MAX_QUESTION_BATCH, Math.max(chunk.length, share))
-    remaining = Math.max(0, remaining - count)
-    batches.push({ knowledgePointIds: chunk, count })
-  }
-  return batches
 }
 
-export interface CoverageResult {
-  covered: string[]
-  missing: string[]
-  ratio: number
+export function adaptQuestionGenerationJobList(
+  res: { items?: WireQuestionGenerationJob[] | null; total?: number | null } | WireQuestionGenerationJob[] | null,
+): QuestionGenerationJobListResult {
+  if (Array.isArray(res)) {
+    const items = res.map(adaptQuestionGenerationJob)
+    return { items, total: items.length }
+  }
+  const items = (res?.items ?? []).map(adaptQuestionGenerationJob)
+  return { items, total: res?.total ?? items.length }
 }
 
-/** 按「题目快照携带的考点」核算实际覆盖，不把生成目标当成覆盖成功。 */
-export function computeKnowledgeCoverage(
-  questions: Array<Pick<QuestionItem, 'knowledge_point_id'>>,
-  selectedKnowledgePointIds: string[],
-): CoverageResult {
-  const selected = Array.from(new Set(selectedKnowledgePointIds.filter(Boolean)))
-  const coveredSet = new Set<string>()
-  for (const question of questions) {
-    const id = question.knowledge_point_id
-    if (id && selected.includes(id)) coveredSet.add(id)
-  }
-  const covered = selected.filter((id) => coveredSet.has(id))
-  const missing = selected.filter((id) => !coveredSet.has(id))
-  const ratio = selected.length === 0 ? 1 : covered.length / selected.length
-  return { covered, missing, ratio }
-}
-
-export function dedupeQuestions(questions: QuestionItem[]): QuestionItem[] {
-  const seen = new Set<string>()
-  const result: QuestionItem[] = []
-  for (const question of questions) {
-    if (!question.id || seen.has(question.id)) continue
-    seen.add(question.id)
-    result.push(question)
-  }
-  return result
-}
+export {
+  MAX_QUESTION_BATCH,
+  computeKnowledgeCoverage,
+  dedupeQuestions,
+  planGenerationBatches,
+  type CoverageResult,
+  type GenerationBatch,
+} from './questionPlanning'

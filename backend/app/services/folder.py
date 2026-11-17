@@ -23,6 +23,7 @@ from app.core.security import generate_user_ref
 from app.models.knowledge import KnowledgePoint
 from app.models.material import Material, MaterialFolder
 from app.repositories.folder import FolderRepository
+from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
 from app.services.material import MaterialService
 
@@ -62,10 +63,19 @@ class FolderService:
         session: Session,
         material_service: MaterialService,
         folder_repo: FolderRepository | None = None,
+        material_repo: MaterialRepository | None = None,
+        question_repo: QuestionRepository | None = None,
     ) -> None:
         self.session = session
         self.material_service = material_service
         self.repo = folder_repo or FolderRepository(session)
+        resolved_material_repo = material_repo or getattr(material_service, "repo", None)
+        self.material_repo: MaterialRepository = (
+            resolved_material_repo
+            if resolved_material_repo is not None
+            else MaterialRepository(session)
+        )
+        self.question_repo = question_repo or QuestionRepository(session)
 
     # ==========================================
     # 课程 CRUD
@@ -310,7 +320,7 @@ class FolderService:
             MaterialNotFoundError: 资料不存在或越权。
             FolderNotFoundError: 目标课程不存在、已归档或越权。
         """
-        material = self.material_service.repo.get_material_by_id(
+        material = self.material_repo.get_material_by_id(
             material_id, user_id, include_deleted=False
         )
         if material is None:
@@ -319,7 +329,7 @@ class FolderService:
             folder = self.repo.get_by_id(folder_id, user_id, include_archived=False)
             if folder is None:
                 raise FolderNotFoundError("目标课程文件夹不存在、已归档或无权访问")
-        moved = self.material_service.repo.move_folder(material_id, user_id, folder_id)
+        moved = self.material_repo.move_folder(material_id, user_id, folder_id)
         if moved is None:
             raise MaterialNotFoundError("请求的学习资料不存在或已被删除")
         self.session.commit()
@@ -348,8 +358,7 @@ class FolderService:
         folder = self.repo.get_by_id(folder_id, user_id, include_archived=False)
         if folder is None:
             raise FolderNotFoundError()
-        question_repo = QuestionRepository(self.session)
-        return question_repo.list_folder_knowledge_points_with_material(user_id, folder_id)
+        return self.question_repo.list_folder_knowledge_points_with_material(user_id, folder_id)
 
     # ==========================================
     # 聚合装配

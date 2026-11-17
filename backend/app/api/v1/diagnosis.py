@@ -10,13 +10,14 @@
 """
 
 import uuid
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.diagnosis import get_diagnosis_service
-from app.models.practice import WrongRecord
+from app.api.deps.pagination import PaginationParams, get_pagination_params
+from app.core.errors import MaterialInvalidError
 from app.models.user import User
 from app.schemas.diagnosis import (
     DeleteWrongRecordResponse,
@@ -42,7 +43,7 @@ router = APIRouter(tags=["diagnosis"])
     status_code=status.HTTP_200_OK,
     summary="生成学情诊断报告",
 )
-async def generate_diagnosis_report(
+def generate_diagnosis_report(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
@@ -76,7 +77,7 @@ async def generate_diagnosis_report(
     status_code=status.HTTP_200_OK,
     summary="查询练习关联的诊断报告",
 )
-async def get_diagnosis_report_by_practice(
+def get_diagnosis_report_by_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
@@ -109,36 +110,27 @@ async def get_diagnosis_report_by_practice(
     status_code=status.HTTP_200_OK,
     summary="分页查询诊断报告列表",
 )
-async def list_diagnosis_reports(
+def list_diagnosis_reports(
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
-    page: Annotated[int, Query(ge=1, description="分页页码")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="每页大小")] = 20,
-    offset: Annotated[int | None, Query(ge=0, description="可选的分页偏移量")] = None,
-    limit: Annotated[int | None, Query(ge=1, le=100, description="可选的分页条数上限")] = None,
+    pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
 ) -> DiagnosisReportListResponse:
     """分页查询当前租户用户的历史学情诊断报告列表。
 
     Args:
         current_user: 当前认证登录租户用户对象。
         diagnosis_service: 学情诊断与错题联动编排服务。
-        page: 当前分页页码 (从 1 起始)。
-        page_size: 每页记录数。
-        offset: 可选的分页偏移量。
-        limit: 可选的分页上限。
+        pagination: 归一化后的分页查询参数。
 
     Returns:
         DiagnosisReportListResponse: 分页诊断报告列表响应。
     """
-    effective_limit = limit if limit is not None else page_size
-    effective_offset = offset if offset is not None else (page - 1) * page_size
-
     reports = diagnosis_service.list_diagnosis_reports(
         user_id=current_user.id,
-        page=page,
-        page_size=page_size,
-        limit=effective_limit,
-        offset=effective_offset,
+        page=pagination.raw_page,
+        page_size=pagination.page_size,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     if isinstance(reports, DiagnosisReportListResponse):
         return reports
@@ -153,10 +145,10 @@ async def list_diagnosis_reports(
     return DiagnosisReportListResponse(
         items=items,
         total=total_count,
-        offset=effective_offset,
-        limit=effective_limit,
-        page=page,
-        page_size=page_size,
+        offset=pagination.offset,
+        limit=pagination.limit,
+        page=pagination.raw_page,
+        page_size=pagination.page_size,
     )
 
 
@@ -166,7 +158,7 @@ async def list_diagnosis_reports(
     status_code=status.HTTP_200_OK,
     summary="查询诊断报告详情",
 )
-async def get_diagnosis_report_by_id(
+def get_diagnosis_report_by_id(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
@@ -199,17 +191,14 @@ async def get_diagnosis_report_by_id(
     status_code=status.HTTP_200_OK,
     summary="用户全量掌握度概览",
 )
-@router.get(
-    "/mastery/overview",
-    response_model=UserMasteryOverviewResponse,
-    status_code=status.HTTP_200_OK,
-    summary="用户资料掌握度宏观全景",
-    include_in_schema=False,
-)
-async def get_mastery_overview(
+def get_mastery_overview(
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
     material_id: Annotated[uuid.UUID | None, Query(description="关联学习资料标识 UUID")] = None,
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程文件夹过滤 ('__none__' 表示未分类资料)"),
+    ] = None,
 ) -> UserMasteryOverviewResponse:
     """获取用户掌握度宏观全景概览。
 
@@ -217,13 +206,25 @@ async def get_mastery_overview(
         current_user: 当前认证登录租户用户对象。
         diagnosis_service: 学情诊断与错题联动编排服务。
         material_id: 可选的学习资料主键 UUID。
+        folder_id: 可选课程文件夹 UUID 或 ``__none__``。
 
     Returns:
         UserMasteryOverviewResponse: 包含四档统计与薄弱点清单的总览响应。
     """
+    extra_kwargs: dict[str, Any] = {}
+    if folder_id is not None:
+        if folder_id == "__none__":
+            extra_kwargs["unclassified"] = True
+        else:
+            try:
+                extra_kwargs["folder_id"] = uuid.UUID(folder_id)
+            except ValueError as exc:
+                raise MaterialInvalidError("folder_id 参数格式非法") from exc
+
     overview = diagnosis_service.get_user_mastery_overview(
         user_id=current_user.id,
         material_id=material_id,
+        **extra_kwargs,
     )
     if isinstance(overview, UserMasteryOverviewResponse):
         return overview
@@ -236,7 +237,7 @@ async def get_mastery_overview(
     status_code=status.HTTP_200_OK,
     summary="单知识点掌握度详情",
 )
-async def get_knowledge_mastery(
+def get_knowledge_mastery(
     knowledge_point_id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
@@ -269,9 +270,10 @@ async def get_knowledge_mastery(
     status_code=status.HTTP_200_OK,
     summary="错题本列表检索",
 )
-async def list_wrong_records(
+def list_wrong_records(
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
+    pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     material_id: Annotated[uuid.UUID | None, Query(description="学习资料主键 UUID")] = None,
     folder_id: Annotated[uuid.UUID | None, Query(description="课程文件夹主键 UUID")] = None,
     unclassified: Annotated[bool, Query(description="仅未分类资料错题")] = False,
@@ -280,33 +282,25 @@ async def list_wrong_records(
     question_type: Annotated[str | None, Query(description="题目类型过滤")] = None,
     is_mastered: Annotated[bool | None, Query(description="攻克掌握布尔状态过滤")] = None,
     status: Annotated[str | None, Query(description="错题状态过滤")] = None,
-    page: Annotated[int, Query(ge=1, description="分页页码")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="每页条数")] = 20,
-    offset: Annotated[int | None, Query(ge=0, description="可选的分页偏移量")] = None,
-    limit: Annotated[int | None, Query(ge=1, le=100, description="可选的分页上限")] = None,
 ) -> WrongRecordListResponse:
     """多维条件分页查询当前用户的错题本记录列表。
 
     Args:
         current_user: 当前认证登录租户用户对象。
         diagnosis_service: 学情诊断与错题联动编排服务。
+        pagination: 归一化后的分页查询参数。
         material_id: 可选的学习资料标识过滤。
+        folder_id: 可选的课程文件夹过滤。
+        unclassified: 是否只筛选未分类资料错题。
         knowledge_point_id: 可选的知识点主键过滤。
         error_type: 可选的错误类型分类过滤。
         question_type: 可选的题目类型过滤。
         is_mastered: 可选的攻克掌握状态过滤。
         status: 可选的错题状态过滤。
-        page: 当前分页页码。
-        page_size: 每页条数。
-        offset: 可选的分页偏移量。
-        limit: 可选的分页上限。
 
     Returns:
         WrongRecordListResponse: 包含原题快照的错题记录分页列表响应。
     """
-    effective_limit = limit if limit is not None else page_size
-    effective_offset = offset if offset is not None else (page - 1) * page_size
-
     result = diagnosis_service.list_wrong_records(
         user_id=current_user.id,
         material_id=material_id,
@@ -317,22 +311,22 @@ async def list_wrong_records(
         knowledge_point_id=knowledge_point_id,
         error_type=error_type,
         question_type=question_type,
-        page=page,
-        page_size=page_size,
-        limit=effective_limit,
-        offset=effective_offset,
+        page=pagination.raw_page,
+        page_size=pagination.page_size,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     if isinstance(result, WrongRecordListResponse):
         return result
 
-    records: list[WrongRecord] = []
+    records: list[Any] = []
     total_count: int | None = None
     if isinstance(result, tuple) and len(result) == 2:
         records = list(result[0])
         total_count = int(result[1])
     else:
         # 兼容旧契约：Service 直接返回普通列表 (含携带 total 属性的列表容器)
-        legacy_records = cast("list[WrongRecord]", result)
+        legacy_records = cast("list[Any]", result)
         records = list(legacy_records)
         total_count = getattr(legacy_records, "total", None)
 
@@ -341,14 +335,24 @@ async def list_wrong_records(
         for r in records
     ]
     if items:
-        scopes = diagnosis_service.get_wrong_record_scopes(
-            current_user.id, {item.knowledge_point_id for item in items}
-        )
-        if isinstance(scopes, dict):
+        kp_ids = {item.knowledge_point_id for item in items}
+        display_meta = diagnosis_service.get_wrong_record_display_meta(current_user.id, kp_ids)
+        if isinstance(display_meta, dict):
             for item in items:
-                scope = scopes.get(item.knowledge_point_id)
-                if scope is not None:
-                    item.material_id, item.folder_id = scope
+                meta = display_meta.get(item.knowledge_point_id)
+                if meta is not None:
+                    item.material_id, item.folder_id, kp_name, mat_title = meta
+                    if not item.knowledge_point_name:
+                        item.knowledge_point_name = kp_name
+                    if not item.material_title:
+                        item.material_title = mat_title
+        else:
+            scopes = diagnosis_service.get_wrong_record_scopes(current_user.id, kp_ids)
+            if isinstance(scopes, dict):
+                for item in items:
+                    scope = scopes.get(item.knowledge_point_id)
+                    if scope is not None:
+                        item.material_id, item.folder_id = scope
     groups = [
         WrongRecordGroupResponse.model_validate(group)
         for group in diagnosis_service.list_wrong_record_groups(current_user.id, is_mastered)
@@ -360,10 +364,10 @@ async def list_wrong_records(
         items=items,
         groups=groups,
         total=total_count,
-        offset=effective_offset,
-        limit=effective_limit,
-        page=page,
-        page_size=page_size,
+        offset=pagination.offset,
+        limit=pagination.limit,
+        page=pagination.raw_page,
+        page_size=pagination.page_size,
     )
 
 
@@ -373,7 +377,7 @@ async def list_wrong_records(
     status_code=status.HTTP_201_CREATED,
     summary="手动标记错题",
 )
-async def create_wrong_record(
+def create_wrong_record(
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
     request: Annotated[WrongRecordCreateRequest, Body()],
@@ -400,8 +404,19 @@ async def create_wrong_record(
         question_id=request.question_id,
     )
     if isinstance(record, WrongRecordItemResponse):
-        return record
-    return WrongRecordItemResponse.model_validate(record)
+        item_resp = record
+    else:
+        item_resp = WrongRecordItemResponse.model_validate(record)
+    display_meta = diagnosis_service.get_wrong_record_display_meta(
+        current_user.id, {item_resp.knowledge_point_id}
+    )
+    if isinstance(display_meta, dict) and item_resp.knowledge_point_id in display_meta:
+        mat_id, fld_id, kp_name, mat_title = display_meta[item_resp.knowledge_point_id]
+        item_resp.material_id = item_resp.material_id or mat_id
+        item_resp.folder_id = item_resp.folder_id or fld_id
+        item_resp.knowledge_point_name = item_resp.knowledge_point_name or kp_name
+        item_resp.material_title = item_resp.material_title or mat_title
+    return item_resp
 
 
 @router.post(
@@ -410,7 +425,7 @@ async def create_wrong_record(
     status_code=status.HTTP_200_OK,
     summary="错题攻克标记",
 )
-async def mark_wrong_record_mastered(
+def mark_wrong_record_mastered(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
@@ -454,7 +469,7 @@ async def mark_wrong_record_mastered(
     status_code=status.HTTP_200_OK,
     summary="错题删除",
 )
-async def delete_wrong_record(
+def delete_wrong_record(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],

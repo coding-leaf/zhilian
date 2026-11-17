@@ -69,7 +69,6 @@ from app.schemas.material import (
     sanitize_material_title,
 )
 from app.schemas.practice import (
-    AttemptItemDetailResponse,
     PracticeCreateRequest,
     PracticeCreateResponse,
     PracticeDetailResponse,
@@ -113,7 +112,6 @@ __all__ = [
     "ActionableSuggestionItemDTO",
     "AnalysisCauseItemDTO",
     "AttemptGradingDetailResponse",
-    "AttemptItemDetailResponse",
     "DeleteWrongRecordResponse",
     "DiagnosisReportListItemResponse",
     "DiagnosisReportListResponse",

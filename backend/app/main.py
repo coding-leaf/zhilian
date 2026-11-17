@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -105,11 +106,11 @@ async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
 async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     """统一 Pydantic 校验错误转换。"""
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "code": 10001,
             "message": "请求参数校验失败",
-            "details": exc.errors(),
+            "details": jsonable_encoder(exc.errors()),
         },
     )
 
@@ -119,7 +120,7 @@ app.include_router(api_v1_router)
 
 
 @app.get("/health", tags=["system"], summary="服务健康检查")
-async def health_check(request: Request) -> JSONResponse:
+def health_check(request: Request) -> JSONResponse:
     """多组件结构化健康检查端点。
 
     根据 AppContainer 诊断结果返回系统就绪状态：

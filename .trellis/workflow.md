@@ -93,7 +93,7 @@ python ./.trellis/scripts/add_session.py --title "Title" --commit "hash" --summa
 ```bash
 python ./.trellis/scripts/get_context.py                            # full session runtime
 python ./.trellis/scripts/get_context.py --mode packages            # available packages + spec layers
-python ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed guide for a workflow step
+python ./.trellis/scripts/get_context.py --mode phase --step <X.Y> [--platform antigravity]  # detailed guide for a workflow step
 ```
 
 ---
@@ -140,8 +140,8 @@ python ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed g
       matching phase's `[required · once]` walkthrough steps for sync
     - Run `trellis update` after editing to push the new bodies to
       downstream user projects (block-level managed replacement)
-    - Full runtime contract:
-      .trellis/spec/cli/backend/workflow-state-contract.md
+    - Full runtime contract (downstream repo):
+      .agent/hooks/trellis_agy_hook.py & .trellis/workflow.md
 -->
 
 ## Phase Index
@@ -182,6 +182,13 @@ Simple conversation / small task: ask only whether this turn should create a Tre
 Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
 [/workflow-state:no_task]
 
+[workflow-state:no_task-antigravity]
+No active task:
+- **Investigation restraint**: Before task creation is confirmed, do not dive into multi-file code reading, broad searches, or inline bug debugging in the main session (keep main context clean; quick orientation only when genuinely trivial).
+- **Pure Q&A / trivial edit**: Answer pure chat or status questions directly; for small code edits, ask briefly whether to create a Trellis task (if no, handle directly).
+- **Non-trivial bug / feature / audit / refactor**: Use `ask_question` in **one combined prompt** for (1) consent to create a Trellis task, and (2) the child-agent `model` to use (once specified, reuse it across all child agents, Swarm workers, and helpers in this session without re-asking).
+[/workflow-state:no_task-antigravity]
+
 <!-- Per-turn breadcrumb: shown when the active task record cannot be read. -->
 
 [workflow-state:task_error]
@@ -194,7 +201,7 @@ Preserve existing task fields and artifacts. If the correct status cannot be det
 - 1.0 Create task `[required · once]` (only after task-creation consent)
 - 1.1 Requirement exploration `[required · repeatable]` (`prd.md`; complex tasks also need `design.md` + `implement.md`)
 - 1.2 Research `[optional · repeatable]`
-- 1.3 Configure context `[required · once]` — Claude Code, Cursor, OpenCode, Codex, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Grok, Kimi Code (sub-agent-dispatch platforms only; inline platforms skip)
+- 1.3 Configure context `[required · once]` — Claude Code, Cursor, OpenCode, Codex, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Grok, Kimi Code, Antigravity (Subagent / Swarm mode) (inline platforms skip)
 - 1.4 Activate task `[required · once]` (review gate, then `task.py start`; status → in_progress)
 - 1.5 Completion criteria
 
@@ -219,6 +226,13 @@ Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and 
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
 [/workflow-state:planning-inline]
+
+[workflow-state:planning-antigravity]
+Load `trellis-brainstorm`; stay in planning.
+- **Investigation restraint & research persistence**: Protect the main context window — read 1–2 small targeted files directly when sufficient, and delegate multi-file exploration, bug localization, call-chain tracing, or history audits to child researchers (`Swarm` or `trellis-research` using the user-specified `model`), persisting findings to `{TASK_DIR}/research/*.md` and reading back concise summaries.
+- **Document constraints**: Converge `prd.md` interactively; for complex tasks, produce `design.md`, `implement.md`, and curated `implement.jsonl` + `check.jsonl` before `task.py start` (for `Parent + M1..Mn`, write full artifacts + `jsonl` for active `M1` first and keep `M2..Mn` as stub PRDs with `--no-start`).
+- **Phase 1.4 Formation Recommendation**: Recommend ONE `(Recommended)` Phase 2 track (`Swarm` for parallel/multi-agent or exact-model work, `Subagent` for single-track sequential isolation, or `Inline` for small direct edits) and wait for user approval on artifacts, formation, and child-agent `model` (if not yet given) before running `task.py start`.
+[/workflow-state:planning-antigravity]
 
 ### Phase 2: Execute
 - 2.1 Implement `[required · repeatable]`
@@ -250,6 +264,14 @@ Flow: `trellis-before-dev` -> edit -> `trellis-check` -> validation -> `trellis-
 Do not dispatch implement/check sub-agents in inline mode.
 Read context: `prd.md` -> `design.md if present` -> `implement.md if present`, plus relevant spec/research loaded by skills.
 [/workflow-state:in_progress-inline]
+
+[workflow-state:in_progress-antigravity]
+Execute the user-approved formation, then finish in main session (if child-agent `model` was not yet specified in this session — e.g. after `/continue` — ask once before dispatching, then reuse freely across all child agents, dynamic `add`/`fork` scaling, and worker helpers without re-asking):
+- **`Swarm`**: load the built-in `swarm` skill and follow its native choreography freely (any worker count, specialized roles, `tasks`/`n` pools, verifiers, `#channels`, `monitor`, mid-flight `add`/`fork`, and worker helpers) using the user-specified `model` (omit `model` on `add` when matching the current session model per user choice, or for `monitor`/`narrator`). `.agent/hooks.json` auto-injects task artifacts & `jsonl` specs. Land verified `share`/`branch` diffs into the main workspace uncommitted and verify project quality gates.
+- **`Subagent`**: dispatch `trellis-implement` -> `trellis-check` (and `trellis-research` if needed) via `invoke_subagent` with explicit `Model` (`.agent/hooks.json` auto-injects specs & artifacts).
+- **`Inline`**: `trellis-before-dev` -> edit -> `trellis-check`.
+Wrap-up (always main session): `trellis-update-spec` (Phase 3.3) -> batched commit confirmation (Phase 3.4) -> `/trellis-finish-work`.
+[/workflow-state:in_progress-antigravity]
 
 ### Phase 3: Finish
 - 3.2 Debug retrospective `[on demand]`
@@ -291,13 +313,23 @@ When a user request matches one of these intents inside an active task, route fi
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-[codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[Antigravity]
+
+- Planning or unclear requirements -> `trellis-brainstorm` (curate `implement.jsonl`/`check.jsonl`, then recommend `(Recommended)` formation — `Swarm` vs `Subagent` vs `Inline` — at Phase 1.4).
+- `in_progress` Swarm mode -> load built-in `swarm` skill for flexible native multi-agent topology (`.agent/hooks.json` auto-injects specs) -> land `share`/`branch` diffs into main workspace -> verify full quality gates (`trellis-check`).
+- `in_progress` Subagent mode -> `invoke_subagent(TypeName="trellis-implement")` -> `invoke_subagent(TypeName="trellis-check")` with explicit `Model` (`.agent/hooks.json` auto-injects specs).
+- `in_progress` Inline mode -> `trellis-before-dev` -> edit -> `trellis-check`.
+- Repeated debugging -> `trellis-break-loop`; spec updates -> `trellis-update-spec`.
+
+[/Antigravity]
+
+[codex-inline, Kilo, Devin, DeepSeek Harness]
 
 - Planning or unclear requirements -> `trellis-brainstorm`.
 - Before editing -> `trellis-before-dev`; after editing -> `trellis-check`.
 - Repeated debugging -> `trellis-break-loop`; spec updates -> `trellis-update-spec`.
 
-[/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[/codex-inline, Kilo, Devin, DeepSeek Harness]
 
 ### Guardrails
 
@@ -310,8 +342,8 @@ When a user request matches one of these intents inside an active task, route fi
 At each step, run this to fetch detailed guidance:
 
 ```bash
-python ./.trellis/scripts/get_context.py --mode phase --step <step>
-# e.g. python ./.trellis/scripts/get_context.py --mode phase --step 1.1
+python ./.trellis/scripts/get_context.py --mode phase --step <step> [--platform antigravity]
+# e.g. python -X utf8 ./.trellis/scripts/get_context.py --mode phase --step 1.1 --platform antigravity
 ```
 
 ---
@@ -374,11 +406,17 @@ Spawn the research sub-agent:
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-[codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[Antigravity]
+
+- **Investigation restraint**: Read 1–2 small targeted files directly when fast; delegate multi-file exploration, bug localization, call-chain tracing, and `git`/`trellis mem` history audits to child researchers (`Swarm` researchers or `trellis-research` subagents using the user-specified `model` — ask once if not yet given, then reuse everywhere) writing findings to `{TASK_DIR}/research/<topic>.md`, and read back only the concise summaries in the main session.
+
+[/Antigravity]
+
+[codex-inline, Kilo, Devin, DeepSeek Harness]
 
 Do the research in the main session directly and write findings into `{TASK_DIR}/research/`. `codex-inline` is the explicit mode that keeps work in the main session.
 
-[/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[/codex-inline, Kilo, Devin, DeepSeek Harness]
 
 **Research artifact conventions**:
 - One file per research topic (e.g. `research/auth-library-comparison.md`)
@@ -438,11 +476,19 @@ Skip this step only when both files already have real curated entries.
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-[codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[Antigravity]
+
+- **Subagent or Swarm tasks (default)**: curate `{TASK_DIR}/implement.jsonl` and `{TASK_DIR}/check.jsonl` before `task.py start` via `python ./.trellis/scripts/task.py add-context "<task>" implement|check "<path>" "<reason>"`. `.agent/hooks.json` (`PreToolUse`) automatically resolves these manifests (plus untracked `{TASK_DIR}/*.md` and `{TASK_DIR}/research/*.md`) to absolute POSIX paths and injects them into every `trellis-implement` / `trellis-check` subagent and Swarm brief so `workspace:"share"` / `"branch"` git worktrees never hit `File Not Found`. When planning parallel `Swarm` authors, note module/file boundaries in `implement.md` (or let the Coordinator split non-colliding ownership when briefing workers).
+- **Lean multi-milestone planning (`Parent + M1..Mn`)**: During initial Phase 1, write full `design.md` + `implement.md` + curated `jsonl` ONLY for the first child (`M1`); create `M2..Mn` with `--no-start` and lightweight stub `prd.md`s, fleshing out each later milestone right before activating it.
+- **If proposing pure Inline mode** (small/straightforward change): skip jsonl curation and pass `--allow-empty-context` after `<task-dir>` (`python -X utf8 ./.trellis/scripts/task.py start <task-dir> --allow-empty-context`) if empty jsonl files were seeded; Phase 2 loads specs via `trellis-before-dev`.
+
+[/Antigravity]
+
+[codex-inline, Kilo, Devin, DeepSeek Harness]
 
 Skip this step. Context is loaded directly by the `trellis-before-dev` skill in Phase 2.
 
-[/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[/codex-inline, Kilo, Devin, DeepSeek Harness]
 
 #### 1.4 Activate task `[required · once]`
 
@@ -452,7 +498,17 @@ After artifact review, flip the task status to `in_progress`:
 python ./.trellis/scripts/task.py start <task-dir>
 ```
 
-For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `design.md`, and `implement.md` must exist and be reviewed before start. On sub-agent-dispatch platforms, `implement.jsonl` and `check.jsonl` must both have real curated entries before start. Runtime consumers tolerate missing or seed-only manifests for compatibility, but that tolerance is not a planning-ready state.
+For lightweight tasks, `prd.md` can be enough. For complex tasks, `prd.md`, `design.md`, and `implement.md` must exist and be reviewed before start. On sub-agent-dispatch platforms (and Antigravity Subagent/Swarm mode), `implement.jsonl` and `check.jsonl` must both have real curated entries before start. Runtime consumers tolerate missing or seed-only manifests for compatibility, but that tolerance is not a planning-ready state.
+
+[Antigravity]
+
+**Formation recommendation & child-agent model gate (no `/swarm` required from user)**: When presenting planning artifacts for user approval, choose ONE `(Recommended)` Phase 2 track alongside one-time child-agent `model` confirmation (if not already given in this session — once specified, reuse across all child agents without re-asking):
+- **`Swarm`** (native `swarm` skill choreography): `(Recommended)` whenever parallel multi-agent collaboration helps — multi-angle research/debugging, multi-module or sharded implementation, independent verification, dynamic scaling — or when using a concrete model ID.
+- **`Subagent`** (`trellis-implement` -> `trellis-check`): `(Recommended)` for clean single-track delegation with sequential context isolation when using a coarse tier (`inherit` / `flash_lite` / `flash` / `pro`).
+- **`Inline`** (`trellis-before-dev` -> edit -> `trellis-check`): `(Recommended)` for small/straightforward single-session edits.
+Wait for user sign-off on artifacts, formation, and child-agent `model` before running `task.py start`.
+
+[/Antigravity]
 
 After this command succeeds, the breadcrumb auto-switches to `[workflow-state:in_progress]`, and the rest of Phase 2 / 3 follows.
 
@@ -468,12 +524,12 @@ If `task.py start` errors with a session-identity message (no context key from h
 | `research/` has artifacts (complex tasks) | recommended |
 | `design.md` exists (complex tasks) | ✅ |
 | `implement.md` exists (complex tasks) | ✅ |
-
 [Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
-
 | `implement.jsonl` and `check.jsonl` each contain at least one real curated entry (seed row does not count) | ✅ |
-
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
+[Antigravity]
+| User confirmed execution formation (`Swarm` vs `Subagent` vs `Inline`) AND child-agent `model` (once per session/task if `Swarm`/`Subagent`); `implement.jsonl` & `check.jsonl` have curated entries (unless pure Inline lightweight) | ✅ |
+[/Antigravity]
 
 ---
 
@@ -526,7 +582,24 @@ The platform prelude auto-handles the context load requirement:
 
 [/Kiro]
 
-[codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[Antigravity]
+
+- **Swarm formation (full native `swarm` choreography)**:
+  1. Load the built-in `swarm` skill and follow its native choreography freely: Trellis imposes **no limit** on worker count (1 or N), naming, roles, `tasks`/`n` sharded pools, multiple verifiers, `#channels`, `monitor`/`narrator` (when available), `fork`, mid-flight dynamic `add` scaling, or workers spawning their own helpers.
+  2. Reuse the user-specified `model` automatically across all initial workers, dynamic additions, and worker-spawned helpers without re-asking (`model` omitted when matching the current session model per user choice, and for `monitor`/`narrator` per native `swarm` skill).
+  3. Trellis integration & safety boundaries: (a) `.agent/hooks.json` automatically injects absolute-path task artifacts and `implement.jsonl` / `check.jsonl` specs into every worker brief by role (`researcher` / `author` / `reviewer`); (b) authors editing concurrently use `workspace:"share"` (or `"branch"`), and no worker modifies `.trellis/**` or pushes to remote; (c) before `kill`ing temporary workers (`kill` deletes their worktree & branch), land verified work into the main working copy uncommitted:
+     - **Single-batch Swarm (clean `HEAD`)**: `git merge --squash <worker-branch>` (followed by `git reset HEAD` if keeping changes unstaged) so changes stay uncommitted for Phase 3.4 batched review.
+     - **Stacked multi-milestone Swarm (`M1 -> M2 -> Mn` kept uncommitted until Phase 3.4)**: pin each verified slice commit before killing its worker via `git update-ref refs/swarm-opt/<m>-<slice> <commit>`, instruct next-milestone `share` workers to merge prior refs as Step 0, land each incremental commit via `git show -p --format= <commit> | git apply`, and clean up temporary refs before Phase 3.4.
+- **Subagent formation (`trellis-implement` -> `trellis-check`)**:
+  1. Dispatch `invoke_subagent(TypeName="trellis-implement", Model=<user-tier>, Role="Trellis Implementer", Prompt="Active task: <task-dir>\nImplement the reviewed task artifacts...")` (coarse tier `flash_lite`/`flash`/`pro`/`inherit`; parallel `trellis-research` calls whenever additional investigation helps).
+  2. `.agent/hooks.json` (`PreToolUse`) automatically appends absolute-path `implement.jsonl`, `{TASK_DIR}/*.md`, `{TASK_DIR}/research/*.md`, and `.trellis/**` write-ban guardrails to `Prompt`.
+- **Inline formation (single-session direct edit)**:
+  1. Load `trellis-before-dev`, read `{TASK_DIR}/prd.md` (`design.md` / `implement.md` if present) and `research/`.
+  2. Implement the code and run the project's lint/type-check/test/build quality gates documented in `.trellis/spec/`.
+
+[/Antigravity]
+
+[codex-inline, Kilo, Devin, DeepSeek Harness]
 
 1. Load the `trellis-before-dev` skill to read project guidelines
 2. Read `{TASK_DIR}/prd.md`, then `design.md` if present, then `implement.md` if present
@@ -534,7 +607,7 @@ The platform prelude auto-handles the context load requirement:
 4. Implement the code per reviewed artifacts
 5. Run project lint and type-check
 
-[/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[/codex-inline, Kilo, Devin, DeepSeek Harness]
 
 #### 2.2 Quality check `[required · repeatable]`
 
@@ -554,7 +627,15 @@ The check agent's job:
 
 [/Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 
-[codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[Antigravity]
+
+- In **Swarm formation**, board verifiers perform iterative spec & test verification (with the Swarm fixing issues in-flight); after landing all worker diffs into the main workspace (`git merge --squash` or `git show -p --format= <commit> | git apply`), run one final full-scope check (`trellis-check` skill, a Swarm verifier, or `invoke_subagent(TypeName="trellis-check", Model=<user-tier>)` plus project quality gates from `.trellis/spec/`) on the combined diff before entering Phase 3.
+- In **Subagent formation**, dispatch `invoke_subagent(TypeName="trellis-check", Model=<user-tier>, Role="Trellis Checker", Prompt="Active task: <task-dir>\nReview git diff against specs and task artifacts, fix in-scope issues, and verify full quality gates.")` (`.agent/hooks.json` auto-injects `check.jsonl` + task artifacts + research notes).
+- In **Inline formation**, load the `trellis-check` skill and verify spec compliance, project lint/type-check/test/build gates from `.trellis/spec/`, and cross-layer consistency until green.
+
+[/Antigravity]
+
+[codex-inline, Kilo, Devin, DeepSeek Harness]
 
 Load the `trellis-check` skill and verify the code per its guidance:
 - Spec compliance
@@ -563,7 +644,7 @@ Load the `trellis-check` skill and verify the code per its guidance:
 
 If issues are found → fix → re-check, until green.
 
-[/codex-inline, Kilo, Antigravity, Devin, DeepSeek Harness]
+[/codex-inline, Kilo, Devin, DeepSeek Harness]
 
 **Final pass (before Phase 3.4 commit)**: the last 2.2 of a task must run full-scope, not just on the latest implement chunk. List all affected packages with `python ./.trellis/scripts/get_context.py --mode packages`, then load each package's spec index Quality Check section. This catches cross-layer / multi-package issues a mid-iteration local 2.2 cannot.
 

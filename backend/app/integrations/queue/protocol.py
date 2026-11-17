@@ -15,7 +15,9 @@ from typing import Any, Protocol, runtime_checkable
 from app.core.errors import QueueError
 
 TaskHandler = Callable[[dict[str, Any]], Any]
-REGISTERED_TASK_NAMES = frozenset({"parse_material_pipeline", "grading_jobs"})
+REGISTERED_TASK_NAMES = frozenset(
+    {"parse_material_pipeline", "grading_jobs", "generate_questions_job"}
+)
 
 
 @dataclass(frozen=True)

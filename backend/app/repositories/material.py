@@ -9,6 +9,7 @@
 
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select, update
@@ -41,6 +42,34 @@ class MaterialRepository:
     # ==========================================
     # Material 主表操作
     # ==========================================
+
+    def get_statistics(self, *, user_id: uuid.UUID) -> tuple[int, int]:
+        """统计用户未删除的就绪资料及其考点，包含未分类和归档课程资料。
+
+        考点按实体计数，不限激活版本；独立标量聚合避免 JOIN 放大资料数。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            tuple[int, int]: (就绪资料数, 考点数)。
+        """
+        material_filters = (
+            Material.user_id == user_id,
+            Material.is_deleted.is_(False),
+            Material.status == MaterialStatus.READY.value,
+        )
+        material_count = select(func.count(Material.id)).where(*material_filters).scalar_subquery()
+        knowledge_count = (
+            select(func.count(KnowledgePoint.id))
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(*material_filters, KnowledgePoint.user_id == user_id)
+            .scalar_subquery()
+        )
+        ready_material_count, knowledge_point_count = self.session.execute(
+            select(material_count, knowledge_count)
+        ).one()
+        return ready_material_count, knowledge_point_count
 
     def create_material(
         self,
@@ -517,14 +546,6 @@ class MaterialRepository:
         )
         return self.session.execute(stmt).scalars().first()
 
-    def get_latest_version_by_hash(
-        self,
-        user_id: uuid.UUID,
-        content_hash: str,
-    ) -> MaterialVersion | None:
-        """find_version_by_hash 别名方法。"""
-        return self.find_version_by_hash(user_id=user_id, content_hash=content_hash)
-
     def update_version_status(
         self,
         version_id: uuid.UUID,
@@ -579,6 +600,7 @@ class MaterialRepository:
         from_status: str,
         to_status: str,
         reset_errors: bool = False,
+        stale_before: datetime | None = None,
     ) -> bool:
         """以条件更新原子地跃迁版本解析状态 (compare-and-swap)。
 
@@ -595,22 +617,30 @@ class MaterialRepository:
             from_status: 期望的当前解析状态。
             to_status: 目标解析状态。
             reset_errors: 是否同时清空 ``error_message`` 与 ``failed_stage``。
+            stale_before: 可选陈旧时间戳上限（用于僵死 ``QUEUED`` 恢复的并发防重入）。
 
         Returns:
             bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
         """
-        values: dict[str, Any] = {"parse_status": to_status}
+        values: dict[str, Any] = {
+            "parse_status": to_status,
+            "updated_at": datetime.now(UTC),
+        }
         if reset_errors:
             values["error_message"] = None
             values["failed_stage"] = None
 
+        conditions = [
+            MaterialVersion.id == version_id,
+            MaterialVersion.material_id == material_id,
+            MaterialVersion.parse_status == from_status,
+        ]
+        if stale_before is not None:
+            conditions.append(MaterialVersion.updated_at <= stale_before)
+
         stmt = (
             update(MaterialVersion)
-            .where(
-                MaterialVersion.id == version_id,
-                MaterialVersion.material_id == material_id,
-                MaterialVersion.parse_status == from_status,
-            )
+            .where(*conditions)
             .values(**values)
             .execution_options(synchronize_session="fetch")
         )
@@ -636,40 +666,6 @@ class MaterialRepository:
             self.session.add(snippet)
         self.session.flush()
 
-    def bulk_create_snippets(
-        self,
-        snippets: Sequence[dict[str, Any]],
-        user_id: uuid.UUID,
-    ) -> int:
-        """批量根据字典结构创建切片。
-
-        Args:
-            snippets: 切片参数字典序列。
-            user_id: 租户用户标识。
-
-        Returns:
-            int: 写入成功的切片条数。
-        """
-        created = 0
-        for item in snippets:
-            snip = MaterialSnippet(
-                user_id=user_id,
-                material_id=item["material_id"],
-                version_id=item["version_id"],
-                snippet_index=item["snippet_index"],
-                content=item["content"],
-                char_length=item["char_length"],
-                start_offset=item["start_offset"],
-                end_offset=item["end_offset"],
-                chapter_title=item.get("chapter_title", ""),
-                source_info=item.get("source_info", {}),
-                embedding=item.get("embedding"),
-            )
-            self.session.add(snip)
-            created += 1
-        self.session.flush()
-        return created
-
     def get_snippets(
         self,
         version_id: uuid.UUID,
@@ -693,14 +689,6 @@ class MaterialRepository:
             .order_by(MaterialSnippet.snippet_index.asc())
         )
         return list(self.session.execute(stmt).scalars().all())
-
-    def list_snippets_by_version(
-        self,
-        version_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[MaterialSnippet]:
-        """get_snippets 别名。"""
-        return self.get_snippets(version_id=version_id, user_id=user_id)
 
     def list_snippets_by_ids(
         self,
@@ -765,40 +753,6 @@ class MaterialRepository:
             self.session.add(page)
         self.session.flush()
 
-    def bulk_create_ocr_pages(
-        self,
-        pages: Sequence[dict[str, Any]],
-        user_id: uuid.UUID,
-    ) -> int:
-        """根据字典序列批量创建页级 OCR 记录。
-
-        Args:
-            pages: 页级记录字典序列。
-            user_id: 租户用户标识。
-
-        Returns:
-            int: 写入成功的页面条数。
-        """
-        created = 0
-        for item in pages:
-            page = MaterialOCRPage(
-                user_id=user_id,
-                material_id=item["material_id"],
-                version_id=item["version_id"],
-                page_number=item["page_number"],
-                image_storage_key=item["image_storage_key"],
-                raw_text=item.get("raw_text", ""),
-                gibberish_ratio=item.get("gibberish_ratio", 0.0),
-                valid_char_count=item.get("valid_char_count", 0),
-                is_qualified=item.get("is_qualified", True),
-                unqualified_reason=item.get("unqualified_reason"),
-                reshoot_count=item.get("reshoot_count", 0),
-            )
-            self.session.add(page)
-            created += 1
-        self.session.flush()
-        return created
-
     def get_ocr_pages(
         self,
         version_id: uuid.UUID,
@@ -822,14 +776,6 @@ class MaterialRepository:
             .order_by(MaterialOCRPage.page_number.asc())
         )
         return list(self.session.execute(stmt).scalars().all())
-
-    def list_ocr_pages_by_version(
-        self,
-        version_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[MaterialOCRPage]:
-        """get_ocr_pages 别名。"""
-        return self.get_ocr_pages(version_id=version_id, user_id=user_id)
 
     def get_ocr_page(
         self,
@@ -901,31 +847,29 @@ class MaterialRepository:
         self.session.flush()
         return True
 
-    def update_ocr_page_result(
+    def delete_ocr_pages_by_version(
         self,
-        page_id: uuid.UUID,
+        version_id: uuid.UUID,
         user_id: uuid.UUID,
-        *,
-        raw_text: str,
-        gibberish_ratio: float,
-        valid_char_count: int,
-        is_qualified: bool,
-        unqualified_reason: str | None,
-        reshoot_count: int,
-        image_storage_key: str | None = None,
-    ) -> bool:
-        """update_ocr_page 别名。"""
-        return self.update_ocr_page(
-            page_id=page_id,
-            user_id=user_id,
-            raw_text=raw_text,
-            gibberish_ratio=gibberish_ratio,
-            valid_char_count=valid_char_count,
-            is_qualified=is_qualified,
-            unqualified_reason=unqualified_reason,
-            reshoot_count=reshoot_count,
-            image_storage_key=image_storage_key,
+    ) -> int:
+        """物理删除指定资料版本下归属当前用户的全部 OCR 页面记录。
+
+        Args:
+            version_id: 资料版本主键。
+            user_id: 租户用户标识。
+
+        Returns:
+            int: 实际删除的页面记录数。
+        """
+        stmt = delete(MaterialOCRPage).where(
+            MaterialOCRPage.version_id == version_id,
+            MaterialOCRPage.user_id == user_id,
         )
+        result = self.session.execute(stmt)
+        self.session.flush()
+        if isinstance(result, CursorResult):
+            return int(result.rowcount or 0)
+        return 0
 
 
 __all__ = ["MaterialRepository"]

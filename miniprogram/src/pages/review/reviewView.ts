@@ -1,9 +1,19 @@
-import type { PracticeStatus, PracticeSummary, WrongRecordItem } from '@/types'
+import type {
+  KnowledgeMasteryLevel,
+  KnowledgeMasterySummary,
+  PracticeStatus,
+  PracticeSummary,
+  UserMasteryOverview,
+  WrongRecordItem,
+} from '@/types'
 import {
   collectUnmasteredKnowledgePointIds,
   isManualWrongRecord,
+  wrongSnapshotKnowledgePointName,
   type WrongGroupOption,
 } from '@/api/adapters/wrong'
+
+export type ReviewSegment = 'mastery' | 'wrong' | 'practices' | 'bank'
 
 const RESUMEABLE: PracticeStatus[] = ['not_started', 'in_progress', 'paused']
 
@@ -28,9 +38,102 @@ export function practiceActionText(practice: PracticeSummary): string {
   return isResumeable(practice) ? '继续作答' : '查看结果'
 }
 
+export function practiceActionButtonText(practice: PracticeSummary): string {
+  if (isResumeable(practice)) return '继续作答'
+  if (practice.status === 'completed') return '查看解析报告'
+  return '查看结果'
+}
+
 export function practiceQuestionLabel(practice: PracticeSummary): string {
   const count = practice.question_count || practice.total_count || 0
   return `${count} 题`
+}
+
+export function practiceAccuracyBadge(practice: PracticeSummary): string {
+  if (typeof practice.score_rate === 'number') {
+    return `正确率 ${Math.round(Math.max(0, Math.min(1, practice.score_rate)) * 100)}%`
+  }
+  if (
+    typeof practice.total_score === 'number'
+    && typeof practice.max_score === 'number'
+    && practice.max_score > 0
+  ) {
+    const pct = Math.round((practice.total_score / practice.max_score) * 100)
+    return `${practice.total_score}/${practice.max_score} · ${pct}%`
+  }
+  return ''
+}
+
+export function formatShortDateTime(iso?: string | null): string {
+  if (!iso) return '近期'
+  const datePart = iso.slice(0, 10)
+  const timeMatch = /[T\s](\d{2}:\d{2})/.exec(iso)
+  return timeMatch ? `${datePart} ${timeMatch[1]}` : datePart
+}
+
+const MASTERY_PRIORITY: Record<KnowledgeMasteryLevel, number> = {
+  weak: 0,
+  basic: 1,
+  unlearned: 2,
+  proficient: 3,
+}
+
+export function masteryLevelLabel(level: KnowledgeMasteryLevel | string): string {
+  switch (level) {
+    case 'weak': return '薄弱'
+    case 'basic': return '基本掌握'
+    case 'unlearned': return '未练'
+    case 'proficient': return '熟练'
+    default: return '未练'
+  }
+}
+
+export function sortMasteryPoints(points: KnowledgeMasterySummary[]): KnowledgeMasterySummary[] {
+  return [...points].sort((a, b) => {
+    const pA = MASTERY_PRIORITY[a.level] ?? 9
+    const pB = MASTERY_PRIORITY[b.level] ?? 9
+    if (pA !== pB) return pA - pB
+    if (a.mastery_score !== b.mastery_score) return a.mastery_score - b.mastery_score
+    return a.knowledge_point_id.localeCompare(b.knowledge_point_id)
+  })
+}
+
+export function mergeMasteryPoints(overview: UserMasteryOverview | null): KnowledgeMasterySummary[] {
+  if (!overview) return []
+  const byId = new Map<string, KnowledgeMasterySummary>()
+  const sources = [
+    ...(overview.points || []),
+    ...(overview.weak_knowledge_points || []),
+    ...(overview.weak_points || []),
+  ]
+  for (const point of sources) {
+    if (!point.knowledge_point_id) continue
+    const existing = byId.get(point.knowledge_point_id)
+    if (!existing || point.practice_count > existing.practice_count) {
+      byId.set(point.knowledge_point_id, point)
+    }
+  }
+  return sortMasteryPoints(Array.from(byId.values()))
+}
+
+export function computePracticedPointCount(overview: UserMasteryOverview | null): number {
+  if (!overview) return 0
+  return Math.max(0, overview.total_knowledge_points - overview.unlearned_count)
+}
+
+export function formatMasteryPercent(score: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, score)) * 100)}%`
+}
+
+export function formatPointAccuracy(point: KnowledgeMasterySummary): string {
+  if (point.practice_count <= 0) return '暂无作答'
+  const pct = Math.round((point.correct_count / point.practice_count) * 100)
+  return `正确率 ${pct}% (${point.correct_count}/${point.practice_count})`
+}
+
+/** 错题卡片考点标签：优先真实知识点名，缺失时兜底「综合考点」，绝不复读题型名。 */
+export function wrongKnowledgePointLabel(record: WrongRecordItem): string {
+  return wrongSnapshotKnowledgePointName(record) || '综合考点'
 }
 
 /** 单个分组内所有未攻克错题的考点集合。 */
@@ -41,11 +144,6 @@ export function groupKnowledgePointIds(
   if (!option) return []
   const unmastered = records.filter((record) => !record.is_mastered)
   return collectUnmasteredKnowledgePointIds(unmastered)
-}
-
-export function groupCounts(records: WrongRecordItem[]) {
-  const mastered = records.filter((record) => record.is_mastered).length
-  return { mastered, pending: records.length - mastered }
 }
 
 /** 单条错题的再生范围：优先课程归属，其次未分类资料归属。 */
@@ -62,19 +160,6 @@ export function hasScope(scope: { folderId?: string; materialId?: string }): boo
   return Boolean(scope.folderId || scope.materialId)
 }
 
-/**
- * 题库题目行「记入错题 / 取消标记」的动作分道。
- *
- * | 记录来源 | 判据 | 动作 |
- * | --- | --- | --- |
- * | 无记录 | `record == null` | `mark` 记入错题 |
- * | 手工 | `practice_id == null` | `delete` 取消标记（删记录） |
- * | 判题 | `practice_id` 非空且未掌握 | `master` 引导「已掌握」，**不删** |
- * | 判题且已掌握 | 同上且 `is_mastered` | `none` 无动作 |
- *
- * 判题来源的记录是真实作答历史，删掉它会让「已消灭错题」等统计失去依据；
- * 「已掌握」正是为该处境设计的语义。
- */
 export type WrongMarkAction = 'mark' | 'delete' | 'master' | 'none'
 
 export function resolveWrongMarkAction(record: WrongRecordItem | null): WrongMarkAction {

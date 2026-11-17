@@ -9,7 +9,7 @@ tasks:
     cmds:
       - uv run python -m app.worker
   verify-backend:
-    desc: Run all backend quality gates (ruff format/check, mypy, import-linter, pytest with 80% coverage)
+    desc: Run all backend quality gates (ruff format/check, mypy, import-linter, pytest coverage, diff-cover incremental)
     dir: backend
     env:
       # import-linter 用 rich 写转圈动画；Windows 控制台默认 GBK，遇到 U+2219 会抛
@@ -22,6 +22,18 @@ tasks:
       - uv run mypy app
       - uv run lint-imports
       - uv run pytest tests --cov=app --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+      # 增量覆盖率：防「新代码没测」。与全量口径**叠加而非替换** ——
+      # 全量防倒退（老代码被改坏），增量防漏测（新代码没有测试）。
+      # ⚠️ 不要给 diff-cover 加 --include：实测它在本项目布局下永不匹配，
+      #    会输出 "No lines with coverage information" 并 exit 0 =
+      #    **静默放行**，比没有门禁更危险。分模块加严请用下面的 coverage report。
+      # 无匹配改动时 diff-cover 也返回 0（已实测），故在 master 上空跑不会假红灯。
+      - uv run diff-cover coverage.xml --compare-branch=origin/master --fail-under=80
+      # T0 核心模块绝对覆盖率 ≥90%（2026-10-03 实测 99%）
+      - uv run coverage report --include="app/core/algorithms/*,app/core/security.py,app/core/errors.py" --fail-under=90
+      # T0 接口依赖层：实测 83%，暂设 80% 防止继续下滑；目标 90%，
+      # 缺口见 中期质量检查/单测计划.md §4（app/api/deps/user.py 有 3 行未覆盖）
+      - uv run coverage report --include="app/api/deps/*" --fail-under=80
 
   verify-frontend:
     desc: Run all frontend quality gates (eslint, vue-tsc typecheck, vitest unit tests with coverage)

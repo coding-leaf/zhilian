@@ -2,8 +2,8 @@
   <view class="paper-card bank-batch-card">
     <view class="bank-batch-header">
       <view :class="['bank-checkbox', checkboxClass]" @tap="emit('toggle')">
-        <text v-if="checkState === 'all'" class="bank-checkmark">✓</text>
-        <text v-else-if="checkState === 'partial'" class="bank-partial-mark">－</text>
+        <view v-if="checkState === 'all'" class="bank-check-mark" />
+        <view v-else-if="checkState === 'partial'" class="bank-partial-bar" />
       </view>
 
       <view class="bank-batch-info" @tap="emit('toggle')">
@@ -36,7 +36,13 @@
           :key="question.id"
           :question="question"
           :selected="selectedIds.includes(question.id)"
+          :detail-expanded="expandedDetailIds.includes(question.id)"
+          :detail="questionDetails.get(question.id)"
+          :loading-detail="loadingDetailIds.includes(question.id)"
+          :detail-error="detailErrors.get(question.id) || ''"
           @toggle="emit('toggle-question', question.id)"
+          @toggle-detail="emit('toggle-detail', question.id)"
+          @retry-detail="emit('retry-detail', question.id)"
         >
           <!-- 动作位（由 09-29-question-bank-page 预留）：记入错题 / 取消标记 -->
           <template #action>
@@ -64,7 +70,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { QuestionBankItem, QuestionBatchSummary, WrongRecordItem } from '@/types'
+import type {
+  QuestionBankItem,
+  QuestionBatchSummary,
+  QuestionItem,
+  WrongRecordItem,
+} from '@/types'
 import { describeBatchLabel, type BatchCheckState } from '@/utils/questionBatch'
 import { wrongMarkLabel } from '../reviewView'
 import QuestionBankQuestionRow from './QuestionBankQuestionRow.vue'
@@ -77,10 +88,12 @@ const props = defineProps<{
   selectedIds: string[]
   isLoadingQuestions: boolean
   questionError: string
-  /** question_id → 错题记录；缺键即未标记。 */
   wrongMarks: Map<string, WrongRecordItem>
-  /** 正在标记/取消中的题目 ID（请求在途禁用，避免双击打出两次往返）。 */
   wrongPendingIds: string[]
+  expandedDetailIds: string[]
+  questionDetails: Map<string, QuestionItem>
+  loadingDetailIds: string[]
+  detailErrors: Map<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -89,12 +102,12 @@ const emit = defineEmits<{
   (e: 'toggle-question', questionId: string): void
   (e: 'retry-questions'): void
   (e: 'toggle-wrong', questionId: string): void
+  (e: 'toggle-detail', questionId: string): void
+  (e: 'retry-detail', questionId: string): void
 }>()
 
-/** 与核对出题页共用同一标签推导，禁止第二份实现。 */
 const label = computed(() => describeBatchLabel(props.batch))
 
-/** 已标记（判题来源，点按走「已掌握」）与已掌握用不同色，未标记无态。 */
 const wrongMarkClass = (questionId: string): string => {
   const record = props.wrongMarks.get(questionId)
   if (!record) return ''
@@ -109,5 +122,5 @@ const checkboxClass = computed(() => {
 </script>
 
 <style lang="scss" scoped>
-@import '../review.scss';
+@import '../questionBank.scss';
 </style>

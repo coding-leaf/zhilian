@@ -1,22 +1,24 @@
 import type { QuestionType, WrongRecordGroup, WrongRecordItem } from '@/types'
-import { adaptQuestion, type WireQuestion } from './question'
+import type { WireQuestion } from './question'
 
 /** 后端 WrongRecordItemResponse 的 wire 形状（含 question_snapshot 字典）。 */
 export interface WireWrongRecordItem {
   id: string
   folder_id?: string | null
   material_id?: string | null
+  material_title?: string | null
   practice_id: string | null
   attempt_item_id: string | null
   question_id?: string | null
   knowledge_point_id?: string | null
+  knowledge_point_name?: string | null
   error_type?: string
   is_mastered?: boolean
   wrong_count?: number
   created_at?: string | null
   updated_at?: string | null
   user_answer?: string | null
-  question_snapshot?: (WireQuestion & { stem?: string }) | null
+  question_snapshot?: (WireQuestion & { stem?: string; knowledge_point_name?: string | null }) | null
 }
 
 /**
@@ -39,16 +41,11 @@ export function wrongSnapshotType(item: WrongRecordItem): QuestionType | undefin
   return item.question_snapshot?.question_type
 }
 
-export function wrongSnapshotOptions(item: WrongRecordItem) {
-  const snapshot = item.question_snapshot
-  if (!snapshot) return []
-  return adaptQuestion({
-    question_type: (snapshot.question_type || 'short_answer') as QuestionType,
-    stem: snapshot.stem || '',
-    options: snapshot.options,
-    answer: snapshot.answer,
-    analysis: snapshot.analysis,
-  }).options || []
+export function wrongSnapshotKnowledgePointName(item: WrongRecordItem): string | undefined {
+  const fromRecord = item.knowledge_point_name
+  if (typeof fromRecord === 'string' && fromRecord.trim()) return fromRecord.trim()
+  const fromSnap = item.question_snapshot?.knowledge_point_name
+  return typeof fromSnap === 'string' && fromSnap.trim() ? fromSnap.trim() : undefined
 }
 
 /**

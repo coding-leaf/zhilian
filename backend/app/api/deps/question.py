@@ -6,49 +6,17 @@
 - 缩写白名单仅限 api, id, url, ocr, llm, db, config, env。
 """
 
-from typing import Annotated, Any
+from app.api.deps._factory import make_service_dep
 
-from fastapi import Depends, Request
-from sqlalchemy.orm import Session
+get_question_service = make_service_dep(
+    service_name="QuestionService",
+    dep_name="get_question_service",
+    builder=lambda container, session: container.create_question_service(session=session),
+)
+get_question_service.__doc__ = """FastAPI 依赖项：获取 QuestionService 服务实例。
 
-from app.api.deps.db import get_db_session
-from app.container import AppContainer
-from app.services.question import QuestionService
-
-_DEFAULT_REQUEST: Any = None
-
-
-def get_question_service(
-    request: Request = _DEFAULT_REQUEST,
-    session: Annotated[Session | None, Depends(get_db_session)] = None,
-) -> QuestionService:
-    """FastAPI 依赖项：获取 QuestionService 服务实例。
-
-    优先从请求生命周期的 AppContainer 中以单请求独立 Session 装配服务实例；
-    在单元测试中通过 app.dependency_overrides[get_question_service] 注入。
-
-    Args:
-        request: FastAPI 请求上下文对象。
-        session: 单请求生命周期的数据库会话（由 get_db_session 供给）。
-
-    Returns:
-        QuestionService: 题目领域编排服务。
-
-    Raises:
-        NotImplementedError: 在外部服务层装配前直接调用时提醒依赖注入覆盖。
-    """
-    if request is not None and getattr(request, "app", None) is not None:
-        container: AppContainer | None = getattr(request.app.state, "container", None)
-        if container is not None:
-            actual_session = (
-                session if isinstance(session, Session) else container.session_factory()
-            )
-            return container.create_question_service(session=actual_session)
-
-    raise NotImplementedError(
-        "QuestionService 生产装配工厂尚未挂载，"
-        "请在测试或路由中使用 dependency_overrides[get_question_service] 注入"
-    )
-
+优先从请求生命周期的 AppContainer 中以单请求独立 Session 装配服务实例；
+在单元测试中通过 app.dependency_overrides[get_question_service] 注入。
+"""
 
 __all__ = ["get_question_service"]

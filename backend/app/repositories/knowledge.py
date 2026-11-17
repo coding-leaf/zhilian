@@ -15,7 +15,7 @@ from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
-from app.models.material import MaterialSnippet
+from app.models.material import Material, MaterialFolder, MaterialSnippet
 
 
 class KnowledgeRepository:
@@ -35,50 +35,6 @@ class KnowledgeRepository:
     # ==========================================
     # KnowledgePoint 知识点 CRUD 操作
     # ==========================================
-
-    def create_knowledge_point(
-        self,
-        *,
-        user_id: uuid.UUID,
-        material_id: uuid.UUID,
-        version_id: uuid.UUID,
-        name: str,
-        description: str = "",
-        level: int = 1,
-        parent_id: uuid.UUID | None = None,
-        batch_id: str = "",
-        is_low_confidence: bool = False,
-    ) -> KnowledgePoint:
-        """创建单个知识点实体。
-
-        Args:
-            user_id: 租户用户主键。
-            material_id: 归属资料主键。
-            version_id: 归属版本主键。
-            name: 知识点名称。
-            description: 知识点描述。
-            level: 拓扑层级 (1~5)。
-            parent_id: 父节点标识（若有）。
-            batch_id: 抽取批次标识。
-            is_low_confidence: 是否标记为低可信度。
-
-        Returns:
-            KnowledgePoint: 已持久化加入会话的知识点实体。
-        """
-        point = KnowledgePoint(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name=name,
-            description=description,
-            level=level,
-            parent_id=parent_id,
-            batch_id=batch_id,
-            is_low_confidence=is_low_confidence,
-        )
-        self.session.add(point)
-        self.session.flush()
-        return point
 
     def batch_create_knowledge_points(
         self,
@@ -109,14 +65,6 @@ class KnowledgeRepository:
         self.session.flush()
         return created
 
-    def create_knowledge_points(
-        self,
-        points: Sequence[KnowledgePoint],
-        user_id: uuid.UUID,
-    ) -> list[KnowledgePoint]:
-        """批量创建知识点记录 (契约别名)。"""
-        return self.batch_create_knowledge_points(points, user_id)
-
     def get_by_id(
         self,
         knowledge_point_id: uuid.UUID,
@@ -145,6 +93,52 @@ class KnowledgeRepository:
         """get_by_id 别名方法。"""
         return self.get_by_id(knowledge_point_id, user_id)
 
+    def list_by_ids(
+        self,
+        knowledge_point_ids: Sequence[uuid.UUID],
+        user_id: uuid.UUID,
+    ) -> list[KnowledgePoint]:
+        """按知识点主键集合与租户用户批量查询知识点。"""
+        if not knowledge_point_ids:
+            return []
+        stmt = select(KnowledgePoint).where(
+            KnowledgePoint.user_id == user_id,
+            KnowledgePoint.id.in_(knowledge_point_ids),
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def list_by_folder_scope(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> list[KnowledgePoint]:
+        """按课程文件夹或未分类范围查询当前用户的全部知识点。"""
+        stmt = (
+            select(KnowledgePoint)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
+        )
+        if unclassified:
+            stmt = stmt.where(Material.folder_id.is_(None))
+        elif folder_id is not None:
+            stmt = stmt.where(
+                Material.folder_id == folder_id,
+                (MaterialFolder.id.is_(None)) | (MaterialFolder.archived_at.is_(None)),
+            )
+        stmt = stmt.order_by(
+            KnowledgePoint.level.asc(),
+            KnowledgePoint.sort_order.asc(),
+            KnowledgePoint.created_at.asc(),
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
     def list_by_material_id(
         self,
         material_id: uuid.UUID,
@@ -165,33 +159,11 @@ class KnowledgeRepository:
                 KnowledgePoint.material_id == material_id,
                 KnowledgePoint.user_id == user_id,
             )
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
-        )
-        return list(self.session.execute(stmt).scalars().all())
-
-    def list_by_user_id(
-        self,
-        user_id: uuid.UUID,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[KnowledgePoint]:
-        """分页获取用户所属的所有知识点。
-
-        Args:
-            user_id: 租户用户标识。
-            limit: 单页上限条数。
-            offset: 偏移游标。
-
-        Returns:
-            list[KnowledgePoint]: 知识点实体列表。
-        """
-        stmt = (
-            select(KnowledgePoint)
-            .where(KnowledgePoint.user_id == user_id)
-            .order_by(KnowledgePoint.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 
@@ -213,7 +185,11 @@ class KnowledgeRepository:
         stmt = (
             select(KnowledgePoint)
             .where(KnowledgePoint.user_id == user_id)
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
 
@@ -240,82 +216,13 @@ class KnowledgeRepository:
                 KnowledgePoint.version_id == version_id,
                 KnowledgePoint.user_id == user_id,
             )
-            .order_by(KnowledgePoint.level.asc(), KnowledgePoint.created_at.asc())
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
         )
         return list(self.session.execute(stmt).scalars().all())
-
-    def update_knowledge_point(
-        self,
-        knowledge_point_id: uuid.UUID,
-        user_id: uuid.UUID,
-        **kwargs: Any,
-    ) -> KnowledgePoint | None:
-        """更新单个知识点属性。
-
-        Args:
-            knowledge_point_id: 知识点标识。
-            user_id: 租户用户标识。
-            **kwargs: 待更新的字段键值对。
-
-        Returns:
-            KnowledgePoint | None: 更新后的实体，不存在或越权返回 None。
-        """
-        point = self.get_by_id(knowledge_point_id, user_id)
-        if point is None:
-            return None
-
-        immutable_fields = {"id", "user_id"}
-        for key, value in kwargs.items():
-            if hasattr(point, key) and key not in immutable_fields:
-                setattr(point, key, value)
-        self.session.flush()
-        return point
-
-    def delete_by_id(
-        self,
-        knowledge_point_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> bool:
-        """根据主键和租户用户删除单个知识点。
-
-        Args:
-            knowledge_point_id: 知识点标识。
-            user_id: 租户用户标识。
-
-        Returns:
-            bool: 成功删除返回 True，未找到或越权返回 False。
-        """
-        stmt = delete(KnowledgePoint).where(
-            KnowledgePoint.id == knowledge_point_id,
-            KnowledgePoint.user_id == user_id,
-        )
-        result = self.session.execute(stmt)
-        self.session.flush()
-        count = result.rowcount if isinstance(result, CursorResult) else 0
-        return bool(count > 0)
-
-    def soft_delete_by_material_id(
-        self,
-        material_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> int:
-        """按资料主键清除其下全部知识点。
-
-        Args:
-            material_id: 资料主键。
-            user_id: 租户用户标识。
-
-        Returns:
-            int: 影响的记录行数。
-        """
-        stmt_delete = delete(KnowledgePoint).where(
-            KnowledgePoint.material_id == material_id,
-            KnowledgePoint.user_id == user_id,
-        )
-        result = self.session.execute(stmt_delete)
-        self.session.flush()
-        count = result.rowcount if isinstance(result, CursorResult) else 0
-        return int(count)
 
     def delete_knowledge_points_by_version(
         self,
@@ -376,14 +283,6 @@ class KnowledgeRepository:
         self.session.flush()
         return created
 
-    def create_knowledge_point_snippets(
-        self,
-        mappings: Sequence[KnowledgePointSnippet],
-        user_id: uuid.UUID,
-    ) -> list[KnowledgePointSnippet]:
-        """create_material_relations 别名方法。"""
-        return self.create_material_relations(mappings, user_id)
-
     def get_snippets_for_point(
         self,
         knowledge_point_id: uuid.UUID,
@@ -413,14 +312,6 @@ class KnowledgeRepository:
         )
         return list(self.session.execute(stmt).scalars().all())
 
-    def get_snippets_by_knowledge_point(
-        self,
-        knowledge_point_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[MaterialSnippet]:
-        """get_snippets_for_point 契约别名。"""
-        return self.get_snippets_for_point(knowledge_point_id, user_id)
-
     def get_points_for_snippet(
         self,
         snippet_id: uuid.UUID,
@@ -449,14 +340,6 @@ class KnowledgeRepository:
             .order_by(KnowledgePoint.level.asc(), KnowledgePoint.name.asc())
         )
         return list(self.session.execute(stmt).scalars().all())
-
-    def get_knowledge_points_by_snippet(
-        self,
-        snippet_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[KnowledgePoint]:
-        """get_points_for_snippet 契约别名。"""
-        return self.get_points_for_snippet(snippet_id, user_id)
 
 
 __all__ = ["KnowledgeRepository"]

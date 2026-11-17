@@ -8,7 +8,6 @@
 """
 
 import uuid
-from collections.abc import Sequence
 
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
@@ -48,52 +47,6 @@ class GradingRepository:
         return record
 
     create_grading_record = create_record
-
-    def batch_create_records(
-        self,
-        records: Sequence[GradingRecord],
-        user_id: uuid.UUID,
-    ) -> list[GradingRecord]:
-        """批量创建判题记录，强制重写并校验租户 user_id。
-
-        Args:
-            records: 待持久化的判题记录实体序列。
-            user_id: 租户用户标识。
-
-        Returns:
-            list[GradingRecord]: 已加入会话的判题记录列表。
-        """
-        created: list[GradingRecord] = []
-        for record in records:
-            record.user_id = user_id
-            self.session.add(record)
-            created.append(record)
-        self.session.flush()
-        return created
-
-    batch_create_grading_records = batch_create_records
-
-    def get_record_by_id(
-        self,
-        record_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> GradingRecord | None:
-        """根据主键和租户用户标识查询单个判题记录。
-
-        Args:
-            record_id: 判题记录主键 UUID。
-            user_id: 租户用户标识。
-
-        Returns:
-            GradingRecord | None: 命中的判题记录，不存在或越权返回 None。
-        """
-        stmt = select(GradingRecord).where(
-            GradingRecord.id == record_id,
-            GradingRecord.user_id == user_id,
-        )
-        return self.session.execute(stmt).scalars().first()
-
-    get_grading_record_by_id = get_record_by_id
 
     def list_records_by_attempt_item(
         self,

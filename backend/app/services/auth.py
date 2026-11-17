@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import AuthenticationError, StorageError
+from app.core.extractors import detect_image_type as _detect_image_type
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -33,23 +34,6 @@ from app.schemas.user import UserProfileResponse
 
 logger = logging.getLogger(__name__)
 _AVATAR_MAX_BYTES = 5 * 1024 * 1024
-
-
-def _detect_image_type(data: bytes) -> tuple[str, str] | None:
-    """Return an image MIME type and suffix only for recognized image signatures."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR":
-        return "image/png", ".png"
-    if data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9"):
-        return "image/jpeg", ".jpg"
-    if data.startswith((b"GIF87a", b"GIF89a")) and data.endswith(b";"):
-        return "image/gif", ".gif"
-    if (
-        data.startswith(b"RIFF")
-        and data[8:12] == b"WEBP"
-        and int.from_bytes(data[4:8], "little") + 8 == len(data)
-    ):
-        return "image/webp", ".webp"
-    return None
 
 
 def validate_user_status(user: User | None, payload_token_version: int) -> User:
@@ -89,7 +73,6 @@ class AuthService:
         self,
         session: Session,
         user_repo: UserRepository | None = None,
-        user_repository: UserRepository | None = None,
         storage: StorageProtocol | None = None,
         storage_bucket: str = "",
     ) -> None:
@@ -98,11 +81,9 @@ class AuthService:
         Args:
             session: 数据库事务会话。
             user_repo: 用户数据仓储实例 (可选)。
-            user_repository: 用户数据仓储实例兼容别名 (可选)。
         """
         self.session = session
-        self.user_repo = user_repo or user_repository or UserRepository(session)
-        self.user_repository = self.user_repo
+        self.user_repo = user_repo or UserRepository(session)
         self.storage = storage
         self.storage_bucket = storage_bucket
 
@@ -324,17 +305,6 @@ class AuthService:
             self.session.rollback()
             raise
 
-    def revoke_user_tokens(self, user_id: uuid.UUID) -> bool:
-        """主动吊销令牌方法别名。
-
-        Args:
-            user_id: 归属用户唯一标识 UUID。
-
-        Returns:
-            bool: 是否成功递增版本。
-        """
-        return self.revoke_tokens(user_id)
-
     def get_user_by_id(self, user_id: uuid.UUID) -> User | None:
         """根据用户唯一标识获取用户实体。
 
@@ -502,17 +472,6 @@ class AuthService:
         except Exception:
             self.session.rollback()
             raise
-
-    def delete_user_account(self, user_id: uuid.UUID) -> bool:
-        """注销账号方法别名。
-
-        Args:
-            user_id: 归属用户唯一标识 UUID。
-
-        Returns:
-            bool: 账号是否注销成功。
-        """
-        return self.delete_account(user_id)
 
 
 __all__ = [

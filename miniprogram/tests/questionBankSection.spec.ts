@@ -1,10 +1,5 @@
 /**
- * 题库区块的**取数接线**测试。
- *
- * 为什么单独有这个文件：`questionBank.spec.ts` 的 16 个用例测的是 `useQuestionBank`
- * 组合式函数本身，它们全绿，而「我的题目」在页面上恒为空——因为组件从未调用过
- * `loadBatches`（只有 `@tap` 引用、无生命周期钩子）。**被测单元正确不等于接线正确**，
- * 只有真正挂载组件才拦得住这一类缺陷。
+ * 题库区块的**取数接线**与刷新/展开详情测试。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -24,7 +19,6 @@ const requestedUrls = (): string[] => requestMock.mock.calls.map((c) => String(c
 describe('QuestionBankSection 取数接线', () => {
   beforeEach(() => {
     requestMock.mockReset()
-    // 批次列表接口的分页响应形状：{ items, total }
     requestMock.mockResolvedValue({ items: [], total: 0 })
   })
 
@@ -37,5 +31,79 @@ describe('QuestionBankSection 取数接线', () => {
       urls.some((u) => u.includes('/questions/batches')),
       `挂载后应请求批次列表，实际请求：${JSON.stringify(urls)}`,
     ).toBe(true)
+  })
+
+  it('exposes refresh() via defineExpose and supports lazy answer/analysis expansion', async () => {
+    requestMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.startsWith('/questions/batches')) {
+        return {
+          items: [
+            {
+              batch_id: 'batch_1',
+              question_count: 1,
+              available_count: 1,
+              pending_review_count: 0,
+              created_at: '2026-11-17T08:00:00',
+              sources: [{ material_id: 'm-1', material_title: '贝叶斯分类器.pdf' }],
+            },
+          ],
+          total: 1,
+        }
+      }
+      if (url.startsWith('/questions?')) {
+        return {
+          items: [
+            {
+              id: 'q-1',
+              question_type: 'single_choice',
+              stem: '公式 $P(Y=c_k|X=x)$ 的含义？',
+              batch_id: 'batch_1',
+              status: 'available',
+            },
+          ],
+          total: 1,
+        }
+      }
+      if (url === '/questions/q-1') {
+        return {
+          id: 'q-1',
+          question_type: 'single_choice',
+          stem: '公式 $P(Y=c_k|X=x)$ 的含义？',
+          options: [{ key: 'A', content: '后验概率' }],
+          answer: 'A',
+          analysis: '由贝叶斯定理直接可得后验概率表达式。',
+        }
+      }
+      throw new Error(`unexpected: ${url}`)
+    })
+
+    const wrapper = mount(QuestionBankSection, {
+      props: { wrongRecords: [] },
+      global: {
+        stubs: {
+          'rich-text': {
+            props: ['nodes'],
+            template: '<div class="rt-stub">{{ JSON.stringify(nodes) }}</div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(typeof (wrapper.vm as { refresh?: unknown }).refresh).toBe('function')
+
+    await wrapper.get('.bank-expand-btn').trigger('tap')
+    await flushPromises()
+    expect(wrapper.text()).toContain('查看解析')
+
+    await wrapper.get('.bank-detail-btn').trigger('tap')
+    await flushPromises()
+    expect(wrapper.text()).toContain('参考答案：')
+    expect(wrapper.text()).toContain('后验概率')
+    expect(wrapper.text()).toContain('深度解析：')
+
+    await (wrapper.vm as { refresh: () => Promise<void> }).refresh()
+    await flushPromises()
+    expect(requestedUrls().filter((u) => u.includes('/questions/batches')).length).toBeGreaterThanOrEqual(2)
   })
 })

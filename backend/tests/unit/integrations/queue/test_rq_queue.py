@@ -151,8 +151,8 @@ def test_terminal_failure_callback_marks_grading_recoverable() -> None:
     container.shutdown.assert_awaited_once()
 
 
-def test_terminal_failure_callback_skips_retryable_and_non_grading_tasks() -> None:
-    """仍会被重试的中间失败、以及解析/未知任务都不得回写判题状态."""
+def test_terminal_failure_callback_skips_retryable_and_unknown_tasks() -> None:
+    """仍会被重试的中间失败以及未知任务不得回写终态."""
     user_id = uuid.uuid4()
     practice_id = uuid.uuid4()
     patcher, container = _patch_container()
@@ -170,17 +170,16 @@ def test_terminal_failure_callback_skips_retryable_and_non_grading_tasks() -> No
             RuntimeError("transient"),
             None,
         )
-        # 解析链路的终态失败由 MaterialService 自行回写，回调只做运维日志
         handle_job_terminal_failure(
             _make_job(
                 task_name="parse_material_pipeline",
                 payload={"material_id": str(uuid.uuid4()), "version_id": str(uuid.uuid4())},
                 user_id=str(user_id),
-                should_retry=False,
+                should_retry=True,
             ),
             MagicMock(),
             RuntimeError,
-            RuntimeError("parse failed"),
+            RuntimeError("transient parse"),
             None,
         )
         handle_job_terminal_failure(
@@ -197,7 +196,61 @@ def test_terminal_failure_callback_skips_retryable_and_non_grading_tasks() -> No
         )
 
     container.create_practice_service.assert_not_called()
+    container.create_material_service.assert_not_called()
     container.shutdown.assert_not_awaited()
+
+
+def test_terminal_failure_callback_marks_orphaned_material_parse_failed() -> None:
+    """重试耗尽或异常终止的资料解析任务必须兜底回写 FAILED (worker_terminated)."""
+    user_id = uuid.uuid4()
+    material_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    job = _make_job(
+        task_name="parse_material_pipeline",
+        payload={"material_id": str(material_id), "version_id": str(version_id)},
+        user_id=str(user_id),
+        should_retry=False,
+    )
+    patcher, container = _patch_container()
+
+    with patcher:
+        handle_job_terminal_failure(job, MagicMock(), TimeoutError, TimeoutError("timeout"), None)
+
+    service = container.create_material_service.return_value
+    service.mark_orphaned_parse_failed.assert_called_once_with(
+        material_id=material_id,
+        version_id=version_id,
+        user_id=user_id,
+        failed_stage="worker_terminated",
+        error_message="后台解析任务异常终止 (TimeoutError)，请重新解析",
+    )
+    container.shutdown.assert_awaited_once()
+
+
+def test_rq_has_active_job_inspects_queues_and_registries() -> None:
+    """RQQueueAdapter.has_active_job 应检查队列与活跃注册表中的匹配任务。"""
+    client = MagicMock()
+    adapter = RQQueueAdapter(redis_client=client)
+    version_id = str(uuid.uuid4())
+
+    fake_queue = MagicMock()
+    fake_queue.get_job_ids.return_value = ["job-1"]
+    fake_queue.started_job_registry.get_job_ids.return_value = []
+    fake_queue.scheduled_job_registry.get_job_ids.return_value = []
+    fake_queue.deferred_job_registry.get_job_ids.return_value = []
+
+    matching_job = SimpleNamespace(
+        args=("parse_material_pipeline", {"version_id": version_id}, "u1")
+    )
+    with (
+        patch("app.integrations.queue.rq_adapter.Queue", return_value=fake_queue),
+        patch("app.integrations.queue.rq_adapter.Job.fetch_many", return_value=[matching_job]),
+    ):
+        assert adapter.has_active_job("parse_material_pipeline", {"version_id": version_id}) is True
+        assert (
+            adapter.has_active_job("parse_material_pipeline", {"version_id": str(uuid.uuid4())})
+            is False
+        )
 
 
 def test_terminal_failure_callback_swallows_writeback_errors() -> None:

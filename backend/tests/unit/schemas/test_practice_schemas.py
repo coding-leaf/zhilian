@@ -20,7 +20,6 @@ from pydantic import ValidationError
 
 from app.schemas.material import SourceSnippetDTO
 from app.schemas.practice import (
-    AttemptItemDetailResponse,
     PracticeCreateRequest,
     PracticeCreateResponse,
     PracticeDetailResponse,
@@ -272,8 +271,6 @@ def test_practice_item_detail_response_and_aliases() -> None:
     assert resp_reverse.attempt_item_id == item_id
     assert resp_reverse.time_spent_seconds == 40
     assert resp_reverse.status == "answered"
-
-    assert AttemptItemDetailResponse is PracticeItemDetailResponse
 
 
 def test_practice_item_grading_status_three_states() -> None:

@@ -27,6 +27,7 @@ class SearchSnippetCandidate:
     final_score: float = 0.0
     vector_rank: int | None = None
     bm25_rank: int | None = None
+    snippet_index: int | None = None
 
     def __repr__(self) -> str:
         """安全脱敏，禁止在日志中泄露切片文本全文。"""
@@ -46,6 +47,7 @@ class SearchOptions:
     rrf_k: int = 60
     vector_weight: float = 0.7
     keyword_weight: float = 0.3
+    allowed_snippet_ids: tuple[uuid.UUID, ...] | None = None
 
     def __post_init__(self) -> None:
         """防御性参数合法性校验。"""
@@ -53,6 +55,8 @@ class SearchOptions:
             raise ValueError("top_k must be greater than 0")
         if self.vector_top_k < self.top_k:
             raise ValueError("vector_top_k must be greater than or equal to top_k")
+        if self.allowed_snippet_ids is not None and not isinstance(self.allowed_snippet_ids, tuple):
+            object.__setattr__(self, "allowed_snippet_ids", tuple(self.allowed_snippet_ids))
         if self.fusion_method not in ("rrf", "weighted"):
             raise ValueError("fusion_method must be either 'rrf' or 'weighted'")
 
@@ -103,7 +107,28 @@ class SearchProtocol(Protocol):
         ...
 
 
+@runtime_checkable
+class NeighborSearchProtocol(Protocol):
+    """可选能力：按切片序号扩展相邻上下文（不属于必选的 SearchProtocol）。"""
+
+    def fetch_neighbor_snippets(
+        self,
+        candidates: Sequence[SearchSnippetCandidate],
+        *,
+        user_id: uuid.UUID,
+        window: int = 1,
+    ) -> list[SearchSnippetCandidate]:
+        """返回候选切片 ± window 范围内的相邻切片（不含已在输入中的切片）。
+
+        约束：同 version_id；双方 source_info 均含 page_number 时须相同；
+        以 user_id 做租户隔离；按 (version_id, snippet_index) 排序；
+        返回切片 vector_score/final_score 均为 0.0。
+        """
+        ...
+
+
 __all__ = [
+    "NeighborSearchProtocol",
     "SearchOptions",
     "SearchProtocol",
     "SearchResult",

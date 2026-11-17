@@ -714,40 +714,6 @@ class ReshootLimitExceededError(AppError):
 OCRReshootExceededError = ReshootLimitExceededError
 
 
-class MaterialParseError(AppError):
-    """学习资料解析处理失败异常 (错误码 40003, HTTP 500)。
-
-    当文本提取、OCR 门禁未通过或切分/向量化失败时抛出。
-
-    Args:
-        message: 异常描述文案，默认 "学习资料解析处理失败"。
-        details: 结构化附加诊断信息。
-        error_code: 错误码，默认 40003。
-        status_code: HTTP 状态码，默认 500。
-        code: 错误码别名参数。
-        detail: 附加信息别名参数。
-    """
-
-    def __init__(
-        self,
-        message: str = "学习资料解析处理失败",
-        details: dict[str, Any] | None = None,
-        *,
-        error_code: int = 40003,
-        status_code: int = 500,
-        code: int | None = None,
-        detail: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(
-            error_code=error_code,
-            message=message,
-            status_code=status_code,
-            details=details,
-            code=code,
-            detail=detail,
-        )
-
-
 class MaterialNotFoundError(AppError):
     """学习资料或版本不存在异常 (错误码 40004, HTTP 404)。
 
@@ -769,32 +735,6 @@ class MaterialNotFoundError(AppError):
         *,
         error_code: int = 40004,
         status_code: int = 404,
-        code: int | None = None,
-        detail: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(
-            error_code=error_code,
-            message=message,
-            status_code=status_code,
-            details=details,
-            code=code,
-            detail=detail,
-        )
-
-
-class KnowledgePointQualityError(AppError):
-    """知识点质检门禁严重拦截异常 (错误码 40005, HTTP 400)。
-
-    当知识点抽取结果未通过四项门禁质检且无法自愈时抛出。
-    """
-
-    def __init__(
-        self,
-        message: str = "知识点质检未达到合格门禁标准",
-        details: dict[str, Any] | None = None,
-        *,
-        error_code: int = 40005,
-        status_code: int = 400,
         code: int | None = None,
         detail: dict[str, Any] | None = None,
     ) -> None:
@@ -872,32 +812,6 @@ class MissingSourceSnippetError(AppError):
         details: dict[str, Any] | None = None,
         *,
         error_code: int = 40003,
-        status_code: int = 400,
-        code: int | None = None,
-        detail: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(
-            error_code=error_code,
-            message=message,
-            status_code=status_code,
-            details=details,
-            code=code,
-            detail=detail,
-        )
-
-
-class QuestionQualityCheckError(AppError):
-    """题目质检未通过门禁异常 (错误码 40008, HTTP 400)。
-
-    当题目质检四项一票否决门禁未通过且重试耗尽时抛出。
-    """
-
-    def __init__(
-        self,
-        message: str = "题目质检未达到合格门禁标准",
-        details: dict[str, Any] | None = None,
-        *,
-        error_code: int = 40008,
         status_code: int = 400,
         code: int | None = None,
         detail: dict[str, Any] | None = None,
@@ -1042,13 +956,14 @@ class AttemptItemNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if attempt_item_id is not None:
             merged_details["attempt_item_id"] = str(attempt_item_id)
+        # BUG-FIX: 不传 detail 别名给父类，否则 AppError.__init__ 会优先使用 detail 别名，
+        # 覆盖 merged_details 中已注入的 attempt_item_id。仅通过 details 通道传递即可。
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
@@ -1176,13 +1091,13 @@ class MasteryRecordNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if knowledge_point_id is not None:
             merged_details["knowledge_point_id"] = str(knowledge_point_id)
+        # BUG-FIX: 同 AttemptItemNotFoundError，不传 detail 别名以保留参数注入合并语义。
         super().__init__(
             error_code=error_code,
             message=message,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
@@ -1203,13 +1118,13 @@ class WrongRecordNotFoundError(AppError):
         merged_details = dict(detail or details or {})
         if record_id is not None:
             merged_details["record_id"] = str(record_id)
+        # BUG-FIX: 同 AttemptItemNotFoundError，不传 detail 别名以保留参数注入合并语义。
         super().__init__(
             message=message,
             error_code=error_code,
             status_code=status_code,
             details=merged_details,
             code=code,
-            detail=detail,
         )
 
 
@@ -1265,6 +1180,29 @@ class FolderNameConflictError(AppError):
         )
 
 
+class QuestionGenerationJobNotFoundError(AppError):
+    """异步出题任务不存在或无权访问异常 (错误码 40022, HTTP 404)。"""
+
+    def __init__(
+        self,
+        message: str = "请求的出题任务不存在或无权访问",
+        details: dict[str, Any] | None = None,
+        *,
+        error_code: int = 40022,
+        status_code: int = 404,
+        code: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            error_code=error_code,
+            message=message,
+            status_code=status_code,
+            details=details,
+            code=code,
+            detail=detail,
+        )
+
+
 __all__ = [
     "AppError",
     "AttemptItemNotFoundError",
@@ -1281,7 +1219,6 @@ __all__ = [
     "IdempotencyKeyInvalidError",
     "KnowledgeExtractionRetryExceededError",
     "KnowledgeNotFoundError",
-    "KnowledgePointQualityError",
     "LLMAuthError",
     "LLMError",
     "LLMResponseFormatError",
@@ -1289,7 +1226,6 @@ __all__ = [
     "MasteryRecordNotFoundError",
     "MaterialInvalidError",
     "MaterialNotFoundError",
-    "MaterialParseError",
     "MissingSourceSnippetError",
     "OCRAuthError",
     "OCRError",
@@ -1303,8 +1239,8 @@ __all__ = [
     "PracticeSessionNotFoundError",
     "PracticeSessionStatusError",
     "PracticeStatusError",
+    "QuestionGenerationJobNotFoundError",
     "QuestionNotFoundError",
-    "QuestionQualityCheckError",
     "QueueError",
     "QueueTimeoutError",
     "ReshootLimitExceededError",

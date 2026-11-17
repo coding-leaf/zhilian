@@ -10,6 +10,7 @@ from app.integrations.search.factory import create_search_adapter
 from app.integrations.search.fake import FakeSearchAdapter
 from app.integrations.search.pgvector import PgvectorHybridSearchAdapter
 from app.integrations.search.protocol import (
+    NeighborSearchProtocol,
     SearchOptions,
     SearchProtocol,
     SearchResult,
@@ -18,6 +19,7 @@ from app.integrations.search.protocol import (
 
 __all__ = [
     "FakeSearchAdapter",
+    "NeighborSearchProtocol",
     "PgvectorHybridSearchAdapter",
     "SearchOptions",
     "SearchProtocol",

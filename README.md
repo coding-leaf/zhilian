@@ -34,27 +34,33 @@
 | 后端 | Python 3.13 · FastAPI · SQLAlchemy 2.x（async）· Alembic · Pydantic v2 |
 | 数据 | PostgreSQL 16 + pgvector（向量）· Redis 7（队列 / 幂等）· MinIO（对象存储） |
 | 异步 | RQ 后台 worker |
-| 前端 | uni-app · Vue 3 · TypeScript · Pinia · Wot Design Uni（微信小程序） |
+| 前端 | uni-app · Vue 3 · TypeScript · Pinia（微信小程序原生组件 + 温润学术设计令牌） |
 | 质量 | ruff · mypy(strict) · import-linter · pytest · eslint · vue-tsc · vitest |
 
 架构上有一条硬约束：**五层单向依赖**（`api → services → repositories`），
-外加「算法核禁止 IO」「仓储层禁止外部框架」等契约，由 import-linter 强制，越层调用直接失败。
+外加「算法核禁止 IO」「仓储层禁止外部框架」「接口层禁止直接依赖适配层」等契约，由 import-linter 强制，越层调用直接失败。
 
-外部能力（大模型 / OCR / 向量化 / 对象存储 / 队列）全部走协议抽象，**每个都有一套纯内存假实现**。
-因此全量测试不依赖数据库与网络——这是 548 个测试函数能在秒级跑完的原因。
+外部能力（大模型 / OCR / 向量化 / 对象存储 / 队列 / 幂等）全部走协议抽象，**每个都有一套纯内存假实现**。
+因此全量测试不依赖数据库与网络——这是 1,639 个测试函数能在秒级跑完的原因。
 
 ## 3 目录结构
 
 ```
-backend/            FastAPI 服务
-  app/core/algorithms/   9 个纯函数算法核（分块 / 质检 / 判题 / 掌握度 / 诊断 / 检索）
-  app/services/          业务编排（事务边界在这一层）
+backend/            FastAPI 服务（Python 3.13）
+  app/core/algorithms/   10 个纯函数算法核（分块 / 建树 / 检索 / 质检 / 判题 / 掌握度 / 诊断 / 练习）
+  app/core/extractors/   文件魔数校验与 PDF / DOCX / PPTX 文本抽取
+  app/services/          领域业务编排与内部拆分模块（事务边界在这一层）
   app/repositories/      数据访问
   app/integrations/      外部能力适配（协议抽象 + 假实现 + 生产实现）
-  app/api/v1/            路由层，只做校验与转发
-  migrations/            10 个 Alembic 迁移
-  tests/                 91 个测试文件、548 个测试函数
-miniprogram/        uni-app 小程序端（18 个页面）
+  app/api/v1/, deps/     路由层与依赖注入，只做校验与转发
+  migrations/            10 个 Alembic 迁移（0001–0010）
+  tests/                 104 个测试文件、1,639 个测试函数
+miniprogram/        uni-app 小程序端（8 个页面、23 个自定义组件）
+  src/api/               分域接口模块（modules/）与后端契约归一化（adapters/）
+  src/types/, stores/    分域类型定义与 Pinia 状态管理
+  src/styles/, utils/    温润学术样式令牌/共享基元（tokens/modal/common）与纯函数工具
+  src/pages/, subpackages/ 主包 4 页 + material / practice / report 3 个分包 4 页
+  tests/                 21 个 Vitest 单测文件、172 个用例（纳入 vue-tsc 检查）
 deploy/             docker-compose：postgres+pgvector / redis / minio / worker
 docs/               设计规范、开发过程文档、待解决问题、截图、团队分工
 .trellis/           开发过程记录（任务树 PRD / 设计与执行计划、规范、开发日志）
@@ -92,7 +98,7 @@ pnpm run dev:mp-weixin        # 产物在 dist/dev/mp-weixin
 ```bash
 task verify           # 全量：后端 + 前端
 task verify-backend   # ruff format/check · mypy(strict) · import-linter · pytest（覆盖率 ≥ 80%）
-task verify-frontend  # eslint · vue-tsc · vitest
+task verify-frontend  # eslint · vue-tsc（src + tests）· vitest（含覆盖率统计）
 task format           # 自动格式化
 ```
 
@@ -102,7 +108,7 @@ task format           # 自动格式化
 cd backend    && uv run ruff format --check . && uv run ruff check . && uv run mypy app \
               && uv run lint-imports \
               && uv run pytest tests --cov=app --cov-branch --cov-fail-under=80
-cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:unit
+cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:cov
 ```
 
 同一套门禁已接进 GitHub Actions（`.github/workflows/verify.yml`），push 与 PR 都会跑。
@@ -117,17 +123,15 @@ cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:unit
 
 | 指标 | 数值 |
 | --- | --- |
-| 提交 | 250 次（2026-09-23 起） |
-| 后端算法核 | 9 个纯函数模块，分支覆盖率 100% |
-| 后端测试 | 91 个文件 / 548 个测试函数 |
-| 前端单元测试 | 13 个文件 / 125 个用例 |
-| 数据库迁移 | 10 个 Alembic 版本 |
+| 提交 | 294+ 次（2026-09-23 起） |
+| 后端算法核 | 10 个纯函数模块 |
+| 后端测试 | 104 个文件 / 1,639 个测试函数 |
+| 前端单元测试 | 21 个文件 / 172 个用例 |
+| 数据库迁移 | 10 个 Alembic 版本（0001–0010） |
 
 ## 7 已知问题
 
-尚在收口的功能缺陷按优先级列在 **[docs/后续待解决问题.md](docs/后续待解决问题.md)**，其中阻塞项包括：
-解析流水线可能卡死且不可恢复、出题链路缺少反馈、思考模式模型上结构化输出不可用、
-个人页学习足迹统计口径漏算。
+尚在收口的功能缺陷按优先级列在 **[docs/后续待解决问题.md](docs/后续待解决问题.md)**，其中原 `P1-4` 学习足迹统计、`P1-5` 举一反三题数同步与 `P1-9` 错题薄弱点数渲染等缺陷已核销修复；当前主要待收口项包括：解析流水线卡死恢复、思考模式结构化输出端到端确认、出题链路三态反馈收口与学情页空态/错态区分。
 
 ## 8 文档索引
 
@@ -139,7 +143,7 @@ cd miniprogram && pnpm run lint && pnpm run type-check && pnpm run test:unit
 | [docs/DESIGN.md](docs/DESIGN.md) | 前端设计规范（色值、间距、动效的量化事实源） |
 | [docs/screenshots/](docs/screenshots/) | 界面截图与说明 |
 | [docs/specs_extracted/](docs/specs_extracted/) | 软件需求规格说明书 V2.0 · 概要设计说明书 V1.0 · 代码管理工作介绍 V1.0 |
-| [docs/legacy_sdlc/](docs/legacy_sdlc/) | P0 任务拓扑矩阵（ROADMAP）、交付台账（ARCHIVE）、范围对齐函 |
+| [docs/legacy_sdlc/](docs/legacy_sdlc/) | 早期 SDLC 历史归档（只读封存，已由 `.trellis/tasks/` 接管） |
 | [AGENTS.md](AGENTS.md) | 工程约定与本机工具链注意事项 |
 
 ## 9 约定

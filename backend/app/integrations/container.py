@@ -2,7 +2,8 @@
 
 严格遵循 AGENTS.md 架构分层规范：
 - 属于 app/integrations 适配层，绝对禁止反向导入 app.services 或 app.repositories；
-- 集中统一分发并持有 7 块协议实例 (LLM, OCR, Storage, Search, Queue, Idempotency, Embedding)；
+- 集中统一分发并持有 7 块必备协议实例 (LLM, OCR, Storage, Search, Queue, Idempotency, Embedding)，
+  以及 2 块可选能力 (Rerank 精排缺省 Fake 实现；VLM 脏页转录缺省为 None)；
 - 提供生命周期关闭钩子 (shutdown)。
 """
 
@@ -14,12 +15,15 @@ from app.integrations.embedding.factory import create_embedding_adapter
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.idempotency.factory import create_idempotency_adapter
 from app.integrations.idempotency.protocol import IdempotencyProtocol
-from app.integrations.llm.factory import create_llm_adapter
+from app.integrations.llm.factory import create_llm_adapter, create_vlm_adapter
 from app.integrations.llm.protocol import LLMProtocol
 from app.integrations.ocr.factory import create_ocr_adapter
 from app.integrations.ocr.protocol import OCRProtocol
 from app.integrations.queue.factory import create_queue_adapter
 from app.integrations.queue.protocol import QueueProtocol
+from app.integrations.rerank.factory import create_rerank_adapter
+from app.integrations.rerank.fake import FakeRerankAdapter
+from app.integrations.rerank.protocol import RerankProtocol
 from app.integrations.search.factory import create_search_adapter
 from app.integrations.search.protocol import SearchProtocol
 from app.integrations.storage.factory import create_storage_adapter
@@ -42,6 +46,8 @@ class ProviderRegistry:
         queue: QueueProtocol | None = None,
         idempotency: IdempotencyProtocol | None = None,
         embedding: EmbeddingProtocol | None = None,
+        rerank: RerankProtocol | None = None,
+        vlm: LLMProtocol | None = None,
         *,
         strict: bool = False,
     ) -> None:
@@ -55,6 +61,8 @@ class ProviderRegistry:
             queue: 任务队列协议适配器。
             idempotency: 幂等拦截协议适配器。
             embedding: 向量化协议适配器。
+            rerank: 精排协议适配器（可选，缺省自动装配 FakeRerankAdapter，不计入 strict 校验）。
+            vlm: 视觉语言模型适配器（可选，None 表示未启用云端 VLM 脏页转录）。
             strict: 是否在构造时强制验证所有协议均已就绪。
 
         Raises:
@@ -67,6 +75,8 @@ class ProviderRegistry:
         self._queue = queue
         self._idempotency = idempotency
         self._embedding = embedding
+        self._rerank: RerankProtocol = rerank if rerank is not None else FakeRerankAdapter()
+        self._vlm = vlm
 
         if strict:
             self.validate()
@@ -197,6 +207,32 @@ class ProviderRegistry:
     def embedding(self, adapter: EmbeddingProtocol) -> None:
         self._embedding = adapter
 
+    @property
+    def rerank(self) -> RerankProtocol:
+        """获取精排协议适配器（缺省为确定性 FakeRerankAdapter）。
+
+        Returns:
+            RerankProtocol: 精排适配器实例。
+        """
+        return self._rerank
+
+    @rerank.setter
+    def rerank(self, adapter: RerankProtocol) -> None:
+        self._rerank = adapter
+
+    @property
+    def vlm(self) -> LLMProtocol | None:
+        """获取视觉语言模型适配器；未启用云端 VLM 时为 None。
+
+        Returns:
+            LLMProtocol | None: VLM 适配器实例或 None。
+        """
+        return self._vlm
+
+    @vlm.setter
+    def vlm(self, adapter: LLMProtocol | None) -> None:
+        self._vlm = adapter
+
     def register_llm(self, adapter: LLMProtocol) -> "ProviderRegistry":
         """注册或覆盖大语言模型适配器。"""
         self.llm = adapter
@@ -232,8 +268,18 @@ class ProviderRegistry:
         self.embedding = adapter
         return self
 
+    def register_rerank(self, adapter: RerankProtocol) -> "ProviderRegistry":
+        """注册或覆盖精排适配器。"""
+        self.rerank = adapter
+        return self
+
+    def register_vlm(self, adapter: LLMProtocol | None) -> "ProviderRegistry":
+        """注册或覆盖 VLM 适配器。"""
+        self.vlm = adapter
+        return self
+
     def validate(self) -> None:
-        """验证所有 7 块协议适配器均已就绪。
+        """验证所有 7 块必备协议适配器均已就绪（rerank / vlm 为可选能力）。
 
         Raises:
             ValueError: 存在尚未注册的协议适配器。
@@ -347,6 +393,33 @@ class ProviderRegistry:
             embedding_adapter=embedding,
         )
 
+        rerank_api_key = (
+            settings.rerank.api_key.get_secret_value()
+            if settings.rerank.api_key is not None
+            else None
+        )
+        rerank = create_rerank_adapter(
+            adapter_type=settings.rerank.provider if settings.rerank.enabled else "fake",
+            api_key=rerank_api_key,
+            base_url=settings.rerank.base_url,
+            model=settings.rerank.model,
+            timeout=settings.rerank.timeout,
+            max_retries=settings.rerank.max_retries,
+        )
+
+        vlm_api_key = (
+            settings.vlm.api_key.get_secret_value() if settings.vlm.api_key is not None else None
+        )
+        vlm = create_vlm_adapter(
+            enabled=settings.vlm.enabled,
+            adapter_type=settings.vlm.provider,
+            api_key=vlm_api_key,
+            base_url=settings.vlm.base_url,
+            model=settings.vlm.model,
+            timeout=settings.vlm.timeout,
+            max_retries=settings.vlm.max_retries,
+        )
+
         queue_redis_url = settings.redis.redis_url if settings.queue.provider == "redis" else None
         queue = create_queue_adapter(
             adapter_type=settings.queue.provider,
@@ -371,6 +444,8 @@ class ProviderRegistry:
             queue=queue,
             idempotency=idempotency,
             embedding=embedding,
+            rerank=rerank,
+            vlm=vlm,
             strict=True,
         )
 
@@ -393,6 +468,8 @@ class ProviderRegistry:
             self._queue,
             self._idempotency,
             self._embedding,
+            self._rerank,
+            self._vlm,
         ):
             if adapter is None:
                 continue

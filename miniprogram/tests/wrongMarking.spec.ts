@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
 const { requestMock } = vi.hoisted(() => ({ requestMock: vi.fn() }))
@@ -84,7 +84,7 @@ describe('wrong mark action routing', () => {
 })
 
 describe('useWrongMarking', () => {
-  let records: ReturnType<typeof ref<WrongRecordItem[]>>
+  let records: Ref<WrongRecordItem[]>
 
   beforeEach(() => {
     requestMock.mockReset()
@@ -215,9 +215,7 @@ describe('manual wrong record enters the regeneration scope (AC-6, bounded)', ()
           quality_checks: [],
         }
       }
-      if (options.url === '/practices') return { id: 'p-new', title: '错题巩固练习' }
-      // apiCreatePractice 创建后会再拉一次会话详情，进作答页用的是这一份。
-      if (options.url === '/practices/p-new') {
+      if (options.url === '/practices') {
         return {
           id: 'p-new',
           title: '错题巩固练习',

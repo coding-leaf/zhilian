@@ -116,7 +116,11 @@ class ErrorType(enum.StrEnum):
     MANUAL = "manual"
 
 
-def build_question_snapshot(question: "Question") -> dict[str, Any]:
+def build_question_snapshot(
+    question: "Question",
+    *,
+    knowledge_point_name: str | None = None,
+) -> dict[str, Any]:
     """从题目实体构造练习作答项与错题本共用的题目快照字典。
 
     唯一构造入口：`PracticeService.create_practice`（作答项快照）与手动错题标记
@@ -125,10 +129,16 @@ def build_question_snapshot(question: "Question") -> dict[str, Any]:
 
     Args:
         question: 题目 ORM 实体。
+        knowledge_point_name: 可选显式传入的知识点名称（避免脱管懒加载）。
 
     Returns:
         dict[str, Any]: 与 `validate_question_snapshot` 配对校验的题目快照字典。
     """
+    resolved_kp_name = knowledge_point_name
+    if resolved_kp_name is None:
+        loaded_kp = getattr(question, "__dict__", {}).get("knowledge_point")
+        if loaded_kp is not None:
+            resolved_kp_name = getattr(loaded_kp, "name", None)
     return {
         "stem": question.stem,
         "question_type": question.question_type,
@@ -140,6 +150,7 @@ def build_question_snapshot(question: "Question") -> dict[str, Any]:
         "knowledge_point_id": (
             str(question.knowledge_point_id) if question.knowledge_point_id else None
         ),
+        "knowledge_point_name": resolved_kp_name,
         "source_snippet_id": (
             str(question.source_snippet_id) if question.source_snippet_id else None
         ),

@@ -1,0 +1,16 @@
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/prd.md", "reason": "Task requirements and acceptance criteria"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/design.md", "reason": "Technical design across frontend and backend"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/implement.md", "reason": "Workstream breakdown and implementation checklist"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/research/issue1-ui-and-coach.md", "reason": "Verified root causes for UI blurriness and AI coach font/verbosity/tone"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/research/issue2-reparse-stuck.md", "reason": "Verified root causes for 60% reparse freeze and latent pipeline defects"}
+{"file": ".trellis/tasks/11-17-ux-reparse-coach-kp-drawer/research/issue3-kp-drawer-and-compose.md", "reason": "Verified root causes for compose KP bloat, count conflict, and 50-question truncation"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture, line caps, and learning loop contracts"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue 3 SFC conventions, props/emits, v-model:visible, zero emoji, non-recursive"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Composable conventions and useQuestionCompose contract"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gates, backdrop/scroll-view/loading rules, coverage contract"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store patterns and polling/error rules"}
+{"file": ".trellis/spec/frontend/api-payload-contracts.md", "reason": "Practice creation and async question job payload contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend layering, ruff/mypy/import-linter, retry and multi-KP contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError hierarchy, rollback, and failure state contracts"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLAlchemy session, cascade, and query conventions"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer field and state contract alignment"}

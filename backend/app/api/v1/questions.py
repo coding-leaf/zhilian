@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Query, Request, status
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.pagination import PaginationParams, get_pagination_params
 from app.api.deps.question import get_question_service
 from app.models.user import User
 from app.schemas.question import (
@@ -27,6 +28,8 @@ from app.schemas.question import (
     QuestionEditLogResponse,
     QuestionGenerateRequest,
     QuestionGenerateResponse,
+    QuestionGenerationJobListResponse,
+    QuestionGenerationJobResponse,
     QuestionListResponse,
     QuestionQualityCheckResponse,
     QuestionUpdateRequest,
@@ -43,7 +46,10 @@ from app.services.question import (
 router = APIRouter(tags=["questions"])
 
 
-async def _resolve_delete_reason(request: Request, reason: str | None) -> str | None:
+async def _resolve_delete_reason(
+    request: Request,
+    reason: Annotated[str | None, Query(description="删除原因说明")] = None,
+) -> str | None:
     """解析删除原因，优先 Query，缺省时兜底读取 JSON 请求体的 reason 字段。
 
     Args:
@@ -116,7 +122,7 @@ def _build_generate_response(
     status_code=status.HTTP_200_OK,
     summary="触发出题生成与质检门禁",
 )
-async def generate_questions(
+def generate_questions(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     payload: Annotated[QuestionGenerateRequest, Body(description="出题生成配置请求体")],
@@ -196,13 +202,71 @@ async def generate_questions(
     )
 
 
+@router.post(
+    "/questions/jobs",
+    response_model=QuestionGenerationJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="创建异步出题队列任务",
+)
+def create_question_generation_job(
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    payload: Annotated[QuestionGenerateRequest, Body(description="异步出题配置请求体")],
+) -> QuestionGenerationJobResponse:
+    """创建后台异步出题任务并入队调度，立即返回 queued 状态任务凭证。"""
+    job = question_service.create_generation_job(user_id=user.id, payload=payload)
+    return QuestionGenerationJobResponse.model_validate(job)
+
+
+@router.get(
+    "/questions/jobs",
+    response_model=QuestionGenerationJobListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查询异步出题任务列表",
+)
+def list_question_generation_jobs(
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    active_only: Annotated[bool, Query(description="是否仅返回进行中(queued/running)任务")] = False,
+    material_id: Annotated[uuid.UUID | None, Query(description="按学习资料筛选")] = None,
+    folder_id: Annotated[uuid.UUID | None, Query(description="按课程文件夹筛选")] = None,
+) -> QuestionGenerationJobListResponse:
+    """分页/条件查询当前用户的异步出题任务状态列表。"""
+    jobs, total = question_service.list_generation_jobs(
+        user_id=user.id,
+        active_only=active_only,
+        material_id=material_id,
+        folder_id=folder_id,
+    )
+    return QuestionGenerationJobListResponse(
+        items=[QuestionGenerationJobResponse.model_validate(j) for j in jobs],
+        total=total,
+    )
+
+
+@router.get(
+    "/questions/jobs/{job_id}",
+    response_model=QuestionGenerationJobResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查询单个异步出题任务详情与进度",
+)
+def get_question_generation_job(
+    job_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+) -> QuestionGenerationJobResponse:
+    """查询指定异步出题任务的实时进度与终态结果，越权或不存在返回 404。"""
+    job = question_service.get_generation_job(user_id=user.id, job_id=job_id)
+    return QuestionGenerationJobResponse.model_validate(job)
+
+
 @router.get(
     "/questions/batches",
     response_model=QuestionBatchListResponse,
     status_code=status.HTTP_200_OK,
     summary="按出题批次聚合查询题库批次列表",
 )
-async def list_question_batches(
+def list_question_batches(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
@@ -241,7 +305,7 @@ async def list_question_batches(
     status_code=status.HTTP_200_OK,
     summary="获取题目详情",
 )
-async def get_question_detail(
+def get_question_detail(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
@@ -259,7 +323,7 @@ async def get_question_detail(
     Raises:
         QuestionNotFoundError: 题目不存在或越权访问 (40009)。
     """
-    question = question_service.get_question_detail(
+    question = question_service.get_question(
         question_id=id,
         user_id=user.id,
     )
@@ -274,7 +338,7 @@ async def get_question_detail(
     status_code=status.HTTP_200_OK,
     summary="AI 助教深度答疑追问",
 )
-async def ask_coach(
+def ask_coach(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
@@ -309,7 +373,7 @@ async def ask_coach(
     status_code=status.HTTP_200_OK,
     summary="根据课程资料来源回答问题",
 )
-async def ask_scoped_coach(
+def ask_scoped_coach(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     payload: ScopedCoachRequest,
@@ -321,6 +385,7 @@ async def ask_scoped_coach(
         folder_id=payload.folder_id,
         material_id=payload.material_id,
         knowledge_point_id=payload.knowledge_point_id,
+        thread_id=payload.thread_id,
     )
 
 
@@ -330,9 +395,10 @@ async def ask_scoped_coach(
     status_code=status.HTTP_200_OK,
     summary="多条件筛选查询题目列表",
 )
-async def list_questions(
+def list_questions(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
+    pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
     folder_id: Annotated[uuid.UUID | None, Query(description="按课程文件夹标识过滤")] = None,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="按知识点标识过滤")] = None,
@@ -346,16 +412,13 @@ async def list_questions(
     unbatched: Annotated[
         bool, Query(description="只看未分批的历史题目 (batch_id IS NULL)")
     ] = False,
-    page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="每页记录数")] = 20,
-    limit: Annotated[int | None, Query(ge=1, le=100, description="单页限制 (兼容)")] = None,
-    offset: Annotated[int | None, Query(ge=0, description="游标偏移量 (兼容)")] = None,
 ) -> QuestionListResponse:
     """多条件组合筛选并分页查询题目列表。
 
     Args:
         user: 当前已认证登录租户用户对象。
         question_service: 题目领域编排服务。
+        pagination: 归一化后的分页查询参数。
         material_id: 可选的资料主键过滤。
         folder_id: 可选的课程文件夹主键过滤。
         knowledge_point_id: 可选的知识点主键过滤。
@@ -365,16 +428,10 @@ async def list_questions(
         status_filter: 别名状态过滤。
         batch_id: 可选的出题生成批次标识过滤。
         unbatched: 为 True 时只返回 batch_id 为空的历史题目。
-        page: 页码。
-        page_size: 每页记录数。
-        limit: 单页记录数限制。
-        offset: 游标偏移量。
 
     Returns:
         QuestionListResponse: 分页题目列表及总数。
     """
-    effective_limit = limit if limit is not None else page_size
-    effective_offset = offset if offset is not None else (max(page - 1, 0) * effective_limit)
     effective_status = review_status if review_status is not None else status_filter
 
     items, total = question_service.list_questions(
@@ -387,18 +444,18 @@ async def list_questions(
         review_status=effective_status,
         batch_id=batch_id,
         unbatched=unbatched,
-        page=page,
-        page_size=effective_limit,
-        limit=effective_limit,
-        offset=effective_offset,
+        page=pagination.raw_page,
+        page_size=pagination.limit,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     list_items = [QuestionDetailResponse.model_validate(q) for q in items]
     question_service.attach_source_snippets(list_items, user_id=user.id)
     return QuestionListResponse(
         items=list_items,
         total=total,
-        limit=effective_limit,
-        offset=effective_offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -408,7 +465,7 @@ async def list_questions(
     status_code=status.HTTP_200_OK,
     summary="题目审核与人工修改（写入修改审计日志）",
 )
-async def update_question(
+def update_question(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
@@ -452,21 +509,19 @@ async def update_question(
     status_code=status.HTTP_200_OK,
     summary="软删除题目",
 )
-async def delete_question(
+def delete_question(
     id: uuid.UUID,
-    request: Request,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
-    reason: Annotated[str | None, Query(description="删除原因说明")] = None,
+    resolved_reason: Annotated[str | None, Depends(_resolve_delete_reason)],
 ) -> QuestionDeleteResponse:
     """对题目执行软删除并保留不可变审计痕迹。
 
     Args:
         id: 题目主键 UUIDv4。
-        request: 原始 HTTP 请求对象，用于请求体原因兜底解析。
         user: 当前已认证登录租户用户对象。
         question_service: 题目领域编排服务。
-        reason: 可选的删除原因备注。
+        resolved_reason: 解析到的可选删除原因备注。
 
     Returns:
         QuestionDeleteResponse: 软删除执行结果。
@@ -474,7 +529,6 @@ async def delete_question(
     Raises:
         QuestionNotFoundError: 题目不存在或越权 (40009)。
     """
-    resolved_reason = await _resolve_delete_reason(request, reason)
     success = question_service.delete_question(
         question_id=id,
         user_id=user.id,
@@ -493,7 +547,7 @@ async def delete_question(
     status_code=status.HTTP_200_OK,
     summary="查看题目修改痕迹审计日志",
 )
-async def list_question_edit_logs(
+def list_question_edit_logs(
     id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
@@ -527,7 +581,7 @@ async def list_question_edit_logs(
     status_code=status.HTTP_200_OK,
     summary="查看资料下题目质检拦截记录",
 )
-async def list_material_quality_checks(
+def list_material_quality_checks(
     material_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],

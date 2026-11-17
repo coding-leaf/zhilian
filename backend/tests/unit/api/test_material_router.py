@@ -76,6 +76,45 @@ def mock_material_service() -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("counts", [(0, 0), (4, 51)])
+async def test_material_statistics_static_route(
+    mock_user: User,
+    mock_material_service: MagicMock,
+    counts: tuple[int, int],
+) -> None:
+    """静态统计路径不得被 UUID 详情路由捕获，计数只来自当前用户。"""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+    mock_material_service.get_statistics.return_value = counts
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/materials/statistics")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ready_material_count": counts[0],
+        "knowledge_point_count": counts[1],
+    }
+    mock_material_service.get_statistics.assert_called_once_with(user_id=mock_user.id)
+    mock_material_service.get_material_detail.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_material_statistics_requires_authentication(
+    mock_material_service: MagicMock,
+) -> None:
+    app = create_test_app()
+    app.dependency_overrides[get_material_service] = lambda: mock_material_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/materials/statistics")
+
+    assert response.status_code == 401
+    mock_material_service.get_statistics.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_upload_material_success(mock_user: User, mock_material_service: MagicMock) -> None:
     """Tests successful file upload via POST /api/v1/materials/upload."""
     app = create_test_app()
@@ -294,6 +333,8 @@ async def test_get_material_detail_success(
     assert payload["versions_count"] == 1
     assert "parse_status" in payload
     assert "progress_percentage" in payload
+    assert payload["error_message"] is None
+    assert payload["failed_stage"] is None
 
     mock_material_service.get_material_detail.assert_called_once_with(
         material_id=material_id,
@@ -408,6 +449,8 @@ async def test_list_materials_success(mock_user: User, mock_material_service: Ma
     assert len(data["items"]) == 2
     assert data["items"][0]["id"] == str(m1.id)
     assert data["items"][0]["title"] == "高等数学讲义.pdf"
+    assert data["items"][0]["error_message"] is None
+    assert data["items"][0]["failed_stage"] is None
     assert data["items"][1]["id"] == str(m2.id)
 
     mock_material_service.list_materials.assert_called_once_with(
@@ -1247,7 +1290,7 @@ async def test_tenant_cross_access_isolation(
 def test_unimplemented_service_dependency() -> None:
     """Tests that calling default get_material_service raises NotImplementedError."""
     with pytest.raises(NotImplementedError) as exc_info:
-        get_material_service()
+        next(get_material_service())
     assert "MaterialService 生产装配工厂尚未挂载" in str(exc_info.value)
 
 

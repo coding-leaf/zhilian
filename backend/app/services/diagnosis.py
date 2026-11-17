@@ -10,23 +10,18 @@
 - 纯函数计算核隔离调度。
 """
 
-import contextlib
 import logging
 import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, SupportsIndex, overload
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.algorithms.diagnosis import (
-    KnowledgeEvaluationInput,
-    MistakeEvidence,
-    synthesize_diagnosis_report,
-)
+from app.core.algorithms.diagnosis import synthesize_diagnosis_report
 from app.core.algorithms.mastery import (
     AttemptRecord,
     GradingSourceType,
@@ -41,7 +36,7 @@ from app.core.errors import (
     QuestionNotFoundError,
     WrongRecordNotFoundError,
 )
-from app.core.security import generate_user_ref
+from app.core.logging import log_structured_metric
 from app.models.practice import (
     DiagnosisReport,
     ErrorType,
@@ -58,6 +53,15 @@ from app.repositories.grading import GradingRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
+from app.services._diagnosis_report import (
+    build_diagnosis_report_entity,
+    build_evaluation_inputs_and_mistakes,
+    collect_involved_point_ids,
+    ensure_utc,
+    evaluate_graded_items_partial,
+    evaluate_practice_items,
+    sync_wrong_records_from_evaluations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,48 +91,6 @@ class UserMasteryOverviewDTO:
     basic_count: int
     proficient_count: int
     weak_knowledge_points: list[KnowledgeMasterySummaryDTO]
-
-
-class MasteryRecordList(list[MasteryRecord]):
-    """双模掌握度记录列表容器。
-
-    同时兼容以整型下标顺序索引以及通过知识点 UUID/字符串主键字典检索。
-    """
-
-    @overload
-    def __getitem__(self, key: SupportsIndex) -> MasteryRecord: ...
-
-    @overload
-    def __getitem__(self, key: slice) -> list[MasteryRecord]: ...
-
-    @overload
-    def __getitem__(self, key: uuid.UUID | str) -> MasteryRecord: ...
-
-    def __getitem__(self, key: Any) -> Any:
-        """支持根据整型索引或知识点标识提取掌握度记录。"""
-        if isinstance(key, (uuid.UUID, str)):
-            key_string = str(key)
-            for item in self:
-                if str(item.knowledge_point_id) == key_string:
-                    return item
-            raise KeyError(key)
-        return super().__getitem__(key)
-
-    def get(
-        self,
-        key: uuid.UUID | str,
-        default: MasteryRecord | None = None,
-    ) -> MasteryRecord | None:
-        """类似字典的安全取值方法。"""
-        key_string = str(key)
-        for item in self:
-            if str(item.knowledge_point_id) == key_string:
-                return item
-        return default
-
-    def as_dict(self) -> dict[uuid.UUID, MasteryRecord]:
-        """转换为以 knowledge_point_id 为键的映射字典。"""
-        return {item.knowledge_point_id: item for item in self}
 
 
 def resolve_channel_to_source(channel: str | None) -> GradingSourceType:
@@ -255,24 +217,17 @@ class DiagnosisService:
 
         绝密脱敏红线：严禁记录题干、选项、标准答案及用户作答原文。
         """
-        log_payload = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "level": "INFO" if error_code == 0 else "ERROR",
-            "logger_name": __name__,
-            "request_id": request_id,
-            "user_ref": generate_user_ref(user_id),
-            "target_id": str(target_id),
-            "duration_ms": round(duration_ms, 2),
-            "error_code": error_code,
-            "action": action,
-        }
-        if extra:
-            log_payload.update(extra)
-
-        if error_code == 0:
-            logger.info("DiagnosisService execution completed: %s", log_payload)
-        else:
-            logger.error("DiagnosisService execution error: %s", log_payload)
+        log_structured_metric(
+            logger,
+            action=action,
+            request_id=request_id,
+            user_id=user_id,
+            target_id=target_id,
+            duration_ms=duration_ms,
+            error_code=error_code,
+            extra=extra,
+            service_label="DiagnosisService",
+        )
 
     # --------------------------------------------------------------------------
     # 核心业务方法
@@ -284,7 +239,7 @@ class DiagnosisService:
         knowledge_point_ids: Sequence[uuid.UUID],
         current_time: datetime | None = None,
         request_id: str | None = None,
-    ) -> MasteryRecordList:
+    ) -> list[MasteryRecord]:
         """针对指定知识点批量计算艾宾浩斯时间衰减掌握度并持久化。
 
         流水线逻辑：
@@ -305,7 +260,7 @@ class DiagnosisService:
         """
         start_time = time.perf_counter()
         request_id = request_id or str(uuid.uuid4())
-        evaluation_time = current_time if current_time is not None else datetime.now(UTC)
+        evaluation_time = ensure_utc(current_time) or datetime.now(UTC)
         evaluation_timestamp = evaluation_time.timestamp()
 
         updated_records: list[MasteryRecord] = []
@@ -338,17 +293,18 @@ class DiagnosisService:
                     channel = "offline"
                     record_created_at = item.created_at
 
+                normalized_created_at = ensure_utc(record_created_at)
                 source = resolve_channel_to_source(channel)
                 answered_timestamp = (
-                    record_created_at.timestamp()
-                    if record_created_at is not None
+                    normalized_created_at.timestamp()
+                    if normalized_created_at is not None
                     else evaluation_timestamp
                 )
 
                 if last_practiced_at is None or (
-                    record_created_at is not None and record_created_at > last_practiced_at
+                    normalized_created_at is not None and normalized_created_at > last_practiced_at
                 ):
-                    last_practiced_at = record_created_at
+                    last_practiced_at = normalized_created_at
 
                 if item_score >= 1.0:
                     correct_count += 1
@@ -368,7 +324,7 @@ class DiagnosisService:
                         "score": round(item_score, 4),
                         "source": str(source),
                         "answered_at": (
-                            record_created_at.isoformat() if record_created_at else None
+                            normalized_created_at.isoformat() if normalized_created_at else None
                         ),
                     }
                 )
@@ -415,7 +371,108 @@ class DiagnosisService:
                 "updated_records_count": len(updated_records),
             },
         )
-        return MasteryRecordList(updated_records)
+        return updated_records
+
+    def sync_practice_learning_state(
+        self,
+        *,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        partial_ok: bool = True,
+        current_time: datetime | None = None,
+        commit: bool = True,
+    ) -> None:
+        """同步练习已判分作答项至错题本 (WrongRecord) 与知识点掌握度 (MasteryRecord)。"""
+        evaluation_time = current_time if current_time is not None else datetime.now(UTC)
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if practice is None:
+            return
+
+        items = self.practice_repo.list_attempt_items(practice_id=practice_id, user_id=user_id)
+        grading_records = self.grading_repo.list_final_records_by_practice(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        if partial_ok:
+            item_evaluations, *_ = evaluate_graded_items_partial(
+                items=items,
+                grading_records=grading_records,
+            )
+            if not item_evaluations:
+                return
+            sorted_point_ids = collect_involved_point_ids(None, item_evaluations)
+        else:
+            item_evaluations, *_ = evaluate_practice_items(
+                practice_id=practice_id,
+                items=items,
+                grading_records=grading_records,
+            )
+            sorted_point_ids = collect_involved_point_ids(
+                practice.knowledge_point_ids, item_evaluations
+            )
+
+        if sorted_point_ids:
+            self.calculate_and_update_mastery(
+                user_id=user_id,
+                knowledge_point_ids=sorted_point_ids,
+                current_time=evaluation_time,
+            )
+
+        fallback_point_id = sorted_point_ids[0] if sorted_point_ids else None
+        sync_wrong_records_from_evaluations(
+            diagnosis_repo=self.diagnosis_repo,
+            user_id=user_id,
+            practice_id=practice_id,
+            item_evaluations=item_evaluations,
+            fallback_point_id=fallback_point_id,
+        )
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
+
+    def ensure_diagnosis_report(
+        self,
+        *,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+    ) -> DiagnosisReport | None:
+        """若练习已达成 COMPLETED、全部作答项已有终态成功判分且尚无报告，则幂等预生成。"""
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if (
+            practice is None
+            or practice.status != PracticeStatus.COMPLETED.value
+            or practice.completed_at is None
+        ):
+            return None
+        existing = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        if existing is not None:
+            return existing
+        items = self.practice_repo.list_attempt_items(practice_id=practice_id, user_id=user_id)
+        grading_records = self.grading_repo.list_final_records_by_practice(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        grading_map = {record.attempt_item_id: record for record in grading_records}
+        if not items or any(
+            item.id not in grading_map
+            or grading_map[item.id].status != GradingStatus.SUCCESS.value
+            or grading_map[item.id].score is None
+            for item in items
+        ):
+            return None
+        return self.generate_diagnosis_report(user_id=user_id, practice_id=practice_id)
 
     def generate_diagnosis_report(
         self,
@@ -517,90 +574,28 @@ class DiagnosisService:
             practice_id=practice_id,
             user_id=user_id,
         )
-        grading_map = {record.attempt_item_id: record for record in grading_records}
+        (
+            item_evaluations,
+            unanswered_count,
+            wrong_count,
+            total_scored,
+            total_maximum,
+        ) = evaluate_practice_items(
+            practice_id=practice_id,
+            items=items,
+            grading_records=grading_records,
+        )
 
-        if not items or any(
-            item.id not in grading_map
-            or grading_map[item.id].status != GradingStatus.SUCCESS.value
-            or grading_map[item.id].score is None
-            for item in items
-        ):
-            raise PracticeNotGradedError(
-                "练习仍有未判完题目，无法生成学情诊断报告",
-                details={"practice_id": str(practice_id)},
-            )
-
-        unanswered_count = 0
-        wrong_count = 0
-        total_scored = 0.0
-        total_maximum = 0.0
-
-        item_evaluations: list[dict[str, Any]] = []
-
-        for item in items:
-            grading = grading_map.get(item.id)
-            if grading is not None and grading.score is not None:
-                item_score = float(grading.score)
-                item_max_score = float(grading.max_score) if grading.max_score > 0.0 else 1.0
-            elif item.score is not None:
-                item_score = float(item.score)
-                item_max_score = float(item.max_score) if item.max_score > 0.0 else 1.0
-            else:
-                item_score = 0.0
-                item_max_score = 1.0
-
-            total_scored += item_score
-            total_maximum += item_max_score
-
-            is_answered = bool(item.is_answered)
-            if not is_answered:
-                unanswered_count += 1
-
-            is_correct = is_answered and (item_score >= item_max_score)
-            if not is_correct:
-                wrong_count += 1
-
-            # 提取所属知识点标识
-            point_id: uuid.UUID | None = None
-            if item.question_snapshot and "knowledge_point_id" in item.question_snapshot:
-                try:
-                    point_id = uuid.UUID(str(item.question_snapshot["knowledge_point_id"]))
-                except (ValueError, TypeError):
-                    point_id = None
-
-            item_evaluations.append(
-                {
-                    "item": item,
-                    "grading": grading,
-                    "score": item_score,
-                    "max_score": item_max_score,
-                    "is_answered": is_answered,
-                    "is_correct": is_correct,
-                    "point_id": point_id,
-                }
-            )
-
-        # 5. 汇集涉及知识点 ID
-        involved_point_ids: set[uuid.UUID] = set()
-        if practice.knowledge_point_ids:
-            for point_string in practice.knowledge_point_ids:
-                with contextlib.suppress(ValueError, TypeError):
-                    involved_point_ids.add(uuid.UUID(point_string))
-
-        for eval_info in item_evaluations:
-            if eval_info["point_id"] is not None:
-                involved_point_ids.add(eval_info["point_id"])
-
-        sorted_point_ids = sorted(involved_point_ids)
-
-        # 6. 查询历史基线掌握度（用于计算退步与距上次练习天数）
+        # 5. 汇集知识点并计算/读取基线与最新掌握度
+        sorted_point_ids = collect_involved_point_ids(
+            practice.knowledge_point_ids, item_evaluations
+        )
         previous_records = self.diagnosis_repo.list_mastery_records_by_knowledge_point_ids(
             knowledge_point_ids=sorted_point_ids,
             user_id=user_id,
         )
         previous_record_map = {record.knowledge_point_id: record for record in previous_records}
 
-        # 7. 计算并落库最新掌握度
         updated_mastery_list = self.calculate_and_update_mastery(
             user_id=user_id,
             knowledge_point_ids=sorted_point_ids,
@@ -609,87 +604,21 @@ class DiagnosisService:
         )
         current_record_map = {record.knowledge_point_id: record for record in updated_mastery_list}
 
-        # 8. 组装纯函数输入实体并检测低可信度结构降级
-        evaluation_inputs: list[KnowledgeEvaluationInput] = []
-        mistake_evidences: list[MistakeEvidence] = []
-        is_structure_degraded = False
-
-        fallback_point_id = sorted_point_ids[0] if sorted_point_ids else None
-
-        for point_id in sorted_point_ids:
-            knowledge_point = self.knowledge_repo.get_by_id(point_id, user_id)
-            if knowledge_point and getattr(knowledge_point, "is_low_confidence", False):
-                is_structure_degraded = True
-
-            prev_record = previous_record_map.get(point_id)
-            curr_record = current_record_map.get(point_id)
-
-            curr_score = curr_record.mastery_score if curr_record else 0.0
-            prev_score = prev_record.mastery_score if prev_record else None
-
-            days_since: float | None = None
-            if prev_record and prev_record.last_practiced_at:
-                delta_seconds = (evaluation_time - prev_record.last_practiced_at).total_seconds()
-                days_since = max(0.0, delta_seconds / 86400.0)
-
-            # 统计本次练习在当前知识点下的错题特征
-            point_items = [
-                e
-                for e in item_evaluations
-                if e["point_id"] == point_id
-                or (e["point_id"] is None and point_id == fallback_point_id)
-            ]
-            has_subjective = any(
-                not e["is_correct"]
-                and e["item"].question_snapshot.get("question_type")
-                in ("short_answer", "essay", "subjective")
-                for e in point_items
-            )
-            has_objective = any(
-                not e["is_correct"]
-                and e["item"].question_snapshot.get("question_type")
-                not in ("short_answer", "essay", "subjective")
-                for e in point_items
-            )
-
-            evaluation_inputs.append(
-                KnowledgeEvaluationInput(
-                    knowledge_id=str(point_id),
-                    knowledge_title=knowledge_point.name
-                    if knowledge_point
-                    else f"知识点-{str(point_id)[:8]}",
-                    current_score=curr_score,
-                    previous_score=prev_score,
-                    days_since_last_practice=days_since,
-                    has_subjective_mistake=has_subjective,
-                    has_objective_mistake=has_objective,
-                )
-            )
-
-        # 收集本次错题证据
-        for eval_info in item_evaluations:
-            if not eval_info["is_correct"]:
-                item_entity = eval_info["item"]
-                snapshot = item_entity.question_snapshot or {}
-                point_id_target = eval_info["point_id"] or fallback_point_id
-                target_point_string = str(point_id_target) if point_id_target else "unknown"
-
-                stem_summary = str(snapshot.get("stem") or "")[:50]
-                user_answer_summary = str(item_entity.user_answer or "")[:50]
-                correct_answer_summary = str(snapshot.get("answer") or "")[:50]
-
-                mistake_evidences.append(
-                    MistakeEvidence(
-                        question_id=str(item_entity.question_id or item_entity.id),
-                        question_brief=stem_summary,
-                        user_answer=user_answer_summary,
-                        correct_answer=correct_answer_summary,
-                        knowledge_id=target_point_string,
-                        is_negation_inversion=bool(snapshot.get("is_negation_inversion", False)),
-                    )
-                )
-
-        # 9. 调用纯函数合成报告内容
+        # 6. 组装纯函数输入、错题证据并合成诊断内容
+        (
+            evaluation_inputs,
+            mistake_evidences,
+            is_structure_degraded,
+            fallback_point_id,
+        ) = build_evaluation_inputs_and_mistakes(
+            knowledge_repo=self.knowledge_repo,
+            user_id=user_id,
+            sorted_point_ids=sorted_point_ids,
+            previous_record_map=previous_record_map,
+            current_record_map=current_record_map,
+            item_evaluations=item_evaluations,
+            evaluation_time=evaluation_time,
+        )
         report_id = uuid.uuid4()
         synthesis_result = synthesize_diagnosis_report(
             report_id=str(report_id),
@@ -697,96 +626,23 @@ class DiagnosisService:
             mistakes=mistake_evidences,
         )
 
-        # 10. 联动同步错题本
-        for eval_info in item_evaluations:
-            item_entity = eval_info["item"]
-            point_id_target = eval_info["point_id"] or fallback_point_id
-            if point_id_target is None:
-                continue
-
-            if not eval_info["is_correct"]:
-                error_type_val = (
-                    ErrorType.UNANSWERED.value
-                    if not eval_info["is_answered"]
-                    else ErrorType.CONCEPTUAL.value
-                )
-                self.diagnosis_repo.upsert_wrong_record(
-                    user_id=user_id,
-                    question_id=item_entity.question_id,
-                    knowledge_point_id=point_id_target,
-                    practice_id=practice_id,
-                    attempt_item_id=item_entity.id,
-                    error_type=error_type_val,
-                    question_snapshot=item_entity.question_snapshot or {},
-                    last_wrong_answer=item_entity.user_answer,
-                )
-            else:
-                if item_entity.question_id is not None:
-                    self.diagnosis_repo.mark_wrong_record_mastered(
-                        question_id=item_entity.question_id,
-                        user_id=user_id,
-                    )
-
-        # 11. 构建 DiagnosisReport 实体并入库
+        # 7. 联动同步错题本并构建 DiagnosisReport 实体
+        sync_wrong_records_from_evaluations(
+            diagnosis_repo=self.diagnosis_repo,
+            user_id=user_id,
+            practice_id=practice_id,
+            item_evaluations=item_evaluations,
+            fallback_point_id=fallback_point_id,
+        )
         score_rate = round(total_scored / total_maximum, 4) if total_maximum > 0.0 else 0.0
-
-        weak_knowledge_data = [
-            {
-                "knowledge_id": item.knowledge_id,
-                "knowledge_title": item.knowledge_title,
-                "current_score": item.current_score,
-                "previous_score": item.previous_score,
-                "score_delta": item.score_delta,
-                "cause_type": item.cause_type.value,
-                "cause_explanation": item.cause_explanation,
-                "actionable_advice": item.actionable_advice,
-                "associated_mistakes": [
-                    {
-                        "question_id": mistake.question_id,
-                        "is_negation_inversion": mistake.is_negation_inversion,
-                    }
-                    for mistake in item.associated_mistakes
-                ],
-            }
-            for item in synthesis_result.weak_points
-        ]
-        regressed_knowledge_data = [
-            {
-                "knowledge_id": item.knowledge_id,
-                "knowledge_title": item.knowledge_title,
-                "current_score": item.current_score,
-                "previous_score": item.previous_score,
-                "score_delta": item.score_delta,
-                "cause_type": item.cause_type.value,
-                "cause_explanation": item.cause_explanation,
-                "actionable_advice": item.actionable_advice,
-            }
-            for item in synthesis_result.regressed_points
-        ]
-        analysis_causes_data = [
-            {
-                "knowledge_id": item.knowledge_id,
-                "cause_type": item.cause_type.value,
-                "explanation": item.cause_explanation,
-            }
-            for item in synthesis_result.weak_points
-        ]
-        actionable_suggestions_data = [
-            {"action": action} for action in synthesis_result.suggested_review_actions
-        ]
-
-        report = DiagnosisReport(
-            id=report_id,
+        report = build_diagnosis_report_entity(
+            report_id=report_id,
             practice_id=practice_id,
             user_id=user_id,
-            weak_knowledge_points=weak_knowledge_data,
-            regressed_knowledge_points=regressed_knowledge_data,
-            analysis_causes=analysis_causes_data,
-            actionable_suggestions=actionable_suggestions_data,
+            synthesis_result=synthesis_result,
+            total_questions=len(items),
             unanswered_count=unanswered_count,
             wrong_count=wrong_count,
-            pending_regrade_count=0,
-            total_questions=len(items),
             score_rate=score_rate,
             is_structure_degraded=is_structure_degraded,
         )
@@ -972,16 +828,21 @@ class DiagnosisService:
         user_id: uuid.UUID,
         material_id: uuid.UUID | None = None,
         request_id: str | None = None,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> UserMasteryOverviewDTO:
         """获取用户的知识点掌握度宏观全景。
 
-        当 ``material_id`` 缺省为 None 时，聚合该用户全部知识点与其掌握度记录
-        （跨资料），而非退化为 ``material_id IS NULL`` 查询（该列 NOT NULL 会恒空）。
+        当 ``material_id`` 缺省为 None 时，支持按 ``folder_id`` 或未分类过滤，
+        否则聚合该用户全部知识点与其掌握度记录（跨资料）。
 
         Args:
             user_id: 租户用户主键。
-            material_id: 可选资料主键；None 表示聚合该用户全部资料知识点。
+            material_id: 可选资料主键；None 表示聚合课程范围或全部资料知识点。
             request_id: 请求追踪标识。
+            folder_id: 可选课程文件夹主键过滤。
+            unclassified: 为 True 时仅统计未归类（``folder_id IS NULL``）资料下的知识点。
 
         Returns:
             UserMasteryOverviewDTO: 包含薄弱点清单与四档统计的总览实体。
@@ -996,6 +857,16 @@ class DiagnosisService:
             )
             mastery_records = self.diagnosis_repo.list_mastery_records_by_material(
                 material_id=material_id,
+                user_id=user_id,
+            )
+        elif folder_id is not None or unclassified:
+            knowledge_points = self.knowledge_repo.list_by_folder_scope(
+                user_id=user_id,
+                folder_id=folder_id,
+                unclassified=unclassified,
+            )
+            mastery_records = self.diagnosis_repo.list_mastery_records_by_knowledge_point_ids(
+                [kp.id for kp in knowledge_points],
                 user_id=user_id,
             )
         else:
@@ -1247,6 +1118,12 @@ class DiagnosisService:
         """Resolve material and course for a page of wrong records."""
         return self.diagnosis_repo.get_wrong_record_scopes(user_id, knowledge_point_ids)
 
+    def get_wrong_record_display_meta(
+        self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, uuid.UUID | None, str, str]]:
+        """Resolve material, course, knowledge point name, and material title for wrong records."""
+        return self.diagnosis_repo.get_wrong_record_display_meta(user_id, knowledge_point_ids)
+
     def list_wrong_record_groups(
         self, user_id: uuid.UUID, is_mastered: bool | None = None
     ) -> list[dict[str, Any]]:
@@ -1489,7 +1366,6 @@ ReportService = DiagnosisService
 __all__ = [
     "DiagnosisService",
     "KnowledgeMasterySummaryDTO",
-    "MasteryRecordList",
     "ReportService",
     "UserMasteryOverviewDTO",
 ]

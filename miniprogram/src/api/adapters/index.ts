@@ -1,4 +1,5 @@
 export * from './material'
+export * from './knowledge'
 export * from './question'
 export * from './practice'
 export * from './diagnosis'

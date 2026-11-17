@@ -1,8 +1,8 @@
 # API Payload Contracts（写入类接口的请求体语义）
 
-> **事实源**：`backend/app/schemas/practice.py`、`backend/app/services/practice.py`、`backend/app/api/v1/practices.py`、`miniprogram/src/api/index.ts`、`miniprogram/src/stores/practice.ts`、`miniprogram/src/pages/review/composables/useQuestionBank.ts`
-> **最后核对**：2026-09-29
-> **核对方式**：逐条读 `services/practice.py` 的 `create_practice` 全路径（**不是读到一半**，见 §7）+ 实测 12 题显式建练习
+> **事实源**：`backend/app/schemas/practice.py`、`backend/app/services/practice.py`、`backend/app/api/v1/practices.py`、`miniprogram/src/api/modules/practices.ts`、`miniprogram/src/types/practice.ts`、`miniprogram/src/stores/practice.ts`、`miniprogram/src/pages/review/composables/useQuestionBank.ts`
+> **最后核对**：2026-11-17
+> **核对方式**：对照 `PracticeCreateRequest._sync_question_count_with_ids`、`CreatePracticeParams` 必填 `title`、`MAX_PRACTICE_QUESTIONS = 50` 及单次往返 `apiCreatePractice` 实测核对
 
 ---
 
@@ -40,12 +40,14 @@ source_type: str | None = None
 ```
 
 ```typescript
-// miniprogram/src/types/index.ts
+// miniprogram/src/types/practice.ts (re-exported via src/types/index.ts)
+export const MAX_PRACTICE_QUESTIONS = 50
+
 export interface CreatePracticeParams {
-  title?: string          // 注意：后端必填，前端类型却是可选
+  title: string           // 必填（与后端 min_length=1 对齐）
   material_id?: string; folder_id?: string
   knowledge_point_ids?: string[]; question_ids?: string[]
-  question_count?: number // ← 传 question_ids 时必须一起传
+  question_count?: number // 传 question_ids 时调用方统一显式传 min(length, MAX_PRACTICE_QUESTIONS)
   // ...
 }
 ```
@@ -289,3 +291,18 @@ if attempt_item_id is not None:
 所以「手工错题的知识点进入了再生题范围」**不等于**「该考点被练到了」：
 考点一旦排在第 11 位之后，对应题目不会进练习，而覆盖率仍按全部生成题目声明。
 该缺陷归 `09-29-question-bank-tab`（R6 / AC-9），修好前不要用它推导「已覆盖」。
+
+---
+
+## Scenario: 判断题标准字面量、多选草稿反序列化与后台异步生题作业（2026-11-17）
+
+### 1. 判断题（`true_false`）作答值必须提交 `'正确'` / `'错误'`
+- **后端契约**：`backend/app/core/algorithms/grading.py` 对 `true_false` 仅接受 `'正确'` / `'错误'` / `'T'` / `'F'` / `'true'` / `'false'`，**不接受 `'A'` / `'B'`**（传 `'A'` / `'B'` 不报错，直接静默判 0 分）。
+- **前端约定**：`subpackages/practice/pages/session/` 渲染判断题选项时统一存储并提交 `'正确'` / `'错误'`；读取历史草稿时兼容将旧版 `'A'`/`'T'` 归一显示为 `'正确'`、`'B'`/`'F'` 归一显示为 `'错误'`。
+
+### 2. 多选题（`multiple_choice`）草稿恢复必须反序列化 JSON 数组字符串
+- **后端契约**：`PracticeDetailResponse.items[].user_answer` 对多选题草稿序列化为 JSON 字符串（如 `'["A","C"]'`）。
+- **前端约定**：`src/api/adapters/practice.ts::adaptPractice` 在恢复 `savedAnswers` 时必须识别并 `JSON.parse` 字符串数组，否则组件层 `Array.isArray(val)` 为 `false`，续答时已勾选项会静默丢失。
+
+### 3. 后台非阻塞生题作业（`POST /api/v1/questions/jobs`）
+- **请求/响应**：前端组卷页统一通过 `useBackgroundTaskStore().startQuestionJob(params)` 调 `POST /questions/jobs`（HTTP 202，`<300ms` 返回 `{ id, status, batch_id, total_kps, completed_kps, generated_count }`），由 `backgroundTask` store 轮询 `GET /questions/jobs/{id}` 并在首页/课程页/学情页经 `<BackgroundTaskBar />` 展示实时进度，严禁在组卷页用超长同步请求阻塞用户返回或切换页面。

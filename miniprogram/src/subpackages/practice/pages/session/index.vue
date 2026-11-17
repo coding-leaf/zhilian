@@ -13,10 +13,7 @@
         <text class="progress-total">/ {{ practiceStore.questions.length }}</text>
       </view>
       <view class="progress-track">
-        <view
-          class="progress-fill"
-          :style="{ width: progressWidth }"
-        />
+        <view class="progress-fill" :style="{ width: progressWidth }" />
       </view>
       <view class="card-drawer-trigger" @tap="showCardDrawer = !showCardDrawer">
         <text class="drawer-trigger-text">
@@ -25,93 +22,36 @@
       </view>
     </view>
 
-    <view v-if="currentQuestion" class="paper-card question-box">
-      <view class="q-meta-row">
-        <view class="q-type-badge">{{ typeLabel(currentQuestion.type) }}</view>
-        <text v-if="currentQuestion.knowledge_point" class="kp-badge">
-          考点：{{ currentQuestion.knowledge_point }}
-        </text>
-        <text class="progress-total">{{ saveStatusText }}</text>
-      </view>
+    <PracticeQuestionBody
+      v-if="currentQuestion"
+      :question="currentQuestion"
+      :user-answer="currentUserAnswer"
+      :save-status-text="saveStatusText"
+      @select-single="selectSingleOption"
+      @toggle-multiple="toggleMultipleOption"
+      @input-answer="handleTextInput"
+      @ask-coach="openQuestionCoach"
+    />
 
-      <text class="q-stem">{{ currentQuestion.stem }}</text>
+    <AnswerCardDrawer
+      v-model:visible="showCardDrawer"
+      :questions="practiceStore.questions"
+      :current-index="practiceStore.currentIndex"
+      :user-answers="practiceStore.userAnswers"
+      @jump="jumpToIndex"
+    />
 
-      <view
-        v-if="currentQuestion.type === 'single_choice' || currentQuestion.type === 'true_false'"
-        class="options-group"
-      >
-        <view
-          v-for="(option, idx) in scopeOptions(currentQuestion)"
-          :key="option.key || idx"
-          :class="['option-btn', isSelected(currentQuestion.id, optionKey(option, idx)) ? 'selected' : '']"
-          @tap="selectSingleOption(currentQuestion.id, optionKey(option, idx))"
-        >
-          <text class="opt-label">{{ optionKey(option, idx) }}</text>
-          <text class="opt-content">{{ option.content }}</text>
-        </view>
-      </view>
-
-      <view v-else-if="currentQuestion.type === 'multiple_choice'" class="options-group">
-        <view
-          v-for="(option, idx) in currentQuestion.options || []"
-          :key="option.key || idx"
-          :class="['option-btn', isMultipleSelected(currentQuestion.id, optionKey(option, idx)) ? 'selected' : '']"
-          @tap="toggleMultipleOption(currentQuestion.id, optionKey(option, idx))"
-        >
-          <text class="opt-checkbox">
-            {{ isMultipleSelected(currentQuestion.id, optionKey(option, idx)) ? '☑' : '☐' }}
-          </text>
-          <text class="opt-label">{{ optionKey(option, idx) }}</text>
-          <text class="opt-content">{{ option.content }}</text>
-        </view>
-      </view>
-
-      <view v-else-if="currentQuestion.type === 'fill_in_blank'" class="fill-blank-box">
-        <text class="input-hint">请在下方输入作答内容：</text>
-        <input
-          class="fill-blank-input"
-          placeholder="请输入你的填空答案..."
-          :value="answerText(currentQuestion.id)"
-          @input="handleTextInput"
-        />
-      </view>
-
-      <view v-else class="essay-box">
-        <text class="input-hint">请输入你的要点与分析：</text>
-        <textarea
-          class="essay-input"
-          placeholder="结合考点，详细阐述你的解答步骤、核心定义或案例见解..."
-          :value="answerText(currentQuestion.id)"
-          :maxlength="1000"
-          @input="handleTextInput"
-        />
-      </view>
-    </view>
-
-    <view v-if="showCardDrawer" class="card-drawer-overlay">
-      <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容即关闭 -->
-      <view class="card-drawer-backdrop" @tap="showCardDrawer = false" />
-      <view class="card-drawer-sheet paper-card">
-        <view class="drawer-title-row">
-          <text class="drawer-title">答题卡索引</text>
-          <text class="drawer-close" @tap="showCardDrawer = false">×</text>
-        </view>
-        <view class="grid-numbers">
-          <view
-            v-for="(question, idx) in practiceStore.questions"
-            :key="question.id"
-            :class="[
-              'num-item',
-              practiceStore.currentIndex === idx ? 'current' : '',
-              isQuestionAnswered(question.id) ? 'answered' : '',
-            ]"
-            @tap="jumpToIndex(idx)"
-          >
-            {{ idx + 1 }}
-          </view>
-        </view>
-      </view>
-    </view>
+    <AiCoachDrawer
+      v-model:visible="showCoachDrawer"
+      :title="coachTitle"
+      :question-id="currentQuestion?.id"
+      :knowledge-point-id="currentQuestion?.knowledge_point_id"
+      :material-id="currentQuestion?.material_id || practiceStore.currentSession?.material_id || undefined"
+      :folder-id="practiceStore.currentSession?.folder_id || undefined"
+      :context-text="coachContext"
+      :user-answer="coachUserAnswer"
+      :grading-points="currentQuestion?.grading_points"
+    />
 
     <view class="bottom-bar">
       <button
@@ -145,14 +85,24 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import { usePracticeStore } from '@/stores/practice'
-import { questionTypeLabel } from '@/api'
-import type { QuestionItem, QuestionOption } from '@/types'
+import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
+import AnswerCardDrawer from '../../components/AnswerCardDrawer.vue'
+import PracticeQuestionBody from '../../components/PracticeQuestionBody.vue'
+import {
+  collectLegacyTrueFalseUpgrades,
+  toggleMultipleSelection,
+} from '../../utils/practiceSession'
 
 const practiceStore = usePracticeStore()
 const showCardDrawer = ref(false)
+const showCoachDrawer = ref(false)
 
 const currentQuestion = computed(() => practiceStore.currentQuestion)
+const currentUserAnswer = computed(() =>
+  currentQuestion.value ? practiceStore.userAnswers[currentQuestion.value.id] : undefined,
+)
 const progressWidth = computed(() => {
   const total = practiceStore.questions.length || 1
   return `${((practiceStore.currentIndex + 1) / total) * 100}%`
@@ -162,72 +112,67 @@ const saveStatusText = computed(() => {
   return practiceStore.isSavingDrafts ? '保存中...' : '已保存'
 })
 
+const coachTitle = computed(() => {
+  const kpName = currentQuestion.value?.knowledge_point_name || currentQuestion.value?.knowledge_point
+  return kpName ? `考点答疑 · ${kpName}` : '本题实时答疑'
+})
+
+const coachContext = computed(() => {
+  const q = currentQuestion.value
+  if (!q) return ''
+  const kpName = q.knowledge_point_name || q.knowledge_point
+  return kpName ? `考点：${kpName}。题干：${q.stem}` : q.stem
+})
+
+const coachUserAnswer = computed(() => {
+  const val = currentUserAnswer.value
+  if (val === undefined || val === null || val === '') return undefined
+  if (Array.isArray(val)) return val.join('、')
+  return String(val)
+})
+
+const RESUMABLE_STATUSES = new Set(['not_started', 'in_progress', 'paused'])
+
 onLoad(async (options) => {
   if (!options?.practice_id) {
-    uni.showToast({ title: '缺少练习标识', icon: 'none' })
+    safeShowToast('缺少练习标识')
     return
   }
   try {
-    await practiceStore.initPractice(options.practice_id)
+    const session = await practiceStore.initPractice(options.practice_id)
+    if (session && RESUMABLE_STATUSES.has(session.status)) {
+      const upgrades = collectLegacyTrueFalseUpgrades(session.questions, practiceStore.userAnswers)
+      for (const item of upgrades) {
+        practiceStore.recordAnswer(item.questionId, item.answer)
+      }
+    }
   } catch (error: any) {
-    uni.showToast({ title: error?.message || '加载练习失败', icon: 'none' })
+    safeShowToast(error?.message || '加载练习失败')
   }
 })
 
-const typeLabel = (type: string) => questionTypeLabel(type)
-
-const optionKey = (option: QuestionOption, idx: number) =>
-  option.key || String.fromCharCode(65 + idx)
-
-const scopeOptions = (question: QuestionItem): QuestionOption[] => {
-  if (question.options?.length) return question.options
-  return [
-    { key: 'A', content: '正确' },
-    { key: 'B', content: '错误' },
-  ]
-}
-
-const answerText = (questionId: string) => {
-  const value = practiceStore.userAnswers[questionId]
-  return typeof value === 'string' ? value : ''
-}
-
-const isSelected = (questionId: string, value: string) =>
-  practiceStore.userAnswers[questionId] === value
-
-const isMultipleSelected = (questionId: string, value: string) => {
-  const current = practiceStore.userAnswers[questionId]
-  return Array.isArray(current) && current.includes(value)
-}
-
-const isQuestionAnswered = (questionId: string) => {
-  const answer = practiceStore.userAnswers[questionId]
-  if (answer === undefined || answer === null || answer === '') return false
-  if (Array.isArray(answer) && answer.length === 0) return false
-  return true
-}
-
-const selectSingleOption = (questionId: string, value: string) => {
-  practiceStore.recordAnswer(questionId, value)
-}
-
-const toggleMultipleOption = (questionId: string, value: string) => {
-  const current: string[] = Array.isArray(practiceStore.userAnswers[questionId])
-    ? [...(practiceStore.userAnswers[questionId] as string[])]
-    : []
-  const idx = current.indexOf(value)
-  if (idx !== -1) {
-    current.splice(idx, 1)
-  } else {
-    current.push(value)
-    current.sort()
-  }
-  practiceStore.recordAnswer(questionId, current)
-}
-
-const handleTextInput = (event: { detail: { value: string } }) => {
+const selectSingleOption = (value: string) => {
   if (!currentQuestion.value) return
-  practiceStore.recordAnswer(currentQuestion.value.id, event.detail.value)
+  practiceStore.recordAnswer(currentQuestion.value.id, value)
+}
+
+const toggleMultipleOption = (value: string) => {
+  if (!currentQuestion.value) return
+  const next = toggleMultipleSelection(
+    practiceStore.userAnswers[currentQuestion.value.id],
+    value,
+  )
+  practiceStore.recordAnswer(currentQuestion.value.id, next)
+}
+
+const handleTextInput = (value: string) => {
+  if (!currentQuestion.value) return
+  practiceStore.recordAnswer(currentQuestion.value.id, value)
+}
+
+const openQuestionCoach = () => {
+  if (!currentQuestion.value) return
+  showCoachDrawer.value = true
 }
 
 const jumpToIndex = (idx: number) => {
@@ -248,20 +193,17 @@ const confirmSubmit = () => {
     confirmColor: '#1E3A8A',
     success: async ({ confirm }: { confirm: boolean }) => {
       if (!confirm) return
-      uni.showLoading({ title: '正在提交交卷...' })
       try {
-        await practiceStore.submit()
-        uni.hideLoading()
+        await withBlockingLoading('正在提交交卷...', () => practiceStore.submit())
         const practiceId = practiceStore.currentSession?.id
         if (practiceId) {
           uni.redirectTo({
             url: `/subpackages/report/pages/detail/index?practice_id=${practiceId}`,
-            fail: () => uni.showToast({ title: '打开结果页失败', icon: 'none' }),
+            fail: () => safeShowToast('打开结果页失败'),
           })
         }
       } catch (error: any) {
-        uni.hideLoading()
-        uni.showToast({ title: error?.message || '交卷失败，请重试', icon: 'none' })
+        safeShowToast(error?.message || '交卷失败，请重试')
       }
     },
   })
@@ -270,20 +212,4 @@ const confirmSubmit = () => {
 
 <style lang="scss" scoped>
 @import '../../session.scss';
-
-/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
-   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
-.card-drawer-backdrop {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 0;
-}
-
-.card-drawer-sheet {
-  position: relative;
-  z-index: 1;
-}
 </style>

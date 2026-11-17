@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/02-backend-architecture-audit.md", "reason": "Verify all targeted backend P0 fixes and zero-caller removals without breaking retained features"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/03-frontend-architecture-audit.md", "reason": "Verify all 7 dead packages, dead page, and unused exports are cleanly removed"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/04-cross-layer-and-synthesis.md", "reason": "Verify P0 snippet page_index fix and verify the 25 uncalled backend extension routes remain intact"}
+{"file": ".trellis/spec/guides/index.md", "reason": "35% false-positive verification check and pre-change grep check"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality gate requirements"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gate requirements"}

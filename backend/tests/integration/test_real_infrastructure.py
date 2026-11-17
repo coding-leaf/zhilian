@@ -23,6 +23,9 @@ from app.integrations.idempotency.factory import create_idempotency_adapter
 from app.integrations.queue.factory import create_queue_adapter
 from app.integrations.storage.factory import create_storage_adapter
 
+# 在模块导入期捕获宿主真实环境变量快照，避免全局 conftest 的离线 fixture 遮蔽真实基础设施连接串
+_INITIAL_ENV: dict[str, str] = dict(os.environ)
+
 
 def _is_tcp_port_open(host: str, port: int, timeout: float = 0.2) -> bool:
     """快速探测本地 TCP 端口是否开放且允许建立连接。
@@ -108,13 +111,24 @@ def is_minio_available() -> bool:
     not is_postgres_available(),
     reason="PostgreSQL 实例未就绪或未安装 psycopg 驱动，脱机环境安全跳过",
 )
-def test_real_postgresql_and_pgvector_handshake() -> None:
+def test_real_postgresql_and_pgvector_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     """验证真实 PostgreSQL 实例连接握手与 pgvector 向量扩展能力 (IT-PGV-01)。"""
+    from sqlalchemy import create_engine
+
     from app.core.config import get_settings
 
-    settings = get_settings()
-    db_url = settings.db.db_url
-    from sqlalchemy import create_engine
+    initial_db_url = _INITIAL_ENV.get("ZHILIAN_DB__DB_URL") or _INITIAL_ENV.get(
+        "ZHILIAN_DATABASE__DB_URL"
+    )
+    if initial_db_url:
+        monkeypatch.setenv("ZHILIAN_DB__DB_URL", initial_db_url)
+    else:
+        monkeypatch.delenv("ZHILIAN_DB__DB_URL", raising=False)
+    get_settings.cache_clear()
+
+    db_url = get_settings().db.db_url
+    if db_url.startswith("sqlite"):
+        db_url = "postgresql+psycopg://zhilian:zhilian_dev_password@127.0.0.1:5432/zhilian"
 
     engine = create_engine(db_url, pool_pre_ping=True)
     with engine.connect() as conn:
@@ -140,7 +154,7 @@ def test_real_postgresql_and_pgvector_handshake() -> None:
 )
 def test_real_redis_handshake_and_adapters() -> None:
     """验证真实 Redis 实例握手及任务队列与幂等适配器协议交互。"""
-    redis_url = os.environ.get("ZHILIAN_REDIS__REDIS_URL", "redis://127.0.0.1:6379/0")
+    redis_url = _INITIAL_ENV.get("ZHILIAN_REDIS__REDIS_URL") or "redis://127.0.0.1:6379/0"
 
     queue_adapter = create_queue_adapter("redis", redis_url=redis_url)
     assert queue_adapter is not None
@@ -155,9 +169,9 @@ def test_real_redis_handshake_and_adapters() -> None:
 )
 def test_real_minio_storage_handshake() -> None:
     """验证真实 MinIO 实例握手与对象读写协议。"""
-    endpoint = os.environ.get("ZHILIAN_STORAGE__ENDPOINT_URL", "http://127.0.0.1:9000")
-    access_key = os.environ.get("ZHILIAN_STORAGE__ACCESS_KEY", "minioadmin")
-    secret_key = os.environ.get("ZHILIAN_STORAGE__SECRET_KEY", "minioadmin")
+    endpoint = _INITIAL_ENV.get("ZHILIAN_STORAGE__ENDPOINT_URL") or "http://127.0.0.1:9000"
+    access_key = _INITIAL_ENV.get("ZHILIAN_STORAGE__ACCESS_KEY") or "minioadmin"
+    secret_key = _INITIAL_ENV.get("ZHILIAN_STORAGE__SECRET_KEY") or "minioadmin"
 
     storage_adapter = create_storage_adapter(
         "minio",

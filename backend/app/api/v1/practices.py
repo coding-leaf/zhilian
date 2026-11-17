@@ -10,20 +10,17 @@
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Header, Query, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.practice import get_practice_service
 from app.core.errors import (
-    IdempotencyConflictError,
     IdempotencyKeyInvalidError,
-    PracticeEmptyQuestionsError,
     PracticeNotFoundError,
-    PracticeStatusError,
 )
-from app.integrations.idempotency.protocol import validate_idempotency_key
+from app.core.idempotency import validate_idempotency_key
 from app.models.user import User
 from app.schemas.practice import (
     PracticeCreateRequest,
@@ -51,7 +48,7 @@ router = APIRouter(prefix="/practices", tags=["Practices"])
     status_code=status.HTTP_201_CREATED,
     summary="创建练习并组卷",
 )
-async def create_practice(
+def create_practice(
     request: PracticeCreateRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -74,31 +71,28 @@ async def create_practice(
         IdempotencyConflictError: 相同幂等键请求正在并发处理中 (409 / 30017)。
         IdempotencyKeyInvalidError: 幂等键格式非法 (400 / 10001)。
     """
-    try:
-        mode_enum = PracticeAssemblyMode(request.mode)
-        options = CreatePracticeOptions(
-            title=request.title,
-            material_id=request.material_id,
-            knowledge_point_ids=request.knowledge_point_ids,
-            question_count=request.question_count,
-            question_types=request.question_types,
-            difficulty=request.difficulty,
-            mode=mode_enum,
-            source_type=request.source_type,
-            source_report_id=request.source_report_id,
-            idempotency_key=idempotency_key or request.idempotency_key,
-            folder_id=request.folder_id,
-            question_ids=request.question_ids,
-        )
-        practice = practice_service.create_practice(
-            user_id=current_user.id,
-            options=options,
-        )
-        if isinstance(practice, PracticeDetailResponse):
-            return practice
-        return PracticeDetailResponse.model_validate(practice)
-    except PracticeEmptyQuestionsError:
-        raise
+    mode_enum = PracticeAssemblyMode(request.mode)
+    options = CreatePracticeOptions(
+        title=request.title,
+        material_id=request.material_id,
+        knowledge_point_ids=request.knowledge_point_ids,
+        question_count=request.question_count,
+        question_types=request.question_types,
+        difficulty=request.difficulty,
+        mode=mode_enum,
+        source_type=request.source_type,
+        source_report_id=request.source_report_id,
+        idempotency_key=idempotency_key or request.idempotency_key,
+        folder_id=request.folder_id,
+        question_ids=request.question_ids,
+    )
+    practice = practice_service.create_practice(
+        user_id=current_user.id,
+        options=options,
+    )
+    if isinstance(practice, PracticeDetailResponse):
+        return practice
+    return PracticeDetailResponse.model_validate(practice)
 
 
 @router.get(
@@ -107,7 +101,7 @@ async def create_practice(
     status_code=status.HTTP_200_OK,
     summary="练习列表查询",
 )
-async def list_practices(
+def list_practices(
     status: Annotated[str | None, Query(description="按练习生命周期状态过滤")] = None,
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
     offset: Annotated[int, Query(ge=0, description="分页游标偏移量")] = 0,
@@ -165,7 +159,7 @@ async def list_practices(
     status_code=status.HTTP_200_OK,
     summary="练习详情查询",
 )
-async def get_practice(
+def get_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -183,21 +177,18 @@ async def get_practice(
     Raises:
         PracticeNotFoundError: 练习不存在或跨租户越权 (404 / 40010)。
     """
-    try:
-        practice = practice_service.get_practice(
-            user_id=current_user.id,
-            practice_id=id,
+    practice = practice_service.get_practice(
+        user_id=current_user.id,
+        practice_id=id,
+    )
+    if practice is None:
+        raise PracticeNotFoundError(
+            "请求的练习不存在或无权访问",
+            details={"practice_id": str(id)},
         )
-        if practice is None:
-            raise PracticeNotFoundError(
-                "请求的练习不存在或无权访问",
-                details={"practice_id": str(id)},
-            )
-        if isinstance(practice, PracticeDetailResponse):
-            return practice
-        return PracticeDetailResponse.model_validate(practice)
-    except PracticeNotFoundError:
-        raise
+    if isinstance(practice, PracticeDetailResponse):
+        return practice
+    return PracticeDetailResponse.model_validate(practice)
 
 
 @router.put(
@@ -206,7 +197,7 @@ async def get_practice(
     status_code=status.HTTP_200_OK,
     summary="逐题作答草稿实时暂存",
 )
-async def save_answer(
+def save_answer(
     id: uuid.UUID,
     request: SaveAnswerRequest,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -227,34 +218,29 @@ async def save_answer(
         PracticeNotFoundError: 练习或题目作答项不存在 (404 / 40010)。
         PracticeStatusError: 练习已完成禁止修改作答 (400 / 40011)。
     """
-    try:
-        result = practice_service.save_answer(
-            user_id=current_user.id,
-            practice_id=id,
-            question_id=request.question_id,
-            user_answer=request.user_answer,
-            time_spent_seconds=request.time_spent_seconds,
-        )
-        if isinstance(result, SaveAnswerResponse):
-            return result
-        resolved_item_id: uuid.UUID = (
-            getattr(result, "id", None) or getattr(result, "attempt_item_id", None) or uuid.uuid4()
-        )
-        return SaveAnswerResponse(
-            attempt_item_id=resolved_item_id,
-            status=getattr(result, "status", "answered"),
-            updated_at=getattr(result, "updated_at", None),
-            practice_id=getattr(result, "practice_id", id),
-            question_id=getattr(result, "question_id", request.question_id),
-            user_answer=getattr(result, "user_answer", request.user_answer),
-            is_answered=getattr(result, "is_answered", True),
-            duration_seconds=getattr(result, "duration_seconds", request.time_spent_seconds),
-            time_spent_seconds=getattr(result, "duration_seconds", request.time_spent_seconds),
-        )
-    except PracticeNotFoundError:
-        raise
-    except PracticeStatusError:
-        raise
+    result = practice_service.save_answer(
+        user_id=current_user.id,
+        practice_id=id,
+        question_id=request.question_id,
+        user_answer=request.user_answer,
+        time_spent_seconds=request.time_spent_seconds,
+    )
+    if isinstance(result, SaveAnswerResponse):
+        return result
+    resolved_item_id: uuid.UUID = (
+        getattr(result, "id", None) or getattr(result, "attempt_item_id", None) or uuid.uuid4()
+    )
+    return SaveAnswerResponse(
+        attempt_item_id=resolved_item_id,
+        status=getattr(result, "status", "answered"),
+        updated_at=getattr(result, "updated_at", None),
+        practice_id=getattr(result, "practice_id", id),
+        question_id=getattr(result, "question_id", request.question_id),
+        user_answer=getattr(result, "user_answer", request.user_answer),
+        is_answered=getattr(result, "is_answered", True),
+        duration_seconds=getattr(result, "duration_seconds", request.time_spent_seconds),
+        time_spent_seconds=getattr(result, "duration_seconds", request.time_spent_seconds),
+    )
 
 
 @router.post(
@@ -263,7 +249,7 @@ async def save_answer(
     status_code=status.HTTP_200_OK,
     summary="暂停练习",
 )
-async def pause_practice(
+def pause_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -282,25 +268,20 @@ async def pause_practice(
         PracticeNotFoundError: 练习不存在或跨租户越权 (404 / 40010)。
         PracticeStatusError: 当前状态不允许暂停 (400 / 40011)。
     """
-    try:
-        practice = practice_service.pause_practice(
-            user_id=current_user.id,
-            practice_id=id,
-        )
-        if isinstance(practice, PracticeStatusResponse):
-            return practice
-        resolved_practice_id: uuid.UUID = (
-            getattr(practice, "id", None) or getattr(practice, "practice_id", None) or id
-        )
-        return PracticeStatusResponse(
-            practice_id=resolved_practice_id,
-            status=getattr(practice, "status", "paused"),
-            message="练习已成功暂停",
-        )
-    except PracticeNotFoundError:
-        raise
-    except PracticeStatusError:
-        raise
+    practice = practice_service.pause_practice(
+        user_id=current_user.id,
+        practice_id=id,
+    )
+    if isinstance(practice, PracticeStatusResponse):
+        return practice
+    resolved_practice_id: uuid.UUID = (
+        getattr(practice, "id", None) or getattr(practice, "practice_id", None) or id
+    )
+    return PracticeStatusResponse(
+        practice_id=resolved_practice_id,
+        status=getattr(practice, "status", "paused"),
+        message="练习已成功暂停",
+    )
 
 
 @router.post(
@@ -309,7 +290,7 @@ async def pause_practice(
     status_code=status.HTTP_200_OK,
     summary="恢复练习",
 )
-async def resume_practice(
+def resume_practice(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -328,25 +309,20 @@ async def resume_practice(
         PracticeNotFoundError: 练习不存在或跨租户越权 (404 / 40010)。
         PracticeStatusError: 当前状态不允许恢复 (400 / 40011)。
     """
-    try:
-        practice = practice_service.resume_practice(
-            user_id=current_user.id,
-            practice_id=id,
-        )
-        if isinstance(practice, PracticeStatusResponse):
-            return practice
-        resolved_practice_id: uuid.UUID = (
-            getattr(practice, "id", None) or getattr(practice, "practice_id", None) or id
-        )
-        return PracticeStatusResponse(
-            practice_id=resolved_practice_id,
-            status=getattr(practice, "status", "in_progress"),
-            message="练习已成功恢复",
-        )
-    except PracticeNotFoundError:
-        raise
-    except PracticeStatusError:
-        raise
+    practice = practice_service.resume_practice(
+        user_id=current_user.id,
+        practice_id=id,
+    )
+    if isinstance(practice, PracticeStatusResponse):
+        return practice
+    resolved_practice_id: uuid.UUID = (
+        getattr(practice, "id", None) or getattr(practice, "practice_id", None) or id
+    )
+    return PracticeStatusResponse(
+        practice_id=resolved_practice_id,
+        status=getattr(practice, "status", "in_progress"),
+        message="练习已成功恢复",
+    )
 
 
 @router.post(
@@ -355,7 +331,7 @@ async def resume_practice(
     status_code=status.HTTP_200_OK,
     summary="交卷提交强幂等",
 )
-async def submit_practice(
+def submit_practice(
     id: uuid.UUID,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -397,44 +373,31 @@ async def submit_practice(
             details=error.details,
         ) from error
 
-    try:
-        confirm_unanswered = payload.confirm_unanswered if payload is not None else False
-        if confirm_unanswered:
-            result = practice_service.submit_practice(
-                user_id=current_user.id,
-                practice_id=id,
-                idempotency_key=clean_key,
-                confirm_unanswered=True,
-            )
-        else:
-            result = practice_service.submit_practice(
-                user_id=current_user.id,
-                practice_id=id,
-                idempotency_key=clean_key,
-            )
+    confirm_unanswered = payload.confirm_unanswered if payload is not None else False
+    submit_kwargs: dict[str, Any] = {"confirm_unanswered": True} if confirm_unanswered else {}
+    result = practice_service.submit_practice(
+        user_id=current_user.id,
+        practice_id=id,
+        idempotency_key=clean_key,
+        **submit_kwargs,
+    )
 
-        if isinstance(result, SubmitPracticeResponse):
-            return result
-        return SubmitPracticeResponse(
-            practice_id=getattr(result, "practice_id", id),
-            status=getattr(result, "status", "completed"),
-            message="交卷成功，已调度判题任务",
-            uncompleted_count=getattr(
-                result, "uncompleted_count", getattr(result, "unanswered_count", 0)
-            ),
-            unanswered_count=getattr(result, "unanswered_count", 0),
-            is_idempotent_replay=getattr(result, "is_idempotent_replay", False),
-            task_id=getattr(result, "task_id", None),
-            total_questions=getattr(result, "total_questions", None),
-            answered_questions=getattr(result, "answered_questions", None),
-            submitted_at=getattr(result, "submitted_at", None),
-        )
-    except IdempotencyConflictError:
-        raise
-    except PracticeStatusError:
-        raise
-    except PracticeNotFoundError:
-        raise
+    if isinstance(result, SubmitPracticeResponse):
+        return result
+    return SubmitPracticeResponse(
+        practice_id=getattr(result, "practice_id", id),
+        status=getattr(result, "status", "completed"),
+        message="交卷成功，已调度判题任务",
+        uncompleted_count=getattr(
+            result, "uncompleted_count", getattr(result, "unanswered_count", 0)
+        ),
+        unanswered_count=getattr(result, "unanswered_count", 0),
+        is_idempotent_replay=getattr(result, "is_idempotent_replay", False),
+        task_id=getattr(result, "task_id", None),
+        total_questions=getattr(result, "total_questions", None),
+        answered_questions=getattr(result, "answered_questions", None),
+        submitted_at=getattr(result, "submitted_at", None),
+    )
 
 
 @router.post(
@@ -443,7 +406,7 @@ async def submit_practice(
     status_code=status.HTTP_200_OK,
     summary="重试未完成的整卷判题",
 )
-async def retry_practice_grading(
+def retry_practice_grading(
     id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
@@ -465,20 +428,15 @@ async def retry_practice_grading(
         PracticeNotFoundError: 练习不存在或跨租户越权 (404 / 40010)。
         PracticeStatusError: 练习已全判完或当前状态不允许重试判题 (400 / 40011)。
     """
-    try:
-        _, practice = practice_service.retry_grading(
-            user_id=current_user.id,
-            practice_id=id,
-        )
-        return PracticeStatusResponse(
-            practice_id=getattr(practice, "id", None) or id,
-            status=getattr(practice, "status", "submitted"),
-            message="判题任务已重新调度，请稍候刷新查看结果",
-        )
-    except PracticeNotFoundError:
-        raise
-    except PracticeStatusError:
-        raise
+    _, practice = practice_service.retry_grading(
+        user_id=current_user.id,
+        practice_id=id,
+    )
+    return PracticeStatusResponse(
+        practice_id=getattr(practice, "id", None) or id,
+        status=getattr(practice, "status", "submitted"),
+        message="判题任务已重新调度，请稍候刷新查看结果",
+    )
 
 
 __all__ = ["router"]

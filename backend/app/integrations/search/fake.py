@@ -8,12 +8,14 @@
 - 绝密脱敏防泄露。
 """
 
+import dataclasses
 import threading
 import time
 import uuid
 from collections.abc import Sequence
 
 from app.core.errors import PermissionDeniedError
+from app.integrations.search._neighbors import neighbor_targets, select_neighbors
 from app.integrations.search.protocol import (
     SearchOptions,
     SearchProtocol,
@@ -47,10 +49,20 @@ class FakeSearchAdapter(SearchProtocol):
         """设置全局默认可供检索切片候选集合。
 
         Args:
-            candidates: 预设候选切片列表。
+            candidates: 预设候选切片列表；未携带 snippet_index 的切片按其所属 version_id
+                内的出现顺序自动补全序号（0 起）。
         """
+        next_index: dict[uuid.UUID, int] = {}
+        normalized: list[SearchSnippetCandidate] = []
+        for cand in candidates:
+            index = cand.snippet_index
+            if index is None:
+                index = next_index.get(cand.version_id, 0)
+                cand = dataclasses.replace(cand, snippet_index=index)
+            next_index[cand.version_id] = max(next_index.get(cand.version_id, 0), index + 1)
+            normalized.append(cand)
         with self._lock:
-            self._canned_candidates = list(candidates)
+            self._canned_candidates = normalized
 
     def set_latency(self, seconds: float) -> None:
         """设置模拟检索时延时长。
@@ -106,6 +118,10 @@ class FakeSearchAdapter(SearchProtocol):
             raise PermissionDeniedError("user_id 不能为空")
 
         opts = options or SearchOptions()
+        allowed = opts.allowed_snippet_ids
+        if allowed is not None and len(allowed) == 0:
+            return SearchResult(query=query, items=(), total_candidates=0, duration_ms=0.0)
+        allowed_set = set(allowed) if allowed is not None else None
 
         with self._lock:
             if self._latency_seconds > 0.0:
@@ -134,6 +150,8 @@ class FakeSearchAdapter(SearchProtocol):
                     continue
                 if version_id is not None and c.version_id != version_id:
                     continue
+                if allowed_set is not None and c.snippet_id not in allowed_set:
+                    continue
                 filtered_candidates.append(c)
 
             top_candidates = filtered_candidates[: opts.top_k]
@@ -143,6 +161,35 @@ class FakeSearchAdapter(SearchProtocol):
                 total_candidates=len(filtered_candidates),
                 duration_ms=self._latency_seconds * 1000.0,
             )
+
+    def fetch_neighbor_snippets(
+        self,
+        candidates: Sequence[SearchSnippetCandidate],
+        *,
+        user_id: uuid.UUID,
+        window: int = 1,
+    ) -> list[SearchSnippetCandidate]:
+        """从预置候选集中取 ± window 相邻切片（同版本、同页、排除输入自身，分数清零）。
+
+        Args:
+            candidates: 已命中的候选切片。
+            user_id: 租户用户 ID（不可为空）。
+            window: 邻域半径，默认 1。
+
+        Returns:
+            list[SearchSnippetCandidate]: 按 (version_id, snippet_index) 排序的邻居切片。
+
+        Raises:
+            PermissionDeniedError: user_id 缺失或为空。
+        """
+        if not user_id:
+            raise PermissionDeniedError("user_id 不能为空")
+        targets = neighbor_targets(candidates, window)
+        if not targets:
+            return []
+        with self._lock:
+            pool = list(self._canned_candidates)
+        return select_neighbors(targets, pool, {c.snippet_id for c in candidates})
 
     def __repr__(self) -> str:
         """安全脱敏日志展示。"""

@@ -55,7 +55,7 @@ describe('draft queue reliability', () => {
   })
 
   it('flushes answers enqueued while a previous write is still in flight', async () => {
-    let release: (() => void) | null = null
+    let release: () => void = () => {}
     const calls: unknown[] = []
     const queue = createDraftQueue(async (_questionId, answer) => {
       calls.push(answer)
@@ -69,7 +69,7 @@ describe('draft queue reliability', () => {
     queue.enqueue('q-1', 'second')
 
     const flushing = queue.flush()
-    release?.()
+    release()
     const saved = await flushing
 
     expect(saved).toBe(true)

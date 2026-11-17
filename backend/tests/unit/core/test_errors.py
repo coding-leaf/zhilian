@@ -14,7 +14,6 @@ from app.core.errors import (
     IdempotencyKeyInvalidError,
     KnowledgeExtractionRetryExceededError,
     KnowledgeNotFoundError,
-    KnowledgePointQualityError,
     LLMAuthError,
     LLMError,
     LLMResponseFormatError,
@@ -22,7 +21,6 @@ from app.core.errors import (
     MasteryRecordNotFoundError,
     MaterialInvalidError,
     MaterialNotFoundError,
-    MaterialParseError,
     MissingSourceSnippetError,
     OCRReshootExceededError,
     PermissionDeniedError,
@@ -33,7 +31,6 @@ from app.core.errors import (
     PracticeSessionStatusError,
     PracticeStatusError,
     QuestionNotFoundError,
-    QuestionQualityCheckError,
     QueueError,
     QueueTimeoutError,
     ReshootLimitExceededError,
@@ -234,12 +231,6 @@ class TestAppErrors:
         assert isinstance(reshoot_err, AppError)
         assert OCRReshootExceededError is ReshootLimitExceededError
 
-        parse_err = MaterialParseError()
-        assert parse_err.error_code == 40003
-        assert parse_err.status_code == 500
-        assert parse_err.message == "学习资料解析处理失败"
-        assert isinstance(parse_err, AppError)
-
         not_found_err = MaterialNotFoundError()
         assert not_found_err.error_code == 40004
         assert not_found_err.status_code == 404
@@ -248,20 +239,6 @@ class TestAppErrors:
 
     def test_knowledge_errors(self) -> None:
         """Verify Knowledge error hierarchy, error codes, and status codes."""
-        quality_err = KnowledgePointQualityError()
-        assert quality_err.error_code == 40005
-        assert quality_err.status_code == 400
-        assert quality_err.message == "知识点质检未达到合格门禁标准"
-        assert isinstance(quality_err, AppError)
-
-        custom_quality_err = KnowledgePointQualityError(
-            message="知识点过度拆分",
-            details={"density": 100},
-        )
-        assert custom_quality_err.error_code == 40005
-        assert custom_quality_err.status_code == 400
-        assert custom_quality_err.details == {"density": 100}
-
         retry_err = KnowledgeExtractionRetryExceededError()
         assert retry_err.error_code == 40006
         assert retry_err.status_code == 500
@@ -289,20 +266,6 @@ class TestAppErrors:
         assert custom_missing.error_code == 40003
         assert custom_missing.status_code == 400
         assert custom_missing.details == {"similarity": 0.2}
-
-        qc_err = QuestionQualityCheckError()
-        assert qc_err.error_code == 40008
-        assert qc_err.status_code == 400
-        assert qc_err.message == "题目质检未达到合格门禁标准"
-        assert isinstance(qc_err, AppError)
-
-        custom_qc = QuestionQualityCheckError(
-            message="重复题目超限",
-            details={"check_type": "DUPLICATE"},
-        )
-        assert custom_qc.error_code == 40008
-        assert custom_qc.status_code == 400
-        assert custom_qc.details == {"check_type": "DUPLICATE"}
 
         not_found_err = QuestionNotFoundError()
         assert not_found_err.error_code == 40009

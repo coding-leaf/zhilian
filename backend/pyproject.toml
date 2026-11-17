@@ -16,12 +16,13 @@ dependencies = [
     "cryptography>=43.0.0",
     "pgvector>=0.3.0",
     "langgraph>=1.2.12",
-    "langchain-core>=1.6.4",
+    "httpx>=0.27.0",
     "python-multipart>=0.0.32",
     "redis>=5.0.0",
     "rq>=2.0,<3.0",
     "boto3>=1.34.0",
     "pypdf>=4.0.0",
+    "pymupdf>=1.25.0,<2",
 ]
 
 [project.optional-dependencies]
@@ -33,7 +34,7 @@ dev = [
     "mypy>=1.10.0",
     "bandit>=1.7.0",
     "pip-audit>=2.7.0",
-    "httpx>=0.27.0",
+    "diff-cover>=9.0.0",
 ]
 
 [build-system]
@@ -52,7 +53,7 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "S", "RUF", "ASYNC", "C901"]
 ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 28
+max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
@@ -126,6 +127,15 @@ forbidden_modules = [
     "app.repositories",
     "app.integrations",
 ]
+
+[[tool.importlinter.contracts]]
+name = "接口层禁止直接依赖外部基础设施适配层"
+type = "forbidden"
+source_modules = ["app.api"]
+forbidden_modules = [
+    "app.integrations",
+]
+allow_indirect_imports = true
 
 
 

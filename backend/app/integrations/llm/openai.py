@@ -20,6 +20,12 @@ from app.core.errors import (
     LLMError,
     LLMTimeoutError,
 )
+from app.integrations._http_retry import (
+    RetryableAdapterError,
+    handle_openai_http_response,
+    managed_httpx_client,
+    run_with_retry,
+)
 from app.integrations.llm.agent_graph import run_structured_agent_workflow
 from app.integrations.llm.protocol import (
     LLMMessage,
@@ -31,6 +37,19 @@ from app.integrations.llm.protocol import (
 )
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _serialize_message(message: LLMMessage) -> dict[str, Any]:
+    """将 LLMMessage 序列化为 OpenAI Chat Completions 消息体。
+
+    无图片附件时保持纯字符串 content（与既有行为完全一致）；存在 ``image_urls`` 时
+    输出 OpenAI vision 兼容的内容块数组 (text + image_url)。
+    """
+    if not message.image_urls:
+        return {"role": message.role, "content": message.content}
+    parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+    parts.extend({"type": "image_url", "image_url": {"url": url}} for url in message.image_urls)
+    return {"role": message.role, "content": parts}
 
 
 class OpenAICompatibleLLMAdapter(LLMProtocol):
@@ -109,74 +128,44 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
             "Content-Type": "application/json",
         }
 
-        last_error: Exception | None = None
-        client = self._get_client(effective_timeout)
+        def _client_factory() -> httpx.Client:
+            return httpx.Client(timeout=effective_timeout)
 
-        for attempt in range(self.max_retries + 1):
-            try:
+        with managed_httpx_client(self._client, _client_factory) as client:
+
+            def _attempt() -> dict[str, Any]:
                 try:
-                    response = client.post(
-                        url,
-                        json=payload,
-                        headers=headers,
-                        timeout=effective_timeout,
+                    try:
+                        response = client.post(
+                            url,
+                            json=payload,
+                            headers=headers,
+                            timeout=effective_timeout,
+                        )
+                    except TypeError:
+                        # 兼容可能不接受 timeout 参数的 Mock Client
+                        response = client.post(url, json=payload, headers=headers)
+                    return handle_openai_http_response(
+                        response,
+                        service_label="大模型服务",
+                        auth_error_cls=LLMAuthError,
+                        service_error_cls=LLMError,
                     )
-                except TypeError:
-                    # 兼容可能不接受 timeout 参数的 Mock Client
-                    response = client.post(url, json=payload, headers=headers)
+                except (httpx.TimeoutException, TimeoutError) as timeout_err:
+                    raise RetryableAdapterError(
+                        LLMTimeoutError("大模型服务响应超时")
+                    ) from timeout_err
+                except (httpx.RequestError, ConnectionError) as req_err:
+                    raise RetryableAdapterError(
+                        LLMError(f"大模型服务网络请求异常: {req_err}")
+                    ) from req_err
 
-                # 401 / 403 凭证错误直接抛出，严禁重试
-                if response.status_code in (401, 403):
-                    raise LLMAuthError(
-                        f"大模型服务认证失败 (HTTP {response.status_code})",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-
-                # 429 频率限制或 5xx 服务端错误，触发重试
-                if response.status_code == 429 or response.status_code >= 500:
-                    last_error = LLMError(
-                        f"大模型服务暂时不可用 (HTTP {response.status_code})",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-                    if attempt < self.max_retries:
-                        time.sleep(self.retry_delay_base * (2**attempt))
-                        continue
-                    raise last_error
-
-                # 其他非 200 响应
-                if response.status_code != 200:
-                    raise LLMError(
-                        f"大模型服务返回异常状态码: {response.status_code}",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-
-                try:
-                    data = response.json()
-                except Exception as json_err:
-                    raise LLMError("大模型服务响应 JSON 反序列化失败") from json_err
-
-                return cast(dict[str, Any], data)
-
-            except LLMAuthError:
-                raise
-
-            except (httpx.TimeoutException, TimeoutError) as timeout_err:
-                last_error = LLMTimeoutError("大模型服务响应超时")
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay_base * (2**attempt))
-                    continue
-                raise last_error from timeout_err
-
-            except (httpx.RequestError, ConnectionError) as req_err:
-                last_error = LLMError(f"大模型服务网络请求异常: {req_err}")
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay_base * (2**attempt))
-                    continue
-                raise last_error from req_err
-
-        if last_error:  # pragma: no cover - 防御性不可达分支
-            raise last_error
-        raise LLMError("大模型服务请求重试耗尽失败")  # pragma: no cover - 防御性不可达分支
+            return run_with_retry(
+                _attempt,
+                max_retries=self.max_retries,
+                retry_delay_base=self.retry_delay_base,
+                sleep_fn=lambda delay: time.sleep(delay),
+            )
 
     def generate(
         self,
@@ -198,7 +187,7 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
 
         payload: dict[str, Any] = {
             "model": model_name,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_serialize_message(m) for m in messages],
         }
         if options:
             payload["temperature"] = options.temperature

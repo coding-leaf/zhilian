@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"用户隔离、聚合查询与数据库会话边界"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"路由/服务错误处理与既有分层"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"后端门禁、测试规范；AGENTS.md 优先于旧 JUnit 建议"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"统计响应类型与 API 边界"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"个人页状态、请求编排与重置"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"小程序组件与事件约定"}
+{"file":".trellis/spec/frontend/network-contract.md","reason":"网络超时、失败反馈与重试"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、类型检查和组件测试"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"数据库到个人页三项数字的端到端契约"}

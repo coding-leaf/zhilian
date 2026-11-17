@@ -318,10 +318,16 @@ class AskCoachRequest(BaseModel):
 
 
 class AskCoachResponse(BaseModel):
-    """AI 助教深度答疑响应模型。"""
+    """AI 助教答疑响应模型。"""
 
-    reply: str = Field(..., description="AI 助教通俗生动的深度解析内容")
-    suggestions: list[str] = Field(default_factory=list, description="推荐延伸思考提示")
+    reply: str = Field(
+        ...,
+        description="精炼、口语化的助教答疑回复（约150-260字，先结论后2-3条简短要点）",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-3条简短口语化的延伸追问建议（每条不超过15字）",
+    )
 
 
 class ScopedCoachRequest(BaseModel):
@@ -331,6 +337,12 @@ class ScopedCoachRequest(BaseModel):
     material_id: uuid.UUID | None = None
     knowledge_point_id: uuid.UUID | None = None
     user_prompt: str = Field(min_length=1, max_length=1000)
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="可选会话线程标识；同一线程的追问共享最近 6 轮对话记忆（服务端按用户隔离）",
+    )
 
     @model_validator(mode="after")
     def validate_scope(self) -> "ScopedCoachRequest":
@@ -353,6 +365,44 @@ class CoachSourceResponse(BaseModel):
     source_info: dict[str, Any] = Field(default_factory=dict)
 
 
+class QuestionGenerationJobResponse(BaseModel):
+    """异步出题队列任务状态与进度响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID = Field(..., description="异步出题任务主键 UUIDv4")
+    status: str = Field(..., description="任务状态 (queued|running|completed|failed)")
+    material_id: uuid.UUID | None = Field(default=None, description="目标学习资料主键")
+    folder_id: uuid.UUID | None = Field(default=None, description="目标课程文件夹主键")
+    total_kps: int = Field(default=0, ge=0, description="总知识点数")
+    completed_kps: int = Field(default=0, ge=0, description="已完成知识点数")
+    generated_count: int = Field(default=0, ge=0, description="成功生成的题目数量")
+    batch_id: str | None = Field(default=None, description="关联出题批次标识")
+    question_ids: list[uuid.UUID] = Field(
+        default_factory=list, description="已生成的题目 UUID 列表"
+    )
+    error_message: str | None = Field(default=None, description="失败原因摘要")
+    created_at: datetime = Field(..., description="任务创建时间")
+    updated_at: datetime = Field(..., description="任务最后更新时间")
+    completed_at: datetime | None = Field(default=None, description="任务完成时间")
+
+    @field_validator("question_ids", mode="before")
+    @classmethod
+    def _coerce_question_ids(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        return list(value)
+
+
+class QuestionGenerationJobListResponse(BaseModel):
+    """异步出题任务列表响应模型。"""
+
+    items: list[QuestionGenerationJobResponse] = Field(
+        default_factory=list, description="任务记录列表"
+    )
+    total: int = Field(..., ge=0, description="符合条件的总任务数")
+
+
 class ScopedCoachResponse(AskCoachResponse):
     sources: list[CoachSourceResponse] = Field(default_factory=list)
 
@@ -372,6 +422,8 @@ __all__ = [
     "QuestionEditLogResponse",
     "QuestionGenerateRequest",
     "QuestionGenerateResponse",
+    "QuestionGenerationJobListResponse",
+    "QuestionGenerationJobResponse",
     "QuestionListQuery",
     "QuestionListResponse",
     "QuestionQualityCheckListResponse",

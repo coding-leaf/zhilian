@@ -127,62 +127,20 @@ class TestGradingRepository:
         assert saved.user_id == user_id
         assert saved.score == 2.0
 
-        fetched = repo.get_record_by_id(saved.id, user_id=user_id)
-        assert fetched is not None
-        assert fetched.id == saved.id
-        assert fetched.score == 2.0
-
-        # Method alias check
-        fetched_alias = repo.get_grading_record_by_id(saved.id, user_id=user_id)
-        assert fetched_alias is not None
-        assert fetched_alias.id == saved.id
-
-    def test_batch_create_records(
-        self, session: Session, helper_setup: dict[str, uuid.UUID]
-    ) -> None:
-        """Verify batch creation of grading records."""
-        repo = GradingRepository(session)
-        user_id = helper_setup["user_id"]
-        practice_id = helper_setup["practice_id"]
-
-        r1 = GradingRecord(
-            id=uuid.uuid4(),
-            practice_id=practice_id,
-            attempt_item_id=helper_setup["item_id_1"],
-            channel=GradingChannel.OFFLINE.value,
-            status=GradingStatus.SUCCESS.value,
-            is_final=True,
-            score=2.0,
-            max_score=2.0,
+        saved_alias = repo.create_grading_record(
+            GradingRecord(
+                id=uuid.uuid4(),
+                practice_id=practice_id,
+                attempt_item_id=helper_setup["item_id_2"],
+                channel=GradingChannel.USER_SELF.value,
+                status=GradingStatus.SUCCESS.value,
+                is_final=False,
+                score=1.5,
+                max_score=2.0,
+            ),
+            user_id=user_id,
         )
-        r2 = GradingRecord(
-            id=uuid.uuid4(),
-            practice_id=practice_id,
-            attempt_item_id=helper_setup["item_id_2"],
-            channel=GradingChannel.AI.value,
-            status=GradingStatus.PENDING_REGRADE.value,
-            is_final=True,
-            score=0.0,
-            max_score=5.0,
-        )
-
-        saved_list = repo.batch_create_records([r1, r2], user_id=user_id)
-        assert len(saved_list) == 2
-        assert all(item.user_id == user_id for item in saved_list)
-
-        # Method alias check
-        r3 = GradingRecord(
-            id=uuid.uuid4(),
-            practice_id=practice_id,
-            attempt_item_id=helper_setup["item_id_1"],
-            channel=GradingChannel.USER_SELF.value,
-            status=GradingStatus.SUCCESS.value,
-            is_final=False,
-            score=1.5,
-            max_score=2.0,
-        )
-        saved_alias = repo.batch_create_grading_records([r3], user_id=user_id)
-        assert len(saved_alias) == 1
+        assert saved_alias.user_id == user_id
 
     def test_list_records_by_attempt_item(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
@@ -214,7 +172,8 @@ class TestGradingRepository:
             max_score=5.0,
         )
 
-        repo.batch_create_records([r1, r2], user_id=user_id)
+        repo.create_record(r1, user_id=user_id)
+        repo.create_record(r2, user_id=user_id)
 
         records = repo.list_records_by_attempt_item(item_id, user_id=user_id)
         assert len(records) == 2
@@ -255,7 +214,8 @@ class TestGradingRepository:
             max_score=5.0,
         )
 
-        repo.batch_create_records([r1, r2], user_id=user_id)
+        repo.create_record(r1, user_id=user_id)
+        repo.create_record(r2, user_id=user_id)
 
         final_rec = repo.get_final_record_for_attempt(item_id, user_id=user_id)
         assert final_rec is not None
@@ -306,7 +266,9 @@ class TestGradingRepository:
             max_score=5.0,
         )
 
-        repo.batch_create_records([r1, r2_old, r2_new], user_id=user_id)
+        repo.create_record(r1, user_id=user_id)
+        repo.create_record(r2_old, user_id=user_id)
+        repo.create_record(r2_new, user_id=user_id)
 
         final_records = repo.list_final_records_by_practice(practice_id, user_id=user_id)
         assert len(final_records) == 2
@@ -386,7 +348,8 @@ class TestGradingRepository:
             score=0.0,
             max_score=5.0,
         )
-        repo.batch_create_records([r1, r2], user_id=user_id)
+        repo.create_record(r1, user_id=user_id)
+        repo.create_record(r2, user_id=user_id)
 
         count = repo.count_pending_regrade(practice_id, user_id=user_id)
         assert count == 1
@@ -417,10 +380,6 @@ class TestGradingRepository:
             max_score=2.0,
         )
         repo.create_record(record, user_id=user_a)
-
-        # User B attempts to read User A's record by id
-        assert repo.get_record_by_id(record.id, user_id=user_b) is None
-        assert repo.get_grading_record_by_id(record.id, user_id=user_b) is None
 
         # User B attempts to list User A's item records
         assert repo.list_records_by_attempt_item(item_id, user_id=user_b) == []

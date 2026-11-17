@@ -18,6 +18,12 @@ from app.core.errors import (
     EmbeddingError,
     EmbeddingTimeoutError,
 )
+from app.integrations._http_retry import (
+    RetryableAdapterError,
+    handle_openai_http_response,
+    managed_httpx_client,
+    run_with_retry,
+)
 from app.integrations.embedding.protocol import (
     EmbeddingOptions,
     EmbeddingProtocol,
@@ -100,62 +106,35 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
             "Content-Type": "application/json",
         }
 
-        last_error: Exception | None = None
-        client = self._get_client()
+        def _client_factory() -> httpx.Client:
+            return httpx.Client(timeout=self.timeout)
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = client.post(url, json=payload, headers=headers)
+        with managed_httpx_client(self._client, _client_factory) as client:
 
-                # 401 / 403 凭据错误直接抛出，不重试
-                if response.status_code in (401, 403):
-                    raise EmbeddingAuthError(
-                        f"向量化服务认证失败 (HTTP {response.status_code})",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-
-                # 429 频率限制或 5xx 服务端错误，触发重试
-                if response.status_code == 429 or response.status_code >= 500:
-                    last_error = EmbeddingError(
-                        f"向量化服务暂时不可用 (HTTP {response.status_code})",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-                    if attempt < self.max_retries:
-                        time.sleep(self.retry_delay_base * (2**attempt))
-                        continue
-                    raise last_error
-
-                # 其他非 200 响应
-                if response.status_code != 200:
-                    raise EmbeddingError(
-                        f"向量化服务返回异常状态码: {response.status_code}",
-                        details={"status_code": response.status_code, "body": response.text[:200]},
-                    )
-
+            def _attempt() -> dict[str, Any]:
                 try:
-                    data = response.json()
-                except Exception as json_err:
-                    raise EmbeddingError("向量化服务响应 JSON 反序列化失败") from json_err
+                    response = client.post(url, json=payload, headers=headers)
+                    return handle_openai_http_response(
+                        response,
+                        service_label="向量化服务",
+                        auth_error_cls=EmbeddingAuthError,
+                        service_error_cls=EmbeddingError,
+                    )
+                except (httpx.TimeoutException, TimeoutError) as timeout_err:
+                    raise RetryableAdapterError(
+                        EmbeddingTimeoutError("向量化服务调用超时")
+                    ) from timeout_err
+                except (httpx.RequestError, ConnectionError) as req_err:
+                    raise RetryableAdapterError(
+                        EmbeddingError(f"向量化网络请求异常: {req_err}")
+                    ) from req_err
 
-                return cast(dict[str, Any], data)
-
-            except (httpx.TimeoutException, TimeoutError) as timeout_err:
-                last_error = EmbeddingTimeoutError("向量化服务调用超时")
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay_base * (2**attempt))
-                    continue
-                raise last_error from timeout_err
-
-            except (httpx.RequestError, ConnectionError) as req_err:
-                last_error = EmbeddingError(f"向量化网络请求异常: {req_err}")
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay_base * (2**attempt))
-                    continue
-                raise last_error from req_err
-
-        if last_error:
-            raise last_error
-        raise EmbeddingError("向量化请求重试耗尽失败")
+            return run_with_retry(
+                _attempt,
+                max_retries=self.max_retries,
+                retry_delay_base=self.retry_delay_base,
+                sleep_fn=lambda delay: time.sleep(delay),
+            )
 
     def embed_query(
         self,

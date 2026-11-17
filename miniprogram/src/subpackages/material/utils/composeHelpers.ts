@@ -1,0 +1,271 @@
+import type { KnowledgeTreeNode, QuestionItem } from '@/types'
+
+export type ComposeMode = 'smart_sample' | 'full_coverage'
+
+export interface ComposeScope {
+  folderId?: string
+  materialId?: string
+}
+
+export interface KnowledgePointOption {
+  id: string
+  name: string
+  level?: number
+  parent_id?: string | null
+  sort_order?: number
+  material_id?: string
+  material_title?: string
+}
+
+export interface ComposeKpGroup {
+  id: string
+  title: string
+  points: KnowledgePointOption[]
+}
+
+export function normalizeKpName(name: string): string {
+  return name.trim().replace(/[\s\-_（）()：:·]+/g, '').toLowerCase()
+}
+
+/** 按 id 与规范化名称去重考点，同时保留优先指定的预选 kp_id。 */
+export function dedupeKnowledgePointOptions(
+  list: readonly KnowledgePointOption[],
+  preferredId?: string,
+): KnowledgePointOption[] {
+  const byNormName = new Map<string, KnowledgePointOption>()
+  const seenIds = new Set<string>()
+  const orderedKeys: string[] = []
+
+  for (const item of list) {
+    if (!item?.id || seenIds.has(item.id)) continue
+    seenIds.add(item.id)
+    const norm = normalizeKpName(item.name || item.id)
+    const key = norm || item.id
+    const existing = byNormName.get(key)
+    if (!existing) {
+      byNormName.set(key, item)
+      orderedKeys.push(key)
+    } else if (preferredId && item.id === preferredId) {
+      byNormName.set(key, item)
+    }
+  }
+
+  return orderedKeys
+    .map((key) => byNormName.get(key))
+    .filter((item): item is KnowledgePointOption => Boolean(item))
+}
+
+function sortOptionsByOrder(list: KnowledgePointOption[]): KnowledgePointOption[] {
+  return list
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const diff = (a.item.sort_order ?? 0) - (b.item.sort_order ?? 0)
+      return diff !== 0 ? diff : a.index - b.index
+    })
+    .map((entry) => entry.item)
+}
+
+export function mapTreeNodesToComposeOptions(
+  nodes: readonly KnowledgeTreeNode[],
+): KnowledgePointOption[] {
+  return nodes.map((node) => ({
+    id: node.id,
+    name: node.name,
+    level: node.level,
+    parent_id: node.parent_id ?? null,
+    sort_order: node.sort_order ?? 0,
+  }))
+}
+
+/** 过滤已有子节点的 L1 章节容器节点，仅保留可出题的叶子/独立考点。 */
+export function selectLeafComposePoints(
+  list: readonly KnowledgePointOption[],
+): KnowledgePointOption[] {
+  const parentIdsWithChildren = new Set<string>()
+  for (const item of list) {
+    if (item.parent_id) parentIdsWithChildren.add(item.parent_id)
+  }
+  return list.filter(
+    (item) => !((item.level ?? 1) === 1 && parentIdsWithChildren.has(item.id)),
+  )
+}
+
+/** 将考点按资料或章节分组，方便多考点自主选择与按章全选。 */
+export function groupComposeKps(list: readonly KnowledgePointOption[]): ComposeKpGroup[] {
+  if (!list.length) return []
+
+  const hasMaterialGroups = list.some((item) => Boolean(item.material_title))
+  if (hasMaterialGroups) {
+    const leafList = selectLeafComposePoints(list)
+    const byMaterial = new Map<string, ComposeKpGroup>()
+    for (const item of leafList) {
+      const key = item.material_id || item.material_title || '__material__'
+      const existing = byMaterial.get(key)
+      if (existing) {
+        existing.points.push(item)
+      } else {
+        byMaterial.set(key, {
+          id: key,
+          title: item.material_title || '课程讲义',
+          points: [item],
+        })
+      }
+    }
+    return Array.from(byMaterial.values()).map((group) => ({
+      ...group,
+      points: sortOptionsByOrder(group.points),
+    }))
+  }
+
+  const byId = new Map<string, KnowledgePointOption>()
+  for (const item of list) {
+    byId.set(item.id, item)
+  }
+
+  const findChapterRootId = (item: KnowledgePointOption): string | null => {
+    if ((item.level ?? 1) <= 1) return null
+    const visited = new Set<string>([item.id])
+    let parentId = item.parent_id
+    while (parentId) {
+      if (visited.has(parentId)) return null
+      visited.add(parentId)
+      const parent = byId.get(parentId)
+      if (!parent) return null
+      if ((parent.level ?? 1) === 1) return parent.id
+      parentId = parent.parent_id
+    }
+    return null
+  }
+
+  const chapterBuckets = new Map<string, KnowledgePointOption[]>()
+  const orphans: KnowledgePointOption[] = []
+  for (const item of list) {
+    if ((item.level ?? 1) <= 1) continue
+    const rootId = findChapterRootId(item)
+    if (rootId) {
+      const bucket = chapterBuckets.get(rootId) ?? []
+      bucket.push(item)
+      chapterBuckets.set(rootId, bucket)
+    } else {
+      orphans.push(item)
+    }
+  }
+
+  const roots = sortOptionsByOrder(list.filter((item) => (item.level ?? 1) === 1))
+  const groups: ComposeKpGroup[] = []
+  const flatLeaves: KnowledgePointOption[] = []
+
+  for (const root of roots) {
+    const descendants = chapterBuckets.get(root.id)
+    if (descendants && descendants.length > 0) {
+      groups.push({
+        id: root.id,
+        title: root.name,
+        points: sortOptionsByOrder(descendants),
+      })
+    } else {
+      flatLeaves.push(root)
+    }
+  }
+
+  const ungrouped = sortOptionsByOrder([...flatLeaves, ...orphans])
+  if (ungrouped.length > 0) {
+    groups.push({
+      id: '__general__',
+      title: groups.length > 0 ? '其他考点' : '全部可选考点',
+      points: ungrouped,
+    })
+  }
+
+  return groups
+}
+
+/** 跨讲义/章节分组确定性均匀抽样 targetCount 个已选考点，避免单一章节独占题量。 */
+export function sampleKnowledgePointIds(
+  groups: readonly ComposeKpGroup[],
+  selectedIds: readonly string[],
+  targetCount: number,
+): string[] {
+  const uniqueSelected = Array.from(new Set(selectedIds.filter(Boolean)))
+  if (targetCount <= 0 || uniqueSelected.length === 0) return []
+  if (uniqueSelected.length <= targetCount) return uniqueSelected
+
+  const selectedSet = new Set(uniqueSelected)
+  const buckets: string[][] = []
+  const placed = new Set<string>()
+
+  for (const group of groups) {
+    const groupSelected = group.points
+      .map((point) => point.id)
+      .filter((id) => selectedSet.has(id) && !placed.has(id))
+    if (groupSelected.length > 0) {
+      buckets.push(groupSelected)
+      groupSelected.forEach((id) => placed.add(id))
+    }
+  }
+
+  const remaining = uniqueSelected.filter((id) => !placed.has(id))
+  if (remaining.length > 0) {
+    buckets.push(remaining)
+  }
+  if (buckets.length === 0) return uniqueSelected.slice(0, targetCount)
+
+  if (buckets.length > targetCount) {
+    const sampled: string[] = []
+    for (let i = 0; i < targetCount; i += 1) {
+      const bucketIdx = Math.min(buckets.length - 1, Math.floor((i * buckets.length) / targetCount))
+      sampled.push(buckets[bucketIdx][0])
+    }
+    return sampled
+  }
+
+  const sampled: string[] = []
+  const cursors = buckets.map(() => 0)
+  while (sampled.length < targetCount) {
+    let progressed = false
+    for (let b = 0; b < buckets.length && sampled.length < targetCount; b += 1) {
+      const bucket = buckets[b]
+      const idx = cursors[b]
+      if (idx < bucket.length) {
+        sampled.push(bucket[idx])
+        cursors[b] = idx + 1
+        progressed = true
+      }
+    }
+    if (!progressed) break
+  }
+  return sampled
+}
+
+export function formatQuestionAnswer(question: Pick<QuestionItem, 'type' | 'answer'>): string {
+  const raw = question.answer
+  if (raw === null || raw === undefined || raw === '') return '暂无参考答案'
+  if (Array.isArray(raw)) {
+    const joined = raw.map((item) => String(item).trim()).filter(Boolean).join('、')
+    return joined || '暂无参考答案'
+  }
+  if (typeof raw === 'number') return String(raw)
+
+  const trimmed = String(raw).trim()
+  if (!trimmed) return '暂无参考答案'
+
+  if (question.type === 'multiple_choice' && trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean).join('、') || trimmed
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (question.type === 'fill_in_blank') {
+    return trimmed
+      .split(/\s*(?:;|；|&&)\s*/)
+      .map((blank) => blank.replace(/\s*(?:\|\|\||\/\/\/|\|)\s*/g, ' 或 '))
+      .join(' ； ')
+  }
+
+  return trimmed
+}

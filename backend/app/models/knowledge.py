@@ -4,7 +4,7 @@
 """
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
@@ -15,8 +15,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from app.models.base import Base, TenantModelMixin, TimestampMixin
 
@@ -71,6 +72,19 @@ class KnowledgePoint(Base, TimestampMixin, TenantModelMixin):
         nullable=False,
         default="",
         comment="知识点简述/抽取摘要",
+    )
+    structured_content: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=True,
+        default=None,
+        comment="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="同层或资料内排序序号",
     )
     level: Mapped[int] = mapped_column(
         Integer,

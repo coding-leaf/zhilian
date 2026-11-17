@@ -70,6 +70,15 @@ from app.core.algorithms.knowledge_quality import (
     generate_prompt_feedback,
     verify_knowledge_points,
 )
+from app.core.algorithms.knowledge_tree import (
+    ExtractedKnowledgeItem,
+    KnowledgeExtractionOutput,
+    ResolvedKnowledgeNode,
+    compute_chapter_stats,
+    deduplicate_candidate_points,
+    normalize_extracted_temp_ids,
+    resolve_knowledge_hierarchy,
+)
 from app.core.algorithms.mastery import (
     DEFAULT_AI_GRADING_WEIGHT,
     DEFAULT_DECAY_LAMBDA,
@@ -101,6 +110,7 @@ from app.core.algorithms.material_chunking import (
     ChunkingResult,
     ParagraphInput,
     Snippet,
+    merge_isolated_short_snippets,
     split_material_into_snippets,
 )
 from app.core.algorithms.ocr_quality import (
@@ -113,7 +123,10 @@ from app.core.algorithms.ocr_quality import (
     calculate_median_length,
     clean_ocr_text,
     count_valid_characters,
+    detect_broken_math_layout,
+    detect_symbol_garble,
     evaluate_page_quality,
+    sanitize_symbol_garble,
     verify_ocr_quality,
 )
 from app.core.algorithms.practice import (
@@ -154,6 +167,10 @@ from app.core.algorithms.search import (
     reciprocal_rank_fusion,
     tokenize_text,
     weighted_score_fusion,
+)
+from app.core.algorithms.text_excerpt import (
+    merge_adjacent_snippet_texts,
+    trim_excerpt_cleanly,
 )
 
 __all__ = [
@@ -210,6 +227,7 @@ __all__ = [
     "ChunkingResult",
     "DiagnosisReportResult",
     "ExistingQuestionReference",
+    "ExtractedKnowledgeItem",
     "ExtractionContext",
     "GradingConfig",
     "GradingMethod",
@@ -217,6 +235,7 @@ __all__ = [
     "GradingRubricItem",
     "GradingSourceType",
     "KnowledgeEvaluationInput",
+    "KnowledgeExtractionOutput",
     "KnowledgeQualityConfig",
     "KnowledgeQualityReport",
     "MasteryAggregationItem",
@@ -235,6 +254,7 @@ __all__ = [
     "QuestionQualityConfig",
     "QuestionQualityReport",
     "QuestionType",
+    "ResolvedKnowledgeNode",
     "SingleQuestionQualityResult",
     "Snippet",
     "TransitionReason",
@@ -263,10 +283,14 @@ __all__ = [
     "check_source_grounding",
     "clean_ocr_text",
     "compute_bm25_score",
+    "compute_chapter_stats",
     "cosine_similarity",
     "count_valid_characters",
+    "deduplicate_candidate_points",
+    "detect_broken_math_layout",
     "detect_negation_inversion",
     "detect_sentence_negation",
+    "detect_symbol_garble",
     "determine_mastery_level",
     "diagnose_cause_and_advice",
     "evaluate_cause_type",
@@ -281,16 +305,22 @@ __all__ = [
     "grade_objective_question",
     "is_weak_knowledge",
     "match_and_grade_answer",
+    "merge_adjacent_snippet_texts",
+    "merge_isolated_short_snippets",
     "normalize_boolean_answer",
+    "normalize_extracted_temp_ids",
     "normalize_fill_blank_text",
     "normalize_objective_token",
     "normalize_timestamp",
     "reciprocal_rank_fusion",
+    "resolve_knowledge_hierarchy",
     "resolve_source_weight",
+    "sanitize_symbol_garble",
     "scatter_adjacent_knowledge_questions",
     "split_material_into_snippets",
     "synthesize_diagnosis_report",
     "tokenize_text",
+    "trim_excerpt_cleanly",
     "verify_knowledge_points",
     "verify_ocr_quality",
     "weighted_score_fusion",

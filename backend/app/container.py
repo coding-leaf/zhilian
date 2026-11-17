@@ -18,6 +18,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import AppSettings, get_settings
 from app.integrations.container import ProviderRegistry
+from app.integrations.llm.coach_memory import CoachSessionMemory
+from app.repositories.diagnosis import DiagnosisRepository
+from app.repositories.material import MaterialRepository
+from app.repositories.question import QuestionRepository
+from app.services._material_pipeline import resolve_progress_redis_client
 from app.services.auth import AuthService
 from app.services.diagnosis import DiagnosisService
 from app.services.folder import FolderService
@@ -65,7 +70,10 @@ class AppContainer:
         self.engine = engine
         self.session_factory = session_factory
         self.providers = providers
-        self.registry = providers
+        # 助教多轮会话记忆：进程内单例，复用队列/幂等适配器的 Redis 客户端（无则内存 LRU）。
+        self.coach_memory = CoachSessionMemory(
+            redis_client=resolve_progress_redis_client(providers.queue, providers.idempotency)
+        )
 
     @classmethod
     def create(
@@ -194,7 +202,12 @@ class AppContainer:
             queue_adapter=self.providers.queue,
             idempotency_adapter=self.providers.idempotency,
             knowledge_service=resolved_knowledge_service,
+            llm_adapter=self.providers.llm,
             bucket=self.settings.storage.bucket_name,
+            vlm_adapter=self.providers.vlm,
+            vlm_dpi=self.settings.vlm.dpi,
+            vlm_max_concurrency=self.settings.vlm.max_concurrency,
+            vlm_timeout=self.settings.vlm.timeout,
         )
 
     def create_knowledge_service(self, session: Session) -> KnowledgeService:
@@ -210,6 +223,8 @@ class AppContainer:
         return FolderService(
             session=session,
             material_service=self.create_material_service(session=session),
+            material_repo=MaterialRepository(session),
+            question_repo=QuestionRepository(session),
         )
 
     def create_question_service(self, session: Session) -> QuestionService:
@@ -219,12 +234,18 @@ class AppContainer:
             llm=self.providers.llm,
             embedding=self.providers.embedding,
             search_adapter=self.providers.search,
+            queue=self.providers.queue,
+            session_factory=self.session_factory,
+            reranker=self.providers.rerank if self.settings.rerank.enabled else None,
+            rerank_settings=self.settings.rerank,
+            memory_store=self.coach_memory,
         )
 
     def create_practice_service(self, session: Session) -> PracticeService:
         """纯工厂方法：构建绑定独立 Session 的 PracticeService。"""
         return PracticeService(
             session=session,
+            diagnosis_repo=DiagnosisRepository(session),
             idempotency=self.providers.idempotency,
             queue=self.providers.queue,
         )
@@ -239,46 +260,6 @@ class AppContainer:
     def create_diagnosis_service(self, session: Session) -> DiagnosisService:
         """纯工厂方法：构建绑定独立 Session 的 DiagnosisService。"""
         return DiagnosisService(session=session)
-
-    # --------------------------------------------------------------------------
-    # 兼容历史调用的别名方法
-    # --------------------------------------------------------------------------
-
-    def get_auth_service(self, session: Session) -> AuthService:
-        """兼容接口：委托给 create_auth_service。"""
-        return self.create_auth_service(session=session)
-
-    def get_user_service(self, session: Session) -> AuthService:
-        """兼容接口：委托给 create_user_service。"""
-        return self.create_user_service(session=session)
-
-    def get_material_service(self, session: Session) -> MaterialService:
-        """兼容接口：委托给 create_material_service。"""
-        return self.create_material_service(session=session)
-
-    def get_knowledge_service(self, session: Session) -> KnowledgeService:
-        """兼容接口：委托给 create_knowledge_service。"""
-        return self.create_knowledge_service(session=session)
-
-    def get_folder_service(self, session: Session) -> FolderService:
-        """兼容接口：委托给 create_folder_service。"""
-        return self.create_folder_service(session=session)
-
-    def get_question_service(self, session: Session) -> QuestionService:
-        """兼容接口：委托给 create_question_service。"""
-        return self.create_question_service(session=session)
-
-    def get_practice_service(self, session: Session) -> PracticeService:
-        """兼容接口：委托给 create_practice_service。"""
-        return self.create_practice_service(session=session)
-
-    def get_grading_service(self, session: Session) -> GradingService:
-        """兼容接口：委托给 create_grading_service。"""
-        return self.create_grading_service(session=session)
-
-    def get_diagnosis_service(self, session: Session) -> DiagnosisService:
-        """兼容接口：委托给 create_diagnosis_service。"""
-        return self.create_diagnosis_service(session=session)
 
     # --------------------------------------------------------------------------
     # 生命周期与健康探测

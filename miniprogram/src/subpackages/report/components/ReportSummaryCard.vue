@@ -35,7 +35,7 @@
 
     <view v-if="suggestion" class="next-suggestion-box">
       <text class="suggestion-tag">学习建议</text>
-      <text class="suggestion-text">{{ suggestion }}</text>
+      <RichContent :content="suggestion" compact />
     </view>
   </view>
 
@@ -50,14 +50,19 @@
         <text class="weakness-name">{{ point.name }}</text>
         <text class="weakness-rate">掌握度 {{ formatPercent(point.masteryRate) }}</text>
       </view>
-      <text class="weakness-reason">{{ point.reason }}</text>
-      <text class="weakness-sugg">建议：{{ point.suggestion }}</text>
+      <view class="weakness-rich">
+        <RichContent :content="point.reason" compact muted />
+      </view>
+      <view class="weakness-rich">
+        <RichContent :content="`建议：${point.suggestion}`" compact muted />
+      </view>
     </view>
   </template>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import RichContent from '@/components/RichContent.vue'
 import type { DiagnosisReport } from '@/types'
 import { formatPercent, type WeakPointView } from '../utils/reportView'
 

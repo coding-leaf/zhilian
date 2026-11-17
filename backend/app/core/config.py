@@ -215,7 +215,7 @@ class EmbeddingSettings(BaseSettings):
         max_retries: 失败最大重试次数。
     """
 
-    provider: Literal["fake", "openai", "dashscope"] = Field(
+    provider: Literal["fake", "openai", "dashscope", "siliconflow"] = Field(
         default="fake",
         description="向量化服务提供商",
     )
@@ -373,6 +373,74 @@ class OCRSettings(BaseSettings):
         return self.api_key or self.secret_id
 
 
+class VLMSettings(BaseSettings):
+    """云端视觉语言模型（VLM）脏页转录配置。
+
+    仅被判定为公式乱码 / 缺字库 / 扫描图的 PDF 页才会渲染为图片送往 VLM，
+    干净页走 PyMuPDF 文本（零成本）。默认关闭且 provider=fake，保证离线测试零联网。
+
+    Attributes:
+        enabled: 是否启用 VLM 脏页转录。
+        provider: VLM 提供商（OpenAI 兼容多模态接口）。
+        model: VLM 模型名称。
+        base_url: 服务基础 URL（siliconflow 缺省 https://api.siliconflow.cn/v1）。
+        api_key: 访问凭证。
+        timeout: 单页请求超时上限（秒）。
+        max_retries: 失败最大重试次数。
+        dpi: 页面渲染分辨率。
+        max_concurrency: 脏页并发转录上限。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用 VLM 脏页转录")
+    provider: Literal["fake", "openai", "siliconflow"] = Field(
+        default="fake",
+        description="VLM 提供商",
+    )
+    model: str = Field(default="Qwen/Qwen2.5-VL-7B-Instruct", description="VLM 模型名称")
+    base_url: str | None = Field(default=None, description="VLM 服务基础 URL")
+    api_key: SecretStr | None = Field(default=None, description="VLM 访问凭证 API Key")
+    timeout: float = Field(default=45.0, description="单页请求超时上限（秒）")
+    max_retries: int = Field(default=2, description="失败最大重试次数")
+    dpi: int = Field(default=150, ge=72, le=300, description="页面渲染 DPI")
+    max_concurrency: int = Field(default=3, ge=1, le=16, description="脏页并发转录上限")
+
+
+class RerankSettings(BaseSettings):
+    """检索结果精排（Rerank）配置。
+
+    Attributes:
+        enabled: 是否启用精排。
+        provider: 精排提供商。
+        model: 精排模型名称。
+        base_url: 服务基础 URL（siliconflow 缺省 https://api.siliconflow.cn/v1）。
+        api_key: 访问凭证。
+        timeout: 请求超时上限（秒）。
+        max_retries: 失败最大重试次数。
+        top_n: 精排后保留的证据条数。
+        min_score: 低于该精排分数视为证据不足（诚实兜底）。
+        rewrite_threshold: 低于该分数且未重写过时触发一次查询改写重检索。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用精排")
+    provider: Literal["fake", "siliconflow", "openai"] = Field(
+        default="fake",
+        description="精排提供商",
+    )
+    model: str = Field(default="BAAI/bge-reranker-v2-m3", description="精排模型名称")
+    base_url: str | None = Field(default=None, description="精排服务基础 URL")
+    api_key: SecretStr | None = Field(default=None, description="精排访问凭证 API Key")
+    timeout: float = Field(default=15.0, description="请求超时上限（秒）")
+    max_retries: int = Field(default=2, description="失败最大重试次数")
+    top_n: int = Field(default=6, ge=1, description="精排后保留证据条数")
+    min_score: float = Field(default=0.25, ge=0.0, le=1.0, description="证据不足分数下限")
+    rewrite_threshold: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="触发查询改写的分数阈值",
+    )
+
+
 class AppSettings(BaseSettings):
     """智练自主学习平台全局强类型配置中心。
 
@@ -392,6 +460,8 @@ class AppSettings(BaseSettings):
         queue: 任务队列子配置。
         idempotency: 幂等拦截器子配置。
         search: 检索子配置。
+        vlm: 云端 VLM 脏页转录子配置。
+        rerank: 检索精排子配置。
     """
 
     env: Literal["development", "test", "production"] = Field(
@@ -424,6 +494,8 @@ class AppSettings(BaseSettings):
     queue: QueueSettings = Field(default_factory=QueueSettings)
     idempotency: IdempotencySettings = Field(default_factory=IdempotencySettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
+    vlm: VLMSettings = Field(default_factory=VLMSettings)
+    rerank: RerankSettings = Field(default_factory=RerankSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="ZHILIAN_",

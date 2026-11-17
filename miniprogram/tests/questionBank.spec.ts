@@ -79,8 +79,7 @@ function mockRequests() {
       if (url.includes('batch_id=batch_a')) return batchAQuestions
       if (url.includes('unbatched=true')) return unbatchedQuestions
     }
-    if (url === '/practices') return { id: 'p-1' }
-    if (url.startsWith('/practices/')) return practiceDetailFixture
+    if (url === '/practices') return practiceDetailFixture
     throw new Error(`unexpected request: ${url}`)
   })
 }
@@ -262,7 +261,7 @@ describe('question bank section', () => {
     const session = await bank.startPractice()
 
     expect(showModal).toHaveBeenCalledTimes(1)
-    expect(showModal.mock.calls[0][0].content).toContain('最多 50 题')
+    expect((showModal.mock.calls[0]?.[0] as { content?: string })?.content).toContain('最多 50 题')
     const createCall = requestMock.mock.calls.find(([options]: any[]) => options.url === '/practices')
     expect(createCall?.[0].data.question_count).toBe(50)
     expect(createCall?.[0].data.question_ids).toHaveLength(50)

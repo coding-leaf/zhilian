@@ -48,6 +48,13 @@ def sanitize_material_title(
     return cleaned[:MAX_TITLE_LENGTH]
 
 
+class MaterialStatisticsResponse(BaseModel):
+    """当前用户未删除且就绪的资料统计，含未分类和归档课程资料。"""
+
+    ready_material_count: int = Field(..., ge=0, description="就绪资料总数")
+    knowledge_point_count: int = Field(..., ge=0, description="就绪资料下的考点实体总数")
+
+
 class MaterialUploadResponse(BaseModel):
     """资料上传创建成功响应模型 (201 Created)。"""
 
@@ -87,6 +94,8 @@ class MaterialDetailResponse(BaseModel):
     versions_count: int = Field(default=0, ge=0, description="关联历史版本总数")
     key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
     page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
+    error_message: str | None = Field(default=None, description="最近一次解析失败原因摘要")
+    failed_stage: str | None = Field(default=None, description="最近一次解析失败阶段标识")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 
@@ -114,6 +123,8 @@ class MaterialListItem(BaseModel):
     )
     key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
     page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
+    error_message: str | None = Field(default=None, description="最近一次解析失败原因摘要")
+    failed_stage: str | None = Field(default=None, description="最近一次解析失败阶段标识")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 
@@ -134,6 +145,7 @@ class MaterialParseRequest(BaseModel):
 
     version_id: uuid.UUID | None = Field(default=None, description="指定待解析版本，默认最新")
     sync: bool = Field(default=False, description="是否以同步阻塞模式执行解析")
+    force: bool = Field(default=False, description="是否强制重新解析已就绪资料并清理旧知识点/切片")
 
 
 class MaterialParseResponse(BaseModel):

@@ -1,261 +1,171 @@
 <template>
   <view class="review-container">
-    <view class="paper-card summary-card">
-      <text class="title">学情全景与错题巩固</text>
-      <text class="subtitle">按课程归类错题 · 举一反三巩固闭环</text>
+    <BackgroundTaskBar auto-refresh />
 
-      <view class="stats-row">
-        <view class="stat-col">
-          <text class="stat-num">{{ pendingCount }}</text>
-          <text class="stat-lbl">待攻克错题</text>
+    <view v-if="review.topErrorBanner.value" class="paper-card top-error-banner">
+      <text class="top-error-text">{{ review.topErrorBanner.value }}</text>
+      <button class="inline-retry-btn" @tap="handleRefreshAll">重试</button>
+    </view>
+
+    <scroll-view scroll-x class="folder-filter-scroll" :show-scrollbar="false">
+      <view class="folder-filter-tabs">
+        <view
+          :class="['folder-pill', review.selectedFolderId.value === 'all' ? 'active' : '']"
+          @tap="review.selectFolderFilter('all')"
+        >
+          <text class="folder-pill-text">全部课程</text>
         </view>
-        <view class="stat-divider" />
-        <view class="stat-col">
-          <text class="stat-num mastered-num">{{ masteredCount }}</text>
-          <text class="stat-lbl">已消灭错题</text>
+        <view
+          v-for="folder in folderStore.folders"
+          :key="folder.id"
+          :class="['folder-pill', review.selectedFolderId.value === folder.id ? 'active' : '']"
+          @tap="review.selectFolderFilter(folder.id)"
+        >
+          <text class="folder-pill-text">{{ folder.name }}</text>
         </view>
-        <view class="stat-divider" />
-        <view class="stat-col">
-          <text class="stat-num material-num">{{ groupOptions.length }}</text>
-          <text class="stat-lbl">归属范围</text>
+        <view
+          :class="['folder-pill', review.selectedFolderId.value === '__none__' ? 'active' : '']"
+          @tap="review.selectFolderFilter('__none__')"
+        >
+          <text class="folder-pill-text">未分类</text>
         </view>
+      </view>
+    </scroll-view>
+
+    <MasteryOverviewCard
+      :overview="review.masteryOverview.value"
+      :loading="review.masteryLoading.value"
+      :error="review.masteryError.value"
+      @retry="review.loadMastery"
+      @reinforce-weak="review.handleReinforceWeak"
+    />
+
+    <view class="segment-bar sticky-surface">
+      <view
+        v-for="tab in segmentTabs"
+        :key="tab.key"
+        :class="['segment-item', review.activeTab.value === tab.key ? 'active' : '']"
+        @tap="handleSwitchTab(tab.key)"
+      >
+        <text class="segment-label">{{ tab.label }}</text>
+        <text v-if="tab.count > 0" class="segment-count">{{ tab.count }}</text>
       </view>
     </view>
 
-    <QuestionBankSection ref="bankSection" :wrong-records="wrongRecords" @wrong-changed="loadWrongs" />
+    <MasteryPointList
+      v-if="review.activeTab.value === 'mastery'"
+      :points="review.sortedMasteryPoints.value"
+      :overview="review.masteryOverview.value"
+      :loading="review.masteryLoading.value"
+      :error="review.masteryError.value"
+      @retry="review.loadMastery"
+      @breakthrough="review.handleBreakthroughPoint"
+    />
 
-    <template v-if="practices.length">
-      <view class="section-title-row">
-        <text class="section-title">我的练习</text>
-        <text class="section-refresh" @tap="loadPractices">刷新</text>
+    <WrongBookSection
+      v-if="review.activeTab.value === 'wrong'"
+      :records="review.visibleRecords.value"
+      :group-options="review.groupOptions.value"
+      :selected-group-key="review.selectedGroupKey.value"
+      :active-group="review.activeGroup.value"
+      :active-kp-ids="review.activeKpIds.value"
+      :active-scope-ready="review.activeScopeReady.value"
+      :needs-group-choice="review.needsGroupChoice.value"
+      :selected-ids="review.selectedWrongIds.value"
+      :marking-ids="review.markingWrongIds.value"
+      :loading="review.isLoadingWrongs.value"
+      :error="review.wrongError.value"
+      :is-generating="review.isGenerating.value"
+      @retry="review.loadWrongs"
+      @select-group="review.selectedGroupKey.value = $event"
+      @toggle-select="review.toggleWrongSelect"
+      @toggle-select-all="review.toggleSelectAllUnmastered"
+      @mark-mastered="review.handleMarkWrongMastered"
+      @restart-selected="review.handleRestartSelectedWrongs"
+      @batch-regenerate="review.handleBatchRegenerate"
+      @practice="review.handleSingleKpPractice"
+    />
+
+    <view v-if="review.activeTab.value === 'practices'" class="practice-list-section">
+      <view v-if="review.practiceError.value" class="paper-card inline-error-box">
+        <text class="inline-error-text">{{ review.practiceError.value }}</text>
+        <button class="inline-retry-btn" @tap="review.loadPractices">重试</button>
       </view>
-      <PracticeEntryCard
-        v-for="practice in practices"
-        :key="practice.id"
-        :practice="practice"
-        @open="openPractice"
+      <view
+        v-else-if="review.isLoadingPractices.value && review.practices.value.length === 0"
+        class="empty-state"
+      >
+        <text class="empty-text">正在加载练习记录...</text>
+      </view>
+      <view v-else-if="review.practices.value.length === 0" class="empty-state">
+        <text class="empty-text">暂无练习记录，从资料详情或我的题库发起练习吧。</text>
+      </view>
+      <template v-else>
+        <PracticeEntryCard
+          v-for="practice in review.practices.value"
+          :key="practice.id"
+          :practice="practice"
+          @open="review.openPractice"
+        />
+      </template>
+    </view>
+
+    <view v-show="review.activeTab.value === 'bank'">
+      <QuestionBankSection
+        ref="bankSection"
+        :wrong-records="review.wrongRecords.value"
+        @wrong-changed="handleWrongChanged"
       />
-    </template>
-
-    <view class="section-title-row">
-      <text class="section-title">错题巩固</text>
-      <text class="section-refresh" @tap="loadWrongs">刷新</text>
-    </view>
-
-    <view v-if="groupOptions.length" class="group-scroll">
-      <scroll-view scroll-x class="group-scroll" :show-scrollbar="false">
-        <view class="group-tabs">
-          <view
-            v-for="option in groupOptions"
-            :key="option.key"
-            :class="['group-chip', selectedGroupKey === option.key ? 'active' : '']"
-            @tap="selectGroup(option.key)"
-          >
-            <text class="group-chip-text">{{ option.label }}</text>
-            <text class="group-chip-count">{{ option.count }}</text>
-          </view>
-        </view>
-      </scroll-view>
-    </view>
-
-    <view v-if="needsGroupChoice" class="paper-card">
-      <text class="action-desc">错题涉及多个课程，请先选择要巩固的课程或资料范围。</text>
-    </view>
-
-    <view v-if="activeGroup && activeKpIds.length > 0 && activeScopeReady" class="paper-card action-card">
-      <view class="action-info">
-        <text class="action-title">错题薄弱点举一反三</text>
-        <text class="action-desc">
-          汇总「{{ activeGroup.label }}」下 {{ activeKpIds.length }} 个薄弱考点，可一键再生题目巩固。
-        </text>
-      </view>
-      <button class="paper-btn-primary quick-gen-btn" :loading="isGenerating" @tap="handleBatchRegenerate">
-        立即巩固
-      </button>
-    </view>
-
-    <view v-if="activeGroup && !activeScopeReady" class="paper-card">
-      <text class="action-desc">该范围内的资料尚未归属课程，暂时无法再生题，请先将资料归入课程。</text>
-    </view>
-
-    <view class="wrong-list">
-      <WrongRecordCard
-        v-for="record in visibleRecords"
-        :key="record.id"
-        :record="record"
-        @practice="handleSingleKpPractice"
-      />
-      <view v-if="visibleRecords.length === 0" class="empty-state">
-        <text class="empty-text">
-          {{ isLoadingWrongs ? '正在加载错题...' : '太棒了！当前范围内没有待巩固的错题。' }}
-        </text>
-      </view>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { onPullDownRefresh } from '@dcloudio/uni-app'
-import { apiListWrongRecords } from '@/api'
-import {
-  buildWrongGroupOptions,
-  recordsInGroup,
-  resolveRegenerateScope,
-  type WrongGroupOption,
-} from '@/api/adapters/wrong'
-import { usePracticeStore } from '@/stores/practice'
-import type { PracticeSummary, WrongRecordItem } from '@/types'
-import WrongRecordCard from './components/WrongRecordCard.vue'
+import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
+import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import { useFolderStore } from '@/stores/folder'
+import MasteryOverviewCard from './components/MasteryOverviewCard.vue'
+import MasteryPointList from './components/MasteryPointList.vue'
 import PracticeEntryCard from './components/PracticeEntryCard.vue'
 import QuestionBankSection from './components/QuestionBankSection.vue'
-import {
-  groupKnowledgePointIds,
-  hasScope,
-  isResumeable,
-  recordRegenerateScope,
-} from './reviewView'
+import WrongBookSection from './components/WrongBookSection.vue'
+import { useReviewCenter } from './composables/useReviewCenter'
+import type { ReviewSegment } from './reviewView'
 
-const practiceStore = usePracticeStore()
-
-const wrongRecords = ref<WrongRecordItem[]>([])
-
-/**
- * 题库区块的句柄。
- *
- * 该区块自己负责「进页面即加载」（见 `QuestionBankSection.vue` 的 onMounted），
- * 这里只在**下拉刷新**时一并刷新它，使三个区块在同一个手势下行为一致。
- */
+const folderStore = useFolderStore()
+const review = useReviewCenter()
 const bankSection = ref<InstanceType<typeof QuestionBankSection> | null>(null)
-const groupOptions = ref<WrongGroupOption[]>([])
-const selectedGroupKey = ref('')
-const practices = ref<PracticeSummary[]>([])
-const isLoadingWrongs = ref(false)
-const isGenerating = ref(false)
 
-const PAGE_SIZE = 50
-const MAX_PAGES = 6
+const segmentTabs = computed<Array<{ key: ReviewSegment; label: string; count: number }>>(() => [
+  { key: 'mastery', label: '考点掌握', count: review.masteryOverview.value?.total_knowledge_points ?? 0 },
+  { key: 'wrong', label: '错题本', count: review.pendingCount.value },
+  { key: 'practices', label: '练习记录', count: review.practices.value.length },
+  { key: 'bank', label: '我的题库', count: 0 },
+])
 
-const masteredCount = computed(() => wrongRecords.value.filter((item) => item.is_mastered).length)
-const pendingCount = computed(() => wrongRecords.value.filter((item) => !item.is_mastered).length)
-
-const activeGroup = computed<WrongGroupOption | null>(() => {
-  return groupOptions.value.find((option) => option.key === selectedGroupKey.value) || null
-})
-
-const needsGroupChoice = computed(() => groupOptions.value.length > 1 && !activeGroup.value)
-
-const visibleRecords = computed(() => {
-  if (!activeGroup.value) return wrongRecords.value
-  return recordsInGroup(wrongRecords.value, activeGroup.value)
-})
-
-const activeKpIds = computed(() => groupKnowledgePointIds(visibleRecords.value, activeGroup.value))
-
-const activeScopeReady = computed(() => {
-  const scope = resolveRegenerateScope(activeGroup.value)
-  return Boolean(scope && hasScope(scope))
-})
-
-const loadWrongs = async () => {
-  isLoadingWrongs.value = true
-  try {
-    const collected: WrongRecordItem[] = []
-    let total = 0
-    for (let page = 1; page <= MAX_PAGES; page += 1) {
-      const res = await apiListWrongRecords({ page, page_size: PAGE_SIZE })
-      collected.push(...(res.items || []))
-      total = res.total ?? collected.length
-      if (page === 1) {
-        groupOptions.value = buildWrongGroupOptions(res.groups || [])
-      }
-      if (collected.length >= total) break
-    }
-    wrongRecords.value = collected
-    if (groupOptions.value.length === 1) {
-      selectedGroupKey.value = groupOptions.value[0].key
-    } else if (!groupOptions.value.some((option) => option.key === selectedGroupKey.value)) {
-      selectedGroupKey.value = ''
-    }
-  } catch (error) {
-    console.error('Failed to load wrong records', error)
-  } finally {
-    isLoadingWrongs.value = false
-  }
+const refreshBank = async () => {
+  await bankSection.value?.refresh()
 }
 
-const loadPractices = async () => {
-  try {
-    practices.value = await practiceStore.loadPractices(undefined, 10)
-  } catch (error) {
-    console.error('Failed to load practices', error)
-  }
+const handleRefreshAll = () => review.refreshAll({ refreshBank })
+const handleSwitchTab = (tab: ReviewSegment) => review.switchTab(tab, refreshBank)
+const handleWrongChanged = async () => {
+  await Promise.all([review.loadWrongs(), review.loadMastery()])
 }
 
 onMounted(async () => {
-  await Promise.all([loadWrongs(), loadPractices()])
+  await review.refreshAll({ refreshBank })
+})
+
+onShow(async () => {
+  await review.refreshAll({ fromShow: true, refreshBank })
 })
 
 onPullDownRefresh(async () => {
-  await Promise.all([loadWrongs(), loadPractices(), bankSection.value?.loadBatches()])
+  await review.refreshAll({ refreshBank })
   uni.stopPullDownRefresh()
 })
-
-const selectGroup = (key: string) => {
-  selectedGroupKey.value = key
-}
-
-const navigateToSession = (practiceId: string) => {
-  uni.navigateTo({
-    url: `/subpackages/practice/pages/session/index?practice_id=${practiceId}`,
-    fail: () => uni.showToast({ title: '打开练习失败，请重试', icon: 'none' }),
-  })
-}
-
-const openPractice = (practice: PracticeSummary) => {
-  if (isResumeable(practice)) {
-    navigateToSession(practice.id)
-    return
-  }
-  uni.navigateTo({
-    url: `/subpackages/report/pages/detail/index?practice_id=${practice.id}`,
-    fail: () => uni.showToast({ title: '打开结果页失败，请重试', icon: 'none' }),
-  })
-}
-
-const runRegenerate = async (kpIds: string[], scope: { folderId?: string; materialId?: string }) => {
-  isGenerating.value = true
-  uni.showLoading({ title: '生成中...' })
-  try {
-    const { session, coverage } = await practiceStore.regenerateFromWrongPoints(kpIds, scope)
-    uni.hideLoading()
-    if (coverage.missing.length > 0) {
-      uni.showToast({ title: `仍有 ${coverage.missing.length} 个考点未覆盖`, icon: 'none' })
-    }
-    navigateToSession(session.id)
-  } catch (error: any) {
-    uni.hideLoading()
-    uni.showToast({ title: error?.message || '生成失败', icon: 'none' })
-  } finally {
-    isGenerating.value = false
-  }
-}
-
-const handleBatchRegenerate = async () => {
-  const scope = resolveRegenerateScope(activeGroup.value)
-  if (!scope || !activeKpIds.value.length) return
-  await runRegenerate(activeKpIds.value, scope)
-}
-
-const handleSingleKpPractice = async (record: WrongRecordItem) => {
-  if (!record.knowledge_point_id) return
-  const scope = recordRegenerateScope(record)
-  if (!hasScope(scope)) {
-    uni.showToast({ title: '该错题所属资料未归属课程，暂时无法出题', icon: 'none' })
-    return
-  }
-  await runRegenerate([record.knowledge_point_id], scope)
-}
 </script>
 
 <style lang="scss" scoped>

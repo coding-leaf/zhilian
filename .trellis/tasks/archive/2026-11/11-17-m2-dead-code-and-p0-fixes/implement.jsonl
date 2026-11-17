@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/02-backend-architecture-audit.md", "reason": "Exact file:line inventory of backend P0 bugs, zero-caller aliases/errors/repo methods, and DI leak"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/03-frontend-architecture-audit.md", "reason": "Exact file:line inventory of 7 dead npm deps, upload/index.vue, 11 dead store members, and dead exports"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/04-cross-layer-and-synthesis.md", "reason": "Cross-layer P0 snippet page_index mismatch, POST /practices double fetch, and 25 retained backend routes"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer payload alignment discipline for SnippetSourceResponse and PracticeDetailResponse"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error class hierarchy rules when removing 3 unused error subclasses"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Frontend Wire* adapter and domain type rules"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "Frontend @/api and uploadFile encapsulation contract"}

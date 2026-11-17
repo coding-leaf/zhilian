@@ -144,5 +144,37 @@ class RQQueueAdapter(QueueProtocol):
             raise QueueError("后台任务取消失败") from exc
         return True
 
+    def has_active_job(self, task_name: str, match_payload: dict[str, str]) -> bool | None:
+        """检查 RQ 队列与活跃注册表中是否存在匹配指定载荷的进行中任务。"""
+        try:
+            job_ids: list[str] = []
+            for queue_name in (HIGH_QUEUE, DEFAULT_QUEUE):
+                queue = Queue(queue_name, connection=self._client)
+                job_ids.extend(queue.get_job_ids())
+                job_ids.extend(queue.started_job_registry.get_job_ids())
+                job_ids.extend(queue.scheduled_job_registry.get_job_ids())
+                job_ids.extend(queue.deferred_job_registry.get_job_ids())
+            if not job_ids:
+                return False
+            jobs = Job.fetch_many(list(dict.fromkeys(job_ids)), connection=self._client)
+            for job in jobs:
+                if job is None:
+                    continue
+                raw_args = job.args if isinstance(job.args, (list, tuple)) else []
+                if (
+                    len(raw_args) < 2
+                    or raw_args[0] != task_name
+                    or not isinstance(raw_args[1], dict)
+                ):
+                    continue
+                if all(
+                    str(raw_args[1].get(key, "")) == str(value)
+                    for key, value in match_payload.items()
+                ):
+                    return True
+            return False
+        except Exception:
+            return None
+
     def __repr__(self) -> str:
         return f"<RQQueueAdapter url={self._url}>"

@@ -42,11 +42,14 @@ FAILURE_CALLBACK_TIMEOUT = 60
 
 
 def _parse_material(container: AppContainer, payload: dict[str, str], user_id: uuid.UUID) -> None:
+    force = str(payload.get("force", "")).lower() == "true"
+    extra_kwargs: dict[str, bool] = {"force": True} if force else {}
     with container.get_session() as session:
         container.create_material_service(session).parse_material_pipeline(
             material_id=uuid.UUID(payload["material_id"]),
             version_id=uuid.UUID(payload["version_id"]),
             user_id=user_id,
+            **extra_kwargs,
         )
 
 
@@ -58,9 +61,20 @@ def _grade_practice(container: AppContainer, payload: dict[str, str], user_id: u
         )
 
 
+def _generate_questions(
+    container: AppContainer, payload: dict[str, str], user_id: uuid.UUID
+) -> None:
+    with container.get_session() as session:
+        container.create_question_service(session).run_generation_job(
+            job_id=uuid.UUID(payload["job_id"]),
+            user_id=user_id,
+        )
+
+
 REGISTERED_TASKS: dict[str, Callable[[AppContainer, dict[str, str], uuid.UUID], None]] = {
     "parse_material_pipeline": _parse_material,
     "grading_jobs": _grade_practice,
+    "generate_questions_job": _generate_questions,
 }
 
 
@@ -94,7 +108,7 @@ def run_worker() -> None:
 
 
 def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
-    """从 RQ 任务参数中解析受控任务名、载荷与用户标识。
+    """从 RQ 任务参数 (args / kwargs / meta) 中解析受控任务名、载荷与用户标识。
 
     Args:
         job: RQ 任务对象。
@@ -103,6 +117,8 @@ def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
         tuple[str, dict[str, str], str]: (任务名, 载荷, 用户标识)；无法解析时均为空值。
     """
     raw_args = job.args if isinstance(job.args, (list, tuple)) else []
+    raw_kwargs = getattr(job, "kwargs", None)
+    kwargs_dict = raw_kwargs if isinstance(raw_kwargs, dict) else {}
     task_name = ""
     payload: dict[str, str] = {}
     user_id = ""
@@ -114,9 +130,27 @@ def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
             payload = {str(key): str(value) for key, value in raw_payload.items()}
         if isinstance(raw_user, str):
             user_id = raw_user
+    elif kwargs_dict:
+        if isinstance(kwargs_dict.get("task_name"), str):
+            task_name = kwargs_dict["task_name"]
+        if isinstance(kwargs_dict.get("payload"), dict):
+            payload = {str(key): str(value) for key, value in kwargs_dict["payload"].items()}
+        else:
+            for key in ("material_id", "version_id", "user_id", "job_id", "practice_id"):
+                if key in kwargs_dict and kwargs_dict[key] is not None:
+                    payload[key] = str(kwargs_dict[key])
+        if isinstance(kwargs_dict.get("user_id"), str):
+            user_id = kwargs_dict["user_id"]
+
     if not task_name:
         raw_meta_name = job.meta.get("task_name") if isinstance(job.meta, dict) else None
         task_name = raw_meta_name if isinstance(raw_meta_name, str) else ""
+    if not user_id:
+        raw_meta_user = job.meta.get("user_id") if isinstance(job.meta, dict) else None
+        if isinstance(raw_meta_user, str):
+            user_id = raw_meta_user
+        elif payload.get("user_id"):
+            user_id = payload["user_id"]
     return task_name, payload, user_id
 
 
@@ -134,6 +168,48 @@ def _mark_grading_failed(payload: dict[str, str], user_id: str) -> None:
         asyncio.run(container.shutdown())
 
 
+def _mark_generation_job_failed(
+    payload: dict[str, str],
+    user_id: str,
+    exception_name: str,
+) -> None:
+    """以短生命周期会话回写异步出题任务终态失败。"""
+    job_id = uuid.UUID(payload["job_id"])
+    container = AppContainer.create()
+    try:
+        with container.get_session() as session:
+            container.create_question_service(session).mark_generation_job_failed(
+                user_id=uuid.UUID(user_id),
+                job_id=job_id,
+                error_message=f"后台出题任务执行失败 ({exception_name})",
+            )
+    finally:
+        asyncio.run(container.shutdown())
+
+
+def _mark_material_parse_failed(
+    payload: dict[str, str],
+    user_id: str,
+    exception_name: str,
+) -> None:
+    """以短生命周期会话兜底回写异常终止的资料解析任务终态失败。"""
+    material_id = uuid.UUID(payload["material_id"])
+    version_id = uuid.UUID(payload["version_id"])
+    uid = uuid.UUID(user_id)
+    container = AppContainer.create()
+    try:
+        with container.get_session() as session:
+            container.create_material_service(session).mark_orphaned_parse_failed(
+                material_id=material_id,
+                version_id=version_id,
+                user_id=uid,
+                failed_stage="worker_terminated",
+                error_message=f"后台解析任务异常终止 ({exception_name})，请重新解析",
+            )
+    finally:
+        asyncio.run(container.shutdown())
+
+
 def handle_job_terminal_failure(
     job: Job,
     connection: Redis,
@@ -145,9 +221,7 @@ def handle_job_terminal_failure(
 
     RQ 在**每一次**失败时都会调用该回调（含仍会重试的中间失败），因此必须先用
     ``should_retry`` 判定后续是否仍会重试；只有重试已耗尽或任务被判定为终态失败时
-    才回写，避免把仍在重试中的任务误标为失败。解析链路已在
-    ``MaterialService.parse_material_pipeline`` / ``_enqueue_parse`` 内自行回写
-    ``failed`` 终态，故此处只做运维日志；判题链路原本缺失回写，此处补齐。
+    才回写，避免把仍在重试中的任务误标为失败。解析、判题与出题链路均在此兜底回写终态。
 
     Args:
         job: 失败的 RQ 任务对象。
@@ -175,8 +249,26 @@ def handle_job_terminal_failure(
         exception_name,
     )
 
+    if (
+        task_name == "parse_material_pipeline"
+        and user_id
+        and payload.get("material_id")
+        and payload.get("version_id")
+    ):
+        try:
+            _mark_material_parse_failed(payload, user_id, exception_name)
+        except Exception:
+            logger.exception("资料解析终态失败回写异常: job_id=%s", job.id)
+        return
+
+    if task_name == "generate_questions_job" and user_id and payload.get("job_id"):
+        try:
+            _mark_generation_job_failed(payload, user_id, exception_name)
+        except Exception:
+            logger.exception("异步出题任务失败状态回写异常: job_id=%s", job.id)
+        return
+
     if task_name != "grading_jobs" or not user_id or not payload.get("practice_id"):
-        # 解析链路的失败回写由 MaterialService 内部负责，这里只保留运维日志
         return
 
     try:

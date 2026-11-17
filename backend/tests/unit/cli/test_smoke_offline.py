@@ -118,7 +118,7 @@ def _seed_full_chain_llm(container: AppContainer) -> None:
                 description="后进先出",
                 level=2,
                 chapter_title="第二章 栈与队列",
-                source_snippet_indices=[2],
+                source_snippet_indices=[1],
             ),
             ExtractedKnowledgeItem(
                 temp_id="kp_3",
@@ -127,7 +127,7 @@ def _seed_full_chain_llm(container: AppContainer) -> None:
                 description="前序遍历按",
                 level=3,
                 chapter_title="第三章 树与二叉树",
-                source_snippet_indices=[3],
+                source_snippet_indices=[1],
             ),
         ]
     )

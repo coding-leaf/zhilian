@@ -9,21 +9,18 @@
 """
 
 import hashlib
-import io
 import logging
 import uuid
-import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
-from xml.etree import ElementTree
 
-import pypdf
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
     from app.services.knowledge import KnowledgeService
 
-from app.core.algorithms.material_chunking import split_material_into_snippets
 from app.core.algorithms.ocr_quality import (
     OCRPageInput,
     verify_ocr_quality,
@@ -34,38 +31,65 @@ from app.core.errors import (
     MaterialNotFoundError,
     ReshootLimitExceededError,
 )
+from app.core.extractors import (
+    MAGIC_NUMBERS as MAGIC_NUMBERS,
+)
+from app.core.extractors import (
+    _extract_paragraphs_from_docx as _extract_paragraphs_from_docx,
+)
+from app.core.extractors import (
+    _extract_paragraphs_from_pptx as _extract_paragraphs_from_pptx,
+)
+from app.core.extractors import (
+    _extract_text_from_pdf as _extract_text_from_pdf,
+)
+from app.core.extractors import (
+    extract_pdf_pages_with_diagnostics,
+)
+from app.core.extractors import (
+    extract_text_from_raw_content as extract_text_from_raw_content,
+)
+from app.core.extractors import (
+    validate_file_magic as validate_file_magic,
+)
+from app.core.idempotency import validate_idempotency_key
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
-from app.integrations.idempotency.protocol import (
-    IdempotencyProtocol,
-    validate_idempotency_key,
-)
+from app.integrations.idempotency.protocol import IdempotencyProtocol
+from app.integrations.llm.protocol import LLMProtocol
 from app.integrations.ocr.protocol import OCRProtocol
 from app.integrations.queue.protocol import QueueProtocol
 from app.integrations.storage.protocol import StorageProtocol
 from app.models.material import (
     Material,
     MaterialOCRPage,
-    MaterialSnippet,
     MaterialStatus,
     MaterialVersion,
     ParseStatus,
     SourceType,
 )
 from app.repositories.folder import FolderRepository
+from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
+from app.services._material_pipeline import (
+    ACTIVE_PARSE_STATUSES,
+    MaterialDetailView,
+    chunk_embed_and_replace_snippets,
+    clear_cached_parse_progress,
+    get_cached_parse_progress,
+    get_cached_parse_progress_batch,
+    mark_pipeline_failed,
+    prepare_material_snippets,
+    process_initial_ocr_page,
+    repair_garbled_pdf_pages,
+    resolve_progress_redis_client,
+    set_cached_parse_progress,
+)
 
 logger = logging.getLogger(__name__)
 
-# 依据：文件类型二进制魔数定义
-MAGIC_NUMBERS: dict[str, list[bytes]] = {
-    "pdf": [b"%PDF-"],
-    "docx": [b"PK\x03\x04"],
-    "pptx": [b"PK\x03\x04"],
-    "png": [b"\x89PNG\r\n\x1a\n"],
-    "jpg": [b"\xff\xd8\xff"],
-    "jpeg": [b"\xff\xd8\xff"],
-}
+STALE_PARSE_TIMEOUT: timedelta = timedelta(minutes=20)
+ORPHAN_QUEUED_GRACE_PERIOD: timedelta = timedelta(seconds=30)
 
 # 依据：系统架构设计文档与 NFR 规定，单文件最大字节数限制
 MAX_FILE_SIZES: dict[str, int] = {
@@ -81,237 +105,6 @@ MAX_FILE_SIZES: dict[str, int] = {
 
 # 依据：MinIO 对象存储多租户隔离默认存储桶名称
 DEFAULT_MATERIAL_BUCKET: str = "zhilian-materials"
-
-
-def validate_file_magic(content: bytes, declared_format: str) -> bool:
-    """校验给定二进制前缀是否与声明格式魔数严格匹配。
-
-    纯函数计算核，无任何外部 I/O。
-
-    Args:
-        content: 文件二进制数据流。
-        declared_format: 声明的文件格式扩展名。
-
-    Returns:
-        bool: 匹配成功返回 True，否则返回 False。
-    """
-    if not isinstance(content, (bytes, bytearray)) or len(content) == 0:
-        return False
-
-    normalized_format = declared_format.lower().lstrip(".")
-
-    # 纯文本类型
-    if normalized_format in ("txt", "md"):
-        try:
-            decoded = content.decode("utf-8")
-            # 二进制控制空字符通常代表假冒文本文件
-            return "\x00" not in decoded
-        except UnicodeDecodeError:
-            return False
-
-    # 二进制魔数对比
-    if normalized_format in MAGIC_NUMBERS:
-        return any(content.startswith(magic) for magic in MAGIC_NUMBERS[normalized_format])
-
-    return False
-
-
-def _extract_text_from_pdf(content: bytes) -> str:
-    """使用 pypdf 从 PDF 二进制中抽取正文纯文本。
-
-    纯函数计算，执行页文本抽取与有效字符门禁。
-
-    Args:
-        content: PDF 原生二进制字节流。
-
-    Returns:
-        str: 规整后的全部页面文本。
-
-    Raises:
-        MaterialInvalidError: PDF 损坏或无有效文本内容。
-    """
-    try:
-        reader = pypdf.PdfReader(io.BytesIO(content))
-        extracted_pages: list[str] = []
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                extracted_pages.append(page_text)
-        full_text = "\n\n".join(extracted_pages).strip()
-    except Exception as exc:
-        if isinstance(exc, MaterialInvalidError):
-            raise
-        raise MaterialInvalidError(
-            f"PDF 文件解析失败: {exc}",
-            details={"error": str(exc)},
-        ) from exc
-
-    valid_chars = [c for c in full_text if not c.isspace()]
-    if len(valid_chars) < 10:
-        raise MaterialInvalidError(
-            "PDF文件无有效文字内容，扫描件请直接上传图片",
-            details={"valid_char_count": len(valid_chars)},
-        )
-
-    return full_text
-
-
-def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]:
-    """从原始文件二进制中提取段落文本序列。
-
-    支持格式：
-    - `txt` / `md`：UTF-8 文本按空行或换行切段；
-    - `pdf`：pypdf 页文本抽取；
-    - `docx` / `pptx`：OOXML（ZIP 容器）正文 XML 文本抽取；
-    - 其他格式：返回空列表。
-
-    Args:
-        content: 原生文件二进制。
-        file_format: 文件格式扩展名。
-
-    Returns:
-        list[str]: 提取的段落文本列表。
-
-    Raises:
-        MaterialInvalidError: docx/pptx 文件损坏、非 ZIP 容器或缺关键成员。
-    """
-    normalized_format = file_format.lower().lstrip(".")
-    if normalized_format == "docx":
-        return _extract_paragraphs_from_docx(content)
-    if normalized_format == "pptx":
-        return _extract_paragraphs_from_pptx(content)
-
-    if normalized_format in ("txt", "md"):
-        text = content.decode("utf-8", errors="replace")
-    elif normalized_format == "pdf":
-        text = _extract_text_from_pdf(content)
-    else:
-        text = ""
-
-    raw_paragraphs = text.split("\n\n") if "\n\n" in text else text.split("\n")
-    paragraphs = [p.strip() for p in raw_paragraphs if p.strip()]
-    return paragraphs if paragraphs else ([text.strip()] if text.strip() else [])
-
-
-def _local_name(tag: str) -> str:
-    """剥离 XML 命名空间前缀，返回标签本地名。"""
-    return tag.rsplit("}", 1)[-1]
-
-
-def _extract_paragraphs_from_docx(content: bytes) -> list[str]:
-    """从真实 DOCX（ZIP 容器）中抽取正文段落文本。
-
-    读取 `word/document.xml`，以纯函数方式按 `w:p` 段落聚合所有 `w:t` 文本节点。
-
-    Args:
-        content: DOCX 原生二进制字节流。
-
-    Returns:
-        list[str]: 按文档顺序排列的非空段落文本。
-
-    Raises:
-        MaterialInvalidError: 非有效 ZIP 容器、缺少 `word/document.xml`、
-            正文 XML 损坏或未包含可提取文本。
-    """
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            document_xml = archive.read("word/document.xml")
-    except (zipfile.BadZipFile, KeyError, OSError) as exc:
-        raise MaterialInvalidError(
-            "DOCX 文档损坏或格式不支持（非有效 OOXML ZIP 容器）",
-            details={"error": str(exc)},
-        ) from exc
-
-    try:
-        root = ElementTree.fromstring(document_xml)  # noqa: S314 - 标准库解析受控 OOXML，禁新增生产依赖
-    except ElementTree.ParseError as exc:
-        raise MaterialInvalidError(
-            "DOCX 正文 XML 损坏，无法解析",
-            details={"error": str(exc)},
-        ) from exc
-
-    paragraphs: list[str] = []
-    for node in root.iter():
-        if _local_name(node.tag) != "p":
-            continue
-        merged = "".join(
-            child.text or "" for child in node.iter() if _local_name(child.tag) == "t"
-        ).strip()
-        if merged:
-            paragraphs.append(merged)
-
-    if not paragraphs:
-        raise MaterialInvalidError(
-            "DOCX 文档未包含可提取的正文文本",
-            details={"paragraph_count": 0},
-        )
-    return paragraphs
-
-
-def _slide_sort_key(name: str) -> int:
-    """从幻灯片成员路径中提取数字序号用于稳定排序。"""
-    stem = name.rsplit("/", 1)[-1]
-    digits = "".join(char for char in stem if char.isdigit())
-    return int(digits) if digits else 0
-
-
-def _extract_paragraphs_from_pptx(content: bytes) -> list[str]:
-    """从真实 PPTX（ZIP 容器）中抽取幻灯片文本。
-
-    读取 `ppt/slides/slide*.xml`（按幻灯片序号排序），抽取全部 `a:t` 文本节点。
-
-    Args:
-        content: PPTX 原生二进制字节流。
-
-    Returns:
-        list[str]: 按幻灯片顺序排列的非空文本片段。
-
-    Raises:
-        MaterialInvalidError: 非有效 ZIP 容器、缺失幻灯片成员、XML 损坏或无文本。
-    """
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            slide_names = sorted(
-                (
-                    name
-                    for name in archive.namelist()
-                    if name.startswith("ppt/slides/slide") and name.endswith(".xml")
-                ),
-                key=_slide_sort_key,
-            )
-            if not slide_names:
-                raise MaterialInvalidError(
-                    "PPTX 文件缺少幻灯片内容",
-                    details={"slide_count": 0},
-                )
-            slide_payloads = [(name, archive.read(name)) for name in slide_names]
-    except (zipfile.BadZipFile, KeyError, OSError) as exc:
-        raise MaterialInvalidError(
-            "PPTX 文件损坏或格式不支持（非有效 OOXML ZIP 容器）",
-            details={"error": str(exc)},
-        ) from exc
-
-    fragments: list[str] = []
-    for name, payload in slide_payloads:
-        try:
-            slide_root = ElementTree.fromstring(payload)  # noqa: S314 - 标准库解析受控 OOXML
-        except ElementTree.ParseError as exc:
-            raise MaterialInvalidError(
-                f"PPTX 幻灯片 XML 损坏: {name}",
-                details={"error": str(exc)},
-            ) from exc
-        for node in slide_root.iter():
-            if _local_name(node.tag) == "t":
-                text = (node.text or "").strip()
-                if text:
-                    fragments.append(text)
-
-    if not fragments:
-        raise MaterialInvalidError(
-            "PPTX 文档未包含可提取的正文文本",
-            details={"slide_count": len(slide_names)},
-        )
-    return fragments
 
 
 def build_material_storage_key(
@@ -356,7 +149,12 @@ class MaterialService:
         material_repo: MaterialRepository | None = None,
         knowledge_service: "KnowledgeService | None" = None,
         folder_repo: FolderRepository | None = None,
+        llm_adapter: LLMProtocol | None = None,
         bucket: str = DEFAULT_MATERIAL_BUCKET,
+        vlm_adapter: LLMProtocol | None = None,
+        vlm_dpi: int = 150,
+        vlm_max_concurrency: int = 3,
+        vlm_timeout: float = 45.0,
     ) -> None:
         self.session = session
         self.storage = storage_adapter
@@ -366,8 +164,15 @@ class MaterialService:
         self.idempotency = idempotency_adapter
         self.repo = material_repo or MaterialRepository(session)
         self.folder_repo = folder_repo or FolderRepository(session)
+        self.knowledge_repo = KnowledgeRepository(session)
         self.knowledge_service = knowledge_service
+        self.llm = llm_adapter
+        self.vlm = vlm_adapter
+        self.vlm_dpi = vlm_dpi
+        self.vlm_max_concurrency = vlm_max_concurrency
+        self.vlm_timeout = vlm_timeout
         self.bucket = bucket
+        self._progress_redis = resolve_progress_redis_client(queue_adapter, idempotency_adapter)
 
     def create_material(
         self,
@@ -562,12 +367,103 @@ class MaterialService:
             folder_id=folder_id,
         )
 
+    def _extract_source_content(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version: MaterialVersion,
+        user_id: uuid.UUID,
+        clean_format: str,
+        file_bytes: bytes,
+    ) -> tuple[Any, str, MaterialVersion | None]:
+        """抽取图片 OCR 或文档正文；图片未达标门禁时返回待重拍版本。"""
+        if clean_format in ("png", "jpg", "jpeg", "image"):
+            ocr_page, is_all_qualified, unqualified_reason = process_initial_ocr_page(
+                storage=self.storage,
+                ocr=self.ocr,
+                bucket=self.bucket,
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version.id,
+                version_number=version.version_number,
+                clean_format=clean_format,
+                file_bytes=file_bytes,
+            )
+            self.repo.delete_ocr_pages_by_version(version.id, user_id)
+            self.repo.create_ocr_pages([ocr_page])
+
+            if not is_all_qualified:
+                self.repo.update_version_status(
+                    version.id,
+                    user_id,
+                    ParseStatus.FAILED.value,
+                    error_message=unqualified_reason,
+                    failed_stage="ocr_quality_gate",
+                )
+                # 质检未达标并非终态失败，而是进入「待重拍」链路供逐页重拍修复
+                self.repo.update_material_status(
+                    material_id, user_id, MaterialStatus.RETAKE_REQUIRED.value
+                )
+                self.session.commit()
+                clear_cached_parse_progress(version.id, redis_client=self._progress_redis)
+                return [], "", version
+
+            extracted_text = ocr_page.raw_text
+            paragraphs: Any = [p.strip() for p in extracted_text.split("\n") if p.strip()]
+            return paragraphs, extracted_text, None
+
+        if clean_format == "pdf":
+            pdf_pages = extract_pdf_pages_with_diagnostics(file_bytes)
+            paragraphs, extracted_text = repair_garbled_pdf_pages(
+                pdf_pages,
+                file_bytes,
+                ocr=self.ocr,
+                llm=self.llm,
+                vlm=self.vlm,
+                vlm_dpi=self.vlm_dpi,
+                vlm_max_concurrency=self.vlm_max_concurrency,
+                vlm_timeout=self.vlm_timeout,
+            )
+            return paragraphs, extracted_text, None
+
+        paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
+        return paragraphs, "\n\n".join(paragraphs), None
+
+    def _build_extraction_progress_callback(
+        self, version_id: uuid.UUID
+    ) -> Callable[[int, int, str], None]:
+        """构建知识抽取实时进度回调，保证同一轮内百分比单调不回退。"""
+        highest_progress = 55
+
+        def _on_progress(completed: int, total: int, stage: str) -> None:
+            nonlocal highest_progress
+            if stage == ParseStatus.AUDITING_KNOWLEDGE.value:
+                computed = 90
+            else:
+                safe_total = max(total, 1)
+                ratio = max(0.0, min(1.0, completed / safe_total))
+                computed = 55 + round(30 * ratio)
+            if computed > highest_progress:
+                highest_progress = computed
+            set_cached_parse_progress(
+                version_id, highest_progress, redis_client=self._progress_redis
+            )
+
+        return _on_progress
+
+    def _snippets_already_staged(self, snippets: Sequence[Any]) -> bool:
+        if not snippets:
+            return False
+        state = sa_inspect(snippets[0], raiseerr=False)
+        return bool(state is not None and (state.persistent or state.pending))
+
     def parse_material_pipeline(
         self,
         *,
         material_id: uuid.UUID,
         version_id: uuid.UUID,
         user_id: uuid.UUID,
+        force: bool = False,
     ) -> MaterialVersion:
         """异步/同步资料解析调度流水线主入口。
 
@@ -575,6 +471,7 @@ class MaterialService:
             material_id: 资料标识。
             version_id: 版本标识。
             user_id: 租户用户标识。
+            force: 为 True 时在所有提取与校验均成功后原子替换该版本旧知识点与切片。
 
         Returns:
             MaterialVersion: 完成或失败后的版本状态实体。
@@ -590,7 +487,7 @@ class MaterialService:
             raise MaterialNotFoundError("学习资料或对应版本不存在")
         if version.material_id != material_id:
             raise MaterialNotFoundError("资料版本不属于指定资料")
-        if version.parse_status == ParseStatus.READY.value:
+        if not force and version.parse_status == ParseStatus.READY.value:
             return version
 
         clean_format = material.file_format.lower().lstrip(".")
@@ -599,73 +496,77 @@ class MaterialService:
         )
 
         try:
+            # 注意：force=True 重解析期间不提前删除旧知识点与切片，确保下载/OCR/LLM 失败时保留旧数据
             self.repo.update_material_status(material_id, user_id, MaterialStatus.PARSING.value)
-            self.repo.update_version_status(version_id, user_id, current_stage)
+            self.repo.update_version_status(
+                version_id,
+                user_id,
+                current_stage,
+                failed_stage=None,
+                error_message=None,
+            )
             self.session.commit()
+            set_cached_parse_progress(version_id, 30, redis_client=self._progress_redis)
+
             file_bytes = self.storage.get_object(self.bucket, version.storage_key)
 
             # 阶段 A: 提取文本与 OCR 质量门禁
-            if clean_format in ("png", "jpg", "jpeg", "image"):
-                ocr_result = self.ocr.recognize_image(file_bytes)
+            paragraphs, extracted_text, early_version = self._extract_source_content(
+                material_id=material_id,
+                version=version,
+                user_id=user_id,
+                clean_format=clean_format,
+                file_bytes=file_bytes,
+            )
+            if early_version is not None:
+                return early_version
 
-                # 逐页门禁评估
-                page_input = OCRPageInput(
-                    page_number=1,
-                    raw_text=ocr_result.full_text,
-                    reshoot_count=0,
-                )
-                report = verify_ocr_quality([page_input])
-                page_report = report.page_results[0]
+            # 阶段 B: 纯函数知识切分与批量向量化（仅内存准备，待全链路成功后原子替换）
+            current_stage = ParseStatus.EMBEDDING_GENERATION.value
+            self.repo.update_version_status(
+                version_id, user_id, ParseStatus.EMBEDDING_GENERATION.value
+            )
+            self.session.commit()
+            set_cached_parse_progress(version_id, 45, redis_client=self._progress_redis)
 
-                page_storage_key = (
-                    f"users/{user_id}/materials/{material_id}/v{version.version_number}/"
-                    "pages/page_1.png"
-                )
-                self.storage.put_object(
-                    self.bucket, page_storage_key, file_bytes, f"image/{clean_format}"
-                )
+            snippets_to_save = prepare_material_snippets(
+                embedding=self.embedding,
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+                paragraphs=paragraphs,
+                require_non_empty=True,
+            )
 
-                ocr_page = MaterialOCRPage(
-                    user_id=user_id,
+            # 阶段 C: 自动串联知识树抽取（抽取与质检全通过后同事务原子替换旧知识点与切片）
+            if self.knowledge_service is not None:
+                current_stage = "knowledge_extraction"
+                self.repo.update_version_status(
+                    version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
+                )
+                self.session.commit()
+                set_cached_parse_progress(version_id, 55, redis_client=self._progress_redis)
+                self.knowledge_service.extract_and_build_knowledge_tree(
                     material_id=material_id,
                     version_id=version_id,
-                    page_number=1,
-                    image_storage_key=page_storage_key,
-                    raw_text=ocr_result.full_text,
-                    gibberish_ratio=page_report.gibberish_ratio,
-                    valid_char_count=page_report.valid_char_count,
-                    is_qualified=page_report.is_qualified,
-                    unqualified_reason=page_report.unqualified_reason,
-                    reshoot_count=0,
+                    user_id=user_id,
+                    snippets=snippets_to_save,
+                    replace_snippets=True,
+                    defer_commit=True,
+                    on_progress=self._build_extraction_progress_callback(version_id),
                 )
-                for previous_page in self.repo.get_ocr_pages(version_id, user_id):
-                    self.session.delete(previous_page)
-                self.session.flush()
-                self.repo.create_ocr_pages([ocr_page])
-
-                if not report.is_all_qualified:
-                    current_stage = "ocr_quality_gate"
-                    self.repo.update_version_status(
-                        version_id,
-                        user_id,
-                        ParseStatus.FAILED.value,
-                        error_message=page_report.unqualified_reason,
-                        failed_stage=current_stage,
-                    )
-                    # 质检未达标并非终态失败，而是进入「待重拍」链路供逐页重拍修复
-                    self.repo.update_material_status(
-                        material_id, user_id, MaterialStatus.RETAKE_REQUIRED.value
-                    )
-                    self.session.commit()
-                    return version
-
-                extracted_text = ocr_result.full_text
-                paragraphs = [p.strip() for p in extracted_text.split("\n") if p.strip()]
+                if not self._snippets_already_staged(snippets_to_save):
+                    self.repo.delete_snippets_by_version(version_id, user_id)
+                    self.repo.create_snippets(snippets_to_save)
             else:
-                paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
-                extracted_text = "\n\n".join(paragraphs)
+                if force:
+                    self.knowledge_repo.delete_knowledge_points_by_version(
+                        material_id, version_id, user_id
+                    )
+                self.repo.delete_snippets_by_version(version_id, user_id)
+                self.repo.create_snippets(snippets_to_save)
 
-            # 持久化提取文本到对象存储
+            # 阶段 D: 全链路成功后再持久化提取文本并激活 READY 终态
             raw_text_key = (
                 f"users/{user_id}/materials/{material_id}/v{version.version_number}/raw_text.txt"
             )
@@ -673,62 +574,6 @@ class MaterialService:
                 self.bucket, raw_text_key, extracted_text.encode("utf-8"), "text/plain"
             )
 
-            # 阶段 B: 纯函数知识切分
-            current_stage = "chunking"
-            self.repo.update_version_status(
-                version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
-            )
-            self.session.commit()
-            chunk_result = split_material_into_snippets(paragraphs)
-
-            if not chunk_result.snippets:
-                raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
-
-            # 阶段 C: 批量向量化与切片持久化
-            current_stage = "embedding_generation"
-            self.repo.update_version_status(
-                version_id, user_id, ParseStatus.EMBEDDING_GENERATION.value
-            )
-            self.session.commit()
-            snippet_texts = [snip.content for snip in chunk_result.snippets]
-            vectors = self.embedding.embed_documents(snippet_texts)
-
-            snippets_to_save: list[MaterialSnippet] = []
-            for i, snip in enumerate(chunk_result.snippets):
-                vector = vectors[i] if i < len(vectors) else None
-                snippets_to_save.append(
-                    MaterialSnippet(
-                        user_id=user_id,
-                        material_id=material_id,
-                        version_id=version_id,
-                        snippet_index=snip.index,
-                        content=snip.content,
-                        char_length=snip.char_count,
-                        start_offset=snip.start_offset,
-                        end_offset=snip.end_offset,
-                        chapter_title=snip.chapter_title,
-                        source_info={"source_ref": snip.source_ref},
-                        embedding=vector,
-                    )
-                )
-
-            self.repo.delete_snippets_by_version(version_id, user_id)
-            self.repo.create_snippets(snippets_to_save)
-
-            # 阶段 D: 自动串联知识树抽取与落库 (若注入了 KnowledgeService)
-            if self.knowledge_service is not None:
-                current_stage = "knowledge_extraction"
-                self.repo.update_version_status(
-                    version_id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value
-                )
-                self.session.commit()
-                self.knowledge_service.extract_and_build_knowledge_tree(
-                    material_id=material_id,
-                    version_id=version_id,
-                    user_id=user_id,
-                )
-
-            # 阶段 E: 激活并准出
             current_stage = "ready"
             self.repo.update_version_status(
                 version_id,
@@ -736,6 +581,7 @@ class MaterialService:
                 ParseStatus.READY.value,
                 raw_text_storage_key=raw_text_key,
                 is_active=True,
+                reset_errors=True,
             )
             self.repo.update_material_status(
                 material_id,
@@ -744,6 +590,7 @@ class MaterialService:
                 current_version_id=version_id,
             )
             self.session.commit()
+            clear_cached_parse_progress(version_id, redis_client=self._progress_redis)
 
             logger.info(
                 "material pipeline ready",
@@ -756,25 +603,45 @@ class MaterialService:
             return version
 
         except Exception as exc:
-            self.session.rollback()
-            try:
-                error_msg = getattr(exc, "message", str(exc))
-                self.repo.update_version_status(
-                    version_id=version_id,
-                    user_id=user_id,
-                    status=ParseStatus.FAILED.value,
-                    failed_stage=current_stage,
-                    error_message=str(error_msg)[:500],
-                )
-                self.repo.update_material_status(
-                    material_id=material_id,
-                    user_id=user_id,
-                    status=MaterialStatus.FAILED.value,
-                )
-                self.session.commit()
-            except Exception:
-                self.session.rollback()
+            mark_pipeline_failed(
+                repo=self.repo,
+                session=self.session,
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+                failed_stage=current_stage,
+                exc=exc,
+                redis_client=self._progress_redis,
+            )
             raise
+
+    def mark_orphaned_parse_failed(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+        failed_stage: str = "worker_terminated",
+        error_message: str = "后台解析任务异常终止，请重新解析",
+    ) -> bool:
+        """兜底回收异常终止的后台解析任务，仅对仍处于活跃解析态的版本回写 FAILED。"""
+        material = self.repo.get_material_by_id(material_id, user_id)
+        version = self.repo.get_version_by_id(version_id, user_id)
+        if material is None or version is None or version.material_id != material_id:
+            return False
+        if version.parse_status not in ACTIVE_PARSE_STATUSES:
+            return False
+        mark_pipeline_failed(
+            repo=self.repo,
+            session=self.session,
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+            failed_stage=failed_stage,
+            exc=RuntimeError(error_message),
+            redis_client=self._progress_redis,
+        )
+        return True
 
     def retry_material_pipeline(
         self,
@@ -826,6 +693,7 @@ class MaterialService:
             current_version_id=version.id,
         )
         self.session.commit()
+        clear_cached_parse_progress(version.id, redis_client=self._progress_redis)
 
         self._enqueue_parse(material_id, version.id, user_id)
 
@@ -955,29 +823,15 @@ class MaterialService:
             )
 
             paragraphs = [p.strip() for p in combined_text.split("\n\n") if p.strip()]
-            chunk_result = split_material_into_snippets(paragraphs)
-
-            self.repo.delete_snippets_by_version(version_id, user_id)
-            texts = [s.content for s in chunk_result.snippets]
-            vectors = self.embedding.embed_documents(texts)
-
-            new_snippets = [
-                MaterialSnippet(
-                    user_id=user_id,
-                    material_id=material_id,
-                    version_id=version_id,
-                    snippet_index=s.index,
-                    content=s.content,
-                    char_length=s.char_count,
-                    start_offset=s.start_offset,
-                    end_offset=s.end_offset,
-                    chapter_title=s.chapter_title,
-                    source_info={"source_ref": s.source_ref},
-                    embedding=vectors[i] if i < len(vectors) else None,
-                )
-                for i, s in enumerate(chunk_result.snippets)
-            ]
-            self.repo.create_snippets(new_snippets)
+            chunk_embed_and_replace_snippets(
+                repo=self.repo,
+                embedding=self.embedding,
+                material_id=material_id,
+                version_id=version_id,
+                user_id=user_id,
+                paragraphs=paragraphs,
+                require_non_empty=False,
+            )
 
             # 与阶段 D 对齐：全部达标后必须重建知识树（内部会先清理旧知识点），
             # 否则版本虽置 READY，知识树仍为空或陈旧。
@@ -1077,30 +931,36 @@ class MaterialService:
     def _calculate_progress_percentage(
         parse_status: str | None,
         material_status: str | None = None,
+        cached_progress: int | None = None,
     ) -> int | None:
-        """根据细粒度解析流水线状态或资料主状态计算进度百分比 (0-100)。"""
+        """根据细粒度解析流水线状态、实时缓存或资料主状态计算进度百分比 (0-100)。"""
+        if parse_status == ParseStatus.READY.value or material_status == MaterialStatus.READY.value:
+            return 100
+        if parse_status == ParseStatus.FAILED.value or material_status in (
+            MaterialStatus.FAILED.value,
+            MaterialStatus.RETAKE_REQUIRED.value,
+        ):
+            return 0
+
         if parse_status is not None:
             status_map: dict[str, int] = {
                 ParseStatus.NOT_STARTED.value: 0,
                 ParseStatus.QUEUED.value: 10,
                 ParseStatus.PARSING_DOC.value: 30,
                 ParseStatus.OCR_PROCESSING.value: 30,
-                ParseStatus.EXTRACTING_KNOWLEDGE.value: 60,
-                ParseStatus.AUDITING_KNOWLEDGE.value: 75,
-                ParseStatus.EMBEDDING_GENERATION.value: 85,
+                ParseStatus.EMBEDDING_GENERATION.value: 45,
+                ParseStatus.EXTRACTING_KNOWLEDGE.value: 55,
+                ParseStatus.AUDITING_KNOWLEDGE.value: 90,
                 ParseStatus.READY.value: 100,
                 ParseStatus.FAILED.value: 0,
             }
             if parse_status in status_map:
-                return status_map[parse_status]
+                base_pct = status_map[parse_status]
+                if parse_status in ACTIVE_PARSE_STATUSES and cached_progress is not None:
+                    return max(base_pct, min(99, cached_progress))
+                return base_pct
 
-        if material_status == MaterialStatus.READY.value:
-            return 100
         if material_status == MaterialStatus.PENDING.value:
-            return 0
-        if material_status == MaterialStatus.FAILED.value:
-            return 0
-        if material_status == MaterialStatus.RETAKE_REQUIRED.value:
             return 0
         if material_status == MaterialStatus.PARSING.value:
             return 30
@@ -1117,7 +977,12 @@ class MaterialService:
         ``_pick_loaded_version`` + ``_compose_parse_status`` 以避免 N+1 查询。
         """
         version = self._resolve_material_version(material, user_id)
-        return self._compose_parse_status(material, version)
+        cached_progress = (
+            get_cached_parse_progress(version.id, redis_client=self._progress_redis)
+            if version is not None and version.parse_status in ACTIVE_PARSE_STATUSES
+            else None
+        )
+        return self._compose_parse_status(material, version, cached_progress=cached_progress)
 
     def _resolve_material_version(
         self,
@@ -1169,11 +1034,15 @@ class MaterialService:
     def _compose_parse_status(
         material: Material,
         version: MaterialVersion | None,
+        *,
+        cached_progress: int | None = None,
     ) -> tuple[str | None, int | None]:
         """根据目标版本与资料主状态合成细粒度解析状态与进度百分比。"""
         parse_status: str | None = version.parse_status if version is not None else None
         progress_percentage = MaterialService._calculate_progress_percentage(
-            parse_status, material.status
+            parse_status,
+            material.status,
+            cached_progress=cached_progress,
         )
         return parse_status, progress_percentage
 
@@ -1182,7 +1051,7 @@ class MaterialService:
         *,
         material_id: uuid.UUID,
         user_id: uuid.UUID,
-    ) -> Material:
+    ) -> MaterialDetailView:
         """获取资料详情（包含历史版本与解析阶段进度），阻断跨租户越权。
 
         Args:
@@ -1190,20 +1059,42 @@ class MaterialService:
             user_id: 租户用户标识。
 
         Returns:
-            Material: 包含历史版本与解析阶段进度的资料实体。
+            MaterialDetailView: 包含历史版本与解析阶段进度的资料强类型视图。
 
         Raises:
             MaterialNotFoundError: 资料不存在或已软删除。
         """
         material = self.get_material(material_id=material_id, user_id=user_id)
         version = self._resolve_material_version(material, user_id)
-        parse_status, progress_pct = self._compose_parse_status(material, version)
-        material.parse_status = parse_status  # type: ignore[attr-defined]
-        material.progress_percentage = progress_pct  # type: ignore[attr-defined]
+        cached_progress = (
+            get_cached_parse_progress(version.id, redis_client=self._progress_redis)
+            if version is not None and version.parse_status in ACTIVE_PARSE_STATUSES
+            else None
+        )
+        parse_status, progress_pct = self._compose_parse_status(
+            material, version, cached_progress=cached_progress
+        )
         key_points_count, page_count = self._compose_version_counts(version, user_id)
-        material.key_points_count = key_points_count  # type: ignore[attr-defined]
-        material.page_count = page_count  # type: ignore[attr-defined]
-        return material
+        return MaterialDetailView(
+            material=material,
+            parse_status=parse_status,
+            progress_percentage=progress_pct,
+            key_points_count=key_points_count,
+            page_count=page_count,
+            error_message=version.error_message if version is not None else None,
+            failed_stage=version.failed_stage if version is not None else None,
+        )
+
+    def get_statistics(self, *, user_id: uuid.UUID) -> tuple[int, int]:
+        """获取当前用户学习足迹的就绪资料数与考点数。
+
+        Args:
+            user_id: 租户用户标识。
+
+        Returns:
+            tuple[int, int]: (就绪资料数, 考点数)。
+        """
+        return self.repo.get_statistics(user_id=user_id)
 
     def list_materials(
         self,
@@ -1219,7 +1110,7 @@ class MaterialService:
         folder_id: uuid.UUID | None = None,
         unclassified: bool = False,
         **kwargs: Any,
-    ) -> tuple[list[Material], int]:
+    ) -> tuple[list[MaterialDetailView], int]:
         """分页获取用户所属资料列表及符合条件总记录数，并装配解析进度信息。
 
         Args:
@@ -1236,7 +1127,7 @@ class MaterialService:
             kwargs: 兼容其他调用传参。
 
         Returns:
-            tuple[list[Material], int]: (资料实体列表, 总记录数)。
+            tuple[list[MaterialDetailView], int]: (资料详情强类型视图列表, 总记录数)。
         """
         resolved_user_id = user_id or kwargs.get("user_id")
         if resolved_user_id is None:
@@ -1257,26 +1148,38 @@ class MaterialService:
             folder_id=folder_id,
             unclassified=unclassified,
         )
-        for item in items:
-            version = self._pick_loaded_version(item)
-            parse_status, progress_pct = self._compose_parse_status(item, version)
-            item.parse_status = parse_status  # type: ignore[attr-defined]
-            item.progress_percentage = progress_pct  # type: ignore[attr-defined]
-
-        # 批量统计各激活版本考点数（单次分组查询，杜绝列表内逐条 N+1）
-        version_ids = [
-            version.id for item in items if (version := self._pick_loaded_version(item)) is not None
+        # 批量统计各激活版本考点数与实时进度（单次分组查询，杜绝列表内逐条 N+1）
+        picked_versions = [self._pick_loaded_version(item) for item in items]
+        version_ids = [version.id for version in picked_versions if version is not None]
+        active_version_ids = [
+            version.id
+            for version in picked_versions
+            if version is not None and version.parse_status in ACTIVE_PARSE_STATUSES
         ]
         kp_counts = self.repo.count_knowledge_points_by_version_ids(version_ids, resolved_user_id)
-        for item in items:
-            version = self._pick_loaded_version(item)
-            if version is None:
-                item.key_points_count = None  # type: ignore[attr-defined]
-                item.page_count = None  # type: ignore[attr-defined]
-                continue
-            item.key_points_count = kp_counts.get(version.id, 0)  # type: ignore[attr-defined]
-            item.page_count = len(version.ocr_pages)  # type: ignore[attr-defined]
-        return items, total
+        cached_progress_map = get_cached_parse_progress_batch(
+            active_version_ids, redis_client=self._progress_redis
+        )
+        views: list[MaterialDetailView] = []
+        for item, version in zip(items, picked_versions, strict=True):
+            cached_progress = cached_progress_map.get(version.id) if version is not None else None
+            parse_status, progress_pct = self._compose_parse_status(
+                item, version, cached_progress=cached_progress
+            )
+            key_points_count = kp_counts.get(version.id, 0) if version is not None else None
+            page_count = len(version.ocr_pages) if version is not None else None
+            views.append(
+                MaterialDetailView(
+                    material=item,
+                    parse_status=parse_status,
+                    progress_percentage=progress_pct,
+                    key_points_count=key_points_count,
+                    page_count=page_count,
+                    error_message=version.error_message if version is not None else None,
+                    failed_stage=version.failed_stage if version is not None else None,
+                )
+            )
+        return views, total
 
     def list_material_versions(
         self,
@@ -1388,6 +1291,45 @@ class MaterialService:
         updated_material = self.repo.get_material_by_id(material_id, user_id)
         return updated_material if updated_material is not None else material
 
+    def _check_stale_or_orphaned_parse(
+        self, version: MaterialVersion
+    ) -> tuple[bool, datetime | None]:
+        """判定处于活跃解析态的版本是否已超时僵死或成为队列孤儿。
+
+        Returns:
+            tuple[bool, datetime | None]: (是否允许强制重置恢复, 并发防重入所需的陈旧时间上限)。
+        """
+        now = datetime.now(UTC)
+        age: timedelta | None = None
+        if version.updated_at is not None:
+            aware_updated = (
+                version.updated_at
+                if version.updated_at.tzinfo is not None
+                else version.updated_at.replace(tzinfo=UTC)
+            )
+            age = now - aware_updated
+
+        if age is not None and age >= STALE_PARSE_TIMEOUT:
+            stale_before = (
+                now - STALE_PARSE_TIMEOUT
+                if version.parse_status == ParseStatus.QUEUED.value
+                else None
+            )
+            return True, stale_before
+
+        has_active_fn = getattr(self.queue, "has_active_job", None)
+        if callable(has_active_fn):
+            active_in_queue = has_active_fn(
+                "parse_material_pipeline",
+                {"version_id": str(version.id)},
+            )
+            if active_in_queue is False:
+                if version.parse_status != ParseStatus.QUEUED.value:
+                    return True, None
+                if age is None or age >= ORPHAN_QUEUED_GRACE_PERIOD:
+                    return True, (now - ORPHAN_QUEUED_GRACE_PERIOD if age is not None else None)
+        return False, None
+
     def trigger_parse(
         self,
         user_id: uuid.UUID,
@@ -1395,6 +1337,7 @@ class MaterialService:
         version_id: uuid.UUID | None = None,
         *,
         sync: bool = False,
+        force: bool = False,
     ) -> MaterialVersion:
         """触发或重新调度资料解析流水线。
 
@@ -1403,6 +1346,7 @@ class MaterialService:
             material_id: 资料主键。
             version_id: 可选指定版本标识，默认当前激活版本或最新版本。
             sync: 是否同步阻塞执行。
+            force: 为 True 时允许强制重新解析已就绪版本或恢复僵死/孤儿活跃解析任务。
 
         Returns:
             MaterialVersion: 目标版本实体。
@@ -1435,17 +1379,17 @@ class MaterialService:
                 material_id=material_id,
                 version_id=target_version.id,
                 user_id=user_id,
+                force=force,
             )
 
-        if target_version.parse_status in {
-            ParseStatus.QUEUED.value,
-            ParseStatus.PARSING_DOC.value,
-            ParseStatus.OCR_PROCESSING.value,
-            ParseStatus.EXTRACTING_KNOWLEDGE.value,
-            ParseStatus.AUDITING_KNOWLEDGE.value,
-            ParseStatus.EMBEDDING_GENERATION.value,
-            ParseStatus.READY.value,
-        }:
+        stale_before: datetime | None = None
+        if target_version.parse_status in ACTIVE_PARSE_STATUSES:
+            if not force:
+                return target_version
+            can_recover, stale_before = self._check_stale_or_orphaned_parse(target_version)
+            if not can_recover:
+                return target_version
+        elif target_version.parse_status == ParseStatus.READY.value and not force:
             return target_version
 
         # 派发必须是原子的：两个并发请求不能凭同一次陈旧读各入队一次，否则同一版本
@@ -1457,9 +1401,11 @@ class MaterialService:
             from_status=target_version.parse_status,
             to_status=ParseStatus.QUEUED.value,
             reset_errors=True,
+            stale_before=stale_before,
         ):
             return target_version
 
+        clear_cached_parse_progress(target_version.id, redis_client=self._progress_redis)
         self.repo.update_material_status(
             material_id,
             user_id,
@@ -1467,21 +1413,29 @@ class MaterialService:
         )
         self.session.commit()
 
-        self._enqueue_parse(material_id, target_version.id, user_id)
+        self._enqueue_parse(material_id, target_version.id, user_id, force=force)
         return target_version
 
     def _enqueue_parse(
-        self, material_id: uuid.UUID, version_id: uuid.UUID, user_id: uuid.UUID
+        self,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        force: bool = False,
     ) -> None:
         """Dispatch one explicit parse request and expose dispatch failure in DB."""
+        payload: dict[str, str] = {
+            "material_id": str(material_id),
+            "version_id": str(version_id),
+            "user_id": str(user_id),
+        }
+        if force:
+            payload["force"] = "true"
         try:
             self.queue.enqueue(
                 task_name="parse_material_pipeline",
-                payload={
-                    "material_id": str(material_id),
-                    "version_id": str(version_id),
-                    "user_id": str(user_id),
-                },
+                payload=payload,
                 user_id=str(user_id),
             )
         except Exception:
@@ -1650,6 +1604,7 @@ __all__ = [
     "DEFAULT_MATERIAL_BUCKET",
     "MAGIC_NUMBERS",
     "MAX_FILE_SIZES",
+    "MaterialDetailView",
     "MaterialService",
     "build_material_storage_key",
     "extract_text_from_raw_content",

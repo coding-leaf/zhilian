@@ -1057,7 +1057,7 @@ class TestQuestionServiceCRUDAndAudit:
             answer="正确",
             difficulty=2,
         )
-        saved = service.question_repo.create_question(q, user_id)
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
         session.commit()
 
         # 1. get_question
@@ -1254,7 +1254,7 @@ class TestQuestionServiceCRUDAndAudit:
             stem="敏捷开发核心理念测试。",
             answer="正确",
         )
-        saved_q = service.question_repo.create_question(existing_q, user_id)
+        [saved_q] = service.question_repo.batch_create_questions([existing_q], user_id)
 
         # Also test update_question rollback
         with pytest.raises(RuntimeError, match="Database connection lost"):
@@ -1273,7 +1273,7 @@ class TestQuestionServiceCRUDAndAudit:
             stem="敏捷开发核心理念测试2。",
             answer="正确",
         )
-        saved_q2 = service.question_repo.create_question(existing_q2, user_id)
+        [saved_q2] = service.question_repo.batch_create_questions([existing_q2], user_id)
 
         # Also test delete_question rollback
         with pytest.raises(RuntimeError, match="Database connection lost"):
@@ -1399,7 +1399,7 @@ class TestQuestionServiceCRUDAndAudit:
             stem="敏捷开发核心理念测试。",
             answer="正确",
         )
-        saved_q = service.question_repo.create_question(existing_q, user_id)
+        [saved_q] = service.question_repo.batch_create_questions([existing_q], user_id)
 
         # Monkeypatch update_question in repo to return None
         monkeypatch.setattr(service.question_repo, "update_question", lambda *a, **kw: None)
@@ -1442,10 +1442,10 @@ class TestQuestionServiceCRUDAndAudit:
             answer="B",
             difficulty=2,
         )
-        saved = service.question_repo.create_question(q, user_id)
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
 
-        # 1. get_question_detail
-        fetched = service.get_question_detail(saved.id, user_id)
+        # 1. get_question
+        fetched = service.get_question(saved.id, user_id)
         assert fetched.id == saved.id
 
         # 2. list_questions with pagination
@@ -1522,7 +1522,7 @@ class TestQuestionServiceCRUDAndAudit:
             analysis="利用贝叶斯公式计算得出。",
             difficulty=3,
         )
-        saved = service.question_repo.create_question(q, user_id)
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
 
         resp = service.ask_coach(
             question_id=saved.id,
@@ -1535,6 +1535,14 @@ class TestQuestionServiceCRUDAndAudit:
         assert "贝叶斯公式" in resp.reply
         assert len(resp.suggestions) == 2
         mock_llm.generate_structured.assert_called_once()
+        call_kwargs = mock_llm.generate_structured.call_args.kwargs
+        system_prompt = call_kwargs["messages"][0].content
+        options = call_kwargs["options"]
+        assert "150~250" in system_prompt
+        assert "一、二、三、" in system_prompt
+        assert options.temperature == 0.65
+        assert options.max_tokens == 900
+        assert "深度解析" not in (AskCoachResponse.model_fields["reply"].description or "")
 
         # Non-existent question raises QuestionNotFoundError
         with pytest.raises(QuestionNotFoundError):
@@ -1566,7 +1574,7 @@ class TestQuestionSourceSnippetAssembly:
             difficulty=2,
             source_snippet_id=source_snippet_id,
         )
-        saved = service.question_repo.create_question(question, tenant_id)
+        [saved] = service.question_repo.batch_create_questions([question], tenant_id)
         service.session.commit()
         return saved
 

@@ -1,0 +1,129 @@
+// 跨页面共享语义基元（分节标题、空态、底栏安全区、资料状态徽章）。
+
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+  padding: 0 4rpx;
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: var(--color-ink-primary);
+}
+
+.section-refresh {
+  font-size: 24rpx;
+  color: var(--color-ink-subtle);
+}
+
+.stat-divider {
+  width: 1px;
+  height: 48rpx;
+  background: var(--color-paper-border);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 64rpx 0;
+}
+
+.empty-text {
+  font-size: 26rpx;
+  color: var(--color-ink-muted);
+}
+
+.bottom-fixed-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-bottom-bar);
+  display: flex;
+  gap: 20rpx;
+  padding: 24rpx 32rpx calc(24rpx + env(safe-area-inset-bottom));
+  background: var(--color-bg-card);
+  border-top: 1px solid var(--color-paper-border);
+  box-shadow: var(--shadow-bar);
+}
+
+.sticky-surface {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+}
+
+.status-badge,
+.badge {
+  font-size: 22rpx;
+  padding: 4rpx 14rpx;
+  border-radius: 6rpx;
+  white-space: nowrap;
+}
+
+.status-ready,
+.badge-ready {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-parsing,
+.badge-parsing {
+  background: var(--color-warning-bg);
+  color: var(--color-warm-amber);
+}
+
+.status-failed,
+.badge-failed {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.status-pending,
+.badge-pending {
+  background: var(--color-surface-muted);
+  color: var(--color-ink-subtle);
+}
+
+.status-retake_required,
+.badge-retake_required {
+  background: var(--color-orange-bg);
+  color: var(--color-orange-strong);
+}
+
+.action-card {
+  padding: 28rpx 32rpx;
+  background: linear-gradient(135deg, var(--color-blue-bg) 0%, var(--color-paper-card) 100%);
+  border: 1px solid var(--color-blue-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.action-info {
+  flex: 1;
+  margin-right: 16rpx;
+}
+
+.action-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: var(--color-academic-blue);
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.action-desc {
+  font-size: 22rpx;
+  color: var(--color-blue-accent);
+  line-height: 1.4;
+  display: block;
+}
+
+.quick-gen-btn {
+  height: 72rpx;
+  font-size: 26rpx;
+  padding: 0 24rpx;
+}

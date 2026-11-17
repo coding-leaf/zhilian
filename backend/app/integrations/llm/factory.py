@@ -74,6 +74,56 @@ def create_llm_adapter(
     raise LLMError(f"未知的 LLM 适配器类型: '{adapter_type}'")
 
 
+def create_vlm_adapter(
+    *,
+    enabled: bool,
+    adapter_type: str = "fake",
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    timeout: float = 45.0,
+    max_retries: int = 2,
+    client: Any | None = None,
+) -> LLMProtocol | None:
+    """创建云端视觉语言模型 (VLM) 适配器，复用 OpenAI 兼容多模态序列化。
+
+    ``enabled`` 为 False、provider 为 fake 或缺少 api_key 时返回 None（VLM 脏页转录
+    整体降级为 PyMuPDF 文本，绝不因 VLM 配置缺失阻断解析主链路）。
+
+    Args:
+        enabled: 是否启用 VLM。
+        adapter_type: 提供商，可选 "fake", "openai", "siliconflow"。
+        api_key: 访问凭证 Key。
+        base_url: 接口基础 URL（siliconflow 缺省 https://api.siliconflow.cn/v1）。
+        model: VLM 模型名称。
+        timeout: 单页请求超时（秒）。
+        max_retries: 最大重试次数。
+        client: 可选外部注入的 HTTP 客户端。
+
+    Returns:
+        LLMProtocol | None: VLM 适配器；未启用或未配置凭证时为 None。
+
+    Raises:
+        LLMError: 适配器类型未知。
+    """
+    adapter_type_lower = adapter_type.lower()
+    if adapter_type_lower not in ("fake", "openai", "siliconflow"):
+        raise LLMError(f"未知的 VLM 适配器类型: '{adapter_type}'")
+    if not enabled or adapter_type_lower == "fake" or not api_key:
+        return None
+    effective_base_url = base_url
+    if effective_base_url is None and adapter_type_lower == "siliconflow":
+        effective_base_url = "https://api.siliconflow.cn/v1"
+    return OpenAICompatibleLLMAdapter(
+        api_key=api_key,
+        base_url=effective_base_url,
+        model=model,
+        timeout=timeout,
+        max_retries=max_retries,
+        client=client,
+    )
+
+
 def create_structured_agent_graph(adapter: LLMProtocol) -> Any:
     """构建并绑定指定适配器的结构化 Agent 执行图。
 
@@ -89,4 +139,5 @@ def create_structured_agent_graph(adapter: LLMProtocol) -> Any:
 __all__ = [
     "create_llm_adapter",
     "create_structured_agent_graph",
+    "create_vlm_adapter",
 ]

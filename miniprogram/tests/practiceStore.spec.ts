@@ -125,8 +125,9 @@ describe('practice store draft isolation and regenerate scope', () => {
           pending_questions: [],
         }
       }
-      if (options.url === '/practices') return { id: 'p-new' }
-      if (options.url === '/practices/p-new') return { ...practiceDetailFixture, id: 'p-new', practice_id: 'p-new' }
+      if (options.url === '/practices') {
+        return { ...practiceDetailFixture, id: 'p-new', practice_id: 'p-new' }
+      }
       throw new Error(`unexpected request: ${options.url}`)
     })
   })
@@ -170,6 +171,46 @@ describe('practice store draft isolation and regenerate scope', () => {
 
     const generateCall = requestMock.mock.calls.find(([options]: any[]) => options.url === '/questions/generate')
     expect(generateCall?.[0].data).toMatchObject({ folder_id: 'f-1', material_id: undefined })
+
+    const practiceCalls = requestMock.mock.calls.filter(([options]: any[]) => options.url.startsWith('/practices'))
+    expect(practiceCalls).toHaveLength(1)
+    expect(practiceCalls[0][0]).toMatchObject({
+      url: '/practices',
+      method: 'POST',
+      data: {
+        title: '错题巩固练习',
+        question_ids: ['q-new-1'],
+        question_count: 1,
+      },
+    })
+  })
+
+  it('clamps regenerated question_ids and explicit question_count to 50', async () => {
+    const store = usePracticeStore()
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/generate') {
+        return {
+          batch_id: 'b-over',
+          total_generated: 55,
+          qualified_count: 55,
+          pending_count: 0,
+          qualified_questions: Array.from({ length: 55 }, (_, i) =>
+            generatedQuestionFixture({ id: `q-over-${i}`, knowledge_point_id: 'k-1' }),
+          ),
+          pending_questions: [],
+        }
+      }
+      if (options.url === '/practices') {
+        return { ...practiceDetailFixture, id: 'p-50', practice_id: 'p-50' }
+      }
+      throw new Error(`unexpected request: ${options.url}`)
+    })
+
+    await store.regenerateFromWrongPoints(['k-1'], { folderId: 'f-1' })
+
+    const createCall = requestMock.mock.calls.find(([options]: any[]) => options.url === '/practices')
+    expect(createCall?.[0].data.question_ids).toHaveLength(50)
+    expect(createCall?.[0].data.question_count).toBe(50)
   })
 })
 

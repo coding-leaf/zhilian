@@ -12,12 +12,9 @@ import {
 export const useFolderStore = defineStore('folder', () => {
   const folders = ref<FolderItem[]>([])
   const currentFolderId = ref<string>('all') // 'all' | '__none__' | folder_id
-  const currentFolderKnowledgePoints = ref<FolderKnowledgePointsResult | null>(null)
-  const isLoading = ref<boolean>(false)
 
   // 1. 获取课程文件夹列表
   const loadFolders = async (includeArchived = false) => {
-    isLoading.value = true
     try {
       const res = await apiListFolders(includeArchived)
       folders.value = res.items || []
@@ -25,8 +22,6 @@ export const useFolderStore = defineStore('folder', () => {
     } catch (err) {
       console.error('Failed to load folders:', err)
       return []
-    } finally {
-      isLoading.value = false
     }
   }
 
@@ -59,14 +54,7 @@ export const useFolderStore = defineStore('folder', () => {
 
   // 5. 加载课程下按资料分组的知识点列表
   const loadFolderKnowledgePoints = async (folderId: string): Promise<FolderKnowledgePointsResult> => {
-    isLoading.value = true
-    try {
-      const result = await apiGetFolderKnowledgePoints(folderId)
-      currentFolderKnowledgePoints.value = result
-      return result
-    } finally {
-      isLoading.value = false
-    }
+    return apiGetFolderKnowledgePoints(folderId)
   }
 
   const setCurrentFolderId = (folderId: string) => {
@@ -76,8 +64,6 @@ export const useFolderStore = defineStore('folder', () => {
   return {
     folders,
     currentFolderId,
-    currentFolderKnowledgePoints,
-    isLoading,
     loadFolders,
     createFolder,
     renameFolder,

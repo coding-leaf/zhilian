@@ -3,17 +3,17 @@
 > 后端代码在本项目中的组织方式（以真实目录与配置为准）。
 
 > **事实源**：`backend/app/`、`backend/pyproject.toml`、`backend/alembic.ini`、`Taskfile.yml`
-> **最后核对**：2026-09-29 @ 90eed7f
-> **核对方式**：`rg "packages|layers|source_modules|testpaths|pythonpath" backend/pyproject.toml`
+> **最后核对**：2026-11-17
+> **核对方式**：`rg "packages|layers|source_modules|testpaths|pythonpath" backend/pyproject.toml` + `uv run lint-imports`
 
 ---
 
 ## Overview
 
-后端是 Python 3.12 + FastAPI + SQLAlchemy 2.0（async 风格 ORM 使用，实际以同步 `Session` 装配）的单体应用，包名 `app`。
+后端运行于 Python 3.13（`backend/.venv`）+ FastAPI + SQLAlchemy 2.0（同步 `Session` 装配）的单体应用，包名 `app`，静态圈复杂度上限为 `[tool.ruff.lint.mccabe] max-complexity = 15`。
 构建与打包由 Hatchling 负责（`[tool.hatch.build.targets.wheel].packages = ["app"]`），依赖安装与命令执行统一走 `uv run`。
 
-分层遵循「五层单向架构依赖契约」（见下文 import-linter 配置），核心原则是**上层可依赖下层，下层不得反向依赖上层**：
+分层遵循「六条单向架构与隔离契约」（见下文 import-linter 配置），核心原则是**上层可依赖下层，下层不得反向依赖上层，`api` 不得跨层触碰 `integrations`，`services` 不得手写裸 SQL 或动态挂载 ORM 未映射属性**：
 
 ```
 app.api → app.services → app.repositories → app.models
@@ -25,7 +25,7 @@ app.core（基础：配置/异常/安全/纯算法，不依赖任何上层）
 - 业务规则与事务边界在 `app.services`。
 - 数据访问在 `app.repositories`。
 - 声明式 ORM 模型与迁移在 `app.models` / `backend/migrations`。
-- 第三方能力（LLM/OCR/Embedding/Search/Storage/Queue/Idempotency）以 Protocol + Factory 形态封装在 `app.integrations`。
+- 第三方能力（LLM/OCR/Embedding/Search/Rerank/Storage/Queue/Idempotency）以 Protocol + Factory 形态封装在 `app.integrations`。
 - 配置、异常、安全、纯算法在 `app.core`（其中 `app.core.algorithms` 为无 IO 纯函数核）。
 
 ---
@@ -40,7 +40,7 @@ backend/
 │   ├── main.py                     # FastAPI 应用装配、lifespan、全局异常处理器、/health
 │   ├── container.py                # AppContainer：引擎/session/Provider/8 大服务工厂
 │   ├── api/
-│   │   ├── deps/                   # FastAPI 依赖项（auth/container/db/各领域 service 注入）
+│   │   ├── deps/                   # FastAPI 依赖项（_factory.py 受管会话工厂、pagination.py、auth/container/db/各域注入）
 │   │   └── v1/                     # v1 路由（auth/users/materials/folders/knowledge/questions/practices/grading/diagnosis）
 │   ├── cli/                        # Headless CLI（python -m app.cli）
 │   │   ├── main.py                 # 参数解析与统一异常→退出码
@@ -52,14 +52,15 @@ backend/
 │   │   ├── config.py               # pydantic-settings 强类型配置（ZHILIAN_ 前缀）
 │   │   ├── errors.py               # AppError 体系与 5 位错误码
 │   │   ├── security.py             # JWT 签发/验签/脱敏纯函数
-│   │   └── algorithms/             # 纯算法核（chunking/search/grading/question_quality/...）
-│   ├── integrations/               # 第三方适配器（Protocol + Fake + 生产实现 + factory）
-│   │   ├── llm/ embedding/ search/ storage/ queue/ idempotency/ ocr/
+│   │   ├── logging.py / idempotency.py / question_types.py / extractors.py # 公共指标、幂等键、题型枚举、PDF/OOXML 解析核
+│   │   └── algorithms/             # 纯算法核（chunking/search/grading/question_quality/knowledge_tree/...）
+│   ├── integrations/               # 第三方适配器（Protocol + Fake + 生产实现 + factory + _http_retry.py）
+│   │   ├── llm/ embedding/ search/ rerank/ storage/ queue/ idempotency/ ocr/
 │   │   └── container.py            # ProviderRegistry
 │   ├── models/                     # SQLAlchemy 声明式模型（material/knowledge/question/practice/user/base）
-│   ├── repositories/               # 数据访问（每领域一文件）
+│   ├── repositories/               # 数据访问（每领域一文件，唯一允许执行 SQLAlchemy select/delete 的层）
 │   ├── schemas/                    # Pydantic v2 请求/响应契约
-│   └── services/                   # 业务编排（auth/material/folder/knowledge/question/practice/grading/diagnosis）
+│   └── services/                   # 业务编排门面与聚焦内部子模块（_*_report/_*_generation/_*_pipeline/_*_assembler/_*_llm）
 ├── migrations/
 │   ├── env.py                      # 迁移运行环境（读取 AppSettings，兼容 asyncpg/aiosqlite DSN）
 │   └── versions/                   # 迁移脚本（NNNN_<slug>.py；链与数量见 `uv run alembic history`）
@@ -76,7 +77,8 @@ backend/
 
 新增后端能力时的落位约定：
 
-- **新增一个 HTTP 端点**：在 `app/api/v1/<domain>.py` 定义 `APIRouter`，路由内 `Depends` 获取 Service，禁止直接 import 仓储或开事务；服务装配走 `app/api/deps/<domain>.py` 的 `get_<domain>_service`。
+- **新增一个 HTTP 端点**：在 `app/api/v1/<domain>.py` 定义 `APIRouter`，路由内 `Depends` 获取 Service，禁止直接 import 仓储或开事务；服务装配走 `app/api/deps/<domain>.py` 的 `get_<domain>_service`。**关键并发红线：本项目使用同步 SQLAlchemy `Session` 与同步 `httpx.Client`，路由函数必须声明为普通 `def`（由 FastAPI 自动派发线程池），严禁声明为 `async def` 阻塞主 asyncio 事件循环**；`async def` 依赖（如 `get_current_user`）若需查库，必须通过 `starlette.concurrency.run_in_threadpool` 卸载。
+- **新增后台异步队列任务**：在 `app/worker.py` 注册顶层可序列化入口（如 `parse_material_job`、`generate_questions_job`）并接入终态错误兜底处理器；本地使用 `deploy/docker-compose.yml` 启动的 `deploy-worker-1` 运行于独立构建镜像，改动 `app/worker.py` 或 `app/services/**` 后必须执行 `docker compose -f deploy/docker-compose.yml up -d --build worker` 重建 Worker 容器。
 - **新增业务规则/事务**：写在 `app/services/<domain>.py`，Service 只依赖 `app.repositories`、`app.core` 与构造注入的 `app.integrations` 适配器。
 - **新增数据访问**：写在 `app/repositories/<domain>.py`，只使用 SQLAlchemy 表达式，返回 ORM 实体或标量，不得 import `fastapi`/`app.services`/`app.api`/`app.integrations`。
 - **新增表/字段**：先改 `app/models/<domain>.py`，再补 `migrations/versions/NNNN_*.py`，并补对称的 `downgrade()`。
@@ -91,6 +93,7 @@ backend/
 - `forbidden`：`app.core.algorithms` 禁 `fastapi`/`sqlalchemy`/`httpx`/`redis`/`boto3` 及上层。
 - `forbidden`：`app.integrations` 禁 `app.services`/`app.api`。
 - `forbidden`：`app.core` 禁 `app.api`/`app.services`/`app.repositories`/`app.integrations`。
+- `forbidden`：`app.api` 禁直接导入 `app.integrations`（必须经 `app.services` 或 `app.core` 抽象）。
 
 代码锚点：`backend/pyproject.toml::[tool.importlinter.contracts]`、`backend/app/services/material.py::MaterialService`、`backend/app/repositories/material.py::MaterialRepository`、`backend/app/api/deps/material.py::get_material_service`、`backend/app/container.py::AppContainer.create_*_service`。
 

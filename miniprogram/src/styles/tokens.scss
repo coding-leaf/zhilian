@@ -1,0 +1,50 @@
+// SCSS 语义令牌别名（指向 App.vue 中 page 声明的 CSS 自定义属性，不产生重复 CSS 规则）。
+
+$color-paper-bg: var(--color-paper-bg);
+$color-paper-card: var(--color-paper-card);
+$color-bg-card: var(--color-bg-card);
+$color-ink-primary: var(--color-ink-primary);
+$color-ink-body: var(--color-ink-body);
+$color-ink-secondary: var(--color-ink-secondary);
+$color-ink-subtle: var(--color-ink-subtle);
+$color-ink-muted: var(--color-ink-muted);
+$color-ink-on-primary: var(--color-ink-on-primary);
+
+$color-surface-subtle: var(--color-surface-subtle);
+$color-surface-muted: var(--color-surface-muted);
+$color-paper-border: var(--color-paper-border);
+$color-border-strong: var(--color-border-strong);
+
+$color-academic-blue: var(--color-academic-blue);
+$color-blue-bg: var(--color-blue-bg);
+$color-blue-border: var(--color-blue-border);
+$color-academic-teal: var(--color-academic-teal);
+
+$color-correct: var(--color-correct);
+$color-success: var(--color-success);
+$color-success-bg: var(--color-success-bg);
+$color-warm-amber: var(--color-warm-amber);
+$color-warning-bg: var(--color-warning-bg);
+$color-wrong: var(--color-wrong);
+$color-danger: var(--color-danger);
+$color-danger-bg: var(--color-danger-bg);
+
+$z-sticky: var(--z-sticky);
+$z-bottom-bar: var(--z-bottom-bar);
+$z-fab: var(--z-fab);
+$z-sheet: var(--z-sheet);
+$z-coach: var(--z-coach);
+$z-modal: var(--z-modal);
+
+@mixin safe-bottom-padding($base: 24rpx) {
+  padding-bottom: calc(#{$base} + env(safe-area-inset-bottom));
+}
+
+@mixin css-checkmark($color: var(--color-ink-on-primary), $width: 14rpx, $height: 8rpx) {
+  width: $width;
+  height: $height;
+  border-left: 3rpx solid $color;
+  border-bottom: 3rpx solid $color;
+  transform: rotate(-45deg);
+  margin-top: -4rpx;
+}

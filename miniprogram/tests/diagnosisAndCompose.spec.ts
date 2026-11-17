@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const { requestMock } = vi.hoisted(() => ({ requestMock: vi.fn() }))
@@ -8,9 +8,19 @@ vi.mock('@/utils/request', () => ({
   uploadFile: vi.fn(),
 }))
 
+import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useDiagnosisStore } from '@/stores/diagnosis'
 import { useQuestionCompose } from '@/subpackages/material/composables/useQuestionCompose'
-import { diagnosisReportFixture, generatedQuestionFixture, practiceDetailFixture } from './fixtures/backendResponses'
+import {
+  groupComposeKps,
+  sampleKnowledgePointIds,
+  selectLeafComposePoints,
+} from '@/subpackages/material/utils/composeHelpers'
+import {
+  diagnosisReportFixture,
+  generatedQuestionFixture,
+  practiceDetailFixture,
+} from './fixtures/backendResponses'
 
 const completedSession = {
   ...practiceDetailFixture,
@@ -18,10 +28,6 @@ const completedSession = {
   completed_at: '2026-09-28T12:00:00',
 }
 
-/**
- * 生成成功后出题页会回查批次摘要来显示「本次生成批次」。
- * 用同一份响应满足该请求，避免用例把「批次回查失败」的降级路径当成正常路径。
- */
 function batchSummaryResponse(
   batchId: string,
   options: { availableCount?: number; materialTitle?: string } = {},
@@ -86,118 +92,210 @@ describe('diagnosis store waits for real grading completion', () => {
   })
 })
 
-describe('question compose coverage gating', () => {
+describe('question compose async job flow & coverage gating', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     requestMock.mockReset()
+  })
+
+  afterEach(() => {
+    useBackgroundTaskStore().reset()
+  })
+
+  it('defaults to smart_sample mode, honors questionCount via cross-group sampling, and supports full_coverage with 50-limit guard', () => {
+    const compose = useQuestionCompose()
+    compose.setKnowledgePoints([
+      { id: 'ch-1', name: '第一章 概率基础', level: 1, parent_id: null, sort_order: 1 },
+      { id: 'k-1', name: '考点一', level: 2, parent_id: 'ch-1', sort_order: 1 },
+      { id: 'k-2', name: '考点二', level: 2, parent_id: 'ch-1', sort_order: 2 },
+      { id: 'k-3', name: '考点三', level: 2, parent_id: 'ch-1', sort_order: 3 },
+      { id: 'ch-2', name: '第二章 线性模型', level: 1, parent_id: null, sort_order: 2 },
+      { id: 'k-4', name: '考点四', level: 2, parent_id: 'ch-2', sort_order: 1 },
+      { id: 'k-5', name: '考点五', level: 2, parent_id: 'ch-2', sort_order: 2 },
+      { id: 'k-6', name: '考点六', level: 2, parent_id: 'ch-2', sort_order: 3 },
+      { id: 'k-7', name: '独立考点七', level: 1, parent_id: null, sort_order: 3 },
+    ])
+    compose.questionCount.value = 3
+
+    // L1 章节容器 ch-1/ch-2 被过滤，仅保留 7 个叶子/独立考点
+    expect(compose.availableKpList.value).toHaveLength(7)
+    expect(compose.selectedKpIds.value).toHaveLength(7)
+    expect(compose.composeMode.value).toBe('smart_sample')
+    expect(compose.plannedCount.value).toBe(3)
+    expect(compose.effectiveKpIds.value).toEqual(['k-1', 'k-4', 'k-7'])
+
+    // 切换全考点覆盖模式后，plannedCount 抬升至已选考点数
+    compose.setComposeMode('full_coverage')
+    expect(compose.plannedCount.value).toBe(7)
+    expect(compose.effectiveKpIds.value).toHaveLength(7)
+    expect(compose.exceedsPracticeLimit.value).toBe(false)
+
+    // 超过 50 个考点在全覆盖模式下触发上限阻断
+    const fiftyOne = Array.from({ length: 51 }, (_, idx) => ({
+      id: `bulk-${idx + 1}`,
+      name: `大批量考点-${idx + 1}`,
+      level: 1,
+      sort_order: idx + 1,
+    }))
+    compose.setKnowledgePoints(fiftyOne)
+    expect(compose.exceedsPracticeLimit.value).toBe(true)
+    compose.setComposeMode('smart_sample')
+    expect(compose.exceedsPracticeLimit.value).toBe(false)
+  })
+
+  it('filters L1 container nodes, samples deterministically across groups, and paginates >100 batch questions', async () => {
+    const rawOptions = [
+      { id: 'c1', name: '第一章', level: 1, parent_id: null, sort_order: 1 },
+      { id: 'p1', name: '子考点1', level: 2, parent_id: 'c1', sort_order: 1 },
+      { id: 'p2', name: '子考点2', level: 2, parent_id: 'c1', sort_order: 2 },
+      { id: 'c2', name: '第二章', level: 1, parent_id: null, sort_order: 2 },
+      { id: 'p3', name: '子考点3', level: 2, parent_id: 'c2', sort_order: 1 },
+      { id: 'p4', name: '子考点4', level: 2, parent_id: 'c2', sort_order: 2 },
+    ]
+    expect(selectLeafComposePoints(rawOptions).map((p) => p.id)).toEqual(['p1', 'p2', 'p3', 'p4'])
+    const groups = groupComposeKps(rawOptions)
+    expect(groups.map((g) => g.points.map((p) => p.id))).toEqual([
+      ['p1', 'p2'],
+      ['p3', 'p4'],
+    ])
+    expect(sampleKnowledgePointIds(groups, ['p1', 'p2', 'p3', 'p4'], 3)).toEqual(['p1', 'p3', 'p2'])
+
+    // 超过分组数的抽样应跨全部分组均匀分布
+    const manyGroups = Array.from({ length: 6 }, (_, i) => ({
+      id: `g-${i}`,
+      title: `G${i}`,
+      points: [{ id: `kp-${i}`, name: `KP${i}` }],
+    }))
+    expect(sampleKnowledgePointIds(manyGroups, manyGroups.map((g) => g.points[0].id), 3)).toEqual([
+      'kp-0',
+      'kp-2',
+      'kp-4',
+    ])
+
+    // 验证 fetchBatchQuestions 使用 page_size=100 并在 total > 100 时继续翻页，不截断于 50 题
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      generatedQuestionFixture({ id: `q-${i + 1}`, knowledge_point_id: `kp-${i + 1}`, batch_id: 'b-big' }),
+    )
+    const page2 = Array.from({ length: 10 }, (_, i) =>
+      generatedQuestionFixture({ id: `q-${101 + i}`, knowledge_point_id: `kp-${101 + i}`, batch_id: 'b-big' }),
+    )
     requestMock.mockImplementation(async (options: any) => {
-      if (options.url === '/questions/generate') {
+      if (options.url === '/questions?batch_id=b-big&page=1&page_size=100') {
+        return { items: page1, total: 110 }
+      }
+      if (options.url === '/questions?batch_id=b-big&page=2&page_size=100') {
+        return { items: page2, total: 110 }
+      }
+      if (options.url.startsWith('/questions/batches')) {
+        return batchSummaryResponse('b-big', { availableCount: 110 })
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    const compose = useQuestionCompose()
+    await expect(compose.loadBatchQuestions('b-big')).resolves.toBe(110)
+    expect(compose.questions.value).toHaveLength(110)
+  })
+
+  it('splits >20 KPs into planGenerationBatches in full_coverage mode without count=20 mismatch', async () => {
+    const jobPayloads: Array<{ knowledge_point_ids: string[]; count: number }> = []
+    let batchSeq = 0
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/jobs' && options.method === 'POST') {
+        batchSeq += 1
         const kpIds: string[] = options.data.knowledge_point_ids || []
+        jobPayloads.push({ knowledge_point_ids: kpIds, count: options.data.count })
+        const batchId = `b-split-${batchSeq}`
         return {
-          batch_id: 'b-1',
-          total_generated: kpIds.length,
-          qualified_count: kpIds.length,
-          pending_count: 0,
-          qualified_questions: kpIds.map((kpId, index) =>
-            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, stem: `题干-${index}` }),
-          ),
-          pending_questions: [],
+          id: `job-split-${batchSeq}`,
+          status: 'completed',
+          material_id: 'm-1',
+          total_kps: kpIds.length,
+          completed_kps: kpIds.length,
+          generated_count: kpIds.length,
+          batch_id: batchId,
+          question_ids: kpIds.map((id) => `q-${id}`),
+          created_at: '',
+          updated_at: '',
+          completed_at: '2026-11-17T10:00:00',
         }
+      }
+      if (options.url.startsWith('/questions?batch_id=b-split-1')) {
+        return {
+          items: jobPayloads[0].knowledge_point_ids.map((kpId) =>
+            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, batch_id: 'b-split-1' }),
+          ),
+        }
+      }
+      if (options.url.startsWith('/questions?batch_id=b-split-2')) {
+        return {
+          items: jobPayloads[1].knowledge_point_ids.map((kpId) =>
+            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, batch_id: 'b-split-2' }),
+          ),
+        }
+      }
+      if (options.url.startsWith('/questions/batches')) return { items: [], total: 0 }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+
+    const compose = useQuestionCompose()
+    compose.setScope({ materialId: 'm-1' })
+    compose.setKnowledgePoints(
+      Array.from({ length: 25 }, (_, i) => ({ id: `kp-${i + 1}`, name: `考点-${i + 1}`, level: 1 })),
+    )
+    compose.setComposeMode('full_coverage')
+
+    await expect(compose.generate()).resolves.toBe(25)
+    expect(jobPayloads).toHaveLength(2)
+    expect(jobPayloads[0].knowledge_point_ids).toHaveLength(20)
+    expect(jobPayloads[0].count).toBe(20)
+    expect(jobPayloads[1].knowledge_point_ids).toHaveLength(5)
+    expect(jobPayloads[1].count).toBe(5)
+    expect(compose.canStart.value).toBe(true)
+  })
+
+  it('submits async job, blocks starting on removal gap, and fills missing KPs asynchronously', async () => {
+    let jobCounter = 0
+    const batchItemsByBatch: Record<string, any[]> = {}
+
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/jobs' && options.method === 'POST') {
+        jobCounter += 1
+        const kpIds: string[] = options.data.knowledge_point_ids || []
+        const batchId = `b-${jobCounter}`
+        batchItemsByBatch[batchId] = kpIds.map((kpId, index) =>
+          generatedQuestionFixture({
+            id: `q-${jobCounter}-${kpId}`,
+            knowledge_point_id: kpId,
+            batch_id: batchId,
+            stem: `题干-${index}`,
+          }),
+        )
+        return {
+          id: `job-${jobCounter}`,
+          status: 'completed',
+          material_id: options.data.material_id ?? null,
+          folder_id: options.data.folder_id ?? null,
+          total_kps: kpIds.length,
+          completed_kps: kpIds.length,
+          generated_count: kpIds.length,
+          batch_id: batchId,
+          question_ids: batchItemsByBatch[batchId].map((q) => q.id),
+          created_at: '2026-11-17T10:00:00',
+          updated_at: '2026-11-17T10:00:01',
+          completed_at: '2026-11-17T10:00:01',
+        }
+      }
+      if (options.url.startsWith('/questions?batch_id=')) {
+        const match = /batch_id=([^&]+)/.exec(options.url)
+        const batchId = match ? decodeURIComponent(match[1]) : ''
+        return { items: batchItemsByBatch[batchId] || [] }
       }
       if (options.url.startsWith('/questions/batches')) return batchSummaryResponse('b-1')
       throw new Error(`unexpected: ${options.url}`)
     })
-  })
 
-  it('raises the planned count to cover all selected points', () => {
     const compose = useQuestionCompose()
-    compose.setKnowledgePoints([
-      { id: 'k-1', name: '考点一' },
-      { id: 'k-2', name: '考点二' },
-      { id: 'k-3', name: '考点三' },
-    ])
-    compose.questionCount.value = 1
-
-    expect(compose.plannedCount.value).toBe(3)
-  })
-
-  it('blocks starting when removal creates a coverage gap', async () => {
-    const compose = useQuestionCompose()
-    compose.setKnowledgePoints([
-      { id: 'k-1', name: '考点一' },
-      { id: 'k-2', name: '考点二' },
-    ])
-    compose.selectedTypes.value = ['single_choice']
-
-    await compose.generate()
-
-    expect(compose.questions.value).toHaveLength(2)
-    expect(compose.canStart.value).toBe(true)
-    expect(compose.coverage.value.missing).toEqual([])
-
-    compose.removeQuestion(compose.questions.value[0])
-
-    expect(compose.coverage.value.missing).toEqual(['k-1'])
-    expect(compose.canStart.value).toBe(false)
-    expect(compose.generationNotice.value).toContain('未覆盖')
-  })
-
-  it('fills the coverage gap by generating for the missing points only', async () => {
-    const compose = useQuestionCompose()
-    compose.setKnowledgePoints([
-      { id: 'k-1', name: '考点一' },
-      { id: 'k-2', name: '考点二' },
-    ])
-
-    await compose.generate()
-    compose.removeQuestion(compose.questions.value.find((item) => item.knowledge_point_id === 'k-2')!)
-    expect(compose.canStart.value).toBe(false)
-
-    await compose.fillCoverageGap()
-
-    expect(compose.coverage.value.missing).toEqual([])
-    expect(compose.canStart.value).toBe(true)
-  })
-})
-
-/**
- * 出题页曾经把「生成成功」和「切到核对视图」之间的连接漏掉：`isConfigMode` 只被写过 true，
- * 于是生成的题目永远渲染不出来，用户看到的是「点了没反应」。
- * 修复把这条连接放在 `generate()` 的返回值上——下面锁定该返回值契约，
- * 使「零合格题/失败」不可能被误当成「可以进核对视图」。
- */
-describe('question compose reports generated count to the caller', () => {
-  beforeEach(() => {
-    requestMock.mockReset()
-  })
-
-  const respondWithQualified = (knowledgePointIds: string[]) => {
-    requestMock.mockImplementation(async (options: any) => {
-      if (options.url === '/questions/generate') {
-        return {
-          batch_id: 'b-1',
-          total_generated: knowledgePointIds.length,
-          qualified_count: knowledgePointIds.length,
-          pending_count: 0,
-          qualified_questions: knowledgePointIds.map((kpId) =>
-            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId }),
-          ),
-          pending_questions: [],
-        }
-      }
-      // 生成后回查批次摘要用于展示「本次生成批次」（标签与题库区块同一函数）
-      if (options.url.startsWith('/questions/batches')) {
-        return batchSummaryResponse('b-1', {
-          availableCount: knowledgePointIds.length,
-          materialTitle: '软件工程导论.pdf',
-        })
-      }
-      throw new Error(`unexpected: ${options.url}`)
-    })
-  }
-
-  it('returns the qualified count on success', async () => {
-    respondWithQualified(['k-1', 'k-2'])
-    const compose = useQuestionCompose()
+    compose.setScope({ materialId: 'm-1' })
     compose.setKnowledgePoints([
       { id: 'k-1', name: '考点一' },
       { id: 'k-2', name: '考点二' },
@@ -205,63 +303,154 @@ describe('question compose reports generated count to the caller', () => {
     compose.selectedTypes.value = ['single_choice']
 
     await expect(compose.generate()).resolves.toBe(2)
+
     expect(compose.questions.value).toHaveLength(2)
+    expect(compose.questions.value[0].knowledge_point_name).toBe('考点一')
     expect(compose.canStart.value).toBe(true)
-    // R5：核对出题页要显示本次生成的批次，标签走与题库区块同一份推导
-    // （只断言时间之后的部分：年份由运行时刻决定，不写死会过期的完整串）
-    expect(compose.generatedBatchLabels.value).toHaveLength(1)
-    expect(compose.generatedBatchLabels.value[0]).toContain('软件工程导论.pdf · 2 题')
+    expect(compose.coverage.value.missing).toEqual([])
+    expect(requestMock.mock.calls.some(([o]: any[]) => o.url === '/questions/generate')).toBe(false)
+
+    compose.removeQuestion(compose.questions.value[0])
+    expect(compose.coverage.value.missing).toEqual(['k-1'])
+    expect(compose.canStart.value).toBe(false)
+    expect(compose.generationNotice.value).toContain('未覆盖')
+
+    await compose.fillCoverageGap()
+    expect(compose.coverage.value.missing).toEqual([])
+    expect(compose.canStart.value).toBe(true)
   })
 
-  it('returns zero and stays out of the reviewable state when nothing qualifies', async () => {
+  it('handles queued->running->completed async jobs non-blockingly and loads batch summary', async () => {
+    let pollStep = 0
     requestMock.mockImplementation(async (options: any) => {
-      if (options.url === '/questions/generate') {
+      if (options.url === '/questions/jobs' && options.method === 'POST') {
         return {
-          batch_id: 'b-1',
-          total_generated: 0,
-          qualified_count: 0,
-          pending_count: 0,
-          qualified_questions: [],
-          pending_questions: [],
+          id: 'job-async',
+          status: 'queued',
+          material_id: 'm-1',
+          total_kps: 2,
+          completed_kps: 0,
+          generated_count: 0,
+          question_ids: [],
+          created_at: '',
+          updated_at: '',
         }
+      }
+      if (options.url === '/questions/jobs/job-async' && options.method === 'GET') {
+        pollStep += 1
+        if (pollStep === 1) {
+          return {
+            id: 'job-async',
+            status: 'running',
+            material_id: 'm-1',
+            total_kps: 2,
+            completed_kps: 1,
+            generated_count: 1,
+            question_ids: [],
+            created_at: '',
+            updated_at: '',
+          }
+        }
+        return {
+          id: 'job-async',
+          status: 'completed',
+          material_id: 'm-1',
+          total_kps: 2,
+          completed_kps: 2,
+          generated_count: 2,
+          batch_id: 'b-async',
+          question_ids: ['q-k-1', 'q-k-2'],
+          created_at: '',
+          updated_at: '',
+          completed_at: '2026-11-17T10:00:10',
+        }
+      }
+      if (options.url.startsWith('/questions?batch_id=b-async')) {
+        return {
+          items: [
+            generatedQuestionFixture({ id: 'q-k-1', knowledge_point_id: 'k-1', batch_id: 'b-async' }),
+            generatedQuestionFixture({ id: 'q-k-2', knowledge_point_id: 'k-2', batch_id: 'b-async' }),
+          ],
+        }
+      }
+      if (options.url.startsWith('/questions/batches')) {
+        return batchSummaryResponse('b-async', {
+          availableCount: 2,
+          materialTitle: '软件工程导论.pdf',
+        })
       }
       throw new Error(`unexpected: ${options.url}`)
     })
-    const compose = useQuestionCompose()
-    compose.setKnowledgePoints([{ id: 'k-1', name: '考点一' }])
 
+    const taskStore = useBackgroundTaskStore()
+    const compose = useQuestionCompose()
+    compose.setScope({ materialId: 'm-1' })
+    compose.setKnowledgePoints([
+      { id: 'k-1', name: '考点一' },
+      { id: 'k-2', name: '考点二' },
+    ])
+
+    // 异步排队时立即返回 0，不阻塞当前页；进度提示立即可见
     await expect(compose.generate()).resolves.toBe(0)
-    expect(compose.questions.value).toEqual([])
-    expect(compose.canStart.value).toBe(false)
+    expect(compose.isJobInFlight.value).toBe(true)
+    expect(compose.jobProgressText.value).toContain('0 / 2 考点')
+
+    await taskStore.pollOnce()
+    expect(compose.jobProgressText.value).toContain('1 / 2 考点')
+
+    await taskStore.pollOnce()
+    expect(compose.activeJob.value?.status).toBe('completed')
+
+    await expect(compose.applyCompletedJob(compose.activeJob.value!)).resolves.toBe(2)
+    expect(compose.questions.value).toHaveLength(2)
+    expect(compose.canStart.value).toBe(true)
+    expect(compose.generatedBatchLabels.value[0]).toContain('软件工程导论.pdf · 2 题')
   })
 
-  it('returns zero instead of throwing when generation fails', async () => {
-    requestMock.mockImplementation(async (options: any) => {
-      throw new Error(`upstream down: ${options.url}`)
-    })
-    const compose = useQuestionCompose()
-    compose.setKnowledgePoints([{ id: 'k-1', name: '考点一' }])
-
-    await expect(compose.generate()).resolves.toBe(0)
-    expect(compose.questions.value).toEqual([])
-    expect(compose.canStart.value).toBe(false)
-  })
-
-  it('returns zero and generates nothing when no point is selected', async () => {
-    const compose = useQuestionCompose()
-
-    await expect(compose.generate()).resolves.toBe(0)
+  it('returns zero and stays out of reviewable state when job fails, produces nothing, or nothing selected', async () => {
+    const composeEmpty = useQuestionCompose()
+    await expect(composeEmpty.generate()).resolves.toBe(0)
     expect(requestMock).not.toHaveBeenCalled()
+
+    requestMock.mockRejectedValueOnce(new Error('upstream down'))
+    const composeErr = useQuestionCompose()
+    composeErr.setKnowledgePoints([{ id: 'k-1', name: '考点一' }])
+    await expect(composeErr.generate()).resolves.toBe(0)
+    expect(composeErr.questions.value).toEqual([])
+    expect(composeErr.canStart.value).toBe(false)
+
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/questions/jobs') {
+        return {
+          id: 'job-empty',
+          status: 'completed',
+          material_id: 'm-1',
+          total_kps: 1,
+          completed_kps: 1,
+          generated_count: 0,
+          batch_id: 'b-empty',
+          question_ids: [],
+        }
+      }
+      if (options.url.startsWith('/questions?batch_id=b-empty')) {
+        return { items: [] }
+      }
+      throw new Error(`unexpected: ${options.url}`)
+    })
+    await expect(composeErr.generate()).resolves.toBe(0)
+    expect(composeErr.questions.value).toEqual([])
+    expect(composeErr.canStart.value).toBe(false)
   })
 })
 
-/**
- * 「继续核对已生成题目」入口的载入契约：选中考点必须取自题目实际覆盖的集合，
- * 否则覆盖率会凭空出现缺口，把用户挡在「开始作答」之外。
- */
 describe('loading already generated questions', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     requestMock.mockReset()
+  })
+
+  afterEach(() => {
+    useBackgroundTaskStore().reset()
   })
 
   it('selects exactly the points the loaded questions cover', async () => {

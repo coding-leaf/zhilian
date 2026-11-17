@@ -4,7 +4,7 @@ import { adaptMaterial, adaptPractice, adaptQuestion } from '../src/api'
 describe('backend response adapters', () => {
   it('normalizes material status without losing parse progress fields', () => {
     const material = adaptMaterial({
-      id: 'm-1', title: '讲义', status: 'READY', created_at: '2026-01-01',
+      id: 'm-1', title: '讲义', status: 'READY' as any, created_at: '2026-01-01',
       parse_status: 'ready', progress_percentage: 100,
     })
 

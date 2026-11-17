@@ -1,8 +1,8 @@
 # Directory Structure
 
-> **事实源**：`miniprogram/src/**`、`miniprogram/src/pages.json`、`miniprogram/vite.config.ts`、`miniprogram/tsconfig.json`、`miniprogram/vitest.config.ts`
-> **最后核对**：2026-09-29
-> **核对方式**：`find miniprogram/src -type f` 全量枚举 + 逐项对照 `pages.json` 注册表
+> **事实源**：`miniprogram/src/**`、`miniprogram/src/pages.json`、`miniprogram/vite.config.ts`、`miniprogram/tsconfig.json`、`miniprogram/tsconfig.test.json`、`miniprogram/vitest.config.ts`
+> **最后核对**：2026-11-17
+> **核对方式**：全量枚举 `miniprogram/src` + 逐项对照 `pages.json` 注册表
 
 > How frontend code is organized in this project. 本文档描述 `miniprogram/` 工程的**真实**布局，不描述理想态。
 
@@ -10,12 +10,11 @@
 
 ## Overview
 
-本前端是 **uni-app + Vue 3 + Pinia** 的微信小程序（`mp-weixin`），构建工具为 Vite，样式预处理器为 SCSS，单元测试为 Vitest，类型检查为 `vue-tsc`。所有命令在 `miniprogram/` 目录下用 `pnpm` 执行（`pnpm run lint` / `type-check` / `test:unit`）。
+本前端是 **uni-app + Vue 3 + Pinia** 的微信小程序（`mp-weixin`），构建工具为 Vite，样式预处理器为 SCSS，单元测试为 Vitest，类型检查为 `vue-tsc`（同时校验 `src/**` 与 `tests/**`）。所有命令在 `miniprogram/` 目录下用 `pnpm` 执行（`pnpm run lint` / `type-check` / `test:cov` / `build:mp-weixin`）。
 
-- 应用入口：`main.ts` 的 `createApp()` 使用 `createSSRApp(App)` + `Pinia.createPinia()`；应用级生命周期（`onLaunch` / `onShow` / `onHide`）在 `App.vue` 内（当前只打日志）。
-- 页面与分包注册、`easycom` 规则集中在 `pages.json`。`easycom` 声明的 `^wd-(.*)` 规则当前**没有使用点**。
-- 路径别名 `@` 由 `vite.config.ts`（`'@': '/src'`）与 `tsconfig.json`（`"@/*": ["./src/*"]`）双处声明。
-- 设计参数的事实源是 `docs/DESIGN.md`；代码侧只有 `App.vue` 在 `page` 上定义的一组 `--color-*` CSS 变量（无 `src/uni.scss`、无 `src/styles/`）。
+- 应用入口：`main.ts` 的 `createApp()` 使用 `createSSRApp(App)` + `Pinia.createPinia()`；全局 `--color-*` Token 与基础纸质样式在 `App.vue` 与 `src/styles/{tokens,modal,common}.scss` 中维护。
+- 页面与分包注册集中在 `pages.json`（共 8 个真实业务页，已清退废弃 `wot-design-uni` `easycom` 规则与 `upload/index` 死占位页）。
+- `src/api/modules/*` 与 `src/types/*` 均按业务域拆分，经各自的 `index.ts` barrel 统一重导出；全仓所有 `.vue` 单文件均严格保持 `<= 300` 行（当前最高 270 行）。
 
 **代码锚点**
 - `miniprogram/src/main.ts::createApp`
@@ -34,62 +33,46 @@ miniprogram/
 ├── src/
 │   ├── api/
 │   │   ├── adapters/            # 后端 wire → 前端 view 的归一化边界
-│   │   │   ├── diagnosis.ts     #   adaptDiagnosisReport / WireDiagnosisReport
-│   │   │   ├── index.ts         #   export * 聚合（5 行）
-│   │   │   ├── material.ts      #   adaptMaterial（状态大小写归一）
-│   │   │   ├── practice.ts      #   adaptPractice / buildAttemptResults / summarizeProgress
-│   │   │   ├── question.ts      #   adaptQuestion / 出题规划 / 覆盖率 / 题型标签
-│   │   │   └── wrong.ts         #   错题分组 / 再生范围 / 快照读取
-│   │   └── index.ts             # 唯一 API 文件：全部 apiXxx 函数 + 适配函数 re-export
+│   │   ├── modules/             # 按业务域拆分的 HTTP 调用（auth/folders/materials/knowledge/questions/practices/grading/diagnosis/wrong）
+│   │   └── index.ts             # API 与适配器统一 barrel 导出
 │   ├── components/
-│   │   └── AiCoachDrawer.vue    # 唯一跨页面共享组件（AI 助教抽屉）
+│   │   ├── AiCoachDrawer.vue    # 全局/局部 AI 助教抽屉（`--z-coach`）
+│   │   ├── CoachMessageList.vue # 助教消息滚动列表（`virtualHost: true` + `<RichContent />`）
+│   │   ├── RichContent.vue      # 零外部依赖学术富文本与公式 AST 渲染组件
+│   │   └── BackgroundTaskBar.vue# 非阻塞后台任务进度条（讲义解析 + 异步生题作业）
+│   ├── composables/
+│   │   └── useCoachChat.ts      # 按上下文键（题目/考点/讲义/课程）隔离会话的助教状态机
 │   ├── pages/                   # 主包页面（3 Tab + 登录）
 │   │   ├── auth/login.vue       #   登录
-│   │   ├── index/index.vue      #   Tab 1: 学习工作台
-│   │   ├── profile/index.vue    #   Tab 3: 个人中心
-│   │   └── review/
-│   │       ├── components/
-│   │       │   ├── PracticeEntryCard.vue
-│   │       │   └── WrongRecordCard.vue
-│   │       ├── index.vue        #   Tab 2: 学情与错题攻克
-│   │       ├── review.scss      #   该功能区共享样式表
-│   │       └── reviewView.ts    #   展示纯函数（状态文案 / 可续练 / 再生范围）
-│   ├── stores/                  # Pinia 域 store（5 个，无 index.ts 聚合）
+│   │   ├── index/               #   Tab 1: 学习工作台（含上传动作菜单与自动解析）
+│   │   ├── profile/             #   Tab 3: 个人中心
+│   │   └── review/              #   Tab 2: 学情总览（掌握度看板 + 4 段切换：考点掌握/错题本/练习记录/我的题库）
+│   ├── stores/                  # Pinia 域 store（6 个）
 │   │   ├── auth.ts              #   token / user / loginWithWechat / fetchProfile
+│   │   ├── backgroundTask.ts    #   解析与异步生题作业轮询及跨页状态同步
 │   │   ├── diagnosis.ts         #   currentReport / isPending / loadReport
 │   │   ├── folder.ts            #   folders / currentFolderId / 课程 CRUD
-│   │   ├── material.ts          #   materialList / 知识树 / 上传解析出题
+│   │   ├── material.ts          #   materialList / 知识树 / 上传解析
 │   │   └── practice.ts          #   会话 / 作答 / 草稿队列 / 交卷 / 再生题
+│   ├── styles/                  # 全局共享设计系统样式（`tokens.scss` / `modal.scss` / `common.scss`，0 `backdrop-filter`）
 │   ├── subpackages/
-│   │   ├── material/
-│   │   │   ├── components/QuestionPreviewCard.vue
-│   │   │   ├── composables/useQuestionCompose.ts   # 全仓库唯一的组合式函数
-│   │   │   ├── pages/course/index.vue              # 资料详情 + 知识树 + 考点切片
-│   │   │   ├── pages/questions/index.vue           # 组卷配置 + 题目核对 + 开始作答
-│   │   │   ├── pages/upload/index.vue              # 占位页（32 行，无逻辑）
-│   │   │   └── questions.scss
-│   │   ├── practice/
-│   │   │   ├── pages/session/index.vue             # 作答页
-│   │   │   └── session.scss
-│   │   └── report/
-│   │       ├── components/
-│   │       │   ├── AttemptResultCard.vue
-│   │       │   ├── GradingActionModal.vue
-│   │       │   └── ReportSummaryCard.vue
-│   │       ├── pages/detail/index.vue              # 结果页 + 诊断报告
-│   │       ├── report.scss
-│   │       └── utils/reportView.ts
-│   ├── types/
-│   │   └── index.ts             # 唯一类型文件（441 行，无分域文件）
+│   │   ├── material/            #   course（章节折叠考点学习卡 + 重新解析）+ questions（异步非阻塞组卷与核对预览）
+│   │   ├── practice/            #   session（在线作答 + 答题卡抽屉）
+│   │   └── report/              #   detail（批改解析报告 + 主观题自评/重判 + 学情联动）
+│   ├── types/                   # 按域拆分类型定义 + `index.ts` barrel 导出
 │   ├── utils/
 │   │   ├── draftQueue.ts        # 逐题草稿串行写入队列
+│   │   ├── loadingGuard.ts      # 引用计数 `withBlockingLoading`（严禁裸调 `showLoading`/`hideLoading`）
 │   │   ├── materialState.ts     # 资料解析状态门禁与文案
-│   │   └── request.ts           # uni.request / uni.uploadFile 封装 + API_BASE_URL
-│   ├── App.vue                  # 应用生命周期 + 全局 CSS 变量与 .paper-card
-│   ├── env.d.ts                 # *.vue 模块声明 + declare const wx: any
+│   │   ├── poller.ts            # 可取消轮询器
+│   │   ├── request.ts           # `uni.request` / `uni.uploadFile` 封装 + `dismissBlockingLoading` 协同
+│   │   ├── requestError.ts      # 网络传输与 HTTP 错误分类
+│   │   └── richText.ts          # Markdown/LaTeX 轻量 AST 解析器与乱码片段检测（`isGarbledSnippetText`）
+│   ├── App.vue                  # 应用生命周期 + 全局 `--color-*` / `--z-*` 变量与 `box-sizing: border-box`（含 `scroll-view, textarea`）
+│   ├── env.d.ts                 # `*.vue` 模块声明 + `declare const wx: any`
 │   ├── main.ts                  # 根实例装配
 │   ├── manifest.json            # uni-app 应用清单
-│   └── pages.json               # 页面/分包/easycom 注册
+│   └── pages.json               # 页面/分包注册（共 8 个页面）
 ├── tests/                       # Vitest 单测（平铺，无 unit/ 子目录）
 │   ├── fixtures/backendResponses.ts   # 后端响应样本（钉死跨层字段名）
 │   ├── setup.ts                       # 内存版 uni mock（storage/toast/navigate）

@@ -31,6 +31,7 @@ from app.core.errors import (
     PracticeEmptyQuestionsError,
     PracticeNotFoundError,
     PracticeStatusError,
+    QueueError,
 )
 from app.integrations.idempotency.memory import MemoryIdempotencyAdapter
 from app.integrations.queue.memory import MemoryQueueAdapter
@@ -39,6 +40,8 @@ from app.models.knowledge import KnowledgePoint
 from app.models.material import Material, MaterialSnippet, MaterialVersion
 from app.models.practice import (
     AttemptItem,
+    DiagnosisReport,
+    GradingRecord,
     MasteryLevel,
     MasteryRecord,
     Practice,
@@ -555,10 +558,6 @@ class TestPracticeServiceStateMachine:
         resumed_p = service.resume_practice(user_id, practice.id)
         assert resumed_p.status == PracticeStatus.IN_PROGRESS.value
 
-        # Timeout practice
-        timeout_p = service.timeout_practice(user_id, practice.id)
-        assert timeout_p.status == "timeout"
-
         # Resume when not paused raises PracticeStatusError
         with pytest.raises(PracticeStatusError):
             service.resume_practice(user_id, practice.id)
@@ -569,8 +568,6 @@ class TestPracticeServiceStateMachine:
             service.pause_practice(user_id, fake_id)
         with pytest.raises(PracticeNotFoundError):
             service.resume_practice(user_id, fake_id)
-        with pytest.raises(PracticeNotFoundError):
-            service.timeout_practice(user_id, fake_id)
 
     def test_save_answer_rejects_non_answerable_states(
         self, session: Session, test_setup: dict[str, Any]
@@ -607,7 +604,10 @@ class TestPracticeServiceStateMachine:
 
         # TIMEOUT rejects further answers
         service.resume_practice(user_id, practice.id)
-        service.timeout_practice(user_id, practice.id)
+        timeout_model = session.get(Practice, practice.id)
+        assert timeout_model is not None
+        timeout_model.status = PracticeStatus.TIMEOUT.value
+        session.commit()
         with pytest.raises(PracticeStatusError):
             service.save_answer(
                 user_id,
@@ -667,10 +667,6 @@ class TestPracticeServiceStateMachine:
                 SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="B"),
             )
 
-        # Timeout completed practice raises PracticeStatusError
-        with pytest.raises(PracticeStatusError):
-            service.timeout_practice(user_id, practice.id)
-
 
 class TestPracticeServiceSubmissionAndIdempotency:
     """Test suite for practice submission, idempotency lock, deduplication, and queue dispatch."""
@@ -718,7 +714,7 @@ class TestPracticeServiceSubmissionAndIdempotency:
         assert exc_info.value.error_code == 40011
         assert exc_info.value.details["unanswered_count"] == 1
 
-        # Submit with confirm_unanswered=True -> succeeds
+        # Submit with confirm_unanswered=True -> pure objective completes immediately
         submit_key = str(uuid.uuid4())
         result = service.submit_practice(
             user_id,
@@ -729,16 +725,115 @@ class TestPracticeServiceSubmissionAndIdempotency:
             ),
         )
         assert result.practice_id == practice.id
-        assert result.status == PracticeStatus.SUBMITTED.value
+        assert result.status == PracticeStatus.COMPLETED.value
         assert result.total_questions == 2
         assert result.unanswered_count == 1
         assert result.answered_questions == 1
-        assert result.task_id != ""
+        assert result.task_id == ""
+        assert len(queue._queue) == 0
 
-        # Verify task is enqueued to "grading_jobs"
+        # Immediate grading + WrongRecord/MasteryRecord/DiagnosisReport persistence
+        persisted = session.get(Practice, practice.id)
+        assert persisted is not None
+        assert persisted.status == PracticeStatus.COMPLETED.value
+        assert persisted.completed_at is not None
+        assert persisted.total_score == 1.0
+        records = session.query(GradingRecord).filter_by(practice_id=practice.id).all()
+        assert len(records) == 2
+        wrongs = session.query(WrongRecord).filter_by(user_id=user_id).all()
+        assert len(wrongs) == 1
+        mastery = (
+            session.query(MasteryRecord)
+            .filter_by(user_id=user_id, knowledge_point_id=kp1_id)
+            .first()
+        )
+        assert mastery is not None
+        report = session.query(DiagnosisReport).filter_by(practice_id=practice.id).first()
+        assert report is not None
+
+    def test_subjective_submission_enqueues_grading_job_and_pregrades_objective(
+        self, session: Session, test_setup: dict[str, Any]
+    ) -> None:
+        """Mixed objective+subjective submission pregrades objective and enqueues grading_jobs."""
+        idempotency = MemoryIdempotencyAdapter()
+        queue = MemoryQueueAdapter()
+        service = PracticeService(session, idempotency=idempotency, queue=queue)
+
+        user_id = test_setup["user_id"]
+        material_id = test_setup["material_id"]
+        version_id = test_setup["version_id"]
+        kp1_id = test_setup["kp1_id"]
+
+        sub_q = Question(
+            id=uuid.uuid4(),
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=kp1_id,
+            user_id=user_id,
+            question_type=QuestionType.SHORT_ANSWER.value,
+            stem="简述信号量P/V操作的含义。",
+            options=[],
+            answer="信号量必须成对使用",
+            grading_rubric={
+                "points": [
+                    {
+                        "point_id": "p1",
+                        "description": "成对使用",
+                        "weight": 1.0,
+                        "keywords": ["信号量", "成对使用"],
+                    }
+                ]
+            },
+            difficulty=3,
+            status=QuestionStatus.AVAILABLE.value,
+        )
+        session.add(sub_q)
+        session.commit()
+
+        obj_q = test_setup["questions"][0]
+        practice = service.create_practice(
+            user_id,
+            CreatePracticeOptions(
+                title="混合交卷测试",
+                material_id=material_id,
+                knowledge_point_ids=[kp1_id],
+                question_ids=[obj_q.id, sub_q.id],
+                question_count=2,
+            ),
+        )
+        # Answer objective wrong ("B") and subjective
+        service.save_answer(
+            user_id,
+            SaveAnswerDTO(practice_id=practice.id, question_id=obj_q.id, user_answer="B"),
+        )
+        service.save_answer(
+            user_id,
+            SaveAnswerDTO(practice_id=practice.id, question_id=sub_q.id, user_answer="任意作答"),
+        )
+
+        result = service.submit_practice(
+            user_id,
+            SubmitPracticeDTO(practice_id=practice.id, idempotency_key=str(uuid.uuid4())),
+        )
+        assert result.status == PracticeStatus.SUBMITTED.value
+        assert result.task_id != ""
         assert len(queue._queue) == 1
         assert queue._queue[0].task_name == "grading_jobs"
         assert queue._queue[0].payload["practice_id"] == str(practice.id)
+
+        # Objective item is already graded and synced to WrongRecord & MasteryRecord
+        obj_records = session.query(GradingRecord).filter_by(practice_id=practice.id).all()
+        assert len(obj_records) == 1
+        assert obj_records[0].score == 0.0
+        assert (
+            session.query(WrongRecord).filter_by(user_id=user_id, question_id=obj_q.id).count() == 1
+        )
+        assert (
+            session.query(MasteryRecord)
+            .filter_by(user_id=user_id, knowledge_point_id=kp1_id)
+            .count()
+            == 1
+        )
 
     def test_submission_idempotency_and_replay(
         self, session: Session, test_setup: dict[str, Any]
@@ -777,13 +872,15 @@ class TestPracticeServiceSubmissionAndIdempotency:
         res2 = service.submit_practice(user_id, dto)
 
         # Second submission must replay the exact same result
-        assert res1.task_id == res2.task_id
+        assert res1.status == PracticeStatus.COMPLETED.value
+        assert res2.status == PracticeStatus.COMPLETED.value
+        assert res1.task_id == res2.task_id == ""
         assert res1.submitted_at == res2.submitted_at
         # First submission is not a replay; cached replay is flagged (BUG-PRAC-005)
         assert res1.is_idempotent_replay is False
         assert res2.is_idempotent_replay is True
-        # Queue should only contain 1 dispatched job
-        assert len(queue._queue) == 1
+        # Pure objective does not dispatch to queue
+        assert len(queue._queue) == 0
 
         # Trying to submit with a different key when practice is already COMPLETED
         # raises PracticeStatusError
@@ -831,16 +928,16 @@ class TestPracticeServiceSubmissionAndIdempotency:
             user_id,
             SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
         )
-        # Snapshot write degraded, but the primary flow still returns the acceptance state.
-        assert result.status == PracticeStatus.SUBMITTED.value
+        # Snapshot write degraded, but the primary flow still returns completed state.
+        assert result.status == PracticeStatus.COMPLETED.value
         assert result.is_idempotent_replay is False
         assert result.practice_id == practice.id
-        assert len(queue._queue) == 1
+        assert len(queue._queue) == 0
 
         # The transaction already persisted the idempotency key on the practice row.
         persisted = session.get(Practice, practice.id)
         assert persisted is not None
-        assert persisted.status == PracticeStatus.SUBMITTED.value
+        assert persisted.status == PracticeStatus.COMPLETED.value
         assert persisted.submit_idempotency_key == submit_key
 
         # Same-key retry must replay (not raise 40011), because the snapshot was lost.
@@ -849,10 +946,10 @@ class TestPracticeServiceSubmissionAndIdempotency:
             SubmitPracticeDTO(practice_id=practice.id, idempotency_key=submit_key),
         )
         assert replay.practice_id == practice.id
-        assert replay.status == PracticeStatus.SUBMITTED.value
+        assert replay.status == PracticeStatus.COMPLETED.value
         assert replay.is_idempotent_replay is True
         assert replay.total_questions == 1
-        assert len(queue._queue) == 1
+        assert len(queue._queue) == 0
 
         # A different key is still rejected (40011), preserving the guard.
         with pytest.raises(PracticeStatusError) as exc_info:
@@ -1178,24 +1275,53 @@ class TestPracticeServiceGradingRecovery:
 
     @staticmethod
     def _create_and_submit(service: PracticeService, setup: dict[str, Any]) -> Practice:
-        """创建一个全部作答并已交卷的练习，返回 ORM 实体。"""
+        """创建一个含主观题的混合练习并交卷进入异步判题状态，返回 ORM 实体。"""
+        sub_q = Question(
+            id=uuid.uuid4(),
+            material_id=setup["material_id"],
+            version_id=setup["version_id"],
+            knowledge_point_id=setup["kp1_id"],
+            user_id=setup["user_id"],
+            question_type=QuestionType.SHORT_ANSWER.value,
+            stem="判题恢复主观题：简述信号量成对使用要求。",
+            options=[],
+            answer="信号量必须成对使用",
+            grading_rubric={
+                "points": [
+                    {
+                        "point_id": "p1",
+                        "description": "成对使用",
+                        "weight": 1.0,
+                        "keywords": ["信号量", "成对使用"],
+                    }
+                ]
+            },
+            difficulty=3,
+            status=QuestionStatus.AVAILABLE.value,
+        )
+        service.session.add(sub_q)
+        service.session.commit()
+
+        obj_q = setup["questions"][0]
         practice = service.create_practice(
             setup["user_id"],
             CreatePracticeOptions(
                 title="判题恢复测试",
                 material_id=setup["material_id"],
                 knowledge_point_ids=[setup["kp1_id"]],
+                question_ids=[obj_q.id, sub_q.id],
                 question_count=2,
             ),
         )
         for item in practice.items:
             assert item.question_id is not None
+            user_ans = "信号量必须成对使用" if item.question_id == sub_q.id else "A"
             service.save_answer(
                 setup["user_id"],
                 SaveAnswerDTO(
                     practice_id=practice.id,
                     question_id=item.question_id,
-                    user_answer="A",
+                    user_answer=user_ans,
                 ),
             )
         service.submit_practice(
@@ -1316,16 +1442,26 @@ class TestPracticeServiceGradingRecovery:
     def test_retry_grading_rolls_back_status_when_dispatch_fails(
         self, session: Session, test_setup: dict[str, Any]
     ) -> None:
-        """入队失败必须回滚为可恢复状态，避免练习永久停在「判题中」."""
+        """入队失败必须回滚为可恢复状态，避免练习永久停在「判题中」.
+
+        BUG-FIX: retry_grading 的异常捕获从 `except Exception` 收紧到
+        `except (QueueError, SQLAlchemyError)`，测试同步改为注入 QueueError
+        以模拟真实队列异常路径。
+        """
+
         queue = MemoryQueueAdapter()
         service = PracticeService(session, idempotency=MemoryIdempotencyAdapter(), queue=queue)
         practice = self._create_and_submit(service, test_setup)
         user_id = test_setup["user_id"]
         service.mark_grading_failed(user_id, practice.id)
 
-        queue.set_fault_injection("enqueue", RuntimeError("redis down"))
-        with pytest.raises(RuntimeError):
+        # 注入生产中真实抛出的异常类型（QueueError），而非任意 RuntimeError
+        queue.set_fault_injection("enqueue", QueueError("redis down"))
+        with pytest.raises(PracticeStatusError) as exc_info:
             service.retry_grading(user_id, practice.id)
+        # BUG-FIX: 入队失败必须抛包装后的 PracticeStatusError 带 reason
+        assert exc_info.value.error_code == 40011
+        assert "redis down" in exc_info.value.details.get("reason", "")
 
         queue.set_fault_injection("enqueue", None)
         restored = service.practice_repo.get_practice_by_id(practice.id, user_id)

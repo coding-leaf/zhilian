@@ -338,7 +338,7 @@ async def test_get_question_detail_success(
     app.dependency_overrides[get_question_service] = lambda: mock_question_service
 
     fake_q = make_fake_question(user_id=mock_user.id)
-    mock_question_service.get_question_detail.return_value = fake_q
+    mock_question_service.get_question.return_value = fake_q
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/api/v1/questions/{fake_q.id}")
@@ -350,7 +350,7 @@ async def test_get_question_detail_success(
     assert data["difficulty"] == fake_q.difficulty
     assert data["status"] == fake_q.status
 
-    mock_question_service.get_question_detail.assert_called_once_with(
+    mock_question_service.get_question.assert_called_once_with(
         question_id=fake_q.id,
         user_id=mock_user.id,
     )
@@ -366,7 +366,7 @@ async def test_get_question_detail_not_found_40009(
     app.dependency_overrides[get_question_service] = lambda: mock_question_service
 
     q_id = uuid.uuid4()
-    mock_question_service.get_question_detail.side_effect = QuestionNotFoundError(
+    mock_question_service.get_question.side_effect = QuestionNotFoundError(
         "请求的题目不存在或无权访问"
     )
 
@@ -663,9 +663,7 @@ async def test_tenant_cross_access_isolation(
     app.dependency_overrides[get_question_service] = lambda: mock_question_service
 
     q_id = uuid.uuid4()
-    mock_question_service.get_question_detail.side_effect = PermissionDeniedError(
-        "无权访问非本人归属资源"
-    )
+    mock_question_service.get_question.side_effect = PermissionDeniedError("无权访问非本人归属资源")
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/api/v1/questions/{q_id}")
@@ -901,6 +899,7 @@ async def test_scoped_coach_routes_authorized_scope(
         folder_id=folder_id,
         material_id=None,
         knowledge_point_id=None,
+        thread_id=None,
     )
 
 
@@ -926,7 +925,94 @@ async def test_scoped_coach_rejects_ambiguous_scope(
     mock_question_service.ask_scoped_coach.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_scoped_coach_forwards_thread_id(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    from app.schemas.question import ScopedCoachResponse
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+    material_id = uuid.uuid4()
+    mock_question_service.ask_scoped_coach.return_value = ScopedCoachResponse(reply="好的")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(material_id),
+                "user_prompt": "那它的条件呢？",
+                "thread_id": "mat:abc",
+            },
+        )
+
+    assert response.status_code == 200
+    mock_question_service.ask_scoped_coach.assert_called_once_with(
+        user_id=mock_user.id,
+        user_prompt="那它的条件呢？",
+        folder_id=None,
+        material_id=material_id,
+        knowledge_point_id=None,
+        thread_id="mat:abc",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", ["", "x" * 129])
+async def test_scoped_coach_rejects_invalid_thread_id(
+    mock_user: User, mock_question_service: MagicMock, thread_id: str
+) -> None:
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(uuid.uuid4()),
+                "user_prompt": "问题",
+                "thread_id": thread_id,
+            },
+        )
+
+    assert response.status_code == 422
+    mock_question_service.ask_scoped_coach.assert_not_called()
+
+
 def test_default_dependency_provider() -> None:
     """Tests that default dependency provider raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="QuestionService 生产装配工厂尚未挂载"):
-        get_question_service()
+        next(get_question_service())
+
+
+@pytest.mark.asyncio
+async def test_validation_error_handler_serializes_model_validator_value_error(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Ensure Pydantic model_validator ValueError in ctx serializes as 422, not 500."""
+    from fastapi.exceptions import RequestValidationError
+
+    from app.main import validation_error_handler
+
+    app = create_test_app()
+    app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(uuid.uuid4()),
+                "knowledge_point_id": str(uuid.uuid4()),
+                "user_prompt": "你好呀",
+            },
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == 10001
+    assert payload["message"] == "请求参数校验失败"
+    mock_question_service.ask_scoped_coach.assert_not_called()

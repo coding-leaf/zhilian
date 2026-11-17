@@ -287,8 +287,11 @@ def test_align_overlap_sentence_boundary_branches() -> None:
 
     assert align_overlap_sentence_boundary("", 10) == ""
     assert align_overlap_sentence_boundary("文本", 0) == ""
-    assert align_overlap_sentence_boundary("纯无标点文本测试", 4) == "文本测试"
-    assert align_overlap_sentence_boundary("末尾句号标点测试。", 4) == "点测试。"
+    # 无完整句首可对齐时宁可无重叠，也不从半句开始（契约：RAG 碎片化治理）
+    assert align_overlap_sentence_boundary("纯无标点文本测试", 4) == ""
+    assert align_overlap_sentence_boundary("末尾句号标点测试。", 4) == ""
+    # 窗口内存在完整句首时，从句首开始
+    assert align_overlap_sentence_boundary("前文内容。完整句子。", 8) == "完整句子。"
 
     # Branch when aligned_overlap covers entire slice length
     ranges = split_paragraph_into_ranges("a" * 100, max_chars=20, overlap_chars=20)

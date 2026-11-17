@@ -11,7 +11,6 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
-from fastapi.concurrency import run_in_threadpool
 
 from app.api.deps.auth import get_auth_service, get_current_user
 from app.models.user import User
@@ -28,7 +27,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     status_code=status.HTTP_200_OK,
     summary="微信登录或自动注册",
 )
-async def login(
+def login(
     request: WechatLoginRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
@@ -41,8 +40,7 @@ async def login(
     Returns:
         TokenResponse: 包含 access_token 与 refresh_token 的响应对象。
     """
-    _, token_response = await run_in_threadpool(
-        auth_service.login_with_wechat,
+    _, token_response = auth_service.login_with_wechat(
         code=request.code,
         nickname=request.nickname,
         avatar_url=request.avatar_url,
@@ -56,7 +54,7 @@ async def login(
     status_code=status.HTTP_200_OK,
     summary="长效凭证刷新双令牌",
 )
-async def refresh(
+def refresh(
     request: RefreshTokenRequest,
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenResponse:
@@ -78,7 +76,7 @@ async def refresh(
     status_code=status.HTTP_200_OK,
     summary="主动吊销全端历史凭据",
 )
-async def revoke(
+def revoke(
     current_user: Annotated[User, Depends(get_current_user)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> UserActionResponse:

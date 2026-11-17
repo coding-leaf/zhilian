@@ -54,3 +54,10 @@ Toolchain notes:
   跑全量套件时 CPU 争用会让其中 2–4 个失败，**单独跑全部通过**。
   这是既有的测试设计问题，与你本次改动无关：**不要把它当成自己引入的回归去追，
   也不要为了让它变绿去放宽阈值**——那是把测试改到通过，不是修问题。
+
+## Trellis + Antigravity 协同规范 (Workflow & Subagents)
+
+- **`no_task` 调查约束与一次模型确认**：非简单问答时，不在任务确认前由主会话深入翻源码或查 Bug 撑爆上下文；先一次性确认「是否建 Trellis 任务 + 手动指明子代理 `model`」（确定一次后整场会话自动复用，不自作主张默认挑模型）；
+- **Phase 1 适度委派调研与文档约束**：1–2 个已知小文件可直接看，多文件排查、调用链追踪与查 Bug 优先委派研究子代理或只读 `Swarm` 落盘 `{TASK_DIR}/research/*.md`（主会话读摘要）；收敛 `prd.md`（复杂任务补齐 `design.md`、`implement.md` 与 `jsonl`）并在 `task.py start` 前确认执行方式（`Swarm` / `Subagent` / `Inline`）；
+- **Phase 2 自由编排与上下文自动注入**：按任务需要灵活选用 **原生 `Swarm`**（完全遵循内置 `swarm` 技能自由决定代理数量、多角色分工、`tasks`/`n` 分片池、多 Verifier、`#channel`、`monitor`、中途动态 `add`/`fork` 及 Worker 自招 Helper）、**`Subagent`**（`trellis-implement` -> `trellis-check`）或 **`Inline`**；`.agent/hooks.json` 自动向所有子代理与 Swarm 成员注入绝对路径工件与 `jsonl` 规范，子代理严禁修改 `.trellis/**` 或擅自 `git commit`/`push`，`share` 分支验证后合并回主工作区待提交；
+- **Phase 3 质量门禁与文档沉淀**：执行当前项目 `.trellis/spec/` 与上方 Quality Gates 约定的离线构建/Lint/测试质量门禁（`task verify`，即 `task verify-backend` + `task verify-frontend`，在宿主 Windows shell 直接执行勿走 WSL），通过 `trellis-update-spec` 将新经验/踩坑沉淀回 `.trellis/spec/`，再在主会话确认 `git commit`、执行 `/trellis-finish-work` 归档任务并记录会话日志。

@@ -366,3 +366,37 @@ def test_material_delete_response() -> None:
     assert resp.material_id == mat_id
     assert resp.is_deleted is True
     assert resp.permanent is False
+
+
+def test_material_detail_and_list_item_expose_optional_failure_fields() -> None:
+    """MaterialDetailResponse & MaterialListItem expose optional error_message/failed_stage."""
+    mat_id = uuid.uuid4()
+    now = datetime.now(UTC)
+
+    default_item = MaterialListItem(
+        id=mat_id,
+        title="默认资料.pdf",
+        file_format="pdf",
+        file_size=128,
+        source_type="local",
+        status="ready",
+        created_at=now,
+        updated_at=now,
+    )
+    assert default_item.error_message is None
+    assert default_item.failed_stage is None
+
+    failed_detail = MaterialDetailResponse(
+        id=mat_id,
+        title="失败资料.pdf",
+        file_format="pdf",
+        file_size=128,
+        source_type="local",
+        status="failed",
+        error_message="后台解析任务异常终止 (JobTimeoutException)，请重新解析",
+        failed_stage="worker_terminated",
+        created_at=now,
+        updated_at=now,
+    )
+    assert failed_detail.failed_stage == "worker_terminated"
+    assert "异常终止" in (failed_detail.error_message or "")

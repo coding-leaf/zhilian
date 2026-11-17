@@ -21,6 +21,7 @@ from app.integrations.llm.agent_graph import (
 from app.integrations.llm.factory import (
     create_llm_adapter,
     create_structured_agent_graph,
+    create_vlm_adapter,
 )
 from app.integrations.llm.fake import FakeLLMAdapter
 from app.integrations.llm.openai import OpenAICompatibleLLMAdapter
@@ -47,6 +48,7 @@ __all__ = [
     "call_model_node",
     "create_llm_adapter",
     "create_structured_agent_graph",
+    "create_vlm_adapter",
     "decide_after_validation",
     "fallback_node",
     "pydantic_to_tool_schema",

@@ -12,7 +12,6 @@ import re
 from collections.abc import Sequence
 from typing import Any, Literal, TypedDict, cast
 
-from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
@@ -57,7 +56,6 @@ def pydantic_to_tool_schema(
 
 def call_model_node(
     state: AgentWorkflowState,
-    config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """节点 1: 注入 Schema-as-Tool 配置并调用底层适配器生成结果。
 
@@ -65,7 +63,6 @@ def call_model_node(
 
     Args:
         state: 当前状态图上下文。
-        config: 可选 RunnableConfig。
 
     Returns:
         dict[str, Any]: 更新后的 raw_response 字段。
@@ -112,13 +109,11 @@ def call_model_node(
 
 def validate_output_node(
     state: AgentWorkflowState,
-    config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """节点 2: 优先解析 Tool Call 参数，兼容文本与 Markdown JSON 反序列化校验。
 
     Args:
         state: 当前状态图上下文。
-        config: 可选 RunnableConfig。
 
     Returns:
         dict[str, Any]: 校验成功或失败的状态更新字典。
@@ -190,13 +185,11 @@ def decide_after_validation(
 
 def repair_prompt_node(
     state: AgentWorkflowState,
-    config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """节点 3: 构造并追加自愈修复上下文提示词。
 
     Args:
         state: 当前状态图上下文。
-        config: 可选 RunnableConfig。
 
     Returns:
         dict[str, Any]: 递增 retry_count 与追加诊断提示词后的消息列表。
@@ -231,13 +224,11 @@ def repair_prompt_node(
 
 def fallback_node(
     state: AgentWorkflowState,
-    config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """节点 4: 记录最终失败状态，准备阻断或降级。
 
     Args:
         state: 当前状态图上下文。
-        config: 可选 RunnableConfig。
 
     Returns:
         dict[str, Any]: 置 status="failed"。
@@ -258,13 +249,12 @@ def build_structured_agent_graph(adapter: LLMProtocol | None = None) -> Any:
     # 包装 call_model_node 支持预绑 adapter
     def _call_model(
         state: AgentWorkflowState,
-        config: RunnableConfig | None = None,
     ) -> dict[str, Any]:
         if "adapter" not in state or state["adapter"] is None:
             if adapter is None:
                 raise ValueError("AgentWorkflowState 中未指定 adapter 且图未预绑 adapter")
             state["adapter"] = adapter
-        return call_model_node(state, config)
+        return call_model_node(state)
 
     workflow = StateGraph(AgentWorkflowState)
     workflow.add_node("call_model_node", _call_model)

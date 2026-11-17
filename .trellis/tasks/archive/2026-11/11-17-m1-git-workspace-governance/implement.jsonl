@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/01-git-and-workspace-audit.md", "reason": "Verified inventory of all 24 local/remote branches, 19 overlapping paths, 5f9fa5f file list, and workspace clutter targets"}
+{"file": ".trellis/tasks/11-17-repo-refactor-git-hygiene/research/04-cross-layer-and-synthesis.md", "reason": "Verified Track T1 execution boundaries and cross-layer quality gates"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Project engineering guides index and pre-modification grep discipline"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for verifying 5f9fa5f material statistics compatibility"}
+{"file": ".trellis/spec/backend/material-statistics.md", "reason": "Contract governing 5f9fa5f P1-4 profile learning statistics landed onto master"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend spec index for verifying profile statistics card integration on master"}

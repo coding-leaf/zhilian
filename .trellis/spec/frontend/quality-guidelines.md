@@ -370,8 +370,10 @@ export function computeKnowledgeCoverage(
 ```
 
 #### 3. Contracts
-- **目标题量取上界**：`target = max(uniqueKpCount, desiredCount)`，即「覆盖全部已选考点」优先于用户指定题量；UI 必须把题量调整**预先披露**（`generationNotice` / 计划题量提示），不静默加量。
-- **分批**：按 `MAX_QUESTION_BATCH = 20` 切块；每批 `count` 取 `min(20, max(chunk.length, share))`，保证每批考点数不超过题数。
+- **双模式目标题量**：
+  - **`smart_sample`（按题量智能抽考，默认）**：保留用户滑块设定 `desiredCount`（1~20），当 `selectedKpIds.length > desiredCount` 时由 `sampleKnowledgePointIds` 跨讲义均匀抽取 `desiredCount` 个代表考点作为 `effectiveKpIds`，覆盖率按本次目标抽样考点 `activeTargetKpIds` 核算。
+  - **`full_coverage`（全考点逐一覆盖）**：`target = max(uniqueKpCount, desiredCount)`，即「覆盖全部已选考点」优先于用户指定题量；UI 必须把题量调整**预先披露**（`generationNotice`），并在超过 `MAX_PRACTICE_QUESTIONS (50)` 时明确阻断提示。
+- **分批与翻页拉全**：目标考点数超出 `MAX_QUESTION_BATCH = 20` 时按 `planGenerationBatches` 顺序分批提交 `POST /questions/jobs`；结果拉取 `fetchBatchQuestions` 按 `page_size=100` 循环翻页拉全，禁止在 50 题处静默截断。
 - **覆盖以题目快照为准**：`computeKnowledgeCoverage` 只认题目实际携带的 `knowledge_point_id`；`missing.length > 0` 时 `canStart` 为假，必须先 `fillCoverageGap()` 补齐或调整考点。
 - **剔题后重算**：`remainingQuestions` 变化会驱动 `coverage` / `canStart` / `generationNotice` 重算；剔除到覆盖缺口时开始按钮自动禁用。
 - **失败/空结果不推进状态**：生成 0 道合格题时 toast 并保持原状态，不清空既有题目。
@@ -448,7 +450,9 @@ export function materialStatusText(material: MaterialState): string;
 - **门禁**：`canStartMaterialParse` 要求 `status === 'pending'` **且** `parse_status` 为空或 `'not_started'`——已排队（`queued`）的资料不得重复触发。
 - **进行中判定**：`isMaterialParsing` 先短路终态（`ready` / `failed` / `retake_required` 一律为假），否则 `status === 'parsing'` 或 `parse_status ∈ {queued, parsing_doc, ocr_processing, extracting_knowledge, auditing_knowledge, embedding_generation}`。
 - **文案**：`queued → '排队中'`，其余进行中 → `'解析中'`；终态映射为 `'已解析' / '解析失败' / '需要重拍'`，默认 `'待解析'`。
-- **轮询**：`materialStore.pollMaterialStatus(id, maxAttempts = 20, interval = 1500)`，命中 `ready` / `failed` / `retake_required` 即返回，超时抛 `'资料解析超时，请稍后刷新'`。**没有自适应退避，也没有 3 分钟熔断**——间隔固定 1500ms、最多 20 次。
+- **轮询**：
+  - `backgroundTaskStore.ensurePolling`：采用分阶段退避（前 48 轮 `2500ms` = 2 分钟，之后最多 157 轮 `5000ms` = +13 分钟，总覆盖 `>= 15` 分钟）；耗尽后把活跃资料任务标记为 `timedOut = true`（UI 暴露「刷新进度」按钮与 `refreshMaterialTask` 手动恢复），禁止静默停表假死。
+  - `materialStore.pollMaterialStatus(id, maxAttempts = 20, interval = 1500)`：短周期辅助轮询，命中 `ready` / `failed` / `retake_required` 即返回，超时抛 `'资料解析超时，请稍后刷新'`。
 - **触发点**：工作台卡片与课程详情页均可在 `canStartMaterialParse` 或 `status === 'failed'` 时按钮触发 `POST /materials/{id}/parse`。
 
 #### 4. Tests Required
@@ -605,8 +609,11 @@ module.exports = {
 
 ### 5. 组件挂载测试缺失
 
-`@vue/test-utils` 是 `devDependencies` 之一，但 `tests/` 下没有任何 `mount()` 调用；9 个 spec 全部是纯函数 / 适配器 / store 级测试。改动页面与组件行为时，请优先把逻辑抽到可测的纯函数（现有先例：`reportView.ts`、`reviewView.ts`、`api/adapters/*`、`utils/materialState.ts`、`utils/draftQueue.ts`、`utils/requestError.ts`）。
+`@vue/test-utils` 是 `devDependencies` 之一，但 `tests/` 下以纯函数 / 适配器 / composable / store 级测试为主（共 28 个 spec / 207 个用例，且 `tsconfig.test.json` 已纳入 `pnpm run type-check`）。改动页面与组件行为时，优先把状态与转换逻辑抽到可测模块（如 `richText.ts`、`loadingGuard.ts`、`useCoachChat.ts`、`backgroundTask.ts`、`courseStudy.ts`、`practiceSessionHelpers.ts`、`reviewView.ts`）。
 
-### 6. 占位页
+### 6. 小程序视觉层级、Loading 槽位与滚动盒模型铁律（2026-11-17 实测清零）
 
-`src/subpackages/material/pages/upload/index.vue` 是 32 行的静态占位页（`<script setup lang="ts">` 为空），已在 `pages.json` 注册但无实际功能；真实上传入口在工作台 `pages/index/index.vue::handleChooseFile`。
+1. **零毛玻璃（`0` `backdrop-filter`）与统一 `--z-*` 层级刻度**：全屏遮罩或高频切换底栏严禁使用 `backdrop-filter: blur(...)`（会导致背景糊屏与底栏切换闪烁）；全仓统一采用实色卡片（`var(--color-bg-card)`）+ 墨色半透明遮罩（`var(--color-scrim)`）+ `App.vue` 层级变量（`--z-sticky: 20`、`--z-bottom-bar: 40`、`--z-fab: 60`、`--z-sheet: 200`、`--z-coach: 300`、`--z-modal: 400`）。
+2. **严禁裸调 `uni.showLoading` / `uni.hideLoading`**：微信原生 `showLoading` 与 `showToast` 共用单实例槽位，裸调会引发「必须配对使用」告警并误关错误 Toast；全仓统一走 `src/utils/loadingGuard.ts::withBlockingLoading`（配合 `request.ts` 内置 `dismissBlockingLoading()`）。
+3. **自定义组件内嵌 `scroll-view` 必须开启 `virtualHost: true` 且 `scroll-view, textarea` 纳入 `box-sizing: border-box`**：否则 `mp-weixin` 宿主节点会截断 Flex 高度链导致抽屉列表无法纵向滚动，且带水平 `padding` 的 `width: 100%` `scroll-view` 会溢出裁切右侧气泡（见 `CoachMessageList.vue` 与 `App.vue`）。
+4. **TabBar 常驻页回访必须注册 `onShow`**：`pages/index`、`pages/review`、`pages/profile` 常驻内存，从报告页或子包返回时 `onMounted` 不重跑，列表与掌握度刷新必须挂在 `onShow` 且禁止静默吞错。

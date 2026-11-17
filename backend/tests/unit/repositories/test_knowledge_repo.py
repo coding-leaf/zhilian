@@ -70,47 +70,10 @@ def helper_setup(session: Session) -> dict[str, uuid.UUID]:
 class TestKnowledgeRepositoryCRUD:
     """Test suite for KnowledgeRepository CRUD operations."""
 
-    def test_create_and_get_knowledge_point(
+    def test_batch_create_and_get_knowledge_points(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:
-        """Verify creating and retrieving a single knowledge point."""
-        repo = KnowledgeRepository(session)
-        user_id = helper_setup["user_id"]
-        material_id = helper_setup["material_id"]
-        version_id = helper_setup["version_id"]
-
-        point = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="极限的定义",
-            description="微积分极限基本概念与数学定义",
-            level=1,
-            batch_id="batch_001",
-            is_low_confidence=False,
-        )
-        session.commit()
-
-        assert point.id is not None
-        assert point.user_id == user_id
-        assert point.name == "极限的定义"
-        assert point.level == 1
-        assert point.is_low_confidence is False
-
-        # Query using get_by_id and get_knowledge_point_by_id
-        fetched = repo.get_by_id(point.id, user_id)
-        assert fetched is not None
-        assert fetched.id == point.id
-        assert fetched.name == "极限的定义"
-
-        fetched_alias = repo.get_knowledge_point_by_id(point.id, user_id)
-        assert fetched_alias is not None
-        assert fetched_alias.id == point.id
-
-    def test_batch_create_knowledge_points(
-        self, session: Session, helper_setup: dict[str, uuid.UUID]
-    ) -> None:
-        """Verify batch creation of knowledge points via models and dicts."""
+        """Verify batch creation of knowledge points via models and dicts and get_by_id."""
         repo = KnowledgeRepository(session)
         user_id = helper_setup["user_id"]
         material_id = helper_setup["material_id"]
@@ -140,46 +103,43 @@ class TestKnowledgeRepositoryCRUD:
         assert created[1].name == "数列极限"
         assert created[1].user_id == user_id
 
-        # Also test create_knowledge_points alias
-        alias_points = [
-            KnowledgePoint(
-                user_id=user_id,
-                material_id=material_id,
-                version_id=version_id,
-                name="函数的连续性",
-                level=2,
-                batch_id="b1",
-            )
-        ]
-        created_alias = repo.create_knowledge_points(alias_points, user_id)
-        session.commit()
-        assert len(created_alias) == 1
+        fetched = repo.get_by_id(created[0].id, user_id)
+        assert fetched is not None
+        assert fetched.id == created[0].id
+        assert fetched.name == "函数与极限"
+
+        fetched_alias = repo.get_knowledge_point_by_id(created[0].id, user_id)
+        assert fetched_alias is not None
+        assert fetched_alias.id == created[0].id
 
     def test_list_and_get_by_version(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:
-        """Verify listing knowledge points by material, user, and version."""
+        """Verify listing knowledge points by material and version."""
         repo = KnowledgeRepository(session)
         user_id = helper_setup["user_id"]
         material_id = helper_setup["material_id"]
         version_id = helper_setup["version_id"]
 
         # Insert points at level 2 then level 1
-        p2 = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="导数的几何意义",
-            level=2,
-            batch_id="b1",
-        )
-        p1 = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="导数与微分",
-            level=1,
-            batch_id="b1",
+        p2, p1 = repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "导数的几何意义",
+                    "level": 2,
+                    "batch_id": "b1",
+                },
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "导数与微分",
+                    "level": 1,
+                    "batch_id": "b1",
+                },
+            ],
+            user_id,
         )
         session.commit()
 
@@ -192,9 +152,6 @@ class TestKnowledgeRepositoryCRUD:
         assert len(by_ver) == 2
         assert by_ver[0].id == p1.id
         assert by_ver[1].id == p2.id
-
-        by_usr = repo.list_by_user_id(user_id, limit=10)
-        assert len(by_usr) == 2
 
     def test_list_all_by_user_id_aggregates_across_materials(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
@@ -243,37 +200,43 @@ class TestKnowledgeRepositoryCRUD:
         session.add_all([other_material, other_version])
         session.commit()
 
-        repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="A-1",
-            level=2,
-            batch_id="b",
+        repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "A-1",
+                    "level": 2,
+                    "batch_id": "b",
+                },
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "A-2",
+                    "level": 1,
+                    "batch_id": "b",
+                },
+                {
+                    "material_id": material_b.id,
+                    "version_id": version_b.id,
+                    "name": "B-1",
+                    "level": 1,
+                    "batch_id": "b",
+                },
+            ],
+            user_id,
         )
-        repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="A-2",
-            level=1,
-            batch_id="b",
-        )
-        repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_b.id,
-            version_id=version_b.id,
-            name="B-1",
-            level=1,
-            batch_id="b",
-        )
-        repo.create_knowledge_point(
-            user_id=other_user_id,
-            material_id=other_material.id,
-            version_id=other_version.id,
-            name="OTHER",
-            level=1,
-            batch_id="b",
+        repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": other_material.id,
+                    "version_id": other_version.id,
+                    "name": "OTHER",
+                    "level": 1,
+                    "batch_id": "b",
+                }
+            ],
+            other_user_id,
         )
         session.commit()
 
@@ -285,92 +248,39 @@ class TestKnowledgeRepositoryCRUD:
         assert points[0].level == 1
         assert points[-1].level == 2
 
-    def test_update_knowledge_point(
-        self, session: Session, helper_setup: dict[str, uuid.UUID]
-    ) -> None:
-        """Verify updating attributes of a knowledge point."""
+    def test_delete_by_version(self, session: Session, helper_setup: dict[str, uuid.UUID]) -> None:
+        """Verify delete_knowledge_points_by_version."""
         repo = KnowledgeRepository(session)
         user_id = helper_setup["user_id"]
         material_id = helper_setup["material_id"]
         version_id = helper_setup["version_id"]
 
-        point = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="原始名称",
-            description="原始描述",
-            level=1,
-            batch_id="b1",
-        )
-        session.commit()
-
-        updated = repo.update_knowledge_point(
-            point.id,
+        created = repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "待删除点1",
+                    "level": 1,
+                    "batch_id": "b1",
+                },
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "待删除点2",
+                    "level": 1,
+                    "batch_id": "b1",
+                },
+            ],
             user_id,
-            name="更新名称",
-            description="更新描述",
-            is_low_confidence=True,
         )
         session.commit()
+        p1_id, p2_id = created[0].id, created[1].id
 
-        assert updated is not None
-        assert updated.name == "更新名称"
-        assert updated.description == "更新描述"
-        assert updated.is_low_confidence is True
-
-    def test_delete_operations(self, session: Session, helper_setup: dict[str, uuid.UUID]) -> None:
-        """Verify delete_by_id, delete by version, and soft_delete_by_material_id."""
-        repo = KnowledgeRepository(session)
-        user_id = helper_setup["user_id"]
-        material_id = helper_setup["material_id"]
-        version_id = helper_setup["version_id"]
-
-        p1 = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="待删除点1",
-            level=1,
-            batch_id="b1",
-        )
-        p2 = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="待删除点2",
-            level=1,
-            batch_id="b1",
-        )
-        session.commit()
-
-        p1_id = p1.id
-        p2_id = p2.id
-
-        # Delete single point
-        assert repo.delete_by_id(p1_id, user_id) is True
-        assert repo.get_by_id(p1_id, user_id) is None
-        assert repo.delete_by_id(p1_id, user_id) is False
-
-        # Delete by version
         deleted_count = repo.delete_knowledge_points_by_version(material_id, version_id, user_id)
-        assert deleted_count == 1
+        assert deleted_count == 2
+        assert repo.get_by_id(p1_id, user_id) is None
         assert repo.get_by_id(p2_id, user_id) is None
-
-        # Re-create and test soft_delete_by_material_id
-        p3 = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="待删除点3",
-            level=1,
-            batch_id="b1",
-        )
-        session.commit()
-        p3_id = p3.id
-        soft_deleted = repo.soft_delete_by_material_id(material_id, user_id)
-        assert soft_deleted == 1
-        assert repo.get_by_id(p3_id, user_id) is None
 
 
 class TestKnowledgeRepositoryTraceability:
@@ -411,13 +321,17 @@ class TestKnowledgeRepositoryTraceability:
         session.add_all([s1, s2])
 
         # Create knowledge point
-        kp = repo.create_knowledge_point(
-            user_id=user_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="核心概念",
-            level=1,
-            batch_id="b1",
+        [kp] = repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "核心概念",
+                    "level": 1,
+                    "batch_id": "b1",
+                }
+            ],
+            user_id,
         )
         session.commit()
 
@@ -429,28 +343,16 @@ class TestKnowledgeRepositoryTraceability:
         repo.create_material_relations(relations, user_id)
         session.commit()
 
-        # Test alias create_knowledge_point_snippets
-        repo.create_knowledge_point_snippets([], user_id)
-        session.commit()
-
         # Query snippets for point
         snippets = repo.get_snippets_for_point(kp.id, user_id)
         assert len(snippets) == 2
         assert snippets[0].id == s1.id
         assert snippets[1].id == s2.id
 
-        # Alias query
-        alias_snippets = repo.get_snippets_by_knowledge_point(kp.id, user_id)
-        assert len(alias_snippets) == 2
-
         # Query points for snippet
         points_for_s1 = repo.get_points_for_snippet(s1.id, user_id)
         assert len(points_for_s1) == 1
         assert points_for_s1[0].id == kp.id
-
-        alias_points_for_s2 = repo.get_knowledge_points_by_snippet(s2.id, user_id)
-        assert len(alias_points_for_s2) == 1
-        assert alias_points_for_s2[0].id == kp.id
 
 
 class TestKnowledgeRepositoryMultiTenantIsolation:
@@ -467,13 +369,17 @@ class TestKnowledgeRepositoryMultiTenantIsolation:
         version_id = helper_setup["version_id"]
 
         # Owner creates point
-        point = repo.create_knowledge_point(
-            user_id=owner_id,
-            material_id=material_id,
-            version_id=version_id,
-            name="私有考点",
-            level=1,
-            batch_id="b1",
+        [point] = repo.batch_create_knowledge_points(
+            [
+                {
+                    "material_id": material_id,
+                    "version_id": version_id,
+                    "name": "私有考点",
+                    "level": 1,
+                    "batch_id": "b1",
+                }
+            ],
+            owner_id,
         )
         snippet = MaterialSnippet(
             id=uuid.uuid4(),
@@ -500,25 +406,15 @@ class TestKnowledgeRepositoryMultiTenantIsolation:
 
         # Attacker cannot list
         assert repo.list_by_material_id(material_id, attacker_id) == []
-        assert repo.list_by_user_id(attacker_id) == []
+        assert repo.list_all_by_user_id(attacker_id) == []
         assert repo.get_knowledge_points_by_version(material_id, version_id, attacker_id) == []
-
-        # Attacker cannot update
-        assert repo.update_knowledge_point(point.id, attacker_id, name="越权篡改") is None
-        refreshed = repo.get_by_id(point.id, owner_id)
-        assert refreshed is not None
-        assert refreshed.name == "私有考点"
 
         # Attacker cannot query relations
         assert repo.get_snippets_for_point(point.id, attacker_id) == []
-        assert repo.get_snippets_by_knowledge_point(point.id, attacker_id) == []
         assert repo.get_points_for_snippet(snippet.id, attacker_id) == []
-        assert repo.get_knowledge_points_by_snippet(snippet.id, attacker_id) == []
 
         # Attacker cannot delete
-        assert repo.delete_by_id(point.id, attacker_id) is False
         assert repo.delete_knowledge_points_by_version(material_id, version_id, attacker_id) == 0
-        assert repo.soft_delete_by_material_id(material_id, attacker_id) == 0
 
         # Point still exists for owner
         assert repo.get_by_id(point.id, owner_id) is not None

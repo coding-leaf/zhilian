@@ -36,7 +36,6 @@ from app.schemas.grading import (
     SelfEvaluateResponse,
 )
 from app.schemas.practice import (
-    AttemptItemDetailResponse,
     PracticeCreateRequest,
     PracticeCreateResponse,
     PracticeDetailResponse,
@@ -266,9 +265,6 @@ def test_practice_item_detail_response_and_aliases() -> None:
     assert resp_reverse.attempt_item_id == item_id
     assert resp_reverse.time_spent_seconds == 40
     assert resp_reverse.status == "answered"
-
-    # 别名类一致性检验
-    assert AttemptItemDetailResponse is PracticeItemDetailResponse
 
 
 # ==============================================================================
@@ -666,9 +662,9 @@ def test_grading_record_dto_and_detail_response() -> None:
 def test_practice_and_grading_dependencies_raise_not_implemented() -> None:
     """测试依赖注入桩函数在未覆盖时正确抛出 NotImplementedError。"""
     with pytest.raises(NotImplementedError) as exc_practice:
-        get_practice_service()
+        next(get_practice_service())
     assert "PracticeService" in str(exc_practice.value)
 
     with pytest.raises(NotImplementedError) as exc_grading:
-        get_grading_service()
+        next(get_grading_service())
     assert "GradingService" in str(exc_grading.value)

@@ -40,13 +40,16 @@ def offline_default_providers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     单独测试可通过在用例内 `monkeypatch.setenv` 覆写具体键来做真实链路断言。
     """
     defaults = {
+        "ZHILIAN_DB__DB_URL": "sqlite:///:memory:",
         "ZHILIAN_LLM__PROVIDER": "fake",
         "ZHILIAN_OCR__PROVIDER": "fake",
         "ZHILIAN_EMBEDDING__PROVIDER": "fake",
         "ZHILIAN_SEARCH__PROVIDER": "fake",
         "ZHILIAN_STORAGE__PROVIDER": "memory",
+        "ZHILIAN_STORAGE__ENDPOINT_URL": "",
         "ZHILIAN_QUEUE__PROVIDER": "memory",
         "ZHILIAN_IDEMPOTENCY__PROVIDER": "memory",
+        "ZHILIAN_REDIS__REDIS_URL": "redis://127.0.0.1:6399/0",
     }
     for key, value in defaults.items():
         monkeypatch.setenv(key, value)
