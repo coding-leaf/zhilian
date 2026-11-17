@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/prd.md", "reason": "Task requirements and acceptance criteria"}
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/design.md", "reason": "Technical architecture and design across backend and frontend"}
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/implement.md", "reason": "Workstream plan and Swarm execution checklist"}
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/research/rag-pdf-fragmentation-and-formulas.md", "reason": "Root-cause diagnosis of snippet fragmentation, broken math, and search bottlenecks"}
+{"file": ".trellis/tasks/11-17-rag-vlm-rerank-langgraph/research/integration-boundaries.md", "reason": "Verified config, ProviderRegistry, import-linter, pgvector, /coach/ask, and richText.ts boundaries"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "6 import-linter contracts, sync def route rule, and AppContainer wiring"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLAlchemy session, Alembic head consistency, and query rules"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError hierarchy and graceful degradation conventions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend ruff, mypy strict, lint-imports, and pytest baseline"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Sanitized logging rules (never log prompts, snippets, or secrets)"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture and quality baseline"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend lint, vue-tsc, vitest, and build conventions"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer schema/API alignment for thread_id and coach sources"}
