@@ -16,9 +16,9 @@
 
 - **零冗余第三方 UI 库**：已彻底清退未使用的 `wot-design-uni`、`unocss` 与 `prettier` 插件；全部页面与组件采用自定义 `.vue` SFC + `src/styles/{tokens,modal,common}.scss` 与 `App.vue` `--color-*` 设计 Token（业务 CSS 规则零裸 Hex、零 Emoji、固定底栏全量适配 `env(safe-area-inset-bottom)`）。
 - **按域模块化类型与 API**：`src/types/` 与 `src/api/modules/` 按业务域（auth/folder/material/knowledge/question/practice/diagnosis/wrong）拆分，由 `src/types/index.ts` 与 `src/api/index.ts` 提供轻量 barrel 聚合导出。
-- **跨页共享底座**：`src/components/` 包含 `AiCoachDrawer.vue`、`CoachMessageList.vue`（`virtualHost: true` + `compact` 紧凑排版 + 上下文隔离）、`RichContent.vue`（零外部依赖富文本/公式 AST 渲染）与 `BackgroundTaskBar.vue`（全局非阻塞后台任务条）。
+- **跨页共享底座**：`src/components/` 包含 `AiCoachDrawer.vue`、`CoachMessageList.vue`（`virtualHost: true` + `compact` 紧凑排版 + 上下文隔离）、`RichContent.vue`（零外部依赖富文本/公式/表格 AST 渲染，支持 LaTeX 矩阵/分段环境与 GFM 管道表格）与 `BackgroundTaskBar.vue`（全局非阻塞后台任务条）。
 - 全局状态为 **6 个 Pinia store**：`auth` / `material` / `folder` / `practice` / `diagnosis` / `backgroundTask`。
-- **单元测试与类型全覆盖**：共 **28 个 spec 文件 / 211 个用例**（全部位于 `miniprogram/tests/`），且通过 `tsconfig.test.json` 纳入 `pnpm run type-check` 静态类型检查。
+- **单元测试与类型全覆盖**：共 **28 个 spec 文件 / 239 个用例**（全部位于 `miniprogram/tests/`），且通过 `tsconfig.test.json` 纳入 `pnpm run type-check` 静态类型检查。
 
 ---
 

@@ -25,7 +25,7 @@ app.core（基础：配置/异常/安全/纯算法，不依赖任何上层）
 - 业务规则与事务边界在 `app.services`。
 - 数据访问在 `app.repositories`。
 - 声明式 ORM 模型与迁移在 `app.models` / `backend/migrations`。
-- 第三方能力（LLM/OCR/Embedding/Search/Storage/Queue/Idempotency）以 Protocol + Factory 形态封装在 `app.integrations`。
+- 第三方能力（LLM/OCR/Embedding/Search/Rerank/Storage/Queue/Idempotency）以 Protocol + Factory 形态封装在 `app.integrations`。
 - 配置、异常、安全、纯算法在 `app.core`（其中 `app.core.algorithms` 为无 IO 纯函数核）。
 
 ---
@@ -55,7 +55,7 @@ backend/
 │   │   ├── logging.py / idempotency.py / question_types.py / extractors.py # 公共指标、幂等键、题型枚举、PDF/OOXML 解析核
 │   │   └── algorithms/             # 纯算法核（chunking/search/grading/question_quality/knowledge_tree/...）
 │   ├── integrations/               # 第三方适配器（Protocol + Fake + 生产实现 + factory + _http_retry.py）
-│   │   ├── llm/ embedding/ search/ storage/ queue/ idempotency/ ocr/
+│   │   ├── llm/ embedding/ search/ rerank/ storage/ queue/ idempotency/ ocr/
 │   │   └── container.py            # ProviderRegistry
 │   ├── models/                     # SQLAlchemy 声明式模型（material/knowledge/question/practice/user/base）
 │   ├── repositories/               # 数据访问（每领域一文件，唯一允许执行 SQLAlchemy select/delete 的层）
