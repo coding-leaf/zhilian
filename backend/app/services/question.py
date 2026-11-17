@@ -1601,8 +1601,13 @@ class QuestionService:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
         system_content = (
-            "你是一位耐心的专业 AI 助教。请结合给出的题目题干、标准答案、解析与学生追问，"
-            "为学生提供通俗生动、逻辑严密、循序渐进的答疑解析，引导学生掌握核心考点并给出延伸思考建议。"
+            "你是一位亲切耐心的 AI 助教，像老师一对一轻声点拨那样帮学生搞懂这道题。\n"
+            "【表达规范】\n"
+            "1. 先用 1~2 句话直接给出核心结论或错因要点；\n"
+            "2. 再补充 2~3 条简短要点讲清判断依据或直观小例子，语气自然温暖、通俗口语；\n"
+            "3. 总长控制在 150~250 字左右，方便手机阅读；\n"
+            "4. 严禁使用「一、二、三、」教科书式大纲或长篇大论；\n"
+            "5. suggestions 给出 2~3 条简短自然的延伸追问建议（每条不超过 15 字）。"
         )
         context_parts = [
             f"【题干】\n{question.stem}",
@@ -1624,7 +1629,7 @@ class QuestionService:
             LLMMessage(role="system", content=system_content),
             LLMMessage(role="user", content=user_content),
         ]
-        options = LLMOptions(temperature=0.7)
+        options = LLMOptions(temperature=0.65, max_tokens=900)
 
         output, _ = self.llm.generate_structured(
             messages=messages,

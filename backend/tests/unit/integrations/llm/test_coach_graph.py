@@ -141,3 +141,40 @@ def test_coach_excludes_stale_versions_from_evidence() -> None:
     assert cited == [current]
     assert search.search.call_args.kwargs["version_id"] == current.version_id
     assert str(stale.snippet_id) not in str(llm.generate_structured.call_args)
+
+
+def test_coach_graph_uses_conversational_prompt_and_bounded_options() -> None:
+    material_id = uuid.uuid4()
+    item = candidate(material_id)
+    search = FakeSearchAdapter()
+    search.set_canned_candidates([item])
+    llm = MagicMock()
+    llm.generate_structured.return_value = (
+        CoachDraft(
+            reply="核心结论：该机制用于降维。",
+            suggestions=["举个例子？"],
+            citation_ids=[item.snippet_id],
+        ),
+        MagicMock(),
+    )
+
+    answer, _ = answer_with_course_evidence(
+        search=search,
+        llm=llm,
+        query="什么是主成分分析？",
+        user_id=uuid.uuid4(),
+        material_ids=(material_id,),
+    )
+
+    assert answer is not None
+    call_kwargs = llm.generate_structured.call_args.kwargs
+    messages = call_kwargs["messages"]
+    options = call_kwargs["options"]
+    system_prompt = messages[0].content
+    assert "citation_ids" in system_prompt
+    assert "150~260" in system_prompt
+    assert "一、二、三、" in system_prompt
+    assert options.temperature == 0.45
+    assert options.max_tokens == 900
+    reply_desc = CoachDraft.model_fields["reply"].description or ""
+    assert "150-260" in reply_desc

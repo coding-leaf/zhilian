@@ -333,6 +333,8 @@ async def test_get_material_detail_success(
     assert payload["versions_count"] == 1
     assert "parse_status" in payload
     assert "progress_percentage" in payload
+    assert payload["error_message"] is None
+    assert payload["failed_stage"] is None
 
     mock_material_service.get_material_detail.assert_called_once_with(
         material_id=material_id,
@@ -447,6 +449,8 @@ async def test_list_materials_success(mock_user: User, mock_material_service: Ma
     assert len(data["items"]) == 2
     assert data["items"][0]["id"] == str(m1.id)
     assert data["items"][0]["title"] == "高等数学讲义.pdf"
+    assert data["items"][0]["error_message"] is None
+    assert data["items"][0]["failed_stage"] is None
     assert data["items"][1]["id"] == str(m2.id)
 
     mock_material_service.list_materials.assert_called_once_with(

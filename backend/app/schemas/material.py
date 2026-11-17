@@ -94,6 +94,8 @@ class MaterialDetailResponse(BaseModel):
     versions_count: int = Field(default=0, ge=0, description="关联历史版本总数")
     key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
     page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
+    error_message: str | None = Field(default=None, description="最近一次解析失败原因摘要")
+    failed_stage: str | None = Field(default=None, description="最近一次解析失败阶段标识")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 
@@ -121,6 +123,8 @@ class MaterialListItem(BaseModel):
     )
     key_points_count: int | None = Field(default=None, ge=0, description="当前激活版本考点总数")
     page_count: int | None = Field(default=None, ge=0, description="当前激活版本 OCR 总页数")
+    error_message: str | None = Field(default=None, description="最近一次解析失败原因摘要")
+    failed_stage: str | None = Field(default=None, description="最近一次解析失败阶段标识")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="最后更新时间")
 

@@ -15,8 +15,14 @@ from app.integrations.search.protocol import (
 
 
 class CoachDraft(BaseModel):
-    reply: str = Field(min_length=1)
-    suggestions: list[str] = Field(default_factory=list)
+    reply: str = Field(
+        min_length=1,
+        description="精炼、口语化的助教答疑回复（约150-260字，先结论后2-3条简短要点，不用大纲编号）",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-3条简短口语化的追问建议（每条不超过15字）",
+    )
     citation_ids: list[uuid.UUID] = Field(min_length=1)
 
 
@@ -85,8 +91,16 @@ def build_coach_graph(search: SearchProtocol, llm: LLMProtocol) -> Any:
                 LLMMessage(
                     role="system",
                     content=(
-                        "你是课程助教。只根据给定资料回答，不足以回答就明确说明。"
-                        "citation_ids 只能选给定切片 ID，不得编造来源。"
+                        "你是亲切耐心的课程助教，像真人学长/老师一对一聊天那样为学生点拨答疑。\n"
+                        "【事实底线】只根据给定资料回答，资料不足以回答时坦诚说明；"
+                        "citation_ids 只能从给定切片 ID 中选择，严禁编造或改写来源。\n"
+                        "【表达规范】\n"
+                        "1. 先用 1~2 句话直接给出核心结论；\n"
+                        "2. 再补充 2~3 条简短要点（条件、原因或小例子），"
+                        "口语自然、有温度；\n"
+                        "3. 总长控制在 150~260 字左右，方便手机小屏阅读；\n"
+                        "4. 严禁使用「一、二、三、」教科书式大纲，严禁机械照搬大段讲义原文；\n"
+                        "5. suggestions 给出 2~3 条简短自然的追问建议（每条不超过 15 字）。"
                     ),
                 ),
                 LLMMessage(
@@ -95,7 +109,7 @@ def build_coach_graph(search: SearchProtocol, llm: LLMProtocol) -> Any:
                 ),
             ],
             response_model=CoachDraft,
-            options=LLMOptions(temperature=0.2),
+            options=LLMOptions(temperature=0.45, max_tokens=900),
         )
         return {"answer": answer}
 

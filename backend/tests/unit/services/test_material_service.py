@@ -1390,11 +1390,15 @@ def test_parse_pipeline_knowledge_chaining(
         user_id=user_id,
     )
 
-    mock_knowledge_service.extract_and_build_knowledge_tree.assert_called_once_with(
-        material_id=mat.id,
-        version_id=ver.id,
-        user_id=user_id,
-    )
+    mock_knowledge_service.extract_and_build_knowledge_tree.assert_called_once()
+    call_kwargs = mock_knowledge_service.extract_and_build_knowledge_tree.call_args.kwargs
+    assert call_kwargs["material_id"] == mat.id
+    assert call_kwargs["version_id"] == ver.id
+    assert call_kwargs["user_id"] == user_id
+    assert call_kwargs["replace_snippets"] is True
+    assert call_kwargs["defer_commit"] is True
+    assert len(call_kwargs["snippets"]) >= 1
+    assert callable(call_kwargs["on_progress"])
     assert res_version.parse_status == ParseStatus.READY.value
     updated_mat = service.repo.get_material_by_id(mat.id, user_id)
     assert updated_mat is not None
@@ -1462,3 +1466,460 @@ def test_parse_pipeline_knowledge_chaining(
     assert ver3.storage_key != ver2.storage_key
     assert ver3.parse_status == ParseStatus.NOT_STARTED.value
     assert mat3.status == MaterialStatus.PENDING.value
+
+
+def test_parse_progress_advances_smoothly_across_batches_and_stages(
+    session: Session,
+    storage: MemoryStorageAdapter,
+    ocr: FakeOCRAdapter,
+    embedding: FakeEmbeddingAdapter,
+    queue: MemoryQueueAdapter,
+    idempotency: MemoryIdempotencyAdapter,
+) -> None:
+    """Multi-batch knowledge extraction emits live progress between 55% and 90%."""
+    from collections.abc import Sequence
+    from typing import TypeVar
+
+    from pydantic import BaseModel
+
+    from app.integrations.llm.protocol import (
+        LLMMessage,
+        LLMOptions,
+        LLMProtocol,
+        LLMResponse,
+        LLMUsage,
+    )
+    from app.services.knowledge import (
+        ExtractedKnowledgeItem,
+        KnowledgeExtractionOutput,
+        KnowledgeService,
+    )
+
+    T = TypeVar("T", bound=BaseModel)
+
+    class _MultiBatchLLM(LLMProtocol):
+        def __init__(self, srv: MaterialService, mat_id: uuid.UUID, uid: uuid.UUID) -> None:
+            self.srv = srv
+            self.mat_id = mat_id
+            self.uid = uid
+            self.observed_progress: list[int] = []
+            self.call_idx = 0
+
+        def generate(
+            self,
+            messages: Sequence[LLMMessage],
+            options: LLMOptions | None = None,
+        ) -> LLMResponse:
+            raise NotImplementedError
+
+        def generate_structured(
+            self,
+            messages: Sequence[LLMMessage],
+            response_model: type[T],
+            options: LLMOptions | None = None,
+        ) -> tuple[T, LLMResponse]:
+            detail = self.srv.get_material_detail(material_id=self.mat_id, user_id=self.uid)
+            if detail.progress_percentage is not None:
+                self.observed_progress.append(detail.progress_percentage)
+            self.call_idx += 1
+            output = KnowledgeExtractionOutput(
+                knowledge_points=[
+                    ExtractedKnowledgeItem(
+                        temp_id=f"kp_{self.call_idx}_1",
+                        name=f"核心知识点{self.call_idx}甲",
+                        description="知识点描述甲",
+                        level=1,
+                        chapter_title="第一章",
+                        source_snippet_indices=[0],
+                    ),
+                    ExtractedKnowledgeItem(
+                        temp_id=f"kp_{self.call_idx}_2",
+                        parent_temp_id=f"kp_{self.call_idx}_1",
+                        name=f"核心知识点{self.call_idx}乙",
+                        description="知识点描述乙",
+                        level=2,
+                        chapter_title="第一章",
+                        source_snippet_indices=[1],
+                    ),
+                    ExtractedKnowledgeItem(
+                        temp_id=f"kp_{self.call_idx}_3",
+                        parent_temp_id=f"kp_{self.call_idx}_2",
+                        name=f"核心知识点{self.call_idx}丙",
+                        description="知识点描述丙",
+                        level=3,
+                        chapter_title="第一章",
+                        source_snippet_indices=[2],
+                    ),
+                ]
+            )
+            return response_model.model_validate(output.model_dump()), LLMResponse(
+                content="{}", model="stub", usage=LLMUsage()
+            )
+
+    user_id = uuid.uuid4()
+    paragraphs = [f"第{i}段 线性代数矩阵变换与特征值分解定理的推导过程。" * 15 for i in range(12)]
+    content = "\n\n".join(paragraphs).encode("utf-8")
+
+    svc = MaterialService(
+        session=session,
+        storage_adapter=storage,
+        ocr_adapter=ocr,
+        embedding_adapter=embedding,
+        queue_adapter=queue,
+        idempotency_adapter=idempotency,
+    )
+    mat, ver = svc.create_material(
+        user_id=user_id,
+        title="线性代数.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    stub_llm = _MultiBatchLLM(svc, mat.id, user_id)
+    ks = KnowledgeService(session=session, llm=stub_llm, embedding=embedding)
+    svc.knowledge_service = ks
+
+    # Force small batch_size=3 so _run_extraction_with_retries loops over multiple batches
+    original_extract = ks.extract_and_build_knowledge_tree
+
+    def _small_batch_extract(**kwargs: object) -> object:
+        kwargs["batch_size"] = 3
+        return original_extract(**kwargs)  # type: ignore[arg-type]
+
+    ks.extract_and_build_knowledge_tree = _small_batch_extract  # type: ignore[method-assign]
+
+    ready_ver = svc.parse_material_pipeline(
+        material_id=mat.id,
+        version_id=ver.id,
+        user_id=user_id,
+    )
+    assert ready_ver.parse_status == ParseStatus.READY.value
+    # First batch sees 55, subsequent batches see monotonic increases > 55
+    assert stub_llm.observed_progress[0] == 55
+    assert any(p > 55 for p in stub_llm.observed_progress)
+    assert stub_llm.observed_progress == sorted(stub_llm.observed_progress)
+
+    final_detail = svc.get_material_detail(material_id=mat.id, user_id=user_id)
+    assert final_detail.progress_percentage == 100
+    assert (
+        MaterialService._calculate_progress_percentage(ParseStatus.EMBEDDING_GENERATION.value) == 45
+    )
+    assert (
+        MaterialService._calculate_progress_percentage(ParseStatus.AUDITING_KNOWLEDGE.value) == 90
+    )
+
+
+def test_force_reparse_preserves_existing_data_on_failure_and_replaces_on_success(
+    session: Session,
+    storage: MemoryStorageAdapter,
+    ocr: FakeOCRAdapter,
+    embedding: FakeEmbeddingAdapter,
+    queue: MemoryQueueAdapter,
+    idempotency: MemoryIdempotencyAdapter,
+) -> None:
+    """force=True re-parse keeps old snippets/KPs/questions intact if fetch/embedding/LLM fails."""
+    from collections.abc import Sequence
+    from typing import TypeVar
+
+    from pydantic import BaseModel
+
+    from app.integrations.llm.protocol import (
+        LLMMessage,
+        LLMOptions,
+        LLMProtocol,
+        LLMResponse,
+        LLMUsage,
+    )
+    from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
+    from app.models.material import MaterialSnippet
+    from app.models.question import Question, QuestionType
+    from app.services.knowledge import (
+        ExtractedKnowledgeItem,
+        KnowledgeExtractionOutput,
+        KnowledgeService,
+    )
+
+    T = TypeVar("T", bound=BaseModel)
+
+    class _ToggleLLM(LLMProtocol):
+        def __init__(self) -> None:
+            self.should_fail = False
+            self.label = "旧版"
+
+        def generate(
+            self,
+            messages: Sequence[LLMMessage],
+            options: LLMOptions | None = None,
+        ) -> LLMResponse:
+            raise NotImplementedError
+
+        def generate_structured(
+            self,
+            messages: Sequence[LLMMessage],
+            response_model: type[T],
+            options: LLMOptions | None = None,
+        ) -> tuple[T, LLMResponse]:
+            if self.should_fail:
+                raise RuntimeError("LLM extraction timeout")
+            output = KnowledgeExtractionOutput(
+                knowledge_points=[
+                    ExtractedKnowledgeItem(
+                        temp_id="kp_1",
+                        name=f"{self.label}核心概念",
+                        description="描述一",
+                        level=1,
+                        chapter_title="第一章",
+                        source_snippet_indices=[0],
+                    ),
+                    ExtractedKnowledgeItem(
+                        temp_id="kp_2",
+                        parent_temp_id="kp_1",
+                        name=f"{self.label}派生性质",
+                        description="描述二",
+                        level=2,
+                        chapter_title="第一章",
+                        source_snippet_indices=[0],
+                    ),
+                    ExtractedKnowledgeItem(
+                        temp_id="kp_3",
+                        parent_temp_id="kp_2",
+                        name=f"{self.label}应用边界",
+                        description="描述三",
+                        level=3,
+                        chapter_title="第一章",
+                        source_snippet_indices=[0],
+                    ),
+                ]
+            )
+            return response_model.model_validate(output.model_dump()), LLMResponse(
+                content="{}", model="stub", usage=LLMUsage()
+            )
+
+    user_id = uuid.uuid4()
+    llm = _ToggleLLM()
+    svc = MaterialService(
+        session=session,
+        storage_adapter=storage,
+        ocr_adapter=ocr,
+        embedding_adapter=embedding,
+        queue_adapter=queue,
+        idempotency_adapter=idempotency,
+        knowledge_service=KnowledgeService(session=session, llm=llm, embedding=embedding),
+    )
+
+    content = ("第一章 矩阵分解\n\n" + "奇异值分解在降维算法中有重要应用。" * 20).encode("utf-8")
+    mat, ver = svc.create_material(
+        user_id=user_id,
+        title="降维算法.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    svc.parse_material_pipeline(material_id=mat.id, version_id=ver.id, user_id=user_id)
+
+    old_kps = session.query(KnowledgePoint).filter_by(version_id=ver.id).all()
+    old_snippets = session.query(MaterialSnippet).filter_by(version_id=ver.id).all()
+    assert len(old_kps) == 3
+    assert len(old_snippets) >= 1
+
+    # Seed an existing Question referencing an old KP to verify cascade doesn't fire on failure
+    question = Question(
+        user_id=user_id,
+        material_id=mat.id,
+        version_id=ver.id,
+        knowledge_point_id=old_kps[0].id,
+        question_type=QuestionType.SINGLE_CHOICE.value,
+        stem="关于降维算法的说法正确的是？",
+        answer="A",
+        difficulty=2,
+    )
+    session.add(question)
+    session.commit()
+
+    # 1. Fail during LLM knowledge extraction on force=True re-parse
+    llm.should_fail = True
+    with pytest.raises(RuntimeError, match="LLM extraction timeout"):
+        svc.parse_material_pipeline(
+            material_id=mat.id, version_id=ver.id, user_id=user_id, force=True
+        )
+
+    assert session.query(KnowledgePoint).filter_by(version_id=ver.id).count() == 3
+    assert session.query(MaterialSnippet).filter_by(version_id=ver.id).count() == len(old_snippets)
+    assert session.query(KnowledgePointSnippet).filter_by(user_id=user_id).count() >= 3
+    assert session.query(Question).filter_by(version_id=ver.id).count() == 1
+    assert ver.parse_status == ParseStatus.FAILED.value
+    assert ver.failed_stage == "knowledge_extraction"
+
+    # 2. Succeed on subsequent force=True re-parse -> atomically replaces old KPs & snippets
+    llm.should_fail = False
+    llm.label = "新版"
+    svc.parse_material_pipeline(material_id=mat.id, version_id=ver.id, user_id=user_id, force=True)
+    new_kps = session.query(KnowledgePoint).filter_by(version_id=ver.id).all()
+    assert len(new_kps) == 3
+    assert all(kp.name.startswith("新版") for kp in new_kps)
+    assert ver.parse_status == ParseStatus.READY.value
+    assert ver.failed_stage is None
+    assert ver.error_message is None
+
+
+def test_trigger_parse_force_recovers_stale_and_orphaned_active_parses(
+    service: MaterialService,
+    queue: MemoryQueueAdapter,
+    session: Session,
+) -> None:
+    """trigger_parse(force=True) recovers stale/orphaned parses while guarding live jobs."""
+    from datetime import UTC, datetime, timedelta
+
+    user_id = uuid.uuid4()
+    content = b"Stale recovery test content\n\n" * 4
+    mat, ver = service.create_material(
+        user_id=user_id,
+        title="StaleRecovery.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+
+    # Freshly queued with live job in queue -> force=True must NOT duplicate-enqueue
+    service.trigger_parse(user_id=user_id, material_id=mat.id, version_id=ver.id, force=False)
+    assert len(queue._queue) == 1
+    service.trigger_parse(user_id=user_id, material_id=mat.id, version_id=ver.id, force=True)
+    assert len(queue._queue) == 1
+
+    # Orphaned extracting_knowledge (no active job in queue) -> force=True recovers immediately
+    queue._tasks.clear()
+    queue._queue.clear()
+    service.repo.update_version_status(ver.id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+    session.commit()
+    recovered = service.trigger_parse(
+        user_id=user_id, material_id=mat.id, version_id=ver.id, force=True
+    )
+    assert recovered.parse_status == ParseStatus.QUEUED.value
+    assert len(queue._queue) == 1
+
+    # Stale QUEUED (> 20 minutes old) even if queue doesn't support inspection -> recovers
+    queue._tasks.clear()
+    queue._queue.clear()
+    ver.updated_at = datetime.now(UTC) - timedelta(minutes=25)
+    session.commit()
+    recovered_stale = service.trigger_parse(
+        user_id=user_id, material_id=mat.id, version_id=ver.id, force=True
+    )
+    assert recovered_stale.parse_status == ParseStatus.QUEUED.value
+    assert len(queue._queue) == 1
+
+
+def test_mark_orphaned_parse_failed_exposes_error_fields_in_detail_and_list(
+    service: MaterialService,
+    session: Session,
+) -> None:
+    """mark_orphaned_parse_failed marks active parses FAILED and skips terminal states."""
+    user_id = uuid.uuid4()
+    content = b"Worker terminal failure recovery test\n\n" * 4
+    mat, ver = service.create_material(
+        user_id=user_id,
+        title="OrphanFail.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    service.repo.update_material_status(mat.id, user_id, MaterialStatus.PARSING.value)
+    service.repo.update_version_status(ver.id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+    session.commit()
+
+    changed = service.mark_orphaned_parse_failed(
+        material_id=mat.id,
+        version_id=ver.id,
+        user_id=user_id,
+        failed_stage="worker_terminated",
+        error_message="后台解析任务异常终止 (JobTimeoutException)，请重新解析",
+    )
+    assert changed is True
+
+    detail = service.get_material_detail(material_id=mat.id, user_id=user_id)
+    assert detail.status == MaterialStatus.FAILED.value
+    assert detail.parse_status == ParseStatus.FAILED.value
+    assert detail.failed_stage == "worker_terminated"
+    assert "JobTimeoutException" in (detail.error_message or "")
+
+    items, total = service.list_materials(user_id=user_id)
+    assert total == 1
+    assert items[0].failed_stage == "worker_terminated"
+    assert items[0].error_message == detail.error_message
+
+    # Calling again when already FAILED must not overwrite existing failure details
+    changed_again = service.mark_orphaned_parse_failed(
+        material_id=mat.id,
+        version_id=ver.id,
+        user_id=user_id,
+        failed_stage="other",
+        error_message="should not overwrite",
+    )
+    assert changed_again is False
+    assert service.get_material_detail(material_id=mat.id, user_id=user_id).failed_stage == (
+        "worker_terminated"
+    )
+
+
+def test_redis_backed_parse_progress_cache_in_detail_and_list(
+    session: Session,
+    storage: MemoryStorageAdapter,
+    ocr: FakeOCRAdapter,
+    embedding: FakeEmbeddingAdapter,
+) -> None:
+    """Active versions read live progress from Redis cache in detail and batch list paths."""
+
+    class _FakeRedis:
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def set(self, key: str, value: str, ex: int | None = None) -> bool:
+            self.data[key] = value.encode("utf-8")
+            return True
+
+        def get(self, key: str) -> bytes | None:
+            return self.data.get(key)
+
+        def mget(self, keys: list[str]) -> list[bytes | None]:
+            return [self.data.get(k) for k in keys]
+
+        def delete(self, key: str) -> int:
+            return 1 if self.data.pop(key, None) is not None else 0
+
+    fake_redis = _FakeRedis()
+    queue = MemoryQueueAdapter()
+    queue._client = fake_redis  # type: ignore[attr-defined]
+    svc = MaterialService(
+        session=session,
+        storage_adapter=storage,
+        ocr_adapter=ocr,
+        embedding_adapter=embedding,
+        queue_adapter=queue,
+    )
+
+    user_id = uuid.uuid4()
+    content = b"Redis progress cache test\n\n" * 3
+    mat, ver = svc.create_material(
+        user_id=user_id,
+        title="RedisProgress.txt",
+        file_format="txt",
+        file_size=len(content),
+        file_content=content,
+    )
+    svc.repo.update_material_status(mat.id, user_id, MaterialStatus.PARSING.value)
+    svc.repo.update_version_status(ver.id, user_id, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+    session.commit()
+
+    from app.services._material_pipeline import (
+        clear_cached_parse_progress,
+        set_cached_parse_progress,
+    )
+
+    set_cached_parse_progress(ver.id, 78, redis_client=fake_redis)
+    assert svc.get_material_detail(material_id=mat.id, user_id=user_id).progress_percentage == 78
+    items, total = svc.list_materials(user_id=user_id)
+    assert total == 1
+    assert items[0].progress_percentage == 78
+
+    clear_cached_parse_progress(ver.id, redis_client=fake_redis)
+    assert svc.get_material_detail(material_id=mat.id, user_id=user_id).progress_percentage == 55

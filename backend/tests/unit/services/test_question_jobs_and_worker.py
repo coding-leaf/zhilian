@@ -327,3 +327,47 @@ def test_worker_dispatches_generate_questions_and_handles_terminal_failure(
     )
     worker.handle_job_terminal_failure(terminal_job, MagicMock(), TimeoutError, None, None)  # type: ignore[arg-type]
     fake_question_svc.mark_generation_job_failed.assert_called_once()
+
+    # parse_material_pipeline retryable failure skips terminal recovery
+    retry_parse_job = SimpleNamespace(
+        id="rq-3",
+        args=(
+            "parse_material_pipeline",
+            {
+                "material_id": str(material_id),
+                "version_id": str(version_id),
+                "user_id": str(user_id),
+            },
+            str(user_id),
+        ),
+        kwargs={},
+        meta={},
+        should_retry=True,
+    )
+    worker.handle_job_terminal_failure(retry_parse_job, MagicMock(), TimeoutError, None, None)  # type: ignore[arg-type]
+    fake_material_svc.mark_orphaned_parse_failed.assert_not_called()
+
+    # parse_material_pipeline terminal failure (via kwargs) marks orphaned parse failed
+    terminal_parse_job = SimpleNamespace(
+        id="rq-4",
+        args=(),
+        kwargs={
+            "task_name": "parse_material_pipeline",
+            "payload": {
+                "material_id": str(material_id),
+                "version_id": str(version_id),
+                "user_id": str(user_id),
+            },
+            "user_id": str(user_id),
+        },
+        meta={},
+        should_retry=False,
+    )
+    worker.handle_job_terminal_failure(terminal_parse_job, MagicMock(), RuntimeError, None, None)  # type: ignore[arg-type]
+    fake_material_svc.mark_orphaned_parse_failed.assert_called_once_with(
+        material_id=material_id,
+        version_id=version_id,
+        user_id=user_id,
+        failed_stage="worker_terminated",
+        error_message="后台解析任务异常终止 (RuntimeError)，请重新解析",
+    )

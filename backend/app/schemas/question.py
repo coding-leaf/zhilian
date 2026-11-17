@@ -318,10 +318,16 @@ class AskCoachRequest(BaseModel):
 
 
 class AskCoachResponse(BaseModel):
-    """AI 助教深度答疑响应模型。"""
+    """AI 助教答疑响应模型。"""
 
-    reply: str = Field(..., description="AI 助教通俗生动的深度解析内容")
-    suggestions: list[str] = Field(default_factory=list, description="推荐延伸思考提示")
+    reply: str = Field(
+        ...,
+        description="精炼、口语化的助教答疑回复（约150-260字，先结论后2-3条简短要点）",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-3条简短口语化的延伸追问建议（每条不超过15字）",
+    )
 
 
 class ScopedCoachRequest(BaseModel):

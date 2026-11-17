@@ -1535,6 +1535,14 @@ class TestQuestionServiceCRUDAndAudit:
         assert "贝叶斯公式" in resp.reply
         assert len(resp.suggestions) == 2
         mock_llm.generate_structured.assert_called_once()
+        call_kwargs = mock_llm.generate_structured.call_args.kwargs
+        system_prompt = call_kwargs["messages"][0].content
+        options = call_kwargs["options"]
+        assert "150~250" in system_prompt
+        assert "一、二、三、" in system_prompt
+        assert options.temperature == 0.65
+        assert options.max_tokens == 900
+        assert "深度解析" not in (AskCoachResponse.model_fields["reply"].description or "")
 
         # Non-existent question raises QuestionNotFoundError
         with pytest.raises(QuestionNotFoundError):

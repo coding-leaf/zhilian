@@ -295,6 +295,21 @@ class MemoryQueueAdapter(QueueProtocol):
             self._tasks[task_id] = (message, cancelled_result)
             return True
 
+    def has_active_job(self, task_name: str, match_payload: dict[str, str]) -> bool:
+        """检查是否存在匹配任务名与载荷子集的排队中或执行中任务。"""
+        with self._lock:
+            for message, result in self._tasks.values():
+                if message.task_name != task_name:
+                    continue
+                if result.status not in {"pending", "running"}:
+                    continue
+                if all(
+                    str(message.payload.get(key, "")) == str(value)
+                    for key, value in match_payload.items()
+                ):
+                    return True
+            return False
+
     def __repr__(self) -> str:
         """安全脱敏的字符串表示。"""
         with self._lock:

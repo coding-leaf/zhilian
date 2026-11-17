@@ -928,3 +928,34 @@ def test_default_dependency_provider() -> None:
     """Tests that default dependency provider raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="QuestionService 生产装配工厂尚未挂载"):
         next(get_question_service())
+
+
+@pytest.mark.asyncio
+async def test_validation_error_handler_serializes_model_validator_value_error(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Ensure Pydantic model_validator ValueError in ctx serializes as 422, not 500."""
+    from fastapi.exceptions import RequestValidationError
+
+    from app.main import validation_error_handler
+
+    app = create_test_app()
+    app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/coach/ask",
+            json={
+                "material_id": str(uuid.uuid4()),
+                "knowledge_point_id": str(uuid.uuid4()),
+                "user_prompt": "你好呀",
+            },
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == 10001
+    assert payload["message"] == "请求参数校验失败"
+    mock_question_service.ask_scoped_coach.assert_not_called()

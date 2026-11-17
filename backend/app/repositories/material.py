@@ -9,6 +9,7 @@
 
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select, update
@@ -599,6 +600,7 @@ class MaterialRepository:
         from_status: str,
         to_status: str,
         reset_errors: bool = False,
+        stale_before: datetime | None = None,
     ) -> bool:
         """以条件更新原子地跃迁版本解析状态 (compare-and-swap)。
 
@@ -615,22 +617,30 @@ class MaterialRepository:
             from_status: 期望的当前解析状态。
             to_status: 目标解析状态。
             reset_errors: 是否同时清空 ``error_message`` 与 ``failed_stage``。
+            stale_before: 可选陈旧时间戳上限（用于僵死 ``QUEUED`` 恢复的并发防重入）。
 
         Returns:
             bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
         """
-        values: dict[str, Any] = {"parse_status": to_status}
+        values: dict[str, Any] = {
+            "parse_status": to_status,
+            "updated_at": datetime.now(UTC),
+        }
         if reset_errors:
             values["error_message"] = None
             values["failed_stage"] = None
 
+        conditions = [
+            MaterialVersion.id == version_id,
+            MaterialVersion.material_id == material_id,
+            MaterialVersion.parse_status == from_status,
+        ]
+        if stale_before is not None:
+            conditions.append(MaterialVersion.updated_at <= stale_before)
+
         stmt = (
             update(MaterialVersion)
-            .where(
-                MaterialVersion.id == version_id,
-                MaterialVersion.material_id == material_id,
-                MaterialVersion.parse_status == from_status,
-            )
+            .where(*conditions)
             .values(**values)
             .execution_options(synchronize_session="fetch")
         )

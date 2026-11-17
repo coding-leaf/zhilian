@@ -1,6 +1,8 @@
 """Internal pipeline helpers and typed view models for MaterialService."""
 
 import logging
+import threading
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -33,6 +35,141 @@ from app.models.material import (
 )
 from app.repositories.material import MaterialRepository
 
+ACTIVE_PARSE_STATUSES: frozenset[str] = frozenset(
+    {
+        ParseStatus.QUEUED.value,
+        ParseStatus.PARSING_DOC.value,
+        ParseStatus.OCR_PROCESSING.value,
+        ParseStatus.EXTRACTING_KNOWLEDGE.value,
+        ParseStatus.AUDITING_KNOWLEDGE.value,
+        ParseStatus.EMBEDDING_GENERATION.value,
+    }
+)
+
+_PARSE_PROGRESS_KEY_PREFIX: str = "zhilian:parse_progress:"
+_PARSE_PROGRESS_TTL_SECONDS: int = 3600
+_LOCAL_PROGRESS_LOCK = threading.Lock()
+_LOCAL_PROGRESS_CACHE: dict[uuid.UUID, tuple[int, float]] = {}
+
+
+def resolve_progress_redis_client(queue: Any, idempotency: Any = None) -> Any | None:
+    """从队列或幂等适配器中提取可用的 Redis 客户端（Duck-typed，无网络回落）。"""
+    for adapter in (queue, idempotency):
+        client = getattr(adapter, "_client", None)
+        if (
+            client is not None
+            and callable(getattr(client, "get", None))
+            and callable(getattr(client, "set", None))
+        ):
+            return client
+    return None
+
+
+def _progress_cache_key(version_id: uuid.UUID) -> str:
+    return f"{_PARSE_PROGRESS_KEY_PREFIX}{version_id}"
+
+
+def _parse_cached_progress_value(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        value = int(text.strip())
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return max(0, min(100, value))
+
+
+def set_cached_parse_progress(
+    version_id: uuid.UUID,
+    percentage: int,
+    *,
+    redis_client: Any | None = None,
+) -> None:
+    """写入版本级实时解析进度缓存（优先 Redis，降级进程内内存缓存）。"""
+    clamped = max(0, min(100, int(percentage)))
+    if redis_client is not None:
+        try:
+            redis_client.set(
+                _progress_cache_key(version_id),
+                str(clamped),
+                ex=_PARSE_PROGRESS_TTL_SECONDS,
+            )
+            return
+        except Exception as exc:
+            _pipeline_logger.warning("set parse progress redis failed: %s", exc)
+    expires_at = time.monotonic() + _PARSE_PROGRESS_TTL_SECONDS
+    with _LOCAL_PROGRESS_LOCK:
+        _LOCAL_PROGRESS_CACHE[version_id] = (clamped, expires_at)
+
+
+def get_cached_parse_progress(
+    version_id: uuid.UUID,
+    *,
+    redis_client: Any | None = None,
+) -> int | None:
+    """读取版本级实时解析进度缓存；不存在或过期返回 None。"""
+    if redis_client is not None:
+        try:
+            return _parse_cached_progress_value(redis_client.get(_progress_cache_key(version_id)))
+        except Exception as exc:
+            _pipeline_logger.warning("get parse progress redis failed: %s", exc)
+    now = time.monotonic()
+    with _LOCAL_PROGRESS_LOCK:
+        entry = _LOCAL_PROGRESS_CACHE.get(version_id)
+        if entry is None:
+            return None
+        value, expires_at = entry
+        if expires_at <= now:
+            _LOCAL_PROGRESS_CACHE.pop(version_id, None)
+            return None
+        return value
+
+
+def get_cached_parse_progress_batch(
+    version_ids: Sequence[uuid.UUID],
+    *,
+    redis_client: Any | None = None,
+) -> dict[uuid.UUID, int]:
+    """批量读取多个活跃版本的实时解析进度缓存，避免列表接口产生 N+1 往返。"""
+    unique_ids = list(dict.fromkeys(version_ids))
+    if not unique_ids:
+        return {}
+    if redis_client is not None and callable(getattr(redis_client, "mget", None)):
+        try:
+            keys = [_progress_cache_key(vid) for vid in unique_ids]
+            raw_values = redis_client.mget(keys)
+            results: dict[uuid.UUID, int] = {}
+            for vid, raw in zip(unique_ids, raw_values, strict=False):
+                parsed = _parse_cached_progress_value(raw)
+                if parsed is not None:
+                    results[vid] = parsed
+            return results
+        except Exception as exc:
+            _pipeline_logger.warning("batch get parse progress redis failed: %s", exc)
+
+    results = {}
+    for vid in unique_ids:
+        cached = get_cached_parse_progress(vid, redis_client=redis_client)
+        if cached is not None:
+            results[vid] = cached
+    return results
+
+
+def clear_cached_parse_progress(
+    version_id: uuid.UUID,
+    *,
+    redis_client: Any | None = None,
+) -> None:
+    """清理指定版本的实时解析进度缓存。"""
+    with _LOCAL_PROGRESS_LOCK:
+        _LOCAL_PROGRESS_CACHE.pop(version_id, None)
+    if redis_client is not None and callable(getattr(redis_client, "delete", None)):
+        try:
+            redis_client.delete(_progress_cache_key(version_id))
+        except Exception as exc:
+            _pipeline_logger.warning("clear parse progress redis failed: %s", exc)
+
 
 @dataclass(frozen=True)
 class MaterialDetailView:
@@ -43,6 +180,8 @@ class MaterialDetailView:
     progress_percentage: int | None = None
     key_points_count: int | None = None
     page_count: int | None = None
+    error_message: str | None = None
+    failed_stage: str | None = None
 
     @property
     def id(self) -> uuid.UUID:
@@ -265,30 +404,30 @@ def repair_garbled_pdf_pages(
     return paragraphs, "\n\n".join(page_texts)
 
 
-def chunk_embed_and_replace_snippets(
+def prepare_material_snippets(
     *,
-    repo: MaterialRepository,
     embedding: EmbeddingProtocol,
     material_id: uuid.UUID,
     version_id: uuid.UUID,
     user_id: uuid.UUID,
     paragraphs: Sequence[str | ParagraphInput],
     require_non_empty: bool = True,
-) -> None:
-    """将文本段落切分为知识片段、批量向量化并幂等替换旧版本切片。"""
+) -> list[MaterialSnippet]:
+    """纯内存切分段落并批量向量化，返回带预分配主键的切片实体列表（不写库）。"""
     chunk_result = split_material_into_snippets(paragraphs)
     if require_non_empty and not chunk_result.snippets:
         raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
 
     snippet_texts = [snip.content for snip in chunk_result.snippets]
     vectors = embedding.embed_documents(snippet_texts)
-    snippets_to_save = []
+    snippets_to_save: list[MaterialSnippet] = []
     for i, snip in enumerate(chunk_result.snippets):
         info: dict[str, Any] = {"source_ref": snip.source_ref}
         if snip.page_number is not None:
             info["page_number"] = snip.page_number
         snippets_to_save.append(
             MaterialSnippet(
+                id=uuid.uuid4(),
                 user_id=user_id,
                 material_id=material_id,
                 version_id=version_id,
@@ -302,6 +441,28 @@ def chunk_embed_and_replace_snippets(
                 embedding=vectors[i] if i < len(vectors) else None,
             )
         )
+    return snippets_to_save
+
+
+def chunk_embed_and_replace_snippets(
+    *,
+    repo: MaterialRepository,
+    embedding: EmbeddingProtocol,
+    material_id: uuid.UUID,
+    version_id: uuid.UUID,
+    user_id: uuid.UUID,
+    paragraphs: Sequence[str | ParagraphInput],
+    require_non_empty: bool = True,
+) -> None:
+    """将文本段落切分为知识片段、批量向量化并幂等替换旧版本切片。"""
+    snippets_to_save = prepare_material_snippets(
+        embedding=embedding,
+        material_id=material_id,
+        version_id=version_id,
+        user_id=user_id,
+        paragraphs=paragraphs,
+        require_non_empty=require_non_empty,
+    )
     repo.delete_snippets_by_version(version_id, user_id)
     repo.create_snippets(snippets_to_save)
 
@@ -315,8 +476,10 @@ def mark_pipeline_failed(
     user_id: uuid.UUID,
     failed_stage: str,
     exc: Exception,
+    redis_client: Any | None = None,
 ) -> None:
     """回滚当前事务并将资料与版本状态原子置为 FAILED。"""
+    clear_cached_parse_progress(version_id, redis_client=redis_client)
     session.rollback()
     try:
         error_msg = getattr(exc, "message", str(exc))
@@ -338,9 +501,16 @@ def mark_pipeline_failed(
 
 
 __all__ = [
+    "ACTIVE_PARSE_STATUSES",
     "MaterialDetailView",
     "chunk_embed_and_replace_snippets",
+    "clear_cached_parse_progress",
+    "get_cached_parse_progress",
+    "get_cached_parse_progress_batch",
     "mark_pipeline_failed",
+    "prepare_material_snippets",
     "process_initial_ocr_page",
     "repair_garbled_pdf_pages",
+    "resolve_progress_redis_client",
+    "set_cached_parse_progress",
 ]

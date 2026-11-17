@@ -318,6 +318,8 @@ def list_materials(
                 progress_percentage=getattr(item, "progress_percentage", None),
                 key_points_count=getattr(item, "key_points_count", None),
                 page_count=getattr(item, "page_count", None),
+                error_message=getattr(item, "error_message", None),
+                failed_stage=getattr(item, "failed_stage", None),
                 created_at=item.created_at,
                 updated_at=item.updated_at,
             )
@@ -401,6 +403,8 @@ def get_material_detail(
         versions_count=versions_count,
         key_points_count=getattr(material, "key_points_count", None),
         page_count=getattr(material, "page_count", None),
+        error_message=getattr(material, "error_message", None),
+        failed_stage=getattr(material, "failed_stage", None),
         created_at=material.created_at,
         updated_at=material.updated_at,
     )
@@ -739,6 +743,8 @@ def move_material_folder(
         versions_count=versions_count,
         key_points_count=getattr(material, "key_points_count", None),
         page_count=getattr(material, "page_count", None),
+        error_message=getattr(material, "error_message", None),
+        failed_stage=getattr(material, "failed_stage", None),
         created_at=material.created_at,
         updated_at=material.updated_at,
     )

@@ -11,7 +11,7 @@
 import logging
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -214,12 +214,27 @@ class KnowledgeService:
         )
         return output.knowledge_points
 
+    @staticmethod
+    def _emit_progress(
+        on_progress: Callable[[int, int, str], None] | None,
+        completed: int,
+        total: int,
+        stage: str,
+    ) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(completed, total, stage)
+        except Exception:
+            logger.warning("knowledge extraction progress callback failed", exc_info=True)
+
     def _validate_and_load_snippets(
         self,
         *,
         material_id: uuid.UUID,
         version_id: uuid.UUID,
         user_id: uuid.UUID,
+        snippets: Sequence[MaterialSnippet] | None = None,
     ) -> list[MaterialSnippet]:
         """校验资料与版本归属并装载用于知识点抽取的切片列表。"""
         material = self.material_repo.get_material_by_id(material_id, user_id)
@@ -234,18 +249,24 @@ class KnowledgeService:
                 "请求的资料版本不存在或已被删除",
                 details={"version_id": str(version_id)},
             )
-        snippets = self.material_repo.get_snippets(version_id, user_id)
-        if not snippets:
+        resolved = (
+            list(snippets)
+            if snippets is not None
+            else self.material_repo.get_snippets(version_id, user_id)
+        )
+        if not resolved:
             raise MaterialInvalidError(
                 "学习资料切片为空，无法进行知识点抽取",
                 details={"material_id": str(material_id), "version_id": str(version_id)},
             )
-        return snippets
+        return resolved
 
     def _run_extraction_with_retries(
         self,
         snippets: list[MaterialSnippet],
         batch_size: int,
+        *,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> tuple[list[ExtractedKnowledgeItem], bool, int]:
         """执行分批抽取、向量语义去重与质量门禁重抽循环（最多 2 次重抽）。"""
         chapter_stats = compute_chapter_stats(snippets)
@@ -263,6 +284,7 @@ class KnowledgeService:
             ]
             raw_extracted: list[ExtractedKnowledgeItem] = []
             outline_skeleton: list[dict[str, Any]] = []
+            total_batches = len(batches)
             for batch_idx, batch in enumerate(batches):
                 batch_items = self._extract_batch_points(
                     batch,
@@ -278,6 +300,12 @@ class KnowledgeService:
                             "level": kp_item.level,
                         }
                     )
+                self._emit_progress(
+                    on_progress,
+                    batch_idx + 1,
+                    total_batches,
+                    ParseStatus.EXTRACTING_KNOWLEDGE.value,
+                )
 
             if not raw_extracted:
                 if re_extract_count >= 2:
@@ -287,6 +315,7 @@ class KnowledgeService:
                 prompt_feedback = "上一轮未抽取到任何有效知识点，请降低粒度并认真分析片段正文内容。"
                 continue
 
+            self._emit_progress(on_progress, 1, 1, ParseStatus.AUDITING_KNOWLEDGE.value)
             embed_texts = [f"{it.name} {it.description}".strip() for it in raw_extracted]
             embeddings = self.embedding.embed_documents(embed_texts)
             deduped_items = deduplicate_candidate_points(
@@ -334,6 +363,10 @@ class KnowledgeService:
         version_id: uuid.UUID,
         user_id: uuid.UUID,
         batch_size: int = 40,
+        snippets: Sequence[MaterialSnippet] | None = None,
+        replace_snippets: bool = False,
+        defer_commit: bool = False,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> list[KnowledgePoint]:
         """端到端编排切片抽取、语义去重、门禁质检、熔断重抽与建树持久化。
 
@@ -342,6 +375,10 @@ class KnowledgeService:
             version_id: 版本主键。
             user_id: 租户用户主键。
             batch_size: 默认批次切片大小，默认 40。
+            snippets: 可选预切分切片列表（供流水线在未落库前先完成抽取，避免失败破坏旧数据）。
+            replace_snippets: 为 True 时在抽取与质检全部通过后同一事务内替换旧切片。
+            defer_commit: 为 True 时仅执行 flush，由调用方统一提交或回滚事务。
+            on_progress: 可选进度回调函数 ``(completed, total, stage)``。
 
         Returns:
             list[KnowledgePoint]: 已持久化构建完成的知识点实体列表。
@@ -354,13 +391,16 @@ class KnowledgeService:
         start_time = time.perf_counter()
         user_ref = generate_user_ref(user_id)
 
-        snippets = self._validate_and_load_snippets(
+        resolved_snippets = self._validate_and_load_snippets(
             material_id=material_id,
             version_id=version_id,
             user_id=user_id,
+            snippets=snippets,
         )
         deduped_items, is_low_confidence, re_extract_count = self._run_extraction_with_retries(
-            snippets, batch_size
+            resolved_snippets,
+            batch_size,
+            on_progress=on_progress,
         )
 
         if not deduped_items:
@@ -385,7 +425,7 @@ class KnowledgeService:
         )
 
         # 7. 数据库事务落库与关联建立
-        snippet_index_map = {s.snippet_index: s.id for s in snippets}
+        snippet_index_map = {s.snippet_index: s.id for s in resolved_snippets}
         relations_to_save: list[KnowledgePointSnippet] = []
         seen_relations: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for it in deduped_items:
@@ -407,33 +447,38 @@ class KnowledgeService:
                 )
 
         try:
-            # 清理历史可能存在的残留数据并写入
+            # 清理历史可能存在的残留数据并写入（仅在抽取与质检均成功后执行）
             self.knowledge_repo.delete_knowledge_points_by_version(material_id, version_id, user_id)
+            if replace_snippets and snippets is not None:
+                self.material_repo.delete_snippets_by_version(version_id, user_id)
+                self.material_repo.create_snippets(resolved_snippets)
             saved_points = self.knowledge_repo.batch_create_knowledge_points(
                 points_to_save, user_id
             )
             if relations_to_save:
                 self.knowledge_repo.create_material_relations(relations_to_save, user_id)
 
-            self.material_repo.update_version_status(
-                version_id=version_id,
-                user_id=user_id,
-                status=ParseStatus.READY.value,
-            )
-            self.session.commit()
-        except Exception:
-            self.session.rollback()
-            try:
+            if not defer_commit:
                 self.material_repo.update_version_status(
                     version_id=version_id,
                     user_id=user_id,
-                    status=ParseStatus.FAILED.value,
-                    error_message="知识点抽取入库异常",
-                    failed_stage="extract_knowledge",
+                    status=ParseStatus.READY.value,
                 )
                 self.session.commit()
-            except Exception:
-                self.session.rollback()
+        except Exception:
+            self.session.rollback()
+            if not defer_commit:
+                try:
+                    self.material_repo.update_version_status(
+                        version_id=version_id,
+                        user_id=user_id,
+                        status=ParseStatus.FAILED.value,
+                        error_message="知识点抽取入库异常",
+                        failed_stage="extract_knowledge",
+                    )
+                    self.session.commit()
+                except Exception:
+                    self.session.rollback()
             raise
 
         # 8. 结构化脱敏日志 8 要素输出
@@ -446,7 +491,7 @@ class KnowledgeService:
                 "duration_ms": duration_ms,
                 "error_code": 0,
                 "points_count": len(saved_points),
-                "snippets_count": len(snippets),
+                "snippets_count": len(resolved_snippets),
                 "is_low_confidence": is_low_confidence,
                 "re_extract_count": re_extract_count,
             },
