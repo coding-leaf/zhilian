@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { useDiagnosisStore } from '@/stores/diagnosis'
 import { usePracticeStore } from '@/stores/practice'
 import { needsGradingRetry, summarizeProgress } from '@/api/adapters/practice'
+import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { createPoller } from '@/utils/poller'
 import type { AttemptResult, DiagnosisReport } from '@/types'
 import {
@@ -64,14 +65,13 @@ export function useReportDetail() {
   const bootstrap = async () => {
     if (!practiceId.value) return
     loadError.value = ''
-    uni.showLoading({ title: '加载作答结果...' })
     try {
-      await practiceStore.refreshSession(practiceId.value)
-      await loadReportIfGraded()
+      await withBlockingLoading('加载作答结果...', async () => {
+        await practiceStore.refreshSession(practiceId.value)
+        await loadReportIfGraded()
+      })
     } catch (error: any) {
       loadError.value = error?.message || '加载失败，请稍后重试'
-    } finally {
-      uni.hideLoading()
     }
   }
 
@@ -100,13 +100,13 @@ export function useReportDetail() {
     isRetryingGrading.value = true
     try {
       await practiceStore.retryGrading(practiceId.value)
-      uni.showToast({ title: '已重新调度判题', icon: 'none' })
+      safeShowToast('已重新调度判题')
       await pollGrading()
       if (!fullyGraded.value && !needsRetry.value && !gradingPoller.isDisposed) {
-        uni.showToast({ title: '判题仍在进行，可稍后从学情页查看', icon: 'none' })
+        safeShowToast('判题仍在进行，可稍后从学情页查看')
       }
     } catch (error: any) {
-      uni.showToast({ title: error?.message || '重试失败，请稍后再试', icon: 'none' })
+      safeShowToast(error?.message || '重试失败，请稍后再试')
     } finally {
       isRetryingGrading.value = false
     }
@@ -125,15 +125,15 @@ export function useReportDetail() {
     try {
       if (modalMode.value === 'regrade') {
         const res = await practiceStore.requestRegrade(result.attemptItemId, payload.reason)
-        uni.showToast({ title: res.message || '复查已完成', icon: 'success' })
+        safeShowToast(res.message || '复查已完成', 'success')
       } else {
         await practiceStore.selfEvaluate(result.attemptItemId, payload.score, payload.reason)
-        uni.showToast({ title: '自评已生效', icon: 'success' })
+        safeShowToast('自评已生效', 'success')
       }
       showModal.value = false
       await loadReportIfGraded()
     } catch (error: any) {
-      uni.showToast({ title: error?.message || '提交失败，请重试', icon: 'none' })
+      safeShowToast(error?.message || '提交失败，请重试')
     } finally {
       isSubmittingGrading.value = false
     }
@@ -142,27 +142,23 @@ export function useReportDetail() {
   const startAdaptivePractice = async () => {
     const scope = regenerateScope.value
     if (!scope || !wrongKnowledgePointIds.value.length) {
-      uni.showToast({ title: '暂无可用再生范围', icon: 'none' })
+      safeShowToast('暂无可用再生范围')
       return
     }
     isRegenerating.value = true
-    uni.showLoading({ title: '生成中...' })
     try {
-      const { session: nextSession, coverage } = await practiceStore.regenerateFromWrongPoints(
-        wrongKnowledgePointIds.value,
-        scope,
+      const { session: nextSession, coverage } = await withBlockingLoading('生成中...', () =>
+        practiceStore.regenerateFromWrongPoints(wrongKnowledgePointIds.value, scope),
       )
-      uni.hideLoading()
       if (coverage.missing.length > 0) {
-        uni.showToast({ title: `仍有 ${coverage.missing.length} 个考点未覆盖`, icon: 'none' })
+        safeShowToast(`仍有 ${coverage.missing.length} 个考点未覆盖`)
       }
       uni.redirectTo({
         url: `/subpackages/practice/pages/session/index?practice_id=${nextSession.id}`,
-        fail: () => uni.showToast({ title: '打开练习失败，请重试', icon: 'none' }),
+        fail: () => safeShowToast('打开练习失败，请重试'),
       })
     } catch (error: any) {
-      uni.hideLoading()
-      uni.showToast({ title: error?.message || '生成失败', icon: 'none' })
+      safeShowToast(error?.message || '生成失败')
     } finally {
       isRegenerating.value = false
     }

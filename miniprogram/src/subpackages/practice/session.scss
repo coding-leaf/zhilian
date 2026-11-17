@@ -86,9 +86,26 @@
 
 .q-meta-row {
   display: flex;
-  align-items: center;
+  justify-content: space-between;
+  align-items: flex-start;
   gap: 12rpx;
   margin-bottom: 20rpx;
+}
+
+.q-meta-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+.q-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-shrink: 0;
 }
 
 .q-type-badge {
@@ -107,27 +124,56 @@
   background: var(--color-teal-tint);
   padding: 4rpx 12rpx;
   border-radius: 6rpx;
+  max-width: 340rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.q-stem {
-  display: block;
-  font-size: 32rpx;
+.multi-hint-badge {
+  font-size: 20rpx;
+  color: var(--color-warning-deep);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  padding: 4rpx 12rpx;
+  border-radius: 6rpx;
   font-weight: 600;
-  color: var(--color-ink-primary);
-  line-height: 1.6;
-  margin-bottom: 36rpx;
+}
+
+.coach-trigger-pill {
+  padding: 6rpx 14rpx;
+  border-radius: 999rpx;
+  background: var(--color-blue-bg);
+  border: 1px solid var(--color-blue-border);
+}
+
+.coach-trigger-text {
+  font-size: 22rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+}
+
+.q-stem-wrap {
+  margin-bottom: 32rpx;
+}
+
+.multi-sub-tip {
+  font-size: 23rpx;
+  color: var(--color-ink-subtle);
+  margin-bottom: 4rpx;
 }
 
 .options-group {
   display: flex;
   flex-direction: column;
-  gap: 20rpx;
+  gap: 18rpx;
 }
 
 .option-btn {
   display: flex;
-  align-items: center;
-  padding: 24rpx 28rpx;
+  align-items: flex-start;
+  gap: 14rpx;
+  padding: 24rpx 24rpx;
   background: var(--color-surface-subtle);
   border: 1px solid var(--color-paper-border);
   border-radius: 12rpx;
@@ -136,6 +182,34 @@
 .option-btn.selected {
   background: var(--color-blue-bg);
   border-color: var(--color-academic-blue);
+}
+
+.opt-key-badge {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 22rpx;
+  background: var(--color-paper-card);
+  border: 1px solid var(--color-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2rpx;
+}
+
+.opt-key-badge.selected {
+  background: var(--color-academic-blue);
+  border-color: var(--color-academic-blue);
+}
+
+.opt-key-text {
+  font-size: 22rpx;
+  font-weight: 700;
+  color: var(--color-ink-body);
+}
+
+.opt-key-badge.selected .opt-key-text {
+  color: var(--color-ink-on-primary);
 }
 
 .opt-checkbox-box {
@@ -147,8 +221,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 14rpx;
   flex-shrink: 0;
+  margin-top: 6rpx;
 }
 
 .opt-checkbox-box.checked {
@@ -161,9 +235,8 @@
 }
 
 .opt-content {
-  font-size: 28rpx;
-  color: var(--color-ink-primary);
   flex: 1;
+  min-width: 0;
 }
 
 .input-hint {
@@ -178,7 +251,25 @@
   margin-top: 20rpx;
 }
 
+.fill-blank-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-bottom: 16rpx;
+}
+
+.fill-blank-index {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: var(--color-academic-blue);
+  background: var(--color-blue-bg);
+  padding: 8rpx 14rpx;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+}
+
 .fill-blank-input {
+  flex: 1;
   width: 100%;
   height: 84rpx;
   background: var(--color-surface-subtle);
@@ -187,6 +278,26 @@
   padding: 0 24rpx;
   font-size: 28rpx;
   box-sizing: border-box;
+}
+
+.essay-hint-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.essay-hint-row .input-hint {
+  margin-bottom: 0;
+}
+
+.score-hint-pill {
+  font-size: 20rpx;
+  color: var(--color-academic-blue);
+  background: var(--color-blue-bg);
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+  font-weight: 600;
 }
 
 .essay-input {
@@ -201,16 +312,26 @@
   box-sizing: border-box;
 }
 
+.essay-count {
+  display: block;
+  text-align: right;
+  font-size: 22rpx;
+  color: var(--color-ink-muted);
+  margin-top: 8rpx;
+}
+
 .bottom-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
+  z-index: var(--z-bottom-bar);
   display: flex;
   gap: 20rpx;
   padding: 24rpx 32rpx calc(24rpx + env(safe-area-inset-bottom));
   background: var(--color-bar-bg);
   border-top: 1px solid var(--color-paper-border);
+  box-shadow: var(--shadow-bar);
 }
 
 .nav-btn {

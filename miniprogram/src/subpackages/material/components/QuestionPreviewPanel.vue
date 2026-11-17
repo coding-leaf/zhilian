@@ -12,7 +12,7 @@
       <text class="gap-text">
         仍有 {{ missingCount }} 个已选考点没有合格题目覆盖，请补齐或调整考点后再开始作答。
       </text>
-      <button class="gap-btn" :loading="isGenerating" @tap="emit('fill-gap')">
+      <button class="gap-btn" :loading="isGenerating || isJobInFlight" @tap="emit('fill-gap')">
         补齐缺失考点
       </button>
     </view>
@@ -23,7 +23,7 @@
         :key="question.id || idx"
         :question="question"
         :index="idx"
-        :disabled="isGenerating"
+        :disabled="isGenerating || isJobInFlight"
         @remove="emit('remove', $event)"
         @regenerate="emit('regenerate', $event)"
       />
@@ -56,6 +56,7 @@ defineProps<{
   generationNotice: string
   missingCount: number
   isGenerating: boolean
+  isJobInFlight?: boolean
   isStarting: boolean
   canStart: boolean
 }>()

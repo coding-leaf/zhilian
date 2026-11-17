@@ -1,0 +1,288 @@
+@import '../../styles/tokens.scss';
+
+.course-container {
+  padding: 28rpx 32rpx;
+  padding-bottom: calc(180rpx + env(safe-area-inset-bottom));
+  min-height: 100vh;
+}
+
+.action-coach-btn {
+  width: 220rpx;
+  height: 88rpx;
+  background: var(--color-blue-bg);
+  color: var(--color-academic-blue);
+  font-size: 28rpx;
+  font-weight: 600;
+  border-radius: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-generate-btn {
+  flex: 1;
+  height: 88rpx;
+  font-size: 30rpx;
+}
+
+.mastery-pill {
+  font-size: 20rpx;
+  font-weight: 600;
+  padding: 4rpx 14rpx;
+  border-radius: 999rpx;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mastery-unlearned {
+  background: var(--color-surface-muted);
+  color: var(--color-ink-subtle);
+}
+
+.mastery-weak {
+  background: var(--color-danger-bg);
+  color: var(--color-wrong);
+}
+
+.mastery-basic {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-strong);
+}
+
+.mastery-proficient {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.study-sheet-panel {
+  height: 82vh;
+  max-height: 84vh;
+}
+
+.sheet-grabber {
+  width: 68rpx;
+  height: 8rpx;
+  border-radius: 999rpx;
+  background: var(--color-border-strong);
+  margin: 12rpx auto 2rpx;
+  flex-shrink: 0;
+}
+
+.study-sheet-header {
+  padding: 20rpx 32rpx 22rpx;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16rpx;
+  border-bottom: 1px solid var(--color-surface-muted);
+  flex-shrink: 0;
+}
+
+.sheet-title-box {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-wrap: wrap;
+}
+
+.sheet-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: var(--color-ink-primary);
+  line-height: 1.4;
+}
+
+.hierarchy-text {
+  display: block;
+  margin-top: 8rpx;
+  color: var(--color-ink-subtle);
+  font-size: 22rpx;
+}
+
+.sheet-scroll-wrap {
+  flex: 1;
+  height: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sheet-body {
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sheet-inner {
+  padding: 24rpx 32rpx 32rpx;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.point-section {
+  margin-bottom: 28rpx;
+}
+
+.sec-label {
+  display: block;
+  font-size: 26rpx;
+  font-weight: 700;
+  color: var(--color-ink-primary);
+  margin-bottom: 12rpx;
+}
+
+.sec-card {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 12rpx;
+  padding: 20rpx 22rpx;
+}
+
+.formula-card {
+  background: var(--color-blue-bg);
+  border: 1px solid var(--color-blue-border);
+  border-radius: 12rpx;
+  padding: 18rpx 22rpx;
+  margin-bottom: 12rpx;
+}
+
+.boundary-card {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: 12rpx;
+  padding: 18rpx 22rpx;
+}
+
+.bullet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+}
+
+.bullet-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+}
+
+.bullet-dot {
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 999rpx;
+  background: var(--color-academic-blue);
+  margin-top: 14rpx;
+  flex-shrink: 0;
+}
+
+.bullet-dot-amber {
+  background: var(--color-warning-strong);
+}
+
+.bullet-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.snippet-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18rpx 22rpx;
+  background: var(--color-surface-slate);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 12rpx;
+}
+
+.snippet-toggle-title {
+  font-size: 25rpx;
+  font-weight: 600;
+  color: var(--color-ink-slate);
+}
+
+.snippet-toggle-action {
+  font-size: 23rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+}
+
+.snippets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  margin-top: 16rpx;
+}
+
+.snippet-item {
+  background: var(--color-surface-slate);
+  border-left: 4rpx solid var(--color-academic-blue);
+  padding: 16rpx 20rpx;
+  border-radius: 8rpx;
+}
+
+.snip-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.snip-page {
+  font-size: 20rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+}
+
+.snip-chapter {
+  font-size: 20rpx;
+  color: var(--color-ink-slate-subtle);
+}
+
+.garbled-hint-box {
+  background: var(--color-orange-bg);
+  border: 1px solid var(--color-orange-border);
+  border-radius: 8rpx;
+  padding: 14rpx 16rpx;
+}
+
+.garbled-hint-text {
+  display: block;
+  font-size: 23rpx;
+  color: var(--color-orange-deep);
+  line-height: 1.5;
+}
+
+.sheet-footer {
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-surface-muted);
+  background: var(--color-bg-card);
+  display: flex;
+  gap: 16rpx;
+  flex-shrink: 0;
+}
+
+.sheet-practice-btn {
+  flex: 1;
+  height: 80rpx;
+  font-size: 26rpx;
+  font-weight: 600;
+  background: var(--color-blue-bg);
+  color: var(--color-academic-blue);
+  border: 1px solid var(--color-blue-border);
+  border-radius: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ask-coach-btn {
+  flex: 1;
+  height: 80rpx;
+  font-size: 26rpx;
+}

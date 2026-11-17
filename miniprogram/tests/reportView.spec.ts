@@ -4,10 +4,13 @@ import {
   buildWeakPointViews,
   collectWrongKnowledgePointIds,
   formatAnswer,
+  formatAttemptAnswer,
   formatPercent,
   formatScore,
+  resolveOptionTone,
   resolveResultBadge,
   resolveSessionScope,
+  resolveSourceQuoteView,
   typeLabel,
 } from '@/subpackages/report/utils/reportView'
 import type { AttemptResult, DiagnosisReport, PracticeSession } from '@/types'
@@ -67,6 +70,42 @@ describe('reportView formatting helpers', () => {
     expect(formatAnswer({ step: 1 })).toBe('{"step":1}')
     expect(formatAnswer('B')).toBe('B')
     expect(formatAnswer(0)).toBe('0')
+  })
+
+  it('formats attempt answers by question type and guards garbled source quotes', () => {
+    expect(formatAttemptAnswer('A', 'true_false')).toBe('正确')
+    expect(formatAttemptAnswer('F', 'true_false')).toBe('错误')
+    expect(formatAttemptAnswer('["A","C"]', 'multiple_choice')).toBe('A、C')
+    expect(formatAttemptAnswer('先验|||后验; 极大似然', 'fill_in_blank')).toBe(
+      '先验 或 后验 ； 极大似然',
+    )
+
+    expect(resolveSourceQuoteView('AB&A&\n"#$"$').isGarbled).toBe(true)
+    expect(resolveSourceQuoteView('AB&A&\n"#$"$').content).toBe('')
+    expect(resolveSourceQuoteView('贝叶斯公式利用先验概率更新后验概率。')).toEqual({
+      visible: true,
+      isGarbled: false,
+      content: '贝叶斯公式利用先验概率更新后验概率。',
+    })
+    expect(resolveSourceQuoteView('')).toEqual({
+      visible: false,
+      isGarbled: false,
+      content: '',
+    })
+
+    const mcResult = makeResult({
+      type: 'multiple_choice',
+      options: [
+        { key: 'A', content: '一' },
+        { key: 'B', content: '二' },
+        { key: 'C', content: '三' },
+      ],
+      userAnswer: ['A', 'B'],
+      correctAnswer: 'A,C',
+    })
+    expect(resolveOptionTone(mcResult.options[0], 0, mcResult)).toBe('correct')
+    expect(resolveOptionTone(mcResult.options[1], 1, mcResult)).toBe('wrong')
+    expect(resolveOptionTone(mcResult.options[2], 2, mcResult)).toBe('missed')
   })
 
   it('formats score, percentage, and question type labels', () => {

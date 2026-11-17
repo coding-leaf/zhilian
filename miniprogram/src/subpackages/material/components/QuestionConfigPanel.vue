@@ -8,17 +8,28 @@
         </text>
       </view>
 
-      <view v-if="availableKpList.length > 0" class="kp-chips-group">
-        <view
-          v-for="kp in availableKpList"
-          :key="kp.id"
-          :class="['kp-chip', isKpSelected(kp.id) ? 'active' : '']"
-          @tap="emit('toggle-kp', kp.id)"
-        >
-          <text class="kp-chip-text">{{ kp.name }}</text>
-          <view v-if="isKpSelected(kp.id)" class="chip-check-mark" />
+      <view v-if="kpGroups.length > 0" class="kp-groups-list">
+        <view v-for="group in kpGroups" :key="group.id" class="kp-group-block">
+          <view v-if="showGroupHeader" class="kp-group-header">
+            <text class="kp-group-title">{{ group.title }}</text>
+            <text class="kp-group-toggle" @tap="emit('toggle-group', group.points.map((p) => p.id))">
+              {{ isGroupAllSelected(group.points) ? '取消本组' : '全选本组' }}
+            </text>
+          </view>
+          <view class="kp-chips-group">
+            <view
+              v-for="kp in group.points"
+              :key="kp.id"
+              :class="['kp-chip', isKpSelected(kp.id) ? 'active' : '']"
+              @tap="emit('toggle-kp', kp.id)"
+            >
+              <text class="kp-chip-text">{{ kp.name }}</text>
+              <view v-if="isKpSelected(kp.id)" class="chip-check-mark" />
+            </view>
+          </view>
         </view>
       </view>
+
       <view v-else class="notice-box">
         <text class="notice-text">
           {{ isLoadingKp ? '正在拉取考点列表...' : '当前范围暂无已解析考点，请先完成资料解析。' }}
@@ -83,10 +94,16 @@
       <button
         class="paper-btn-primary full-btn"
         :loading="isGenerating"
-        :disabled="selectedKpIds.length === 0 || isGenerating"
+        :disabled="selectedKpIds.length === 0 || isGenerating || isJobInFlight"
         @tap="emit('generate')"
       >
-        {{ isGenerating ? 'AI 正在组卷中...' : `一键智能出题 (${selectedKpIds.length} 考点)` }}
+        {{
+          isJobInFlight
+            ? '后台正在出题中...'
+            : isGenerating
+              ? '正在创建出题任务...'
+              : `一键智能出题 (${selectedKpIds.length} 考点)`
+        }}
       </button>
     </view>
   </view>
@@ -96,6 +113,7 @@
 import { computed } from 'vue'
 import type { QuestionType } from '@/types'
 import type { KnowledgePointOption } from '../composables/useComposeConfig'
+import { groupComposeKps } from '../utils/composeHelpers'
 
 const props = defineProps<{
   availableKpList: KnowledgePointOption[]
@@ -107,10 +125,12 @@ const props = defineProps<{
   isAllKpSelected: boolean
   isLoadingKp: boolean
   isGenerating: boolean
+  isJobInFlight?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-select-all'): void
+  (e: 'toggle-group', ids: string[]): void
   (e: 'toggle-kp', id: string): void
   (e: 'toggle-type', type: QuestionType): void
   (e: 'update:questionCount', value: number): void
@@ -118,7 +138,7 @@ const emit = defineEmits<{
   (e: 'generate'): void
 }>()
 
-const sliderActiveColor = '#1E3A8A'
+const sliderActiveColor = 'rgb(30, 58, 138)'
 
 const typeOptions: Array<{ label: string; value: QuestionType }> = [
   { label: '单项选择', value: 'single_choice' },
@@ -130,7 +150,14 @@ const typeOptions: Array<{ label: string; value: QuestionType }> = [
   { label: '案例分析题', value: 'case_analysis' },
 ]
 
+const kpGroups = computed(() => groupComposeKps(props.availableKpList))
+const showGroupHeader = computed(
+  () => kpGroups.value.length > 1 || (kpGroups.value.length === 1 && kpGroups.value[0].id !== '__general__'),
+)
+
 const isKpSelected = (id: string) => props.selectedKpIds.includes(id)
+const isGroupAllSelected = (points: KnowledgePointOption[]) =>
+  points.length > 0 && points.every((p) => props.selectedKpIds.includes(p.id))
 const isTypeSelected = (type: QuestionType) => props.selectedTypes.includes(type)
 
 const difficultyLabel = computed(() => {

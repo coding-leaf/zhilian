@@ -1,15 +1,13 @@
 import { computed, ref } from 'vue'
 import type { FolderKnowledgePointItem, QuestionType } from '@/types'
+import {
+  dedupeKnowledgePointOptions,
+  normalizeKpName,
+  type ComposeScope,
+  type KnowledgePointOption,
+} from '../utils/composeHelpers'
 
-export interface ComposeScope {
-  folderId?: string
-  materialId?: string
-}
-
-export interface KnowledgePointOption {
-  id: string
-  name: string
-}
+export type { ComposeScope, KnowledgePointOption }
 
 const DEFAULT_TYPES: QuestionType[] = [
   'single_choice',
@@ -18,7 +16,7 @@ const DEFAULT_TYPES: QuestionType[] = [
   'short_answer',
 ]
 
-/** 组卷配置状态：作用域、考点勾选、题型、题量与难度。 */
+/** 组卷配置状态：作用域、去重考点勾选、题型、题量与难度。 */
 export function useComposeConfig() {
   const scope = ref<ComposeScope>({})
   const availableKpList = ref<KnowledgePointOption[]>([])
@@ -41,13 +39,39 @@ export function useComposeConfig() {
     scope.value = next
   }
 
-  const setKnowledgePoints = (list: KnowledgePointOption[]) => {
-    availableKpList.value = list
-    selectedKpIds.value = list.map((point) => point.id)
+  const setKnowledgePoints = (list: KnowledgePointOption[], preselectedKpId?: string) => {
+    const deduped = dedupeKnowledgePointOptions(list, preselectedKpId)
+    availableKpList.value = deduped
+    if (preselectedKpId) {
+      const matched =
+        deduped.find((point) => point.id === preselectedKpId)
+        || (() => {
+          const target = list.find((point) => point.id === preselectedKpId)
+          if (!target) return undefined
+          const norm = normalizeKpName(target.name)
+          return deduped.find((point) => normalizeKpName(point.name) === norm)
+        })()
+      if (matched) {
+        selectedKpIds.value = [matched.id]
+        return
+      }
+    }
+    selectedKpIds.value = deduped.map((point) => point.id)
   }
 
-  const flattenKnowledgePoints = (list: FolderKnowledgePointItem[]): KnowledgePointOption[] =>
-    list.map((point) => ({ id: point.id, name: point.name }))
+  const flattenKnowledgePoints = (
+    list: FolderKnowledgePointItem[],
+    materialMeta?: { materialId?: string; materialTitle?: string },
+  ): KnowledgePointOption[] =>
+    list.map((point) => ({
+      id: point.id,
+      name: point.name,
+      level: point.level,
+      parent_id: point.parent_id ?? null,
+      sort_order: point.sort_order ?? 0,
+      material_id: materialMeta?.materialId,
+      material_title: materialMeta?.materialTitle,
+    }))
 
   const isKpSelected = (id: string) => selectedKpIds.value.includes(id)
 
@@ -55,6 +79,20 @@ export function useComposeConfig() {
     selectedKpIds.value = isKpSelected(id)
       ? selectedKpIds.value.filter((value) => value !== id)
       : [...selectedKpIds.value, id]
+  }
+
+  const toggleKpGroup = (groupIds: string[]) => {
+    if (!groupIds.length) return
+    const allSelected = groupIds.every((id) => selectedKpIds.value.includes(id))
+    if (allSelected) {
+      const removeSet = new Set(groupIds)
+      selectedKpIds.value = selectedKpIds.value.filter((id) => !removeSet.has(id))
+    } else {
+      const merged = new Set([...selectedKpIds.value, ...groupIds])
+      selectedKpIds.value = availableKpList.value
+        .map((point) => point.id)
+        .filter((id) => merged.has(id))
+    }
   }
 
   const toggleSelectAllKp = () => {
@@ -91,6 +129,7 @@ export function useComposeConfig() {
     flattenKnowledgePoints,
     isKpSelected,
     toggleKp,
+    toggleKpGroup,
     toggleSelectAllKp,
     isTypeSelected,
     toggleType,

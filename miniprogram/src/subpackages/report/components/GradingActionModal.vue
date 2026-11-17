@@ -1,5 +1,5 @@
 <template>
-  <view v-if="visible" class="modal-overlay">
+  <view v-if="visible" class="modal-overlay grading-modal-overlay">
     <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容（含输入框）即关闭 -->
     <view class="modal-backdrop" @tap="close" />
     <view class="modal-content paper-card">
@@ -9,6 +9,13 @@
       </view>
 
       <view class="modal-body">
+        <view v-if="result?.gradingPoints?.length" class="modal-rubric-box">
+          <text class="modal-rubric-title">参考采分点：</text>
+          <view v-for="(pt, idx) in result.gradingPoints" :key="idx" class="modal-rubric-item">
+            <RichContent :content="`${idx + 1}. ${pt}`" compact muted />
+          </view>
+        </view>
+
         <template v-if="isRegrade">
           <text class="form-tips">
             如果系统评分遗漏了你的核心得分词或步骤，请补充说明复核理由：
@@ -53,6 +60,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import RichContent from '@/components/RichContent.vue'
+import { safeShowToast } from '@/utils/loadingGuard'
 import type { AttemptResult } from '@/types'
 import type { GradingMode } from '../utils/reportView'
 
@@ -88,14 +97,14 @@ const handleSubmit = () => {
     const score = Number(scoreInput.value)
     const max = props.result?.maxScore ?? 1
     if (!Number.isFinite(score) || score < 0 || score > max) {
-      uni.showToast({ title: `请输入 0 - ${max} 之间的分数`, icon: 'none' })
+      safeShowToast(`请输入 0 - ${max} 之间的分数`)
       return
     }
     emit('submit', { reason: trimmed, score })
     return
   }
   if (!trimmed) {
-    uni.showToast({ title: '请输入复核理由', icon: 'none' })
+    safeShowToast('请输入复核理由')
     return
   }
   emit('submit', { reason: trimmed, score: 0 })
@@ -106,7 +115,32 @@ const handleSubmit = () => {
 @import '../../../styles/modal.scss';
 @import '../report.scss';
 
+.grading-modal-overlay {
+  z-index: var(--z-modal);
+}
+
 .modal-content {
   max-width: 620rpx;
+  background: var(--color-bg-card);
+}
+
+.modal-rubric-box {
+  margin-bottom: 16rpx;
+  padding: 14rpx 18rpx;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 10rpx;
+}
+
+.modal-rubric-title {
+  display: block;
+  font-size: 22rpx;
+  font-weight: 600;
+  color: var(--color-ink-body);
+  margin-bottom: 6rpx;
+}
+
+.modal-rubric-item {
+  margin-bottom: 4rpx;
 }
 </style>

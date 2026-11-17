@@ -1,6 +1,7 @@
 import { ref } from 'vue'
-import { apiListQuestionBankItems } from '@/api'
-import type { QuestionBankItem } from '@/types'
+import { adaptQuestion, apiListQuestionBankItems } from '@/api'
+import type { QuestionBankItem, QuestionItem } from '@/types'
+import { request } from '@/utils/request'
 import { describeFailure } from '@/utils/requestError'
 import type { BatchKey } from '@/utils/questionBatch'
 
@@ -15,6 +16,11 @@ export function useBatchQuestionsCache() {
   const loadingQuestions = ref<BatchKey[]>([])
   const questionErrors = ref<Map<BatchKey, string>>(new Map())
 
+  const expandedDetailIds = ref<string[]>([])
+  const questionDetails = ref<Map<string, QuestionItem>>(new Map())
+  const loadingDetailIds = ref<string[]>([])
+  const detailErrors = ref<Map<string, string>>(new Map())
+
   const isExpanded = (batchId: BatchKey): boolean => expanded.value.includes(batchId)
   const questionsFor = (batchId: BatchKey): QuestionBankItem[] =>
     questionsByBatch.value.get(batchId) ?? []
@@ -27,6 +33,13 @@ export function useBatchQuestionsCache() {
     if (message) next.set(batchId, message)
     else next.delete(batchId)
     questionErrors.value = next
+  }
+
+  const setDetailError = (questionId: string, message: string) => {
+    const next = new Map(detailErrors.value)
+    if (message) next.set(questionId, message)
+    else next.delete(questionId)
+    detailErrors.value = next
   }
 
   /**
@@ -82,10 +95,42 @@ export function useBatchQuestionsCache() {
 
   const retryBatchQuestions = (batchId: BatchKey) => loadBatchQuestions(batchId)
 
+  const loadQuestionDetail = async (questionId: string) => {
+    if (loadingDetailIds.value.includes(questionId)) return
+    loadingDetailIds.value = [...loadingDetailIds.value, questionId]
+    setDetailError(questionId, '')
+    try {
+      const raw = await request<Parameters<typeof adaptQuestion>[0]>({
+        url: `/questions/${questionId}`,
+        method: 'GET',
+      })
+      questionDetails.value = new Map(questionDetails.value).set(questionId, adaptQuestion(raw))
+    } catch (error) {
+      console.error('Failed to load question detail', error)
+      setDetailError(questionId, describeFailure(error, '答案解析加载失败，请重试'))
+    } finally {
+      loadingDetailIds.value = loadingDetailIds.value.filter((id) => id !== questionId)
+    }
+  }
+
+  const toggleQuestionDetail = async (questionId: string) => {
+    if (expandedDetailIds.value.includes(questionId)) {
+      expandedDetailIds.value = expandedDetailIds.value.filter((id) => id !== questionId)
+      return
+    }
+    expandedDetailIds.value = [...expandedDetailIds.value, questionId]
+    if (questionDetails.value.has(questionId)) return
+    await loadQuestionDetail(questionId)
+  }
+
   return {
     expanded,
     loadingQuestions,
     questionErrors,
+    expandedDetailIds,
+    questionDetails,
+    loadingDetailIds,
+    detailErrors,
     isExpanded,
     isLoadingQuestions,
     questionError,
@@ -93,5 +138,7 @@ export function useBatchQuestionsCache() {
     fetchBatchQuestions,
     toggleExpand,
     retryBatchQuestions,
+    loadQuestionDetail,
+    toggleQuestionDetail,
   }
 }

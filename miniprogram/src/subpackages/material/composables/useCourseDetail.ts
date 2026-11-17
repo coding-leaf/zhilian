@@ -1,19 +1,23 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { apiGetMasteryOverview } from '@/api'
+import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useMaterialStore } from '@/stores/material'
-import { flattenKnowledgeTree } from '@/utils/knowledgeTree'
+import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { canStartMaterialParse, isMaterialParsing } from '@/utils/materialState'
-import { createPoller } from '@/utils/poller'
+import { describeFailure, RequestError } from '@/utils/requestError'
 import type { KnowledgeSnippet, KnowledgeTreeNode, MaterialItem } from '@/types'
+import { buildMasteryMap, flattenTreeWithParents, type MasteryEntry } from '../utils/courseStudy'
 
-/** 资料详情、知识树展开、轮询同步与考点切片加载编排。 */
+/** 资料详情、知识树展开、掌握度映射、重新解析同步与考点切片加载编排。 */
 export function useCourseDetail() {
   const materialStore = useMaterialStore()
-  const parsePoller = createPoller()
+  const taskStore = useBackgroundTaskStore()
 
   const materialId = ref('')
   const material = ref<MaterialItem | null>(null)
   const knowledgeNodes = ref<KnowledgeTreeNode[]>([])
   const generatedQuestionCount = ref(0)
+  const masteryMap = ref<Record<string, MasteryEntry>>({})
 
   const showPointModal = ref(false)
   const selectedPoint = ref<KnowledgeTreeNode | null>(null)
@@ -27,13 +31,13 @@ export function useCourseDetail() {
 
   const parseProgressText = computed(() => {
     const progress = material.value?.progress_percentage
-    return typeof progress === 'number'
+    return typeof progress === 'number' && progress > 0
       ? `正在提取知识点与原文切片，已完成 ${Math.round(progress)}%...`
-      : '智能解析中，正在提取关键知识点与切片...'
+      : '智能解析中，正在提取结构化考点与原文切片...'
   })
 
   const pointHierarchy = computed(() => {
-    const point = selectedPointDetail.value
+    const point = selectedPointDetail.value || selectedPoint.value
     if (!point) return ''
     const names = [point.name]
     let parentId = point.parent_id
@@ -56,63 +60,102 @@ export function useCourseDetail() {
     }
   }
 
+  const refreshMastery = async () => {
+    if (!materialId.value) return
+    try {
+      const folderScope = material.value?.folder_id ?? '__none__'
+      let overview = await apiGetMasteryOverview(folderScope).catch(() => null)
+      if (!overview) {
+        overview = await apiGetMasteryOverview().catch(() => null)
+      }
+      masteryMap.value = buildMasteryMap(overview)
+    } catch {
+      masteryMap.value = {}
+    }
+  }
+
   const loadReadyAssets = async () => {
     const tree = await materialStore.loadKnowledgeTree(materialId.value)
     if (tree?.nodes) {
-      knowledgeNodes.value = flattenKnowledgeTree(tree.nodes)
+      knowledgeNodes.value = flattenTreeWithParents(tree.nodes)
+    } else {
+      knowledgeNodes.value = []
     }
-    await loadGeneratedQuestionCount()
+    await Promise.all([loadGeneratedQuestionCount(), refreshMastery()])
   }
 
   const loadDetail = async () => {
     if (!materialId.value) return
     try {
-      material.value = await materialStore.fetchMaterialDetail(materialId.value)
-      if (material.value.status === 'ready') {
+      const fetched = await materialStore.fetchMaterialDetail(materialId.value)
+      material.value = fetched
+      if (fetched.status === 'ready') {
         await loadReadyAssets()
+      } else if (isMaterialParsing(fetched)) {
+        taskStore.trackMaterialParse(fetched)
       }
     } catch (err) {
       console.error(err)
     }
   }
 
-  const syncParseProgress = async () => {
-    if (!materialId.value) return
-    try {
-      material.value = await materialStore.pollMaterialStatus(
-        materialId.value,
-        20,
-        1500,
-        parsePoller,
-      )
-    } catch {
-      material.value = materialStore.currentMaterial
-    }
-    if (material.value?.status === 'ready') {
-      await loadReadyAssets()
-    }
-  }
+  watch(
+    () => materialStore.currentMaterial,
+    async (next) => {
+      if (!next || next.id !== materialId.value) return
+      const prevStatus = material.value?.status
+      material.value = next
+      if (next.status === 'ready' && prevStatus !== 'ready') {
+        await loadReadyAssets()
+      }
+    },
+  )
 
   const initCourse = async (id: string) => {
     materialId.value = id
     await loadDetail()
-    if (material.value && isMaterialParsing(material.value)) {
-      await syncParseProgress()
+  }
+
+  const startParse = async (force = false) => {
+    if (!materialId.value) return
+    const prevMaterial = material.value
+    const title = prevMaterial?.title || '学习资料'
+    try {
+      await withBlockingLoading(force ? '启动重新解析...' : '启动解析流水线...', async () => {
+        await taskStore.startMaterialParse(materialId.value, title, force)
+      })
+      if (prevMaterial) {
+        const queuedState: MaterialItem = {
+          ...prevMaterial,
+          status: 'parsing',
+          parse_status: 'queued',
+          progress_percentage: 0,
+        }
+        material.value = queuedState
+        materialStore.currentMaterial = queuedState
+      }
+      safeShowToast(force ? '已启动重新解析' : '已启动后台解析', 'success')
+    } catch (err: any) {
+      if (!(err instanceof RequestError)) {
+        safeShowToast(describeFailure(err, '解析启动失败'))
+      }
     }
   }
 
-  const startParse = async () => {
+  const confirmAndReparse = () => {
     if (!materialId.value) return
-    uni.showLoading({ title: '启动流水线...' })
-    try {
-      await materialStore.triggerParse(materialId.value)
-      uni.hideLoading()
-      uni.showToast({ title: '开始解析', icon: 'success' })
-      await syncParseProgress()
-    } catch (err: any) {
-      uni.hideLoading()
-      uni.showToast({ title: err?.message || '解析启动失败', icon: 'none' })
+    if (material.value?.status === 'failed' || material.value?.status === 'retake_required') {
+      void startParse(true)
+      return
     }
+    uni.showModal({
+      title: '重新解析讲义',
+      content: '重新解析将更新章节结构、公式编码与知识点卡片（已有练习记录会保留），确定继续？',
+      confirmText: '重新解析',
+      success: ({ confirm }) => {
+        if (confirm) void startParse(true)
+      },
+    })
   }
 
   const openPointDetail = async (node: KnowledgeTreeNode) => {
@@ -133,7 +176,7 @@ export function useCourseDetail() {
   }
 
   const dispose = () => {
-    parsePoller.dispose()
+    // 后台解析轮询由全局 backgroundTaskStore 接管，离开页面不中断
   }
 
   return {
@@ -141,6 +184,7 @@ export function useCourseDetail() {
     material,
     knowledgeNodes,
     generatedQuestionCount,
+    masteryMap,
     showPointModal,
     selectedPoint,
     selectedPointDetail,
@@ -153,7 +197,9 @@ export function useCourseDetail() {
     parseProgressText,
     initCourse,
     loadDetail,
+    refreshMastery,
     startParse,
+    confirmAndReparse,
     openPointDetail,
     dispose,
   }

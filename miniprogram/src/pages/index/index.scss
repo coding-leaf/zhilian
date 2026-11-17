@@ -1,0 +1,184 @@
+@import '../../styles/common.scss';
+
+.index-container {
+  padding: 32rpx;
+  padding-bottom: calc(220rpx + env(safe-area-inset-bottom));
+  min-height: 100vh;
+}
+
+.hero-section {
+  padding: 20rpx 8rpx 32rpx 8rpx;
+}
+
+.hero-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.hero-tag {
+  display: inline-block;
+  font-size: 22rpx;
+  color: var(--color-academic-blue);
+  background-color: var(--color-blue-tint);
+  padding: 6rpx 16rpx;
+  border-radius: 6rpx;
+  font-weight: 500;
+}
+
+.login-trigger-btn {
+  background: var(--color-academic-blue);
+  padding: 8rpx 20rpx;
+  border-radius: 24rpx;
+}
+
+.login-trigger-text {
+  font-size: 22rpx;
+  color: var(--color-ink-on-primary);
+  font-weight: 600;
+}
+
+.user-status-pill {
+  background: var(--color-teal-tint);
+  padding: 6rpx 16rpx;
+  border-radius: 20rpx;
+}
+
+.user-status-text {
+  font-size: 22rpx;
+  color: var(--color-academic-teal);
+  font-weight: 500;
+}
+
+.hero-title {
+  display: block;
+  font-size: 44rpx;
+  font-weight: 700;
+  color: var(--color-ink-primary);
+  letter-spacing: -0.5rpx;
+  margin-bottom: 12rpx;
+}
+
+.hero-subtitle {
+  display: block;
+  font-size: 24rpx;
+  color: var(--color-ink-subtle);
+  line-height: 1.5;
+}
+
+.upload-card {
+  padding: 32rpx 28rpx;
+  display: flex;
+  align-items: center;
+  margin-bottom: 32rpx;
+}
+
+.upload-icon-badge {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 16rpx;
+  background: var(--color-blue-bg);
+  border: 1px solid var(--color-blue-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 24rpx;
+  flex-shrink: 0;
+}
+
+.upload-icon-text {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: var(--color-academic-blue);
+}
+
+.upload-info {
+  flex: 1;
+}
+
+.upload-title {
+  display: block;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--color-ink-primary);
+  margin-bottom: 6rpx;
+}
+
+.upload-desc {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-ink-subtle);
+}
+
+.upload-action {
+  padding-left: 16rpx;
+}
+
+.action-btn-text {
+  font-size: 26rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+  background: var(--color-blue-bg);
+  padding: 10rpx 24rpx;
+  border-radius: 8rpx;
+}
+
+.course-quick-practice {
+  padding: 28rpx 32rpx;
+  background: linear-gradient(135deg, var(--color-blue-bg) 0%, var(--color-paper-card) 100%);
+  border: 1px solid var(--color-blue-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 32rpx;
+}
+
+.cqp-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: var(--color-academic-blue);
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.cqp-desc {
+  font-size: 22rpx;
+  color: var(--color-blue-accent);
+  display: block;
+}
+
+.cqp-arrow {
+  font-size: 28rpx;
+  color: var(--color-academic-blue);
+  font-weight: 700;
+}
+
+.floating-coach-btn {
+  position: fixed;
+  right: 32rpx;
+  bottom: calc(48rpx + env(safe-area-inset-bottom));
+  background: var(--color-academic-blue);
+  box-shadow: 0 6rpx 20rpx var(--color-blue-shadow);
+  border-radius: 40rpx;
+  padding: 14rpx 24rpx;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  z-index: var(--z-fab);
+}
+
+.coach-btn-tag {
+  font-size: 20rpx;
+  font-weight: 700;
+  color: var(--color-academic-blue);
+  background: var(--color-paper-card);
+  padding: 2rpx 10rpx;
+  border-radius: 16rpx;
+}
+
+.coach-btn-text {
+  color: var(--color-ink-on-primary);
+  font-size: 24rpx;
+  font-weight: 600;
+}

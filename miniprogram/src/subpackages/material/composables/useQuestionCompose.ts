@@ -1,20 +1,30 @@
 import { computed, ref } from 'vue'
 import {
+  adaptQuestion,
   apiGetQuestionsByMaterial,
   apiListQuestionBatches,
   computeKnowledgeCoverage,
   dedupeQuestions,
+  type WireQuestion,
 } from '@/api'
 import type { CoverageResult } from '@/api/adapters/question'
+import { isQuestionJobActive, useBackgroundTaskStore } from '@/stores/backgroundTask'
+import { safeShowToast } from '@/utils/loadingGuard'
+import { describeFailure, RequestError } from '@/utils/requestError'
+import { request } from '@/utils/request'
 import { describeBatchLabel } from '@/utils/questionBatch'
-import { generateQuestionsInBatches } from '@/utils/questionGeneration'
-import type { QuestionBatchSummary, QuestionItem } from '@/types'
+import type {
+  QuestionBatchSummary,
+  QuestionGenerationJob,
+  QuestionItem,
+} from '@/types'
 import { useComposeConfig, type ComposeScope, type KnowledgePointOption } from './useComposeConfig'
 
 export type { ComposeScope, KnowledgePointOption }
 
 export function useQuestionCompose() {
   const config = useComposeConfig()
+  const taskStore = useBackgroundTaskStore()
   const { scope, selectedKpIds, selectedTypes, questionCount, difficulty, plannedCount } = config
 
   const questions = ref<QuestionItem[]>([])
@@ -22,10 +32,33 @@ export function useQuestionCompose() {
   const hasGenerated = ref(false)
   const isGenerating = ref(false)
   const isStarting = ref(false)
+  const activeJobId = ref<string | null>(null)
+  const jobMode = ref<'compose' | 'fill_gap' | 'regenerate'>('compose')
+  const replacingQuestionId = ref<string | null>(null)
+  const pendingReviewNoticeCount = ref(0)
 
-  /** 本次生成的批次摘要：标签由 describeBatchLabel 统一推导（与题库区块同一函数）。 */
   const generatedBatches = ref<QuestionBatchSummary[]>([])
   const generatedBatchFallback = ref('')
+
+  const activeJob = computed<QuestionGenerationJob | null>(() =>
+    activeJobId.value ? taskStore.questionJobs.get(activeJobId.value) ?? null : null,
+  )
+
+  const isJobInFlight = computed(() =>
+    Boolean(activeJob.value && isQuestionJobActive(activeJob.value)),
+  )
+
+  const jobProgressText = computed(() => {
+    const job = activeJob.value
+    if (!job || !isQuestionJobActive(job)) return ''
+    return `正在后台生成题目 (${job.completed_kps} / ${job.total_kps} 考点)... 您可以留在当前页等待，或随时返回浏览讲义`
+  })
+
+  const jobProgressPercent = computed(() => {
+    const job = activeJob.value
+    if (!job || job.total_kps <= 0) return 0
+    return Math.min(100, Math.round((job.completed_kps / job.total_kps) * 100))
+  })
 
   const remainingQuestions = computed(() =>
     questions.value.filter((question) => question.id && !removedIds.value.includes(question.id)),
@@ -39,12 +72,14 @@ export function useQuestionCompose() {
     () => remainingQuestions.value.length > 0 && coverage.value.missing.length === 0,
   )
 
-  /** 生成前后都据实披露题量调整与合格题覆盖缺口，剔除题目后自动重算。 */
   const generationNotice = computed(() => {
     if (!hasGenerated.value) return ''
     const parts: string[] = []
     if (plannedCount.value > questionCount.value) {
       parts.push(`为覆盖全部 ${selectedKpIds.value.length} 个考点，本次按 ${plannedCount.value} 题目标生成`)
+    }
+    if (pendingReviewNoticeCount.value > 0) {
+      parts.push(`另有 ${pendingReviewNoticeCount.value} 道题待审核，本次展示全部可作答题目`)
     }
     if (coverage.value.missing.length > 0) {
       parts.push(`合格题未覆盖 ${coverage.value.missing.length} 个考点，需补齐后才能开始作答`)
@@ -52,15 +87,32 @@ export function useQuestionCompose() {
     return parts.join('；')
   })
 
-  const generateForPoints = (knowledgePointIds: string[], desiredCount: number) =>
-    generateQuestionsInBatches({
-      folderId: scope.value.folderId,
-      materialId: scope.value.materialId,
-      knowledgePointIds,
-      desiredCount,
-      questionTypes: selectedTypes.value,
-      difficulty: difficulty.value,
+  const enrichKpNames = (items: QuestionItem[]): QuestionItem[] => {
+    const kpNameById = new Map(config.availableKpList.value.map((kp) => [kp.id, kp.name]))
+    return items.map((item) => {
+      const resolvedName =
+        item.knowledge_point_name
+        || (item.knowledge_point_id ? kpNameById.get(item.knowledge_point_id) : undefined)
+        || item.knowledge_point
+        || null
+      return resolvedName
+        ? { ...item, knowledge_point_name: resolvedName, knowledge_point: item.knowledge_point || resolvedName }
+        : item
     })
+  }
+
+  const fetchBatchQuestions = async (
+    batchId: string,
+  ): Promise<{ available: QuestionItem[]; pendingCount: number }> => {
+    const res = await request<{ items?: WireQuestion[] } | WireQuestion[]>({
+      url: `/questions?batch_id=${encodeURIComponent(batchId)}&page=1&page_size=50`,
+      method: 'GET',
+    })
+    const rawList = Array.isArray(res) ? res : res?.items || []
+    const pendingCount = rawList.filter((item) => item.status === 'pending_review').length
+    const usable = rawList.filter((item) => !item.status || item.status === 'available')
+    return { available: enrichKpNames(usable.map(adaptQuestion)), pendingCount }
+  }
 
   const loadGeneratedBatches = async (batchIds: string[]) => {
     generatedBatchFallback.value = ''
@@ -88,47 +140,152 @@ export function useQuestionCompose() {
     generatedBatches.value.map((batch) => describeBatchLabel(batch)),
   )
 
-  /** 核对视图顶部的一行提示：有批次就报批次，取不到就如实说明。 */
   const generatedBatchNotice = computed(() => {
     if (generatedBatchLabels.value.length > 0) {
-      return `本次生成批次：${generatedBatchLabels.value.join('；')}。已归入「学情 - 我的题目」，可在那里按批次再练。`
+      return `本次生成批次：${generatedBatchLabels.value.join('；')}。已归入「学情 - 我的题库」，可在那里按批次再练。`
     }
     return generatedBatchFallback.value
   })
 
-  /** 生成题目：返回本次合格题数量（失败或 0 题返回 0）。 */
+  const clearActiveJob = () => {
+    activeJobId.value = null
+    replacingQuestionId.value = null
+    jobMode.value = 'compose'
+  }
+
+  const loadJobResultItems = async (
+    job: QuestionGenerationJob,
+  ): Promise<{ available: QuestionItem[]; pendingCount: number }> => {
+    if (job.batch_id) {
+      return fetchBatchQuestions(job.batch_id)
+    }
+    if (scope.value.materialId) {
+      const list = await apiGetQuestionsByMaterial(scope.value.materialId)
+      const idSet = new Set(job.question_ids)
+      const matched = idSet.size > 0 ? list.filter((item) => idSet.has(item.id)) : list
+      return { available: enrichKpNames(matched), pendingCount: 0 }
+    }
+    return { available: [], pendingCount: 0 }
+  }
+
+  const applyCompletedJob = async (job: QuestionGenerationJob): Promise<number> => {
+    const mode = jobMode.value
+    const targetReplaceId = replacingQuestionId.value
+    try {
+      const { available, pendingCount } = await loadJobResultItems(job)
+      if (mode === 'fill_gap') {
+        questions.value = dedupeQuestions([...questions.value, ...available])
+        const addedIds = new Set(available.map((item) => item.id))
+        removedIds.value = removedIds.value.filter((id) => !addedIds.has(id))
+        hasGenerated.value = true
+      } else if (mode === 'regenerate' && targetReplaceId) {
+        const replacement = available.find((item) => item.id !== targetReplaceId) || available[0]
+        if (!replacement) {
+          safeShowToast('未能生成替代题目，请稍后重试')
+          return 0
+        }
+        questions.value = questions.value.map((item) =>
+          item.id === targetReplaceId ? replacement : item,
+        )
+        removedIds.value = removedIds.value.filter((id) => id !== targetReplaceId)
+      } else {
+        if (available.length === 0) {
+          safeShowToast('未生成合格题目，请调整配置后重试')
+          return 0
+        }
+        questions.value = available
+        removedIds.value = []
+        hasGenerated.value = true
+        pendingReviewNoticeCount.value = pendingCount
+        if (job.batch_id) await loadGeneratedBatches([job.batch_id])
+      }
+      return available.length
+    } catch (error: any) {
+      if (!(error instanceof RequestError)) {
+        safeShowToast(describeFailure(error, '加载生成题目失败'))
+      }
+      return 0
+    } finally {
+      taskStore.dismissTask(`job:${job.id}`)
+      clearActiveJob()
+    }
+  }
+
+  /** 提交后台异步出题任务；若任务当场完成则返回合格题数，进行中返回 0 并由任务流续接。 */
   const generate = async (): Promise<number> => {
     if (selectedKpIds.value.length === 0) {
-      uni.showToast({ title: '请至少勾选一个知识点', icon: 'none' })
+      safeShowToast('请至少勾选一个知识点')
       return 0
     }
     isGenerating.value = true
     try {
-      const { questions: generated, batchIds } = await generateForPoints(
-        selectedKpIds.value,
-        questionCount.value,
-      )
-      if (generated.length === 0) {
-        uni.showToast({ title: '未生成合格题目，请调整配置后重试', icon: 'none' })
+      const job = await taskStore.startQuestionJob({
+        folder_id: scope.value.folderId,
+        material_id: scope.value.folderId ? undefined : scope.value.materialId,
+        knowledge_point_ids: [...selectedKpIds.value],
+        question_types: [...selectedTypes.value],
+        count: Math.min(20, Math.max(1, plannedCount.value)),
+        difficulty: difficulty.value,
+      })
+      jobMode.value = 'compose'
+      replacingQuestionId.value = null
+      activeJobId.value = job.id
+
+      if (job.status === 'completed') {
+        return await applyCompletedJob(job)
+      }
+      if (job.status === 'failed') {
+        safeShowToast(job.error_message || '出题任务失败，请重试')
+        clearActiveJob()
         return 0
       }
-      questions.value = generated
-      removedIds.value = []
-      hasGenerated.value = true
-      await loadGeneratedBatches(batchIds)
-      uni.showToast({ title: `已生成 ${generated.length} 道题目`, icon: 'success' })
-      return generated.length
+      return 0
     } catch (error: any) {
-      uni.showToast({ title: error?.message || '生成失败', icon: 'none' })
+      if (!(error instanceof RequestError)) {
+        safeShowToast(describeFailure(error, '创建出题任务失败'))
+      }
       return 0
     } finally {
       isGenerating.value = false
     }
   }
 
+  const attachActiveJobForScope = () => {
+    if (activeJobId.value && isJobInFlight.value) return
+    for (const job of taskStore.questionJobs.values()) {
+      if (!isQuestionJobActive(job)) continue
+      const matchesFolder = scope.value.folderId && job.folder_id === scope.value.folderId
+      const matchesMaterial =
+        !scope.value.folderId && scope.value.materialId && job.material_id === scope.value.materialId
+      if (matchesFolder || matchesMaterial) {
+        jobMode.value = 'compose'
+        activeJobId.value = job.id
+        return
+      }
+    }
+  }
+
+  const loadBatchQuestions = async (batchId: string): Promise<number> => {
+    const { available, pendingCount } = await fetchBatchQuestions(batchId)
+    if (available.length === 0) return 0
+    selectedKpIds.value = Array.from(
+      new Set(
+        available
+          .map((item) => item.knowledge_point_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    )
+    questions.value = available
+    removedIds.value = []
+    hasGenerated.value = true
+    pendingReviewNoticeCount.value = pendingCount
+    await loadGeneratedBatches([batchId])
+    return available.length
+  }
+
   /** 载入该资料已持久化的题目，供「继续核对已生成题目」入口直接进入核对视图。 */
   const loadExistingQuestions = async (materialId: string): Promise<number> => {
-    const loaded = await apiGetQuestionsByMaterial(materialId)
+    const loaded = enrichKpNames(await apiGetQuestionsByMaterial(materialId))
     if (loaded.length === 0) return 0
     selectedKpIds.value = Array.from(
       new Set(
@@ -149,22 +306,32 @@ export function useQuestionCompose() {
     removedIds.value = [...removedIds.value, questionId]
   }
 
-  /** 对不合格题目按原考点重新生成，补齐后替换该题。 */
   const regenerateQuestion = async (question: QuestionItem) => {
     const knowledgePointId = question.knowledge_point_id || selectedKpIds.value[0]
     if (!knowledgePointId) return
     isGenerating.value = true
     try {
-      const { questions: generated } = await generateForPoints([knowledgePointId], 1)
-      const replacement = generated.find((item) => item.id !== question.id)
-      if (!replacement) {
-        uni.showToast({ title: '未能生成替代题目，请稍后重试', icon: 'none' })
-        return
+      const job = await taskStore.startQuestionJob({
+        folder_id: scope.value.folderId,
+        material_id: scope.value.folderId ? undefined : (question.material_id || scope.value.materialId),
+        knowledge_point_ids: [knowledgePointId],
+        question_types: [question.type],
+        count: 1,
+        difficulty: difficulty.value,
+      })
+      jobMode.value = 'regenerate'
+      replacingQuestionId.value = question.id
+      activeJobId.value = job.id
+      if (job.status === 'completed') {
+        await applyCompletedJob(job)
+      } else if (job.status === 'failed') {
+        safeShowToast(job.error_message || '重新生成失败')
+        clearActiveJob()
       }
-      questions.value = questions.value.map((item) => (item.id === question.id ? replacement : item))
-      removedIds.value = removedIds.value.filter((id) => id !== question.id)
     } catch (error: any) {
-      uni.showToast({ title: error?.message || '重新生成失败', icon: 'none' })
+      if (!(error instanceof RequestError)) {
+        safeShowToast(describeFailure(error, '重新生成失败'))
+      }
     } finally {
       isGenerating.value = false
     }
@@ -175,12 +342,27 @@ export function useQuestionCompose() {
     if (missing.length === 0) return
     isGenerating.value = true
     try {
-      const { questions: generated } = await generateForPoints(missing, missing.length)
-      questions.value = dedupeQuestions([...questions.value, ...generated])
-      const generatedIds = new Set(generated.map((item) => item.id))
-      removedIds.value = removedIds.value.filter((id) => !generatedIds.has(id))
+      const job = await taskStore.startQuestionJob({
+        folder_id: scope.value.folderId,
+        material_id: scope.value.folderId ? undefined : scope.value.materialId,
+        knowledge_point_ids: missing,
+        question_types: [...selectedTypes.value],
+        count: Math.min(20, Math.max(1, missing.length)),
+        difficulty: difficulty.value,
+      })
+      jobMode.value = 'fill_gap'
+      replacingQuestionId.value = null
+      activeJobId.value = job.id
+      if (job.status === 'completed') {
+        await applyCompletedJob(job)
+      } else if (job.status === 'failed') {
+        safeShowToast(job.error_message || '补齐失败')
+        clearActiveJob()
+      }
     } catch (error: any) {
-      uni.showToast({ title: error?.message || '补齐失败', icon: 'none' })
+      if (!(error instanceof RequestError)) {
+        safeShowToast(describeFailure(error, '补齐失败'))
+      }
     } finally {
       isGenerating.value = false
     }
@@ -199,7 +381,16 @@ export function useQuestionCompose() {
     canStart,
     isGenerating,
     isStarting,
+    activeJobId,
+    activeJob,
+    isJobInFlight,
+    jobProgressText,
+    jobProgressPercent,
     generate,
+    applyCompletedJob,
+    clearActiveJob,
+    attachActiveJobForScope,
+    loadBatchQuestions,
     loadExistingQuestions,
     removeQuestion,
     regenerateQuestion,

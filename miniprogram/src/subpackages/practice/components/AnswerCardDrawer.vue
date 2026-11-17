@@ -1,5 +1,5 @@
 <template>
-  <view v-if="visible" class="sheet-overlay">
+  <view v-if="visible" class="sheet-overlay answer-card-overlay">
     <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容即关闭 -->
     <view class="modal-backdrop" @tap="close" />
     <view class="sheet-panel card-drawer-sheet paper-card">
@@ -48,9 +48,14 @@ const close = () => emit('update:visible', false)
 <style lang="scss" scoped>
 @import '../../../styles/modal.scss';
 
+.answer-card-overlay {
+  z-index: var(--z-sheet);
+}
+
 .card-drawer-sheet {
   padding: 32rpx 32rpx calc(32rpx + env(safe-area-inset-bottom));
   max-height: 60vh;
+  background: var(--color-bg-card);
 }
 
 .drawer-title-row {

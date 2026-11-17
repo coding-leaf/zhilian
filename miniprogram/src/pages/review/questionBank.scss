@@ -4,7 +4,7 @@
 // ---- 题库区块（我的题目） ----
 
 .bank-section .section-title-row {
-  margin-top: 24rpx;
+  margin-top: 8rpx;
 }
 
 .bank-state-card {
@@ -16,6 +16,11 @@
   margin-bottom: 20rpx;
 }
 
+.bank-error-card {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+}
+
 .bank-state-text {
   font-size: 26rpx;
   color: var(--color-ink-subtle);
@@ -23,11 +28,15 @@
   text-align: center;
 }
 
+.bank-error-card .bank-state-text {
+  color: var(--color-wrong);
+}
+
 .bank-retry-btn,
 .bank-more-btn {
   font-size: 26rpx;
   color: var(--color-academic-blue);
-  background: transparent;
+  background: var(--color-paper-card);
   border: 1px solid var(--color-blue-border);
   border-radius: 12rpx;
   padding: 0 32rpx;
@@ -128,11 +137,15 @@
   font-weight: 600;
 }
 
-.bank-question-row {
-  padding: 16rpx 0;
+.bank-question-wrap {
   border-bottom: 1px solid var(--color-surface-subtle);
+  padding: 14rpx 0;
+}
+
+.bank-question-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12rpx;
 }
 
@@ -144,10 +157,30 @@
   min-width: 0;
 }
 
-/* 动作位：记入错题 / 取消标记（进行中置灰，避免双击打出两次往返） */
+.bank-question-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8rpx;
+  flex-shrink: 0;
+}
+
+.bank-detail-btn {
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  border: 1px solid var(--color-blue-border);
+  background: var(--color-blue-bg);
+}
+
+.bank-detail-text {
+  font-size: 20rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+}
+
 .bank-wrong-btn {
   flex-shrink: 0;
-  padding: 8rpx 18rpx;
+  padding: 6rpx 16rpx;
   border-radius: 999rpx;
   border: 1px solid var(--color-border-strong);
   background: var(--color-paper-card);
@@ -208,11 +241,60 @@
   margin-bottom: 4rpx;
 }
 
-.bank-question-stem {
+.bank-detail-drawer {
+  margin-top: 12rpx;
+  margin-left: 56rpx;
+  padding: 16rpx 18rpx;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 10rpx;
+}
+
+.bank-detail-error {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.bank-detail-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  margin-bottom: 12rpx;
+}
+
+.bank-detail-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8rpx;
+}
+
+.bank-detail-opt-key {
+  font-size: 22rpx;
+  font-weight: 600;
+  color: var(--color-academic-blue);
+  flex-shrink: 0;
+}
+
+.bank-detail-opt-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.bank-detail-block {
+  margin-top: 8rpx;
+}
+
+.bank-detail-label {
   display: block;
-  font-size: 26rpx;
-  color: var(--color-ink-primary);
-  line-height: 1.5;
+  font-size: 22rpx;
+  font-weight: 600;
+  color: var(--color-ink-body);
+  margin-bottom: 4rpx;
+}
+
+.bank-detail-pt {
+  margin-top: 2rpx;
 }
 
 .bank-pending-hint {

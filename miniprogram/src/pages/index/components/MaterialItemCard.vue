@@ -29,8 +29,8 @@
 
       <!-- 已解析状态：知识树学习与出题入口 -->
       <view v-else-if="item.status === 'ready'" class="ready-actions">
-        <text class="action-link-study" @tap.stop="emit('open', item)">知识图谱 →</text>
-        <text class="action-link-practice" @tap.stop="emit('questions', item)">智能出题 →</text>
+        <text class="action-link-study" @tap.stop="emit('open', item)">知识速览 -></text>
+        <text class="action-link-practice" @tap.stop="emit('questions', item)">智能出题 -></text>
       </view>
 
       <!-- 删除入口无条件显示：资料卡整体有 @tap 跳详情，故必须 @tap.stop -->

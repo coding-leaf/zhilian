@@ -1,14 +1,19 @@
 <template>
   <view class="paper-card question-card">
     <view class="q-header">
-      <text class="q-num">第 {{ index + 1 }} 题</text>
+      <view class="q-header-left">
+        <text class="q-num">第 {{ index + 1 }} 题</text>
+        <text v-if="knowledgePointLabel" class="q-kp-tag">{{ knowledgePointLabel }}</text>
+      </view>
       <view class="q-meta-badges">
         <text class="q-type">{{ typeLabel }}</text>
         <text v-if="question.difficulty" class="q-diff">难度 {{ question.difficulty }}</text>
       </view>
     </view>
 
-    <text class="q-stem">{{ question.stem }}</text>
+    <view class="q-stem-wrap">
+      <RichContent :content="question.stem" />
+    </view>
 
     <view v-if="question.options && question.options.length" class="q-options">
       <view
@@ -16,13 +21,49 @@
         :key="option.key || optIdx"
         class="option-item"
       >
-        <text class="option-text">{{ optionDisplayText(option, optIdx) }}</text>
+        <text class="option-key">{{ optionKey(option, optIdx) }}.</text>
+        <view class="option-content">
+          <RichContent :content="cleanOptionContent(option.content)" compact />
+        </view>
+      </view>
+    </view>
+
+    <view class="answer-toggle-bar" @tap="showAnswer = !showAnswer">
+      <text class="answer-toggle-text">
+        {{ showAnswer ? '收起参考答案与解析' : '查看参考答案与解析' }}
+      </text>
+    </view>
+
+    <view v-if="showAnswer" class="answer-panel">
+      <view class="answer-row">
+        <text class="answer-label">参考答案</text>
+        <RichContent :content="formattedAnswer" compact />
+      </view>
+
+      <view v-if="explanationText" class="answer-row">
+        <text class="answer-label">解析说明</text>
+        <RichContent :content="explanationText" compact muted />
+      </view>
+
+      <view v-if="question.grading_points?.length" class="answer-row">
+        <text class="answer-label">采分点</text>
+        <view class="grading-list">
+          <view v-for="(pt, pIdx) in question.grading_points" :key="pIdx" class="grading-item">
+            <text class="grading-index">{{ pIdx + 1 }}.</text>
+            <view class="grading-text">
+              <RichContent :content="pt" compact muted />
+            </view>
+          </view>
+        </view>
       </view>
     </view>
 
     <view v-if="question.source_quote" class="source-box">
       <text class="source-tag">讲义依据切片</text>
-      <text class="source-text">{{ question.source_quote }}</text>
+      <text v-if="isSourceGarbled" class="source-garbled-hint">
+        检测到旧版讲义公式编码异常，重新解析讲义后可恢复原文依据
+      </text>
+      <RichContent v-else :content="question.source_quote" compact muted />
     </view>
 
     <view class="card-actions">
@@ -35,9 +76,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import RichContent from '@/components/RichContent.vue'
+import { optionKey, questionTypeLabel } from '@/api'
+import { isGarbledSnippetText } from '@/utils/richText'
 import type { QuestionItem } from '@/types'
-import { optionDisplayText, questionTypeLabel } from '@/api'
+import { formatQuestionAnswer } from '../utils/composeHelpers'
 
 const props = defineProps<{
   question: QuestionItem
@@ -50,23 +94,29 @@ const emit = defineEmits<{
   (e: 'regenerate', question: QuestionItem): void
 }>()
 
+const showAnswer = ref(false)
+
+watch(
+  () => props.question.id,
+  () => {
+    showAnswer.value = false
+  },
+)
+
 const typeLabel = computed(() => questionTypeLabel(props.question.type))
+const knowledgePointLabel = computed(
+  () => props.question.knowledge_point_name || props.question.knowledge_point || '',
+)
+const formattedAnswer = computed(() => formatQuestionAnswer(props.question))
+const explanationText = computed(() => props.question.analysis || props.question.explanation || '')
+const isSourceGarbled = computed(() => isGarbledSnippetText(props.question.source_quote))
+
+const cleanOptionContent = (raw: string) =>
+  String(raw ?? '')
+    .trim()
+    .replace(/^(?:(?:[(（][A-Z][)）]|[A-Z][.。、:：)）])\s*)+/i, '')
 </script>
 
 <style lang="scss" scoped>
-.question-card { padding: 32rpx; margin-bottom: 24rpx; }
-.q-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16rpx; }
-.q-num { font-size: 26rpx; font-weight: 600; color: var(--color-academic-blue); }
-.q-meta-badges { display: flex; gap: 12rpx; }
-.q-type, .q-diff { font-size: 22rpx; background: var(--color-surface-muted); color: var(--color-ink-subtle); padding: 4rpx 12rpx; border-radius: 4rpx; }
-.q-stem { display: block; font-size: 30rpx; color: var(--color-ink-primary); line-height: 1.6; font-weight: 500; margin-bottom: 20rpx; }
-.option-item { display: flex; padding: 12rpx 0; font-size: 28rpx; color: var(--color-ink-body); }
-.option-text { flex: 1; }
-.source-box { margin-top: 20rpx; padding: 16rpx 20rpx; background: var(--color-surface-subtle); border-left: 4rpx solid var(--color-academic-blue); border-radius: 4rpx; }
-.source-tag { font-size: 22rpx; font-weight: 600; color: var(--color-academic-blue); display: block; margin-bottom: 4rpx; }
-.source-text { font-size: 24rpx; color: var(--color-ink-subtle); line-height: 1.5; }
-.card-actions { display: flex; gap: 16rpx; margin-top: 20rpx; padding-top: 16rpx; border-top: 1px dashed var(--color-paper-border); }
-.remove-btn, .regen-btn { flex: 1; height: 64rpx; font-size: 24rpx; border-radius: 8rpx; display: flex; align-items: center; justify-content: center; }
-.remove-btn { background: var(--color-surface-muted); color: var(--color-ink-secondary); }
-.regen-btn { background: var(--color-blue-bg); color: var(--color-academic-blue); }
+@import '../questions.scss';
 </style>

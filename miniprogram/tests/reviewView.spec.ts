@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import {
+  computePracticedPointCount,
+  formatPointAccuracy,
   groupKnowledgePointIds,
   hasScope,
   isResumeable,
+  masteryLevelLabel,
+  mergeMasteryPoints,
+  practiceAccuracyBadge,
+  practiceActionButtonText,
   practiceActionText,
   practiceQuestionLabel,
   practiceStatusText,
   recordRegenerateScope,
   resolveWrongMarkAction,
+  wrongKnowledgePointLabel,
   wrongMarkLabel,
 } from '@/pages/review/reviewView'
-import type { PracticeStatus, PracticeSummary, WrongRecordItem } from '@/types'
+import type {
+  PracticeStatus,
+  PracticeSummary,
+  UserMasteryOverview,
+  WrongRecordItem,
+} from '@/types'
 
 function makePractice(overrides: Partial<PracticeSummary> = {}): PracticeSummary {
   return {
@@ -55,12 +67,104 @@ describe('reviewView practice status & labels', () => {
     }
 
     expect(practiceStatusText(makePractice({ status: 'unknown' as PracticeStatus }))).toBe('进行中')
+    expect(practiceActionButtonText(makePractice({ status: 'completed' }))).toBe('查看解析报告')
+    expect(practiceActionButtonText(makePractice({ status: 'in_progress' }))).toBe('继续作答')
+    expect(practiceAccuracyBadge(makePractice({ score_rate: 0.82 }))).toBe('正确率 82%')
+    expect(practiceAccuracyBadge(makePractice({ total_score: 4, max_score: 5 }))).toBe('4/5 · 80%')
   })
 
   it('formats practiceQuestionLabel with fallback to total_count and 0', () => {
     expect(practiceQuestionLabel(makePractice({ question_count: 12, total_count: 15 }))).toBe('12 题')
     expect(practiceQuestionLabel(makePractice({ question_count: 0, total_count: 8 }))).toBe('8 题')
     expect(practiceQuestionLabel(makePractice({ question_count: 0, total_count: null }))).toBe('0 题')
+  })
+})
+
+describe('reviewView mastery sorting & wrong KP labels', () => {
+  it('sorts mastery points with weak -> basic -> unlearned -> proficient priority', () => {
+    const overview: UserMasteryOverview = {
+      total_points: 4,
+      total_knowledge_points: 4,
+      mastered_count: 1,
+      proficient_count: 1,
+      learning_count: 1,
+      basic_count: 1,
+      weak_count: 1,
+      unlearned_count: 1,
+      overall_score: 0.52,
+      overall_mastery_score: 0.52,
+      points: [
+        {
+          knowledge_point_id: 'kp-prof',
+          knowledge_name: '全概率公式',
+          mastery_score: 0.92,
+          level: 'proficient',
+          practice_count: 5,
+          correct_count: 5,
+        },
+        {
+          knowledge_point_id: 'kp-un',
+          knowledge_name: '平滑修正',
+          mastery_score: 0,
+          level: 'unlearned',
+          practice_count: 0,
+          correct_count: 0,
+        },
+        {
+          knowledge_point_id: 'kp-basic',
+          knowledge_name: '条件独立假设',
+          mastery_score: 0.65,
+          level: 'basic',
+          practice_count: 4,
+          correct_count: 3,
+        },
+      ],
+      weak_knowledge_points: [
+        {
+          knowledge_point_id: 'kp-weak',
+          knowledge_name: '朴素贝叶斯分类器',
+          mastery_score: 0.2,
+          level: 'weak',
+          practice_count: 2,
+          correct_count: 0,
+        },
+      ],
+      weak_points: [],
+    }
+
+    const merged = mergeMasteryPoints(overview)
+    expect(merged.map((p) => p.knowledge_point_id)).toEqual([
+      'kp-weak',
+      'kp-basic',
+      'kp-un',
+      'kp-prof',
+    ])
+    expect(masteryLevelLabel('weak')).toBe('薄弱')
+    expect(masteryLevelLabel('basic')).toBe('基本掌握')
+    expect(masteryLevelLabel('unlearned')).toBe('未练')
+    expect(masteryLevelLabel('proficient')).toBe('熟练')
+    expect(computePracticedPointCount(overview)).toBe(3)
+    expect(formatPointAccuracy(merged[1])).toBe('正确率 75% (3/4)')
+    expect(formatPointAccuracy(merged[2])).toBe('暂无作答')
+  })
+
+  it('binds real knowledge point name for wrong record instead of question type', () => {
+    expect(
+      wrongKnowledgePointLabel(makeWrong({ knowledge_point_name: '最大似然估计' })),
+    ).toBe('最大似然估计')
+    expect(
+      wrongKnowledgePointLabel(
+        makeWrong({
+          knowledge_point_name: null,
+          question_snapshot: {
+            stem: '题干',
+            question_type: 'single_choice',
+            knowledge_point_name: '贝叶斯定理',
+          },
+        }),
+      ),
+    ).toBe('贝叶斯定理')
+    expect(wrongKnowledgePointLabel(makeWrong({ knowledge_point_name: null }))).toBe('综合考点')
   })
 })
 

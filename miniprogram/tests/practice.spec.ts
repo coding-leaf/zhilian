@@ -2,6 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePracticeStore } from '@/stores/practice'
 import { useFolderStore } from '@/stores/folder'
+import {
+  collectLegacyTrueFalseUpgrades,
+  isSingleOrTrueFalseSelected,
+  joinFillBlankAnswers,
+  normalizeMultipleSelection,
+  normalizeTrueFalseValue,
+  resolveFillBlankCount,
+  resolveTrueFalseOptions,
+  splitFillBlankAnswers,
+  toggleMultipleSelection,
+} from '@/subpackages/practice/utils/practiceSession'
 
 describe('Practice & Learning Workflow Unit Tests', () => {
   beforeEach(() => {
@@ -67,5 +78,53 @@ describe('Practice & Learning Workflow Unit Tests', () => {
     folderStore.setCurrentFolderId('folder_123')
     expect(folderStore.currentFolderId).toBe('folder_123')
   })
-})
 
+  it('normalizes true_false options and legacy draft answers to canonical 正确/错误', () => {
+    expect(normalizeTrueFalseValue('A')).toBe('正确')
+    expect(normalizeTrueFalseValue('T')).toBe('正确')
+    expect(normalizeTrueFalseValue('正确')).toBe('正确')
+    expect(normalizeTrueFalseValue('B')).toBe('错误')
+    expect(normalizeTrueFalseValue('F')).toBe('错误')
+    expect(normalizeTrueFalseValue('错误')).toBe('错误')
+
+    const opts = resolveTrueFalseOptions([
+      { key: 'A', content: '正确' },
+      { key: 'B', content: '错误' },
+    ])
+    expect(opts).toEqual([
+      { key: '正确', content: '正确' },
+      { key: '错误', content: '错误' },
+    ])
+
+    expect(isSingleOrTrueFalseSelected('true_false', 'A', '正确')).toBe(true)
+    expect(isSingleOrTrueFalseSelected('true_false', 'F', '错误')).toBe(true)
+    expect(isSingleOrTrueFalseSelected('true_false', 'A', '错误')).toBe(false)
+
+    const upgrades = collectLegacyTrueFalseUpgrades(
+      [
+        { id: 'q-tf-1', type: 'true_false', stem: '判断题 1' },
+        { id: 'q-tf-2', type: 'true_false', stem: '判断题 2' },
+        { id: 'q-tf-3', type: 'true_false', stem: '判断题 3' },
+      ],
+      { 'q-tf-1': 'A', 'q-tf-2': 'F', 'q-tf-3': '正确' },
+    )
+    expect(upgrades).toEqual([
+      { questionId: 'q-tf-1', answer: '正确' },
+      { questionId: 'q-tf-2', answer: '错误' },
+    ])
+  })
+
+  it('supports multi-choice array toggling and multi-blank fill_in_blank split/join', () => {
+    expect(normalizeMultipleSelection('["C","A"]')).toEqual(['C', 'A'])
+    expect(toggleMultipleSelection(['A'], 'C')).toEqual(['A', 'C'])
+    expect(toggleMultipleSelection(['A', 'C'], 'A')).toEqual(['C'])
+
+    expect(resolveFillBlankCount('先验概率是____，似然度是（）')).toBe(2)
+    expect(resolveFillBlankCount('公式 $P(Y=c_k|X=x_j)$ 中唯一空白是____')).toBe(1)
+    expect(resolveFillBlankCount('请填写两个术语', '先验; 后验')).toBe(2)
+
+    expect(splitFillBlankAnswers('先验概率; 后验概率', 2)).toEqual(['先验概率', '后验概率'])
+    expect(joinFillBlankAnswers(['先验概率', '后验概率'])).toBe('先验概率; 后验概率')
+    expect(joinFillBlankAnswers(['', '   '])).toBe('')
+  })
+})

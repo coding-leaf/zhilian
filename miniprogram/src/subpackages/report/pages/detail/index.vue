@@ -47,7 +47,18 @@
     </template>
 
     <view class="bottom-bar">
-      <button class="paper-btn-primary full-btn" @tap="handleBackHome">返回工作台</button>
+      <button class="secondary-bar-btn" @tap="handleBackHome">返回工作台</button>
+      <button
+        v-if="detail.wrongKnowledgePointIds.value.length > 0 && detail.canRegenerate.value"
+        class="reinforce-bar-btn"
+        :loading="detail.isRegenerating.value"
+        @tap="detail.startAdaptivePractice"
+      >
+        错题靶向强化
+      </button>
+      <button class="paper-btn-primary primary-bar-btn" @tap="handleGoReview">
+        查看学情总览
+      </button>
     </view>
 
     <GradingActionModal
@@ -60,8 +71,9 @@
 
     <AiCoachDrawer
       v-model:visible="showCoach"
-      title="针对本题答疑"
+      :title="coachTitle"
       :question-id="coachQuestionId"
+      :knowledge-point-id="coachKnowledgePointId"
       :context-text="coachContext"
       :user-answer="coachUserAnswer"
       :grading-points="coachGradingPoints"
@@ -74,17 +86,20 @@ import { ref } from 'vue'
 import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app'
 import type { AttemptResult } from '@/types'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
+import { safeShowToast } from '@/utils/loadingGuard'
 import ReportSummaryCard from '../../components/ReportSummaryCard.vue'
 import AttemptResultCard from '../../components/AttemptResultCard.vue'
 import GradingActionModal from '../../components/GradingActionModal.vue'
 import AdaptivePracticeCard from '../../components/AdaptivePracticeCard.vue'
 import { useReportDetail } from '../../composables/useReportDetail'
-import { formatAnswer } from '../../utils/reportView'
+import { formatAttemptAnswer } from '../../utils/reportView'
 
 const detail = useReportDetail()
 
 const showCoach = ref(false)
+const coachTitle = ref('针对本题答疑')
 const coachQuestionId = ref('')
+const coachKnowledgePointId = ref<string | undefined>()
 const coachContext = ref('')
 const coachUserAnswer = ref('')
 const coachGradingPoints = ref<string[]>([])
@@ -112,16 +127,29 @@ onUnload(() => {
 
 const openCoach = (result: AttemptResult) => {
   coachQuestionId.value = result.questionId
-  coachContext.value = result.stem
-  coachUserAnswer.value = formatAnswer(result.userAnswer)
-  coachGradingPoints.value = result.missingKeywords
+  coachKnowledgePointId.value = result.knowledgePointId
+  coachTitle.value = result.knowledgePointName ? `考点答疑 · ${result.knowledgePointName}` : '针对本题答疑'
+  coachContext.value = result.knowledgePointName
+    ? `考点：${result.knowledgePointName}。题干：${result.stem}`
+    : result.stem
+  coachUserAnswer.value = formatAttemptAnswer(result.userAnswer, result.type)
+  coachGradingPoints.value = result.missingKeywords.length
+    ? result.missingKeywords
+    : result.gradingPoints
   showCoach.value = true
 }
 
 const handleBackHome = () => {
   uni.switchTab({
     url: '/pages/index/index',
-    fail: () => uni.showToast({ title: '返回工作台失败', icon: 'none' }),
+    fail: () => safeShowToast('返回工作台失败'),
+  })
+}
+
+const handleGoReview = () => {
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('打开学情总览失败'),
   })
 }
 </script>
