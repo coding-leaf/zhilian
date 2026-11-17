@@ -57,13 +57,13 @@ const handleLogin = async () => {
   display: block;
   font-size: 40rpx;
   font-weight: 700;
-  color: #1c1917;
+  color: var(--color-ink-primary);
   margin-bottom: 16rpx;
 }
 .desc {
   display: block;
   font-size: 26rpx;
-  color: #78716c;
+  color: var(--color-ink-subtle);
   line-height: 1.5;
   margin-bottom: 48rpx;
 }

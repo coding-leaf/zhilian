@@ -1,40 +1,21 @@
 import { computed, ref } from 'vue'
 import {
-  apiGenerateQuestions,
   apiGetQuestionsByMaterial,
   apiListQuestionBatches,
   computeKnowledgeCoverage,
   dedupeQuestions,
-  planGenerationBatches,
 } from '@/api'
 import type { CoverageResult } from '@/api/adapters/question'
 import { describeBatchLabel } from '@/utils/questionBatch'
-import type { FolderKnowledgePointItem, QuestionItem, QuestionBatchSummary, QuestionType } from '@/types'
+import { generateQuestionsInBatches } from '@/utils/questionGeneration'
+import type { QuestionBatchSummary, QuestionItem } from '@/types'
+import { useComposeConfig, type ComposeScope, type KnowledgePointOption } from './useComposeConfig'
 
-export interface ComposeScope {
-  folderId?: string
-  materialId?: string
-}
-
-export interface KnowledgePointOption {
-  id: string
-  name: string
-}
-
-const DEFAULT_TYPES: QuestionType[] = [
-  'single_choice',
-  'multiple_choice',
-  'true_false',
-  'short_answer',
-]
+export type { ComposeScope, KnowledgePointOption }
 
 export function useQuestionCompose() {
-  const scope = ref<ComposeScope>({})
-  const availableKpList = ref<KnowledgePointOption[]>([])
-  const selectedKpIds = ref<string[]>([])
-  const selectedTypes = ref<QuestionType[]>([...DEFAULT_TYPES])
-  const questionCount = ref<number>(5)
-  const difficulty = ref<number>(3)
+  const config = useComposeConfig()
+  const { scope, selectedKpIds, selectedTypes, questionCount, difficulty, plannedCount } = config
 
   const questions = ref<QuestionItem[]>([])
   const removedIds = ref<string[]>([])
@@ -58,10 +39,6 @@ export function useQuestionCompose() {
     () => remainingQuestions.value.length > 0 && coverage.value.missing.length === 0,
   )
 
-  const plannedCount = computed(() =>
-    Math.max(selectedKpIds.value.length, questionCount.value),
-  )
-
   /** 生成前后都据实披露题量调整与合格题覆盖缺口，剔除题目后自动重算。 */
   const generationNotice = computed(() => {
     if (!hasGenerated.value) return ''
@@ -75,70 +52,16 @@ export function useQuestionCompose() {
     return parts.join('；')
   })
 
-  const isAllKpSelected = computed(
-    () =>
-      availableKpList.value.length > 0 &&
-      selectedKpIds.value.length === availableKpList.value.length,
-  )
+  const generateForPoints = (knowledgePointIds: string[], desiredCount: number) =>
+    generateQuestionsInBatches({
+      folderId: scope.value.folderId,
+      materialId: scope.value.materialId,
+      knowledgePointIds,
+      desiredCount,
+      questionTypes: selectedTypes.value,
+      difficulty: difficulty.value,
+    })
 
-  const setKnowledgePoints = (list: KnowledgePointOption[]) => {
-    availableKpList.value = list
-    selectedKpIds.value = list.map((point) => point.id)
-  }
-
-  const isKpSelected = (id: string) => selectedKpIds.value.includes(id)
-  const toggleKp = (id: string) => {
-    selectedKpIds.value = isKpSelected(id)
-      ? selectedKpIds.value.filter((value) => value !== id)
-      : [...selectedKpIds.value, id]
-  }
-  const toggleSelectAllKp = () => {
-    selectedKpIds.value = isAllKpSelected.value
-      ? []
-      : availableKpList.value.map((point) => point.id)
-  }
-
-  const isTypeSelected = (type: QuestionType) => selectedTypes.value.includes(type)
-  const toggleType = (type: QuestionType) => {
-    if (isTypeSelected(type)) {
-      if (selectedTypes.value.length === 1) {
-        uni.showToast({ title: '至少选择一种题型', icon: 'none' })
-        return
-      }
-      selectedTypes.value = selectedTypes.value.filter((value) => value !== type)
-      return
-    }
-    selectedTypes.value = [...selectedTypes.value, type]
-  }
-
-  const generateForKnowledgePoints = async (knowledgePointIds: string[], desiredCount: number) => {
-    const batches = planGenerationBatches(knowledgePointIds, desiredCount)
-    const collected: QuestionItem[] = []
-    const batchIds: string[] = []
-    let pending = 0
-    for (const batch of batches) {
-      const result = await apiGenerateQuestions({
-        folder_id: scope.value.folderId,
-        material_id: scope.value.folderId ? undefined : scope.value.materialId,
-        knowledge_point_ids: batch.knowledgePointIds,
-        question_types: selectedTypes.value,
-        count: batch.count,
-        difficulty: difficulty.value,
-      })
-      collected.push(...result.qualified_questions)
-      if (result.batch_id) batchIds.push(result.batch_id)
-      pending += result.pending_count
-    }
-    return { questions: dedupeQuestions(collected), pending, batchIds }
-  }
-
-  /**
-   * 拉取本次生成批次的摘要用于展示。
-   *
-   * 标签只在题库批次接口上有完整输入（一个批次可以横跨多份资料，「来源」不是生成
-   * 响应能拼出来的），所以这里回查同一份数据，保证两处说的「同一个批次」一致。
-   * 回查失败只降级提示，不影响核对与开练。
-   */
   const loadGeneratedBatches = async (batchIds: string[]) => {
     generatedBatchFallback.value = ''
     if (batchIds.length === 0) {
@@ -173,13 +96,7 @@ export function useQuestionCompose() {
     return generatedBatchFallback.value
   })
 
-  /**
-   * 生成题目。
-   *
-   * 返回值即「本次合格题数量」，调用方据此决定是否切到核对视图：
-   * 失败与零合格题都返回 0，使调用方无需自行区分异常与空结果——
-   * 两种情况都必须留在配置区，展示一个空核对列表比留在配置区更糟。
-   */
+  /** 生成题目：返回本次合格题数量（失败或 0 题返回 0）。 */
   const generate = async (): Promise<number> => {
     if (selectedKpIds.value.length === 0) {
       uni.showToast({ title: '请至少勾选一个知识点', icon: 'none' })
@@ -187,7 +104,7 @@ export function useQuestionCompose() {
     }
     isGenerating.value = true
     try {
-      const { questions: generated, batchIds } = await generateForKnowledgePoints(
+      const { questions: generated, batchIds } = await generateForPoints(
         selectedKpIds.value,
         questionCount.value,
       )
@@ -209,13 +126,7 @@ export function useQuestionCompose() {
     }
   }
 
-  /**
-   * 载入该资料已持久化的题目，供「继续核对已生成题目」入口直接进入核对视图。
-   *
-   * 选中考点取自已加载题目**实际覆盖**的考点集合，因此覆盖率缺口必然为空——
-   * 这批题本来就只为这些考点生成过，「缺口」在这里不是缺口，不该拦住作答。
-   * 一条都没载到时返回 0，由调用方留在配置区。
-   */
+  /** 载入该资料已持久化的题目，供「继续核对已生成题目」入口直接进入核对视图。 */
   const loadExistingQuestions = async (materialId: string): Promise<number> => {
     const loaded = await apiGetQuestionsByMaterial(materialId)
     if (loaded.length === 0) return 0
@@ -238,17 +149,13 @@ export function useQuestionCompose() {
     removedIds.value = [...removedIds.value, questionId]
   }
 
-  const restoreQuestion = (questionId: string) => {
-    removedIds.value = removedIds.value.filter((id) => id !== questionId)
-  }
-
   /** 对不合格题目按原考点重新生成，补齐后替换该题。 */
   const regenerateQuestion = async (question: QuestionItem) => {
     const knowledgePointId = question.knowledge_point_id || selectedKpIds.value[0]
     if (!knowledgePointId) return
     isGenerating.value = true
     try {
-      const { questions: generated } = await generateForKnowledgePoints([knowledgePointId], 1)
+      const { questions: generated } = await generateForPoints([knowledgePointId], 1)
       const replacement = generated.find((item) => item.id !== question.id)
       if (!replacement) {
         uni.showToast({ title: '未能生成替代题目，请稍后重试', icon: 'none' })
@@ -268,9 +175,8 @@ export function useQuestionCompose() {
     if (missing.length === 0) return
     isGenerating.value = true
     try {
-      const { questions: generated } = await generateForKnowledgePoints(missing, missing.length)
+      const { questions: generated } = await generateForPoints(missing, missing.length)
       questions.value = dedupeQuestions([...questions.value, ...generated])
-      // 若补齐题与已剔除题为同一条目，则以生成结果恢复其可见性
       const generatedIds = new Set(generated.map((item) => item.id))
       removedIds.value = removedIds.value.filter((id) => !generatedIds.has(id))
     } catch (error: any) {
@@ -280,21 +186,8 @@ export function useQuestionCompose() {
     }
   }
 
-  const setScope = (next: ComposeScope) => {
-    scope.value = next
-  }
-
-  const flattenKnowledgePoints = (list: FolderKnowledgePointItem[]): KnowledgePointOption[] =>
-    list.map((point) => ({ id: point.id, name: point.name }))
-
   return {
-    scope,
-    setScope,
-    availableKpList,
-    selectedKpIds,
-    selectedTypes,
-    questionCount,
-    difficulty,
+    ...config,
     questions,
     remainingQuestions,
     removedIds,
@@ -304,21 +197,11 @@ export function useQuestionCompose() {
     generatedBatchNotice,
     coverage,
     canStart,
-    plannedCount,
-    isAllKpSelected,
     isGenerating,
     isStarting,
-    setKnowledgePoints,
-    flattenKnowledgePoints,
-    isKpSelected,
-    toggleKp,
-    toggleSelectAllKp,
-    isTypeSelected,
-    toggleType,
     generate,
     loadExistingQuestions,
     removeQuestion,
-    restoreQuestion,
     regenerateQuestion,
     fillCoverageGap,
   }

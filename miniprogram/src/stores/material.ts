@@ -2,10 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   MaterialItem,
-  QuestionItem,
-  KnowledgeTreeResult,
   KnowledgePointDetail,
-  PointSourceListResult,
 } from '@/types'
 import {
   apiUploadMaterial,
@@ -13,35 +10,25 @@ import {
   apiGetMaterialDetail,
   apiGetMaterialList,
   apiTriggerMaterialParse,
-  apiGenerateQuestions,
   apiGetQuestionsByMaterial,
   apiGetKnowledgeTree,
   apiGetKnowledgePointDetail,
   apiGetKnowledgePointSnippets,
-  type GenerateQuestionsParams,
 } from '@/api'
+import { createPoller, type PollerHandle } from '@/utils/poller'
 
 export const useMaterialStore = defineStore('material', () => {
   const currentMaterial = ref<MaterialItem | null>(null)
   const materialList = ref<MaterialItem[]>([])
-  const questions = ref<QuestionItem[]>([])
-  const isUploading = ref<boolean>(false)
   const isGenerating = ref<boolean>(false)
-  const currentKnowledgeTree = ref<KnowledgeTreeResult | null>(null)
   const activeKnowledgePoint = ref<KnowledgePointDetail | null>(null)
-  const activeSnippets = ref<PointSourceListResult | null>(null)
 
   // 1. 上传资料并加入列表（支持关联课程文件夹）
   const upload = async (filePath: string, title?: string, folderId?: string): Promise<MaterialItem> => {
-    isUploading.value = true
-    try {
-      const item = await apiUploadMaterial(filePath, title, folderId)
-      currentMaterial.value = item
-      materialList.value.unshift(item)
-      return item
-    } finally {
-      isUploading.value = false
-    }
+    const item = await apiUploadMaterial(filePath, title, folderId)
+    currentMaterial.value = item
+    materialList.value.unshift(item)
+    return item
   }
 
   // 2. 手动触发资料解析流水线
@@ -60,14 +47,22 @@ export const useMaterialStore = defineStore('material', () => {
     return item
   }
 
-  // 4. 轮询资料解析状态
-  const pollMaterialStatus = async (id: string, maxAttempts = 20, interval = 1500): Promise<MaterialItem> => {
-    for (let i = 0; i < maxAttempts; i++) {
-      const item = await fetchMaterialDetail(id)
-      if (['ready', 'failed', 'retake_required'].includes(item.status)) {
-        return item
-      }
-      await new Promise((r) => setTimeout(r, interval))
+  // 4. 轮询资料解析状态（支持页面传入可取消 poller）
+  const pollMaterialStatus = async (
+    id: string,
+    maxAttempts = 20,
+    interval = 1500,
+    poller: PollerHandle = createPoller(),
+  ): Promise<MaterialItem> => {
+    const result = await poller.run(() => fetchMaterialDetail(id), {
+      maxAttempts,
+      intervalMs: interval,
+      isDone: (item) => ['ready', 'failed', 'retake_required'].includes(item.status),
+    })
+    if (result.status === 'completed') return result.value
+    if (result.status === 'stopped') {
+      if (result.lastValue) return result.lastValue
+      throw new Error('资料轮询已取消')
     }
     throw new Error('资料解析超时，请稍后刷新')
   }
@@ -101,9 +96,7 @@ export const useMaterialStore = defineStore('material', () => {
   // 5. 加载知识树
   const loadKnowledgeTree = async (materialId: string, versionId?: string) => {
     try {
-      const tree = await apiGetKnowledgeTree(materialId, versionId)
-      currentKnowledgeTree.value = tree
-      return tree
+      return await apiGetKnowledgeTree(materialId, versionId)
     } catch (err) {
       console.error('Failed to load knowledge tree', err)
       return null
@@ -118,7 +111,6 @@ export const useMaterialStore = defineStore('material', () => {
         apiGetKnowledgePointSnippets(pointId),
       ])
       activeKnowledgePoint.value = detail
-      activeSnippets.value = snippetsRes
       return { detail, snippets: snippetsRes }
     } catch (err) {
       console.error('Failed to load knowledge point snippets', err)
@@ -126,42 +118,16 @@ export const useMaterialStore = defineStore('material', () => {
     }
   }
 
-  // 7. 触发智能出题（扩展支持多知识点与多题型）
-  const generateQuestions = async (params: GenerateQuestionsParams | string, count = 5) => {
-    isGenerating.value = true
-    try {
-      const req: GenerateQuestionsParams = typeof params === 'string'
-        ? { material_id: params, count }
-        : params
-
-      const res = await apiGenerateQuestions(req)
-      if (res && res.qualified_questions && res.qualified_questions.length > 0) {
-        questions.value = res.qualified_questions
-      } else if (req.material_id) {
-        // 兜底拉取题目
-        questions.value = await apiGetQuestionsByMaterial(req.material_id)
-      }
-      return questions.value
-    } finally {
-      isGenerating.value = false
-    }
-  }
-
-  // 8. 获取题目
+  // 7. 获取题目
   const loadQuestions = async (materialId: string) => {
-    questions.value = await apiGetQuestionsByMaterial(materialId)
-    return questions.value
+    return apiGetQuestionsByMaterial(materialId)
   }
 
   return {
     currentMaterial,
     materialList,
-    questions,
-    isUploading,
     isGenerating,
-    currentKnowledgeTree,
     activeKnowledgePoint,
-    activeSnippets,
     upload,
     triggerParse,
     fetchMaterialDetail,
@@ -170,7 +136,6 @@ export const useMaterialStore = defineStore('material', () => {
     loadMaterialList,
     loadKnowledgeTree,
     loadKnowledgePointWithSnippets,
-    generateQuestions,
     loadQuestions,
   }
 })

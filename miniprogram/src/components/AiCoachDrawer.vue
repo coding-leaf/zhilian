@@ -1,66 +1,31 @@
 <template>
-  <view v-if="visible" class="coach-drawer-overlay">
+  <view v-if="visible" class="sheet-overlay">
     <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容（含输入框）即关闭 -->
-    <view class="coach-drawer-backdrop" @tap="closeDrawer" />
-    <view class="coach-drawer-sheet">
-      <!-- 头部 -->
+    <view class="modal-backdrop" @tap="closeDrawer" />
+    <view class="sheet-panel coach-drawer-sheet">
       <view class="drawer-header">
         <view class="header-left">
-          <text class="coach-avatar">🤖</text>
+          <view class="coach-avatar">
+            <text class="coach-avatar-text">AI</text>
+          </view>
           <view class="coach-titles">
             <text class="coach-name">AI 智能助教</text>
             <text class="coach-desc">{{ title || '深度解析与启发式答疑' }}</text>
           </view>
         </view>
         <view class="close-btn" @tap="closeDrawer">
-          <text class="close-icon">✕</text>
+          <text class="close-icon">关闭</text>
         </view>
       </view>
 
-      <!-- 消息与启发式内容区 -->
-      <scroll-view scroll-y class="chat-body">
-        <!-- 题目或知识点背景卡片 -->
-        <view v-if="contextText" class="context-card">
-          <text class="context-tag">📌 答疑上下文</text>
-          <text class="context-content">{{ contextText }}</text>
-        </view>
+      <CoachMessageList
+        :context-text="contextText"
+        :messages="messageList"
+        :is-thinking="isThinking"
+        @select-suggestion="setInputQuery"
+        @open-source="openSource"
+      />
 
-        <!-- 对话流 -->
-        <view v-for="(msg, idx) in messageList" :key="idx" :class="['msg-row', `msg-${msg.role}`]">
-          <view class="msg-bubble">
-            <text class="msg-text">{{ msg.content }}</text>
-            <view v-if="msg.prompt" class="next-prompt-box">
-              <text class="next-prompt-label">💡 启发延伸：</text>
-              <text class="next-prompt-text">{{ msg.prompt }}</text>
-            </view>
-            <view v-if="msg.suggestions?.length" class="suggestions-list">
-              <text
-                v-for="suggestion in msg.suggestions"
-                :key="suggestion"
-                class="suggestion-item"
-                @tap="inputQuery = suggestion"
-              >
-                {{ suggestion }}
-              </text>
-            </view>
-            <view v-if="msg.sources?.length" class="sources-list">
-              <text class="sources-title">参考资料</text>
-              <view v-for="source in msg.sources" :key="source.snippet_id" class="source-item">
-                <text class="source-link" @tap="openSource(source.material_id)">
-                  {{ source.chapter_title || '打开来源讲义' }} ↗
-                </text>
-                <text class="source-excerpt">{{ source.excerpt }}</text>
-              </view>
-            </view>
-          </view>
-        </view>
-
-        <view v-if="isThinking" class="thinking-row">
-          <text class="thinking-text">助教正在组织思路...</text>
-        </view>
-      </scroll-view>
-
-      <!-- 底部输入框 -->
       <view class="drawer-footer">
         <input
           v-model="inputQuery"
@@ -68,13 +33,13 @@
           placeholder="向助教追问（如：为何这道题考点是...）"
           :disabled="isThinking"
           confirm-type="send"
-          @confirm="handleSend"
+          @confirm="sendMessage"
         />
         <button
           class="paper-btn-primary send-btn"
           :loading="isThinking"
           :disabled="!inputQuery.trim() || isThinking"
-          @tap="handleSend"
+          @tap="sendMessage"
         >
           发送
         </button>
@@ -84,17 +49,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { apiAskQuestionCoach, apiAskScopedCoach } from '@/api'
-import type { CoachSource } from '@/types'
-
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  prompt?: string
-  suggestions?: string[]
-  sources?: CoachSource[]
-}
+import CoachMessageList from './CoachMessageList.vue'
+import { useCoachChat } from '@/composables/useCoachChat'
 
 const props = defineProps<{
   visible: boolean
@@ -112,60 +68,23 @@ const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void
 }>()
 
-const inputQuery = ref('')
-const isThinking = ref(false)
-const messageList = ref<ChatMessage[]>([])
+const {
+  inputQuery,
+  isThinking,
+  messageList,
+  setInputQuery,
+  sendMessage,
+} = useCoachChat(() => ({
+  questionId: props.questionId,
+  userAnswer: props.userAnswer,
+  gradingPoints: props.gradingPoints,
+  folderId: props.folderId,
+  materialId: props.materialId,
+  knowledgePointId: props.knowledgePointId,
+}))
 
 const closeDrawer = () => {
   emit('update:visible', false)
-}
-
-const handleSend = async () => {
-  const q = inputQuery.value.trim()
-  if (!q || isThinking.value) return
-
-  messageList.value.push({
-    role: 'user',
-    content: q,
-  })
-  inputQuery.value = ''
-  isThinking.value = true
-
-  try {
-    if (props.questionId) {
-      const res = await apiAskQuestionCoach(
-        props.questionId,
-        q,
-        props.userAnswer,
-        props.gradingPoints
-      )
-      messageList.value.push({ role: 'assistant', content: res.reply, suggestions: res.suggestions })
-    } else {
-      if (!props.folderId && !props.materialId && !props.knowledgePointId) {
-        messageList.value.push({ role: 'assistant', content: '请先选择一门课程或打开一份讲义，再向助教提问。' })
-        return
-      }
-      const response = await apiAskScopedCoach({
-        ...(props.folderId ? { folder_id: props.folderId } : {}),
-        ...(props.materialId ? { material_id: props.materialId } : {}),
-        ...(props.knowledgePointId ? { knowledge_point_id: props.knowledgePointId } : {}),
-        user_prompt: q,
-      })
-      messageList.value.push({
-        role: 'assistant',
-        content: response.reply,
-        suggestions: response.suggestions,
-        sources: response.sources,
-      })
-    }
-  } catch (err: any) {
-    messageList.value.push({
-      role: 'assistant',
-      content: '助教网络开小差了，请稍后再试。',
-    })
-  } finally {
-    isThinking.value = false
-  }
 }
 
 const openSource = (id: string) => {
@@ -176,28 +95,11 @@ const openSource = (id: string) => {
 }
 </script>
 
-<style scoped>
-.coach-drawer-overlay {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
-  z-index: 999;
-  display: flex;
-  justify-content: flex-end;
-  flex-direction: column;
-}
+<style lang="scss" scoped>
+@import '../styles/modal.scss';
 
 .coach-drawer-sheet {
-  background: #ffffff;
-  border-top-left-radius: 28rpx;
-  border-top-right-radius: 28rpx;
   height: 75vh;
-  display: flex;
-  flex-direction: column;
   box-shadow: 0 -8rpx 32rpx rgba(0, 0, 0, 0.08);
 }
 
@@ -206,7 +108,7 @@ const openSource = (id: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #f5f5f4;
+  border-bottom: 1px solid var(--color-surface-muted);
 }
 
 .header-left {
@@ -215,172 +117,62 @@ const openSource = (id: string) => {
 }
 
 .coach-avatar {
-  font-size: 40rpx;
+  width: 56rpx;
+  height: 56rpx;
+  border-radius: 28rpx;
+  background: var(--color-blue-bg);
+  border: 1px solid var(--color-blue-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-right: 16rpx;
+}
+
+.coach-avatar-text {
+  font-size: 22rpx;
+  font-weight: 700;
+  color: var(--color-academic-blue);
 }
 
 .coach-name {
   font-size: 30rpx;
   font-weight: 700;
-  color: #1c1917;
+  color: var(--color-ink-primary);
   display: block;
 }
 
 .coach-desc {
   font-size: 22rpx;
-  color: #78716c;
+  color: var(--color-ink-subtle);
 }
 
 .close-btn {
-  width: 48rpx;
-  height: 48rpx;
+  padding: 6rpx 18rpx;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 24rpx;
-  background: #f5f5f4;
+  background: var(--color-surface-muted);
 }
 
 .close-icon {
-  font-size: 24rpx;
-  color: #78716c;
-}
-
-.chat-body {
-  flex: 1;
-  padding: 24rpx 32rpx;
-  overflow-y: auto;
-}
-
-.context-card {
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 12rpx;
-  padding: 16rpx 20rpx;
-  margin-bottom: 24rpx;
-}
-
-.context-tag {
-  font-size: 20rpx;
-  color: #0284c7;
-  font-weight: 600;
-  display: block;
-  margin-bottom: 4rpx;
-}
-
-.context-content {
-  font-size: 24rpx;
-  color: #475569;
-  line-height: 1.5;
-}
-
-.msg-row {
-  display: flex;
-  margin-bottom: 20rpx;
-}
-
-.msg-user {
-  justify-content: flex-end;
-}
-
-.msg-assistant {
-  justify-content: flex-start;
-}
-
-.msg-bubble {
-  max-width: 82%;
-  padding: 20rpx 24rpx;
-  border-radius: 16rpx;
-  line-height: 1.5;
-}
-
-.msg-user .msg-bubble {
-  background: #1e3a8a;
-  color: #ffffff;
-  border-bottom-right-radius: 4rpx;
-}
-
-.msg-assistant .msg-bubble {
-  background: #f5f5f4;
-  color: #1c1917;
-  border-bottom-left-radius: 4rpx;
-}
-
-.msg-text {
-  font-size: 28rpx;
-}
-
-.next-prompt-box {
-  margin-top: 14rpx;
-  padding-top: 12rpx;
-  border-top: 1px dashed #d6d3d1;
-}
-
-.next-prompt-label {
   font-size: 22rpx;
-  font-weight: 600;
-  color: #b45309;
-  display: block;
-}
-
-.next-prompt-text {
-  font-size: 24rpx;
-  color: #78350f;
-}
-
-.thinking-row {
-  padding: 12rpx 0;
-}
-
-.thinking-text {
-  font-size: 24rpx;
-  color: #a8a29e;
-  font-style: italic;
-}
-
-.suggestions-list,
-.sources-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10rpx;
-  margin-top: 16rpx;
-}
-
-.suggestion-item {
-  color: #176b62;
-  font-size: 23rpx;
-  padding: 10rpx 12rpx;
-  background: #eef7f4;
-  border-radius: 8rpx;
-}
-
-.sources-title,
-.source-link {
-  color: #245c51;
-  font-size: 22rpx;
-  font-weight: 600;
-}
-
-.source-excerpt {
-  display: block;
-  color: #57534e;
-  font-size: 22rpx;
-  margin-top: 6rpx;
+  color: var(--color-ink-subtle);
 }
 
 .drawer-footer {
-  padding: 20rpx 32rpx;
+  padding: 20rpx 32rpx calc(20rpx + env(safe-area-inset-bottom));
   display: flex;
   gap: 16rpx;
-  border-top: 1px solid #f5f5f4;
-  background: #ffffff;
+  border-top: 1px solid var(--color-surface-muted);
+  background: var(--color-paper-card);
 }
 
 .chat-input {
   flex: 1;
   height: 80rpx;
-  background: #fafaf9;
-  border: 1px solid #e7e5e4;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
   border-radius: 12rpx;
   padding: 0 20rpx;
   font-size: 26rpx;
@@ -390,21 +182,5 @@ const openSource = (id: string) => {
   width: 140rpx;
   height: 80rpx;
   font-size: 26rpx;
-}
-
-/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap。
-   backdrop 为绝对定位、抽屉在流内，内容必须显式提升 z-index 才不会被 backdrop 盖住。 */
-.coach-drawer-backdrop {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 0;
-}
-
-.coach-drawer-sheet {
-  position: relative;
-  z-index: 1;
 }
 </style>

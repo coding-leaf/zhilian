@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { UserProfile, UpdateUserProfilePayload } from '@/types'
-import { apiLoginByWechat, apiGetUserProfile, apiUpdateUserProfile } from '@/api'
+import { apiLoginByWechat, apiGetUserProfile, apiUpdateUserProfile, apiUploadAvatar } from '@/api'
 import { RequestError } from '@/utils/requestError'
+import { ACCESS_TOKEN_KEY } from '@/utils/storageKeys'
 
 /** 登录失败的用户可见原因，覆盖「网络不通 / 后端拒绝 / wx.login 失败」三类。 */
 export type LoginFailureReason = 'wechat' | 'timeout' | 'network' | 'http'
@@ -41,20 +42,20 @@ export function classifyLoginFailure(err: unknown): LoginFailure {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string>(uni.getStorageSync('access_token') || '')
+  const token = ref<string>(uni.getStorageSync(ACCESS_TOKEN_KEY) || '')
   const user = ref<UserProfile | null>(null)
 
   const isLoggedIn = () => !!token.value
 
   const setToken = (newToken: string) => {
     token.value = newToken
-    uni.setStorageSync('access_token', newToken)
+    uni.setStorageSync(ACCESS_TOKEN_KEY, newToken)
   }
 
   const clearAuth = () => {
     token.value = ''
     user.value = null
-    uni.removeStorageSync('access_token')
+    uni.removeStorageSync(ACCESS_TOKEN_KEY)
   }
 
   const loginWithWechat = async (): Promise<LoginOutcome> => {
@@ -110,6 +111,12 @@ export const useAuthStore = defineStore('auth', () => {
     return updated
   }
 
+  const updateAvatar = async (filePath: string): Promise<UserProfile> => {
+    const updated = await apiUploadAvatar(filePath)
+    user.value = updated
+    return updated
+  }
+
   return {
     token,
     user,
@@ -119,5 +126,6 @@ export const useAuthStore = defineStore('auth', () => {
     loginWithWechat,
     fetchProfile,
     updateProfile,
+    updateAvatar,
   }
 })

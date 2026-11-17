@@ -2,7 +2,7 @@
   <view class="bank-question-row">
     <view class="bank-question-main" @tap="emit('toggle')">
       <view v-if="question.selectable" :class="['bank-checkbox', selected ? 'checked' : '']">
-        <text v-if="selected" class="bank-checkmark">✓</text>
+        <view v-if="selected" class="bank-check-mark" />
       </view>
       <view v-else class="bank-pending-badge">
         <text class="bank-pending-text">待审核</text>
@@ -37,5 +37,5 @@ const typeLabel = computed(() => questionTypeLabel(props.question.type))
 </script>
 
 <style lang="scss" scoped>
-@import '../review.scss';
+@import '../questionBank.scss';
 </style>

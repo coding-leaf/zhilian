@@ -1,0 +1,228 @@
+@import '../../styles/common.scss';
+@import '../../styles/tokens.scss';
+
+// ---- 题库区块（我的题目） ----
+
+.bank-section .section-title-row {
+  margin-top: 24rpx;
+}
+
+.bank-state-card {
+  padding: 32rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16rpx;
+  margin-bottom: 20rpx;
+}
+
+.bank-state-text {
+  font-size: 26rpx;
+  color: var(--color-ink-subtle);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.bank-retry-btn,
+.bank-more-btn {
+  font-size: 26rpx;
+  color: var(--color-academic-blue);
+  background: transparent;
+  border: 1px solid var(--color-blue-border);
+  border-radius: 12rpx;
+  padding: 0 32rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  margin: 0;
+}
+
+.bank-more {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20rpx;
+}
+
+.bank-batch-card {
+  padding: 24rpx 28rpx;
+  margin-bottom: 20rpx;
+}
+
+.bank-batch-header {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.bank-checkbox {
+  width: 40rpx;
+  height: 40rpx;
+  border-radius: 8rpx;
+  border: 2rpx solid var(--color-border-strong);
+  background: var(--color-paper-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bank-checkbox.checked,
+.bank-checkbox.partial {
+  border-color: var(--color-academic-blue);
+  background: var(--color-academic-blue);
+}
+
+.bank-check-mark {
+  @include css-checkmark(var(--color-ink-on-primary), 16rpx, 9rpx);
+}
+
+.bank-partial-bar {
+  width: 18rpx;
+  height: 4rpx;
+  border-radius: 2rpx;
+  background: var(--color-ink-on-primary);
+}
+
+.bank-batch-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.bank-batch-label {
+  display: block;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: var(--color-ink-primary);
+}
+
+.bank-batch-meta {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-ink-muted);
+  margin-top: 4rpx;
+}
+
+.bank-expand-btn {
+  font-size: 24rpx;
+  color: var(--color-academic-blue);
+  padding: 8rpx 0 8rpx 16rpx;
+  flex-shrink: 0;
+}
+
+.bank-question-list {
+  margin-top: 16rpx;
+  border-top: 1px dashed var(--color-surface-muted);
+  padding-top: 8rpx;
+}
+
+.bank-state-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16rpx;
+  padding: 24rpx 0;
+}
+
+.bank-retry-text {
+  font-size: 24rpx;
+  color: var(--color-academic-blue);
+  font-weight: 600;
+}
+
+.bank-question-row {
+  padding: 16rpx 0;
+  border-bottom: 1px solid var(--color-surface-subtle);
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.bank-question-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 16rpx;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 动作位：记入错题 / 取消标记（进行中置灰，避免双击打出两次往返） */
+.bank-wrong-btn {
+  flex-shrink: 0;
+  padding: 8rpx 18rpx;
+  border-radius: 999rpx;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-paper-card);
+}
+
+.bank-wrong-btn.marked {
+  border-color: var(--color-danger-border-strong);
+  background: var(--color-danger-bg);
+}
+
+.bank-wrong-btn.mastered {
+  border-color: var(--color-success-border-soft);
+  background: var(--color-success-bg-soft);
+}
+
+.bank-wrong-btn.pending {
+  opacity: 0.5;
+}
+
+.bank-wrong-text {
+  font-size: 20rpx;
+  color: var(--color-ink-secondary);
+}
+
+.bank-wrong-btn.marked .bank-wrong-text {
+  color: var(--color-wrong);
+}
+
+.bank-wrong-btn.mastered .bank-wrong-text {
+  color: var(--color-correct);
+}
+
+.bank-pending-badge {
+  width: 72rpx;
+  height: 40rpx;
+  border-radius: 8rpx;
+  background: var(--color-warning-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bank-pending-text {
+  font-size: 20rpx;
+  color: var(--color-warm-amber);
+}
+
+.bank-question-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.bank-question-type {
+  display: block;
+  font-size: 20rpx;
+  color: var(--color-ink-subtle);
+  margin-bottom: 4rpx;
+}
+
+.bank-question-stem {
+  display: block;
+  font-size: 26rpx;
+  color: var(--color-ink-primary);
+  line-height: 1.5;
+}
+
+.bank-pending-hint {
+  display: block;
+  font-size: 22rpx;
+  color: var(--color-ink-muted);
+  padding: 16rpx 0 4rpx;
+}
+
+.bank-action-card {
+  margin-top: 8rpx;
+  margin-bottom: 20rpx;
+}

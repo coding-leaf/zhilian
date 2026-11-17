@@ -1,6 +1,8 @@
+@import '../../styles/tokens.scss';
+
 .session-container {
   padding: 32rpx;
-  padding-bottom: 180rpx;
+  padding-bottom: calc(180rpx + env(safe-area-inset-bottom));
   min-height: 100vh;
 }
 
@@ -9,8 +11,8 @@
   justify-content: space-between;
   align-items: center;
   padding: 16rpx 24rpx;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
   border-radius: 8rpx;
   margin-bottom: 24rpx;
 }
@@ -18,13 +20,13 @@
 .draft-banner-text {
   flex: 1;
   font-size: 24rpx;
-  color: #b91c1c;
+  color: var(--color-wrong);
 }
 
 .draft-retry-btn {
   font-size: 24rpx;
-  color: #ffffff;
-  background: #b91c1c;
+  color: var(--color-ink-on-primary);
+  background: var(--color-wrong);
   padding: 8rpx 20rpx;
   border-radius: 8rpx;
 }
@@ -42,25 +44,25 @@
 .progress-num {
   font-size: 36rpx;
   font-weight: 700;
-  color: #1e3a8a;
+  color: var(--color-academic-blue);
 }
 
 .progress-total {
   font-size: 24rpx;
-  color: #a8a29e;
+  color: var(--color-ink-muted);
 }
 
 .progress-track {
   flex: 1;
   height: 12rpx;
-  background: #e7e5e4;
+  background: var(--color-paper-border);
   border-radius: 6rpx;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: #1e3a8a;
+  background: var(--color-academic-blue);
   border-radius: 6rpx;
   transition: width 0.3s ease;
 }
@@ -71,8 +73,8 @@
 
 .drawer-trigger-text {
   font-size: 22rpx;
-  color: #1e3a8a;
-  background: #eff6ff;
+  color: var(--color-academic-blue);
+  background: var(--color-blue-bg);
   padding: 6rpx 14rpx;
   border-radius: 16rpx;
   font-weight: 600;
@@ -92,8 +94,8 @@
 .q-type-badge {
   display: inline-block;
   font-size: 22rpx;
-  color: #1e3a8a;
-  background: rgba(30, 58, 138, 0.08);
+  color: var(--color-academic-blue);
+  background: var(--color-blue-tint);
   padding: 4rpx 14rpx;
   border-radius: 6rpx;
   font-weight: 600;
@@ -101,8 +103,8 @@
 
 .kp-badge {
   font-size: 20rpx;
-  color: #0d9488;
-  background: rgba(13, 148, 136, 0.1);
+  color: var(--color-academic-teal);
+  background: var(--color-teal-tint);
   padding: 4rpx 12rpx;
   border-radius: 6rpx;
 }
@@ -111,7 +113,7 @@
   display: block;
   font-size: 32rpx;
   font-weight: 600;
-  color: #1c1917;
+  color: var(--color-ink-primary);
   line-height: 1.6;
   margin-bottom: 36rpx;
 }
@@ -126,43 +128,48 @@
   display: flex;
   align-items: center;
   padding: 24rpx 28rpx;
-  background: #fafaf9;
-  border: 1px solid #e7e5e4;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
   border-radius: 12rpx;
 }
 
 .option-btn.selected {
-  background: #eff6ff;
-  border-color: #1e3a8a;
+  background: var(--color-blue-bg);
+  border-color: var(--color-academic-blue);
 }
 
-.opt-checkbox {
-  font-size: 32rpx;
-  color: #1e3a8a;
-  margin-right: 12rpx;
+.opt-checkbox-box {
+  width: 34rpx;
+  height: 34rpx;
+  border-radius: 8rpx;
+  border: 2rpx solid var(--color-border-strong);
+  background: var(--color-paper-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 14rpx;
+  flex-shrink: 0;
 }
 
-.opt-label {
-  font-size: 28rpx;
-  font-weight: 700;
-  color: #78716c;
-  margin-right: 20rpx;
+.opt-checkbox-box.checked {
+  border-color: var(--color-academic-blue);
+  background: var(--color-academic-blue);
 }
 
-.option-btn.selected .opt-label {
-  color: #1e3a8a;
+.opt-checkbox-mark {
+  @include css-checkmark(var(--color-ink-on-primary), 14rpx, 8rpx);
 }
 
 .opt-content {
   font-size: 28rpx;
-  color: #1c1917;
+  color: var(--color-ink-primary);
   flex: 1;
 }
 
 .input-hint {
   display: block;
   font-size: 24rpx;
-  color: #78716c;
+  color: var(--color-ink-subtle);
   margin-bottom: 12rpx;
 }
 
@@ -174,8 +181,8 @@
 .fill-blank-input {
   width: 100%;
   height: 84rpx;
-  background: #fafaf9;
-  border: 1px solid #e7e5e4;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
   border-radius: 12rpx;
   padding: 0 24rpx;
   font-size: 28rpx;
@@ -185,84 +192,13 @@
 .essay-input {
   width: 100%;
   height: 260rpx;
-  background: #fafaf9;
-  border: 1px solid #e7e5e4;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-paper-border);
   border-radius: 12rpx;
   padding: 20rpx;
   font-size: 28rpx;
   line-height: 1.5;
   box-sizing: border-box;
-}
-
-.card-drawer-overlay {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 999;
-  display: flex;
-  justify-content: flex-end;
-  flex-direction: column;
-}
-
-.card-drawer-sheet {
-  background: #ffffff;
-  border-top-left-radius: 28rpx;
-  border-top-right-radius: 28rpx;
-  padding: 32rpx;
-  max-height: 60vh;
-}
-
-.drawer-title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 28rpx;
-}
-
-.drawer-title {
-  font-size: 30rpx;
-  font-weight: 700;
-  color: #1c1917;
-}
-
-.drawer-close {
-  font-size: 32rpx;
-  color: #a8a29e;
-  padding: 8rpx;
-}
-
-.grid-numbers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20rpx;
-}
-
-.num-item {
-  width: 80rpx;
-  height: 80rpx;
-  border-radius: 40rpx;
-  background: #f5f5f4;
-  color: #57534e;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 28rpx;
-  font-weight: 600;
-  border: 1px solid #e7e5e4;
-}
-
-.num-item.answered {
-  background: #eff6ff;
-  color: #1e3a8a;
-  border-color: #93c5fd;
-}
-
-.num-item.current {
-  border: 2px solid #1e3a8a;
-  font-weight: 700;
 }
 
 .bottom-bar {
@@ -272,9 +208,9 @@
   right: 0;
   display: flex;
   gap: 20rpx;
-  padding: 24rpx 32rpx;
-  background: rgba(255, 255, 255, 0.95);
-  border-top: 1px solid #e7e5e4;
+  padding: 24rpx 32rpx calc(24rpx + env(safe-area-inset-bottom));
+  background: var(--color-bar-bg);
+  border-top: 1px solid var(--color-paper-border);
 }
 
 .nav-btn {
@@ -284,8 +220,8 @@
 }
 
 .prev-btn {
-  background: #f5f5f4;
-  color: #44403c;
+  background: var(--color-surface-muted);
+  color: var(--color-ink-body);
   border-radius: 12rpx;
   display: flex;
   align-items: center;
@@ -295,5 +231,5 @@
 .submit-btn {
   flex: 1;
   height: 88rpx;
-  background: #059669;
+  background: var(--color-success);
 }

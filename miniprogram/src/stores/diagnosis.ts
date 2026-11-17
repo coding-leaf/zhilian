@@ -2,8 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { DiagnosisReport } from '@/types'
 import { apiGetPracticeSession, apiTriggerDiagnosis } from '@/api'
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+import { createPoller, type PollerHandle } from '@/utils/poller'
 
 export const useDiagnosisStore = defineStore('diagnosis', () => {
   const currentReport = ref<DiagnosisReport | null>(null)
@@ -19,22 +18,25 @@ export const useDiagnosisStore = defineStore('diagnosis', () => {
     practiceId: string,
     maxAttempts = 15,
     intervalMs = 2000,
+    poller: PollerHandle = createPoller(),
   ): Promise<DiagnosisReport | null> => {
     isLoading.value = true
     isPending.value = false
     try {
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const session = await apiGetPracticeSession(practiceId)
-        const fullyGraded = Boolean(session.completed_at) && session.status === 'completed'
-        if (fullyGraded) {
-          // 后端不会在判题完成时自动生成报告；确认全卷判完后按幂等语义触发生成/取回
-          const report = await apiTriggerDiagnosis(practiceId)
-          currentReport.value = report
-          isPending.value = false
-          return report
-        }
-        isPending.value = true
-        await sleep(intervalMs)
+      const result = await poller.run(() => apiGetPracticeSession(practiceId), {
+        maxAttempts,
+        intervalMs,
+        isDone: (session) => Boolean(session.completed_at) && session.status === 'completed',
+        onAttempt: () => {
+          isPending.value = true
+        },
+      })
+      if (result.status === 'completed') {
+        // 后端不会在判题完成时自动生成报告；确认全卷判完后按幂等语义触发生成/取回
+        const report = await apiTriggerDiagnosis(practiceId)
+        currentReport.value = report
+        isPending.value = false
+        return report
       }
       return null
     } finally {

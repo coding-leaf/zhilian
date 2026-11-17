@@ -16,8 +16,7 @@
         :key="option.key || optIdx"
         class="option-item"
       >
-        <text class="option-index">{{ option.key || String.fromCharCode(65 + optIdx) }}.</text>
-        <text class="option-text">{{ option.content }}</text>
+        <text class="option-text">{{ optionDisplayText(option, optIdx) }}</text>
       </view>
     </view>
 
@@ -38,7 +37,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { QuestionItem } from '@/types'
-import { questionTypeLabel } from '@/api'
+import { optionDisplayText, questionTypeLabel } from '@/api'
 
 const props = defineProps<{
   question: QuestionItem
@@ -55,5 +54,19 @@ const typeLabel = computed(() => questionTypeLabel(props.question.type))
 </script>
 
 <style lang="scss" scoped>
-@import '../questions.scss';
+.question-card { padding: 32rpx; margin-bottom: 24rpx; }
+.q-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16rpx; }
+.q-num { font-size: 26rpx; font-weight: 600; color: var(--color-academic-blue); }
+.q-meta-badges { display: flex; gap: 12rpx; }
+.q-type, .q-diff { font-size: 22rpx; background: var(--color-surface-muted); color: var(--color-ink-subtle); padding: 4rpx 12rpx; border-radius: 4rpx; }
+.q-stem { display: block; font-size: 30rpx; color: var(--color-ink-primary); line-height: 1.6; font-weight: 500; margin-bottom: 20rpx; }
+.option-item { display: flex; padding: 12rpx 0; font-size: 28rpx; color: var(--color-ink-body); }
+.option-text { flex: 1; }
+.source-box { margin-top: 20rpx; padding: 16rpx 20rpx; background: var(--color-surface-subtle); border-left: 4rpx solid var(--color-academic-blue); border-radius: 4rpx; }
+.source-tag { font-size: 22rpx; font-weight: 600; color: var(--color-academic-blue); display: block; margin-bottom: 4rpx; }
+.source-text { font-size: 24rpx; color: var(--color-ink-subtle); line-height: 1.5; }
+.card-actions { display: flex; gap: 16rpx; margin-top: 20rpx; padding-top: 16rpx; border-top: 1px dashed var(--color-paper-border); }
+.remove-btn, .regen-btn { flex: 1; height: 64rpx; font-size: 24rpx; border-radius: 8rpx; display: flex; align-items: center; justify-content: center; }
+.remove-btn { background: var(--color-surface-muted); color: var(--color-ink-secondary); }
+.regen-btn { background: var(--color-blue-bg); color: var(--color-academic-blue); }
 </style>

@@ -161,7 +161,7 @@ describe('request layer: diagnosable failures', () => {
 
     await request({ url: '/auth/login', method: 'POST' }).catch(() => undefined)
 
-    const title = toast.mock.calls.at(-1)?.[0].title as string
+    const title = (toast.mock.calls.at(-1)?.[0] as { title: string }).title
     expect(title).toContain('超时')
     expect(title).toContain('15')
   })
@@ -173,7 +173,7 @@ describe('request layer: diagnosable failures', () => {
     const rejection = await request({ url: '/users/me' }).catch((err) => err)
 
     expect(rejection.kind).toBe('network')
-    const title = toast.mock.calls.at(-1)?.[0].title as string
+    const title = (toast.mock.calls.at(-1)?.[0] as { title: string }).title
     expect(title).not.toContain('超时')
     expect(title).toContain('网络')
   })

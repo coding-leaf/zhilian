@@ -9,7 +9,7 @@
 
     <view v-if="result.options.length" class="answer-compare-box">
       <text v-for="(option, idx) in result.options" :key="option.key || idx" class="ans-line">
-        {{ option.key || String.fromCharCode(65 + idx) }}. {{ option.content }}
+        {{ optionDisplayText(option, idx) }}
       </text>
     </view>
 
@@ -75,6 +75,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AttemptResult } from '@/types'
+import { optionDisplayText } from '@/api'
 import { canGradeManually } from '@/api/adapters/practice'
 import { formatAnswer, resolveResultBadge, typeLabel } from '../utils/reportView'
 
@@ -90,5 +91,29 @@ const badge = computed(() => resolveResultBadge(props.result))
 </script>
 
 <style lang="scss" scoped>
-@import '../report.scss';
+.detail-card { padding: 30rpx; margin-bottom: 24rpx; }
+.d-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16rpx; }
+.d-num { font-size: 26rpx; font-weight: 600; color: var(--color-academic-blue); }
+.result-tag { font-size: 22rpx; padding: 4rpx 14rpx; border-radius: 6rpx; }
+.tag-correct { background: var(--color-success-bg); color: var(--color-success); }
+.tag-wrong { background: var(--color-danger-bg); color: var(--color-danger); }
+.tag-pending { background: var(--color-warning-bg); color: var(--color-warm-amber); }
+.tag-unanswered { background: var(--color-surface-muted); color: var(--color-ink-subtle); }
+.d-stem { display: block; font-size: 28rpx; color: var(--color-ink-primary); line-height: 1.6; margin-bottom: 20rpx; }
+.answer-compare-box { background: var(--color-surface-subtle); padding: 16rpx 20rpx; border-radius: 8rpx; margin-bottom: 16rpx; }
+.ans-line { display: block; font-size: 24rpx; color: var(--color-ink-subtle); margin-bottom: 6rpx; }
+.ans-val { color: var(--color-ink-primary); font-weight: 500; }
+.ans-correct { color: var(--color-success); }
+.feedback-box, .source-quote-box, .kp-hit-box, .kp-miss-box { margin-top: 12rpx; font-size: 24rpx; line-height: 1.5; }
+.fb-title, .sq-title, .hit-title, .miss-title { font-weight: 600; color: var(--color-ink-body); display: block; margin-bottom: 4rpx; }
+.hit-title { color: var(--color-correct); }
+.miss-title { color: var(--color-wrong); }
+.hit-item { color: var(--color-success-strong); display: block; }
+.miss-item { color: var(--color-danger-strong); display: block; }
+.fb-text { color: var(--color-ink-secondary); }
+.sq-text { color: var(--color-ink-subtle); }
+.card-actions-row { display: flex; gap: 16rpx; margin-top: 20rpx; padding-top: 16rpx; border-top: 1px dashed var(--color-paper-border); }
+.regrade-action-btn, .coach-action-btn { flex: 1; height: 64rpx; font-size: 24rpx; border-radius: 8rpx; display: flex; align-items: center; justify-content: center; }
+.regrade-action-btn { background: var(--color-warning-bg-strong); color: var(--color-warning-deep); }
+.coach-action-btn { background: var(--color-blue-bg); color: var(--color-academic-blue); }
 </style>

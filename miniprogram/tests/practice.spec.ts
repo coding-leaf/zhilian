@@ -13,9 +13,9 @@ describe('Practice & Learning Workflow Unit Tests', () => {
     store.currentSession = {
       id: 'p_1',
       title: '测试多题型练习',
-      status: 'IN_PROGRESS',
+      status: 'in_progress',
       total_count: 4,
-      submitted_count: 0,
+      completed_count: 0,
       questions: [
         { id: 'q_1', type: 'single_choice', stem: '单选题干', answer: 'A' },
         { id: 'q_2', type: 'multiple_choice', stem: '多选题干', answer: ['A', 'B'] },

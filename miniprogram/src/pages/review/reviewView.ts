@@ -43,11 +43,6 @@ export function groupKnowledgePointIds(
   return collectUnmasteredKnowledgePointIds(unmastered)
 }
 
-export function groupCounts(records: WrongRecordItem[]) {
-  const mastered = records.filter((record) => record.is_mastered).length
-  return { mastered, pending: records.length - mastered }
-}
-
 /** 单条错题的再生范围：优先课程归属，其次未分类资料归属。 */
 export function recordRegenerateScope(record: WrongRecordItem): {
   folderId?: string

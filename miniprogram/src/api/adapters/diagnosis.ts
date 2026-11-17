@@ -1,7 +1,7 @@
 import type { DiagnosisReport, WeakKnowledgeItem } from '@/types'
 
 /** 后端 DiagnosisReportResponse 的 weak_knowledge_points 条目 wire 形状。 */
-export interface WireWeakKnowledgeItem {
+interface WireWeakKnowledgeItem {
   knowledge_point_id?: string | null
   knowledge_name?: string | null
   knowledge_id?: string | null

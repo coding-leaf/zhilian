@@ -1,10 +1,4 @@
 {
-  "easycom": {
-    "autoscan": true,
-    "custom": {
-      "^wd-(.*)": "wot-design-uni/components/wd-$1/wd-$1.vue"
-    }
-  },
   "pages": [
     {
       "path": "pages/index/index",
@@ -58,12 +52,6 @@
     {
       "root": "subpackages/material",
       "pages": [
-        {
-          "path": "pages/upload/index",
-          "style": {
-            "navigationBarTitleText": "导入资料"
-          }
-        },
         {
           "path": "pages/course/index",
           "style": {

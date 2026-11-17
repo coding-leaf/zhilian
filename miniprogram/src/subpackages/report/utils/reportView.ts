@@ -1,7 +1,6 @@
 import type {
   AttemptResult,
   DiagnosisReport,
-  GradingStatus,
   PracticeSession,
   QuestionType,
 } from '@/types'
@@ -38,15 +37,6 @@ export function resolveResultBadge(result: AttemptResult): ResultBadge {
   return result.isCorrect
     ? { text: `正确 ${formatScore(result.score, result.maxScore)}`, tone: 'correct' }
     : { text: `错误 ${formatScore(result.score, result.maxScore)}`, tone: 'wrong' }
-}
-
-export function resolveGradingStatusText(status: GradingStatus | 'grading'): string {
-  switch (status) {
-    case 'graded': return '已判分'
-    case 'pending_regrade': return '待重判'
-    case 'unanswered': return '未作答'
-    default: return '判题中'
-  }
 }
 
 export function typeLabel(type: QuestionType | string): string {
@@ -95,10 +85,6 @@ export function resolveSessionScope(session: PracticeSession | null) {
     folderId: session?.folder_id || undefined,
     materialId: session?.folder_id ? undefined : session?.material_id || undefined,
   }
-}
-
-export function isSelectableForRegrade(result: AttemptResult): boolean {
-  return Boolean(result.attemptItemId) && result.isAnswered
 }
 
 export type GradingMode = 'regrade' | 'self-evaluate'

@@ -13,10 +13,7 @@
         <text class="progress-total">/ {{ practiceStore.questions.length }}</text>
       </view>
       <view class="progress-track">
-        <view
-          class="progress-fill"
-          :style="{ width: progressWidth }"
-        />
+        <view class="progress-fill" :style="{ width: progressWidth }" />
       </view>
       <view class="card-drawer-trigger" @tap="showCardDrawer = !showCardDrawer">
         <text class="drawer-trigger-text">
@@ -46,8 +43,7 @@
           :class="['option-btn', isSelected(currentQuestion.id, optionKey(option, idx)) ? 'selected' : '']"
           @tap="selectSingleOption(currentQuestion.id, optionKey(option, idx))"
         >
-          <text class="opt-label">{{ optionKey(option, idx) }}</text>
-          <text class="opt-content">{{ option.content }}</text>
+          <text class="opt-content">{{ optionDisplayText(option, idx) }}</text>
         </view>
       </view>
 
@@ -58,11 +54,18 @@
           :class="['option-btn', isMultipleSelected(currentQuestion.id, optionKey(option, idx)) ? 'selected' : '']"
           @tap="toggleMultipleOption(currentQuestion.id, optionKey(option, idx))"
         >
-          <text class="opt-checkbox">
-            {{ isMultipleSelected(currentQuestion.id, optionKey(option, idx)) ? '☑' : '☐' }}
-          </text>
-          <text class="opt-label">{{ optionKey(option, idx) }}</text>
-          <text class="opt-content">{{ option.content }}</text>
+          <view
+            :class="[
+              'opt-checkbox-box',
+              isMultipleSelected(currentQuestion.id, optionKey(option, idx)) ? 'checked' : '',
+            ]"
+          >
+            <view
+              v-if="isMultipleSelected(currentQuestion.id, optionKey(option, idx))"
+              class="opt-checkbox-mark"
+            />
+          </view>
+          <text class="opt-content">{{ optionDisplayText(option, idx) }}</text>
         </view>
       </view>
 
@@ -88,30 +91,13 @@
       </view>
     </view>
 
-    <view v-if="showCardDrawer" class="card-drawer-overlay">
-      <!-- 关闭热区独立成元素：@tap.self 在小程序端被编译器丢弃，绑在容器上会导致点内容即关闭 -->
-      <view class="card-drawer-backdrop" @tap="showCardDrawer = false" />
-      <view class="card-drawer-sheet paper-card">
-        <view class="drawer-title-row">
-          <text class="drawer-title">答题卡索引</text>
-          <text class="drawer-close" @tap="showCardDrawer = false">×</text>
-        </view>
-        <view class="grid-numbers">
-          <view
-            v-for="(question, idx) in practiceStore.questions"
-            :key="question.id"
-            :class="[
-              'num-item',
-              practiceStore.currentIndex === idx ? 'current' : '',
-              isQuestionAnswered(question.id) ? 'answered' : '',
-            ]"
-            @tap="jumpToIndex(idx)"
-          >
-            {{ idx + 1 }}
-          </view>
-        </view>
-      </view>
-    </view>
+    <AnswerCardDrawer
+      v-model:visible="showCardDrawer"
+      :questions="practiceStore.questions"
+      :current-index="practiceStore.currentIndex"
+      :user-answers="practiceStore.userAnswers"
+      @jump="jumpToIndex"
+    />
 
     <view class="bottom-bar">
       <button
@@ -146,8 +132,9 @@
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { usePracticeStore } from '@/stores/practice'
-import { questionTypeLabel } from '@/api'
+import { optionDisplayText, optionKey, questionTypeLabel } from '@/api'
 import type { QuestionItem, QuestionOption } from '@/types'
+import AnswerCardDrawer from '../../components/AnswerCardDrawer.vue'
 
 const practiceStore = usePracticeStore()
 const showCardDrawer = ref(false)
@@ -176,9 +163,6 @@ onLoad(async (options) => {
 
 const typeLabel = (type: string) => questionTypeLabel(type)
 
-const optionKey = (option: QuestionOption, idx: number) =>
-  option.key || String.fromCharCode(65 + idx)
-
 const scopeOptions = (question: QuestionItem): QuestionOption[] => {
   if (question.options?.length) return question.options
   return [
@@ -198,13 +182,6 @@ const isSelected = (questionId: string, value: string) =>
 const isMultipleSelected = (questionId: string, value: string) => {
   const current = practiceStore.userAnswers[questionId]
   return Array.isArray(current) && current.includes(value)
-}
-
-const isQuestionAnswered = (questionId: string) => {
-  const answer = practiceStore.userAnswers[questionId]
-  if (answer === undefined || answer === null || answer === '') return false
-  if (Array.isArray(answer) && answer.length === 0) return false
-  return true
 }
 
 const selectSingleOption = (questionId: string, value: string) => {
@@ -270,20 +247,4 @@ const confirmSubmit = () => {
 
 <style lang="scss" scoped>
 @import '../../session.scss';
-
-/* 关闭热区：由独立元素承载「点外部关闭」，容器不再绑 tap（见模板注释）。
-   内容必须显式提升 z-index，否则会被绝对定位的 backdrop 盖住。 */
-.card-drawer-backdrop {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 0;
-}
-
-.card-drawer-sheet {
-  position: relative;
-  z-index: 1;
-}
 </style>

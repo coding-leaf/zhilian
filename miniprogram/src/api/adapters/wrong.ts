@@ -1,5 +1,5 @@
 import type { QuestionType, WrongRecordGroup, WrongRecordItem } from '@/types'
-import { adaptQuestion, type WireQuestion } from './question'
+import type { WireQuestion } from './question'
 
 /** 后端 WrongRecordItemResponse 的 wire 形状（含 question_snapshot 字典）。 */
 export interface WireWrongRecordItem {
@@ -37,18 +37,6 @@ export function wrongSnapshotStem(item: WrongRecordItem): string {
 
 export function wrongSnapshotType(item: WrongRecordItem): QuestionType | undefined {
   return item.question_snapshot?.question_type
-}
-
-export function wrongSnapshotOptions(item: WrongRecordItem) {
-  const snapshot = item.question_snapshot
-  if (!snapshot) return []
-  return adaptQuestion({
-    question_type: (snapshot.question_type || 'short_answer') as QuestionType,
-    stem: snapshot.stem || '',
-    options: snapshot.options,
-    answer: snapshot.answer,
-    analysis: snapshot.analysis,
-  }).options || []
 }
 
 /**

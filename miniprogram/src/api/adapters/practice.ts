@@ -7,7 +7,7 @@ import type {
 import { adaptQuestion, isSubjectiveType, type WireQuestion } from './question'
 
 /** 后端 PracticeDetailResponse.items[] 的 wire 形状。 */
-export type WirePracticeItem = Omit<PracticeItem, 'question_snapshot'> & {
+type WirePracticeItem = Omit<PracticeItem, 'question_snapshot'> & {
   question_snapshot: WireQuestion
 }
 

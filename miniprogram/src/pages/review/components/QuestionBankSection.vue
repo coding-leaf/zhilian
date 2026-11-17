@@ -144,5 +144,5 @@ const actionHint = computed(() => {
 </script>
 
 <style lang="scss" scoped>
-@import '../review.scss';
+@import '../questionBank.scss';
 </style>

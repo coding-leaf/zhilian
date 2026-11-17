@@ -2,8 +2,8 @@
   <view class="paper-card bank-batch-card">
     <view class="bank-batch-header">
       <view :class="['bank-checkbox', checkboxClass]" @tap="emit('toggle')">
-        <text v-if="checkState === 'all'" class="bank-checkmark">✓</text>
-        <text v-else-if="checkState === 'partial'" class="bank-partial-mark">－</text>
+        <view v-if="checkState === 'all'" class="bank-check-mark" />
+        <view v-else-if="checkState === 'partial'" class="bank-partial-bar" />
       </view>
 
       <view class="bank-batch-info" @tap="emit('toggle')">
@@ -109,5 +109,5 @@ const checkboxClass = computed(() => {
 </script>
 
 <style lang="scss" scoped>
-@import '../review.scss';
+@import '../questionBank.scss';
 </style>

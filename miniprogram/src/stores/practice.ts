@@ -3,7 +3,6 @@ import { ref, computed } from 'vue'
 import type {
   PracticeSession,
   QuestionItem,
-  DiagnosisReport,
   RegradeResponse,
   SelfEvaluateResponse,
   AttemptResult,
@@ -16,18 +15,23 @@ import {
   apiRetryPracticeGrading,
   apiRegradeAttempt,
   apiSelfEvaluate,
-  apiAskQuestionCoach,
-  apiGenerateQuestions,
   apiListPractices,
   buildAttemptResults,
-  computeKnowledgeCoverage,
-  dedupeQuestions,
-  planGenerationBatches,
   type CoverageResult,
   type CreatePracticeParams,
 } from '@/api'
 import { createDraftQueue } from '@/utils/draftQueue'
+import {
+  clearPracticeStorage,
+  getOrCreatePracticeSubmitKey,
+  isAnswered,
+  readPracticeDraft,
+  writePracticeDraft,
+} from '@/utils/practiceHelpers'
+import { regenerateWrongPractice } from '@/utils/questionGeneration'
 import { useAuthStore } from './auth'
+
+export { isAnswered }
 
 export interface RegenerateScope {
   folderId?: string
@@ -47,10 +51,6 @@ function resolveUserId(): string {
   }
 }
 
-function randomKey(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
 export const usePracticeStore = defineStore('practice', () => {
   const currentSession = ref<PracticeSession | null>(null)
   const currentIndex = ref<number>(0)
@@ -58,7 +58,6 @@ export const usePracticeStore = defineStore('practice', () => {
   const isSubmitting = ref<boolean>(false)
   const isSavingDrafts = ref<boolean>(false)
   const draftFailures = ref<string[]>([])
-  const latestDiagnosis = ref<DiagnosisReport | null>(null)
 
   const questions = computed<QuestionItem[]>(() => currentSession.value?.questions || [])
   const attemptResults = computed<AttemptResult[]>(() => buildAttemptResults(currentSession.value))
@@ -67,23 +66,11 @@ export const usePracticeStore = defineStore('practice', () => {
     return questions.value[currentIndex.value] || null
   })
 
-  const isAnswered = (value: unknown): boolean => {
-    if (value === undefined || value === null || value === '') return false
-    if (Array.isArray(value) && value.length === 0) return false
-    return true
-  }
+  const answeredCount = computed<number>(() =>
+    Object.keys(userAnswers.value).filter((key) => isAnswered(userAnswers.value[key])).length,
+  )
 
-  const answeredCount = computed<number>(() => {
-    return Object.keys(userAnswers.value).filter((key) => isAnswered(userAnswers.value[key])).length
-  })
-
-  const unansweredCount = computed<number>(() => {
-    return questions.value.length - answeredCount.value
-  })
-
-  // 按用户 + 练习隔离的本地草稿 key，避免换账号后串数据
-  const getStorageKey = (practiceId: string) => `practice_draft_${resolveUserId()}_${practiceId}`
-  const getSubmitKeyStorage = (practiceId: string) => `practice_submit_key_${practiceId}`
+  const unansweredCount = computed<number>(() => questions.value.length - answeredCount.value)
 
   // 逐题草稿写入队列：同题串行、失败可见、交卷前必须 flush 成功
   const draftQueue = createDraftQueue(
@@ -99,7 +86,7 @@ export const usePracticeStore = defineStore('practice', () => {
   )
 
   // 1. 初始化或继续练习
-  const initPractice = async (practiceId?: string, params?: CreatePracticeParams | string) => {
+  const initPractice = async (practiceId?: string, params?: CreatePracticeParams) => {
     draftQueue.reset()
     if (practiceId) {
       currentSession.value = await apiGetPracticeSession(practiceId)
@@ -111,12 +98,8 @@ export const usePracticeStore = defineStore('practice', () => {
       currentIndex.value = 0
       const session = currentSession.value
       // 优先恢复本地草稿，其次使用服务端已存作答
-      const localDraft = uni.getStorageSync(getStorageKey(session.id))
-      if (localDraft && typeof localDraft === 'object') {
-        userAnswers.value = { ...(localDraft as Record<string, unknown>) }
-      } else {
-        userAnswers.value = { ...(session.user_answers || {}) }
-      }
+      const localDraft = readPracticeDraft(resolveUserId(), session.id)
+      userAnswers.value = localDraft ?? { ...(session.user_answers || {}) }
     }
     return currentSession.value
   }
@@ -132,15 +115,9 @@ export const usePracticeStore = defineStore('practice', () => {
   const recordAnswer = (questionId: string, answer: unknown) => {
     userAnswers.value = { ...userAnswers.value, [questionId]: answer }
     if (currentSession.value) {
-      uni.setStorageSync(getStorageKey(currentSession.value.id), userAnswers.value)
+      writePracticeDraft(resolveUserId(), currentSession.value.id, userAnswers.value)
       draftQueue.enqueue(questionId, answer)
     }
-  }
-
-  const flushDrafts = async (): Promise<boolean> => draftQueue.flush()
-
-  const retryDraft = async (questionId: string) => {
-    await draftQueue.retry(questionId)
   }
 
   const retryAllDrafts = async () => {
@@ -157,13 +134,11 @@ export const usePracticeStore = defineStore('practice', () => {
       if (!saved) {
         throw new Error('仍有作答未保存成功，请检查网络后重试')
       }
-      const submitKey = uni.getStorageSync(getSubmitKeyStorage(practiceId)) || randomKey()
-      uni.setStorageSync(getSubmitKeyStorage(practiceId), submitKey)
+      const submitKey = getOrCreatePracticeSubmitKey(practiceId)
       await apiSubmitPractice(practiceId, confirmUnanswered, submitKey)
       const session = await apiGetPracticeSession(practiceId)
       currentSession.value = session
-      uni.removeStorageSync(getStorageKey(practiceId))
-      uni.removeStorageSync(getSubmitKeyStorage(practiceId))
+      clearPracticeStorage(resolveUserId(), practiceId)
       return session
     } finally {
       isSubmitting.value = false
@@ -201,60 +176,18 @@ export const usePracticeStore = defineStore('practice', () => {
     knowledgePointIds: string[],
     scope: RegenerateScope,
   ): Promise<RegenerateResult> => {
-    if (!knowledgePointIds || knowledgePointIds.length === 0) {
-      throw new Error('未提供错题知识点')
-    }
-    if (!scope?.folderId && !scope?.materialId) {
-      throw new Error('缺少课程或资料范围，无法再生题')
-    }
-    if (scope.folderId && scope.materialId) {
-      throw new Error('再生题范围只能指定一个课程或一份资料')
-    }
-
-    const batches = planGenerationBatches(knowledgePointIds, Math.max(3, knowledgePointIds.length))
-    const collected: QuestionItem[] = []
-    for (const batch of batches) {
-      const res = await apiGenerateQuestions({
-        folder_id: scope.folderId,
-        material_id: scope.materialId,
-        knowledge_point_ids: batch.knowledgePointIds,
-        count: batch.count,
-        difficulty: 3,
-      })
-      collected.push(...res.qualified_questions)
-    }
-
-    const generated = dedupeQuestions(collected)
-    if (generated.length === 0) {
-      throw new Error('未生成可用题目，请稍后重试')
-    }
-    const coverage = computeKnowledgeCoverage(generated, knowledgePointIds)
-
-    const session = await apiCreatePractice({
-      title: '错题巩固练习',
-      folder_id: scope.folderId,
-      material_id: scope.materialId,
-      knowledge_point_ids: knowledgePointIds,
-      question_ids: generated.map((question) => question.id),
-      source_type: 'wrong_record',
-    })
-
-    currentSession.value = session
+    const result = await regenerateWrongPractice(knowledgePointIds, scope)
+    currentSession.value = result.session
     currentIndex.value = 0
     userAnswers.value = {}
     draftQueue.reset()
-    return { session, coverage }
+    return result
   }
 
   // 6. 查询本人练习列表：学情页恢复未完成练习与打开历史报告
   const loadPractices = async (status?: string, limit = 20) => {
     const res = await apiListPractices({ status, limit })
     return res.items || []
-  }
-
-  // 7. 追问题目级 AI 助教
-  const askCoach = async (questionId: string, prompt: string, userAnswer?: string, gradingPoints?: string[]) => {
-    return apiAskQuestionCoach(questionId, prompt, userAnswer, gradingPoints)
   }
 
   const nextQuestion = () => {
@@ -276,7 +209,6 @@ export const usePracticeStore = defineStore('practice', () => {
     isSubmitting,
     isSavingDrafts,
     draftFailures,
-    latestDiagnosis,
     questions,
     attemptResults,
     currentQuestion,
@@ -285,8 +217,6 @@ export const usePracticeStore = defineStore('practice', () => {
     initPractice,
     refreshSession,
     recordAnswer,
-    flushDrafts,
-    retryDraft,
     retryAllDrafts,
     submit,
     requestRegrade,
@@ -294,7 +224,6 @@ export const usePracticeStore = defineStore('practice', () => {
     selfEvaluate,
     regenerateFromWrongPoints,
     loadPractices,
-    askCoach,
     nextQuestion,
     prevQuestion,
     jumpTo,
