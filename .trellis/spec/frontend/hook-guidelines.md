@@ -31,8 +31,8 @@
 |---|---|
 | 入参 | 无 |
 | 导出的类型 | `ComposeScope { folderId?: string; materialId?: string }`、`KnowledgePointOption { id: string; name: string }` |
-| state（`ref`） | `scope`、`availableKpList`、`selectedKpIds`、`selectedTypes`（默认 `DEFAULT_TYPES` = 单选/多选/判断/简答）、`questionCount`（默认 5）、`difficulty`（默认 3）、`questions`、`removedIds`、`hasGenerated`、`isGenerating`、`isStarting` |
-| getters（`computed`） | `remainingQuestions`（排除 `removedIds`）、`coverage`（`computeKnowledgeCoverage` 投影）、`canStart`（有剩余题**且** `coverage.missing.length === 0`）、`plannedCount`（`max(已选考点数, 指定题量)`）、`generationNotice`（生成前后据实披露题量调整与覆盖缺口）、`isAllKpSelected` |
+| state（`ref`） | `scope`、`availableKpList`、`selectedKpIds`、`composeMode`（默认 `'smart_sample'`，可选 `'full_coverage'`）、`selectedTypes`（默认 `DEFAULT_TYPES` = 单选/多选/判断/简答）、`questionCount`（默认 5，范围 1~20）、`difficulty`（默认 3）、`questions`、`removedIds`、`hasGenerated`、`isGenerating`、`isStarting`、`activeTargetKpIds` |
+| getters（`computed`） | `remainingQuestions`（排除 `removedIds`）、`effectiveKpIds`（`smart_sample` 且已选 > 题量时跨组均匀抽样 `questionCount` 个）、`coverage`（基于 `activeTargetKpIds` 的 `computeKnowledgeCoverage` 投影）、`canStart`（有剩余题**且** `coverage.missing.length === 0`）、`plannedCount`（`smart_sample` 下取 `questionCount`；`full_coverage` 下取 `max(已选考点数, 指定题量)`）、`generationNotice`（生成前后据实披露抽样/题量调整与覆盖缺口）、`isAllKpSelected` |
 | 作用域 | `setScope(next)` |
 | 考点操作 | `setKnowledgePoints(list)`（同时全选）、`flattenKnowledgePoints(FolderKnowledgePointItem[])`、`isKpSelected(id)`、`toggleKp(id)`、`toggleSelectAllKp()` |
 | 题型操作 | `isTypeSelected(type)`、`toggleType(type)`（**至少保留一种题型**，否则 toast 并拒绝） |
