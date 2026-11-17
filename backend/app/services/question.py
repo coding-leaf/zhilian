@@ -14,19 +14,12 @@ import logging
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
-from app.core.algorithms.question_quality import (
-    CandidateQuestion,
-    ExistingQuestionReference,
-    extract_keywords,
-    filter_qualified_questions,
-)
+from app.core.algorithms.question_quality import extract_keywords
 from app.core.errors import (
     FolderNotFoundError,
     KnowledgeNotFoundError,
@@ -37,13 +30,8 @@ from app.core.errors import (
 )
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
-from app.integrations.llm.agent_graph import run_structured_agent_workflow
 from app.integrations.llm.coach_graph import answer_with_course_evidence
-from app.integrations.llm.protocol import (
-    LLMMessage,
-    LLMOptions,
-    LLMProtocol,
-)
+from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.search.protocol import SearchProtocol
 from app.models.knowledge import KnowledgePoint
 from app.models.material import MaterialStatus
@@ -53,7 +41,6 @@ from app.models.question import (
     QuestionAuditLog,
     QuestionQualityCheck,
     QuestionStatus,
-    QuestionType,
 )
 from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
@@ -68,540 +55,54 @@ from app.schemas.question import (
     QuestionDetailResponse,
     ScopedCoachResponse,
 )
+from app.services._question_generation import (
+    GenerateQuestionsOptions as GenerateQuestionsOptions,
+)
+from app.services._question_generation import (
+    MultiKnowledgePointGenerationResult as MultiKnowledgePointGenerationResult,
+)
+from app.services._question_generation import (
+    QuestionGenerationResult as QuestionGenerationResult,
+)
+from app.services._question_generation import (
+    SnippetCandidate as SnippetCandidate,
+)
+from app.services._question_generation import (
+    aggregate_snippet_context as aggregate_snippet_context,
+)
+from app.services._question_generation import (
+    build_existing_question_refs,
+    build_question_entity,
+    resolve_effective_version_id,
+    run_question_generation_loop,
+)
+from app.services._question_generation import (
+    build_generation_prompt as build_generation_prompt,
+)
+from app.services._question_generation import (
+    convert_llm_items_to_candidates as convert_llm_items_to_candidates,
+)
+from app.services._question_generation import (
+    distribute_count as distribute_count,
+)
+from app.services._question_llm_schemas import (
+    LLMGeneratedQuestionItem as LLMGeneratedQuestionItem,
+)
+from app.services._question_llm_schemas import (
+    LLMGradingPointItem as LLMGradingPointItem,
+)
+from app.services._question_llm_schemas import (
+    LLMGradingRubric as LLMGradingRubric,
+)
+from app.services._question_llm_schemas import (
+    LLMQuestionBatchOutput as LLMQuestionBatchOutput,
+)
+from app.services._question_llm_schemas import (
+    LLMQuestionOptionItem as LLMQuestionOptionItem,
+)
 from app.services.source_snippets import build_source_snippet_map
 
 logger = logging.getLogger(__name__)
-
-# ==============================================================================
-# 题目生成配置与传输对象 (DTOs)
-# ==============================================================================
-
-
-@dataclass(frozen=True)
-class GenerateQuestionsOptions:
-    """题目生成高级配置选项。"""
-
-    question_types: Sequence[str] = (
-        QuestionType.SINGLE_CHOICE.value,
-        QuestionType.MULTIPLE_CHOICE.value,
-        QuestionType.TRUE_FALSE.value,
-        QuestionType.SHORT_ANSWER.value,
-    )
-    count: int = 5
-    difficulty: int = 3
-    max_retries: int = 2
-
-    def __post_init__(self) -> None:
-        """校验配置参数合法性。"""
-        if self.count <= 0 or self.count > 20:
-            raise ValueError("count 必须在 1 到 20 之间")
-        if not (1 <= self.difficulty <= 5):
-            raise ValueError("difficulty 必须在 1 到 5 之间")
-        if self.max_retries < 0 or self.max_retries > 5:
-            raise ValueError("max_retries 必须在 0 到 5 之间")
-        if not self.question_types:
-            raise ValueError("question_types 不能为空")
-        valid_types = {item.value for item in QuestionType}
-        invalid_types = [item for item in self.question_types if item not in valid_types]
-        if invalid_types:
-            raise ValueError(f"question_types 含非法题型: {', '.join(invalid_types)}")
-
-
-@dataclass(frozen=True)
-class QuestionGenerationResult:
-    """出题服务执行结果传输对象。"""
-
-    batch_id: str
-    material_id: uuid.UUID
-    version_id: uuid.UUID
-    knowledge_point_id: uuid.UUID
-    total_generated: int
-    qualified_questions: Sequence[Question]
-    pending_questions: Sequence[Question]
-    quality_checks: Sequence[QuestionQualityCheck]
-    retry_count: int
-
-
-@dataclass(frozen=True)
-class MultiKnowledgePointGenerationResult:
-    """多考点出题聚合结果传输对象。"""
-
-    batch_id: str
-    material_id: uuid.UUID
-    version_id: uuid.UUID
-    knowledge_point_id: uuid.UUID
-    knowledge_point_ids: Sequence[uuid.UUID]
-    requested_count: int
-    total_generated: int
-    qualified_questions: Sequence[Question]
-    pending_questions: Sequence[Question]
-    quality_checks: Sequence[QuestionQualityCheck]
-    retry_count: int
-
-
-@dataclass(frozen=True)
-class SnippetCandidate:
-    """检索命中供出题使用的候选切片不可变对象。"""
-
-    snippet_id: uuid.UUID
-    content: str
-    score: float
-    chapter_title: str = ""
-
-
-# ==============================================================================
-# 大模型结构化出题 Pydantic Schema
-# ==============================================================================
-
-
-class LLMQuestionOptionItem(BaseModel):
-    """客观题选项条目。"""
-
-    key: str = Field(description="选项标识，如 A, B, C, D")
-    content: str = Field(description="选项文本内容")
-
-
-class LLMGradingPointItem(BaseModel):
-    """主观题采分要点条目。"""
-
-    point: str = Field(description="采分要点阐述")
-    score: int = Field(ge=1, description="本要点分值")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_point(cls, data: Any) -> Any:
-        if isinstance(data, str):
-            return {"point": data.strip() or "采分要点", "score": 1}
-        if isinstance(data, dict):
-            d = dict(data)
-            if "point" not in d or not d["point"]:
-                d["point"] = (
-                    d.get("content")
-                    or d.get("text")
-                    or d.get("description")
-                    or d.get("criterion")
-                    or d.get("name")
-                    or "采分要点"
-                )
-            raw_score = d.get("score")
-            if raw_score is None:
-                d["score"] = 1
-            else:
-                try:
-                    score_val = int(float(raw_score))
-                    d["score"] = max(1, score_val)
-                except (ValueError, TypeError):
-                    d["score"] = 1
-            return d
-        return data
-
-
-class LLMGradingRubric(BaseModel):
-    """主观题评分细则。"""
-
-    total_score: int = Field(ge=1, description="主观题总分")
-    points: list[LLMGradingPointItem] = Field(
-        default_factory=list,
-        description="采分要点列表",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_rubric(cls, data: Any) -> Any:
-        if isinstance(data, list):
-            points = data
-            total = 0
-            for p in points:
-                if isinstance(p, dict):
-                    try:
-                        total += max(1, int(float(p.get("score", 1))))
-                    except (ValueError, TypeError):
-                        total += 1
-                elif isinstance(p, LLMGradingPointItem):
-                    total += p.score
-                elif isinstance(p, str):
-                    total += 1
-            return {
-                "total_score": max(1, total),
-                "points": points,
-            }
-        if isinstance(data, str):
-            s = data.strip()
-            if not s or s.lower() in ("none", "null", "无", "{}"):
-                return {"total_score": 5, "points": []}
-            return {
-                "total_score": 5,
-                "points": [{"point": s, "score": 5}],
-            }
-        if isinstance(data, dict):
-            d = dict(data)
-            if "points" not in d:
-                for alt_key in ("rubric", "items", "criteria", "points_list"):
-                    if alt_key in d and isinstance(d[alt_key], list):
-                        d["points"] = d[alt_key]
-                        break
-            points = d.get("points") or []
-            if not isinstance(points, list):
-                points = [points] if points else []
-                d["points"] = points
-
-            raw_total = d.get("total_score")
-            total_score_val = 0
-            if raw_total is not None:
-                try:
-                    total_score_val = int(float(raw_total))
-                except (ValueError, TypeError):
-                    total_score_val = 0
-
-            if total_score_val < 1:
-                computed = 0
-                for p in points:
-                    if isinstance(p, dict):
-                        try:
-                            computed += max(1, int(float(p.get("score", 1))))
-                        except (ValueError, TypeError):
-                            computed += 1
-                    elif isinstance(p, LLMGradingPointItem):
-                        computed += p.score
-                    elif isinstance(p, str):
-                        computed += 1
-                total_score_val = max(1, computed) if computed > 0 else 5
-
-            d["total_score"] = total_score_val
-            return d
-        return data
-
-
-class LLMGeneratedQuestionItem(BaseModel):
-    """大模型抽取的单道题目数据结构。"""
-
-    question_type: str = Field(description="题型枚举")
-    stem: str = Field(description="题干内容，至少 6 字符")
-    options: list[LLMQuestionOptionItem] = Field(
-        default_factory=list,
-        description="客观题选项列表",
-    )
-    answer: str = Field(description="参考答案或标准答案")
-    analysis: str = Field(default="", description="题目解析")
-    difficulty: int = Field(default=3, ge=1, le=5, description="题目难度系数")
-    grading_rubric: LLMGradingRubric | None = Field(
-        default=None,
-        description="主观题评分细则",
-    )
-    source_snippet_index: int = Field(
-        default=0,
-        description="主要依据的切片序号 (0~3)",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_item(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        d = dict(data)
-        # 兼容 question / title 映射至 stem
-        if ("stem" not in d or not d["stem"]) and ("question" in d or "title" in d):
-            d["stem"] = d.get("question") or d.get("title")
-
-        # 兼容 options 为字符串列表 ["...", "..."] 或字典不规范形式
-        raw_options = d.get("options")
-        if isinstance(raw_options, list):
-            normalized_opts: list[dict[str, Any]] = []
-            for idx, opt in enumerate(raw_options):
-                if isinstance(opt, str):
-                    key = chr(ord("A") + idx)
-                    if len(opt) > 2 and opt[0].isalpha() and opt[1] in (".", "、", ":", " "):
-                        key = opt[0].upper()
-                        opt_content = opt[2:].strip()
-                    else:
-                        opt_content = opt
-                    normalized_opts.append({"key": key, "content": opt_content})
-                elif isinstance(opt, dict):
-                    opt_dict = dict(opt)
-                    if "content" not in opt_dict and "text" in opt_dict:
-                        opt_dict["content"] = opt_dict["text"]
-                    if "key" not in opt_dict:
-                        opt_dict["key"] = chr(ord("A") + idx)
-                    normalized_opts.append(opt_dict)
-                else:
-                    normalized_opts.append(opt)
-            d["options"] = normalized_opts
-
-        # 兼容 difficulty_level / target_difficulty
-        if "difficulty" not in d:
-            if "target_difficulty" in d:
-                d["difficulty"] = d["target_difficulty"]
-            elif "difficulty_level" in d:
-                d["difficulty"] = d["difficulty_level"]
-
-        # 兼容与规范化 answer（list/tuple 转字符串、bool 转正确/错误、数值转 str）
-        raw_answer = d.get("answer")
-        if raw_answer is None:
-            raw_answer = (
-                d.get("correct_answer") if "correct_answer" in d else d.get("standard_answer")
-            )
-
-        if raw_answer is None:
-            d["answer"] = "A"
-        elif isinstance(raw_answer, bool):
-            d["answer"] = "正确" if raw_answer else "错误"
-        elif isinstance(raw_answer, (list, tuple)):
-            items = [str(x).strip() for x in raw_answer if x is not None and str(x).strip()]
-            if all(len(x) == 1 and x.isalpha() for x in items):
-                d["answer"] = ",".join(x.upper() for x in items)
-            else:
-                d["answer"] = "; ".join(items) if len(items) > 1 else (items[0] if items else "")
-        elif isinstance(raw_answer, (int, float)):
-            d["answer"] = str(raw_answer)
-        elif isinstance(raw_answer, str):
-            d["answer"] = raw_answer.strip()
-        else:
-            d["answer"] = str(raw_answer).strip()
-
-        # 兼容与清洗 grading_rubric（空/无效清洗为 None）
-        raw_rubric = d.get("grading_rubric")
-        if raw_rubric is not None:
-            if isinstance(raw_rubric, str):
-                cleaned_rubric_str = raw_rubric.strip()
-                if not cleaned_rubric_str or cleaned_rubric_str.lower() in (
-                    "none",
-                    "null",
-                    "无",
-                    "{}",
-                ):
-                    d["grading_rubric"] = None
-                else:
-                    d["grading_rubric"] = cleaned_rubric_str
-            elif isinstance(raw_rubric, (list, tuple)):
-                if not raw_rubric:
-                    d["grading_rubric"] = None
-                else:
-                    d["grading_rubric"] = list(raw_rubric)
-            elif isinstance(raw_rubric, dict):
-                if not raw_rubric:
-                    d["grading_rubric"] = None
-                else:
-                    d["grading_rubric"] = raw_rubric
-
-        return d
-
-
-class LLMQuestionBatchOutput(BaseModel):
-    """大模型批次出题输出容器 DTO。"""
-
-    questions: list[LLMGeneratedQuestionItem] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_batch(cls, data: Any) -> Any:
-        if isinstance(data, list):
-            return {"questions": data}
-        if isinstance(data, dict) and "questions" not in data and "items" in data:
-            data["questions"] = data["items"]
-        return data
-
-
-# ==============================================================================
-# 纯数据处理与上下文组装辅助函数 (McCabe V(G) <= 8)
-# ==============================================================================
-
-
-def distribute_count(total: int, n: int) -> list[int]:
-    """将总题量按考点数量均分，余数前置且每个考点至少 1 题。
-
-    Args:
-        total: 期望生成的总题量（正整数）。
-        n: 考点数量（正整数）。
-
-    Returns:
-        list[int]: 与考点一一对应的题量分配列表，长度等于 n 且每项 >= 1。
-            当 total < n 时退化为每个考点各 1 题（实际总数 = n）。
-
-    Raises:
-        ValueError: 当 total 或 n 非正整数时抛出。
-    """
-    if total <= 0:
-        raise ValueError("total 必须为正整数")
-    if n <= 0:
-        raise ValueError("n 必须为正整数")
-    if total < n:
-        return [1] * n
-    base, remainder = divmod(total, n)
-    return [base + 1 if idx < remainder else base for idx in range(n)]
-
-
-def aggregate_snippet_context(
-    snippets: Sequence[SnippetCandidate],
-    max_chars: int = 2400,
-) -> tuple[str, list[dict[str, Any]]]:
-    """选取 Top 4 优质切片，截断在 2400 字符以内并提取溯源元数据。
-
-    Args:
-        snippets: 候选切片序列。
-        max_chars: 上下文字符数上限，默认 2400 字符。
-
-    Returns:
-        tuple[str, list[dict[str, Any]]]: (聚合文本, 切片元数据清单)。
-    """
-    chosen = list(snippets[:4])
-    context_parts: list[str] = []
-    metadata_list: list[dict[str, Any]] = []
-    current_length = 0
-
-    for idx, snip in enumerate(chosen):
-        title = snip.chapter_title if snip.chapter_title else f"片段 {idx + 1}"
-        header = f"--- [切片 {idx}] (章节: {title}) ---\n"
-        body = snip.content.strip()
-        part = header + body + "\n\n"
-
-        if current_length + len(part) > max_chars:
-            remaining = max_chars - current_length - len(header) - 4
-            if remaining > 20:
-                truncated_body = body[:remaining] + "..."
-                context_parts.append(header + truncated_body + "\n\n")
-                metadata_list.append(
-                    {
-                        "snippet_id": str(snip.snippet_id),
-                        "similarity": round(snip.score, 4),
-                        "index": idx,
-                    }
-                )
-            break
-
-        context_parts.append(part)
-        current_length += len(part)
-        metadata_list.append(
-            {
-                "snippet_id": str(snip.snippet_id),
-                "similarity": round(snip.score, 4),
-                "index": idx,
-            }
-        )
-
-    aggregated_text = "".join(context_parts).strip()
-    return aggregated_text, metadata_list
-
-
-def build_generation_prompt(
-    kp_name: str,
-    kp_description: str,
-    context_text: str,
-    question_types: Sequence[str],
-    count: int,
-    difficulty: int,
-    feedback: str | None = None,
-) -> list[LLMMessage]:
-    """构造大模型出题提示词上下文。
-
-    Args:
-        kp_name: 知识点名称。
-        kp_description: 知识点描述。
-        context_text: 聚合切片上下文。
-        question_types: 目标题型列表。
-        count: 生成题目数量。
-        difficulty: 题目目标难度 (1~5)。
-        feedback: 质检未通过历史反馈信息。
-
-    Returns:
-        list[LLMMessage]: 组装完毕的提示词消息序列。
-    """
-    system_content = (
-        "你是一名资深教育命题专家。你的任务是严格依据所提供的资料切片内容，"
-        "针对指定的核心知识点生成高质量的练习题目。\n"
-        "【硬性命题铁律】:\n"
-        "1. 事实完全忠于资料：题目的题干、选项与参考答案必须源自资料切片，绝不可编造概念；\n"
-        "2. 题干长度：题干去空白字符数必须不少于 6 字符，表述必须清晰严谨，无任何歧义；\n"
-        "3. 客观选择题规范：单选必须且仅有 1 个正确答案（如 'A'）；"
-        "多选必须 >=3 个选项且正确答案数 >=2，"
-        "多选答案必须为逗号分隔的纯字符串（如 'A,B,C' 或 'ABC'，严禁返回 JSON 数组）；\n"
-        "4. 判断题规范：答案必须明确标注为字符串'正确'或'错误'（严禁返回布尔值）；\n"
-        "5. 填空题规范：答案必须为纯字符串（若多空以分号分隔，如 '答案1; 答案2'，严禁返回数组）；\n"
-        "6. 主观题评分细则：主观题必须提供 grading_rubric 对象"
-        "（格式如 {'total_score': 5, 'points': [{'point': '...', 'score': 2}]}），"
-        "要点分值总和严格等于 total_score；非主观题 grading_rubric 置为 null；\n"
-        "7. 来源切片标注：每道题目必须标注 source_snippet_index (0~3)，指明主要依据的切片序号；\n"
-        "8. 输出格式规范：必须输出包含 questions 列表的纯 JSON 对象，"
-        '每题必须包含 question_type, stem, options([{"key": "A", "content": "..."}]), '
-        "answer(纯字符串), analysis, difficulty, grading_rubric, source_snippet_index。"
-    )
-
-    user_parts = [
-        f"【核心考查知识点】: {kp_name}",
-        f"【知识点内涵阐述】: {kp_description if kp_description else '依据下述切片全面考查'}",
-        f"【期望生成题型】: {', '.join(question_types)}",
-        f"【期望出题数量】: {count} 道",
-        f"【目标难度级别】: {difficulty} (1:基础 ~ 5:专家)",
-        "\n【参考资料切片正文】:",
-        context_text,
-    ]
-
-    if feedback:
-        user_parts.append(
-            f"\n【上一轮质检未通过反馈】:\n{feedback}\n请特别注意修正上述缺陷，严格避免重复、缺乏实词依据或答案冲突！"
-        )
-
-    user_parts.append("\n请输出符合契约的结构化题目列表。")
-
-    return [
-        LLMMessage(role="system", content=system_content),
-        LLMMessage(role="user", content="\n".join(user_parts)),
-    ]
-
-
-def convert_llm_items_to_candidates(
-    items: Sequence[LLMGeneratedQuestionItem],
-    snippet_metadata: list[dict[str, Any]],
-    aggregated_source_text: str,
-    embeddings: Sequence[Sequence[float]] | None = None,
-    start_seq: int = 0,
-) -> tuple[list[CandidateQuestion], dict[str, LLMGeneratedQuestionItem]]:
-    """将大模型生成的题目结构转化为纯函数质检核所需的 CandidateQuestion。
-
-    Args:
-        items: 大模型结构化题目对象序列。
-        snippet_metadata: 切片溯源元数据列表。
-        aggregated_source_text: 聚合切片原文。
-        embeddings: 题干语义向量列表（若有）。
-        start_seq: 批次序列号起始游标。
-
-    Returns:
-        tuple[list[CandidateQuestion], dict[str, LLMGeneratedQuestionItem]]:
-            (待质检候选题目列表, question_id 到原始条目映射字典)。
-    """
-    candidates: list[CandidateQuestion] = []
-    item_map: dict[str, LLMGeneratedQuestionItem] = {}
-
-    for idx, it in enumerate(items):
-        q_id = str(uuid.uuid4())
-        item_map[q_id] = it
-
-        # 匹配来源切片标识
-        snip_idx = it.source_snippet_index
-        if 0 <= snip_idx < len(snippet_metadata):
-            snip_id_str = snippet_metadata[snip_idx]["snippet_id"]
-        elif snippet_metadata:
-            snip_id_str = snippet_metadata[0]["snippet_id"]
-        else:
-            snip_id_str = ""
-
-        opt_dicts = tuple(opt.model_dump() for opt in it.options)
-        emb = tuple(embeddings[idx]) if embeddings and idx < len(embeddings) else None
-
-        candidate = CandidateQuestion(
-            question_id=q_id,
-            stem=it.stem,
-            question_type=it.question_type,
-            answer=it.answer,
-            options=opt_dicts,
-            source_snippet_ids=(snip_id_str,) if snip_id_str else (),
-            source_text=aggregated_source_text,
-            embedding=emb,
-            analysis=it.analysis,
-            created_at_seq=start_seq + idx,
-        )
-        candidates.append(candidate)
-
-    return candidates, item_map
 
 
 # ==============================================================================
@@ -800,22 +301,11 @@ class QuestionService:
         if kp is None or kp.material_id != material_id:
             raise KnowledgeNotFoundError("请求的知识点不存在或无权访问")
 
-        # 智能版本回退与容错：
-        # 如果客户端传入的 version_id 为空，或者客户端误传了 version_id == material_id，
-        # 或者传入的 version_id 与知识点所属的 kp.version_id 不符但知识点确实属于该 material_id，
-        # 自动将 effective_version_id 对齐为 kp.version_id（或 material.current_version_id）
-        effective_version_id = version_id
-        if (
-            effective_version_id is None
-            or effective_version_id == material_id
-            or effective_version_id != kp.version_id
-        ):
-            fallback_version_id = kp.version_id or getattr(material, "current_version_id", None)
-            if fallback_version_id is None:
-                raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
-            effective_version_id = fallback_version_id
+        effective_version_id = resolve_effective_version_id(material, kp, version_id)
+        if effective_version_id is None:
+            raise KnowledgeNotFoundError("请求的知识点不存在关联版本")
 
-        # 2. 检索前置门禁校验
+        # 2. 检索前置门禁校验与 Top 4 上下文聚合 (2400 字符上限)
         snippets = self._retrieve_and_gate_snippets(
             user_id=user_id,
             material_id=material_id,
@@ -824,212 +314,63 @@ class QuestionService:
             kp_name=kp.name,
             kp_description=kp.description,
         )
-
-        # 3. 上下文聚合: Top 4 切片，截断在 2400 字符内
         context_text, snippet_metadata = aggregate_snippet_context(snippets, max_chars=2400)
 
-        # 4. 获取历史已有题目比对基准 (滑动窗口 500 道)
+        # 3. 历史去重基准与出题质检重抽循环
         recent_questions = self.question_repo.list_recent_for_deduplication(
             material_id, user_id, limit=500
         )
-        existing_refs = [
-            ExistingQuestionReference(
-                question_id=str(rq.id),
-                stem=rq.stem,
-                question_type=rq.question_type,
-                answer=rq.answer,
-                options=tuple(rq.options) if rq.options else (),
-                embedding=tuple(rq.embedding) if rq.embedding else None,
-            )
-            for rq in recent_questions
-        ]
+        existing_refs = build_existing_question_refs(recent_questions)
+        outcome = run_question_generation_loop(
+            llm=self.llm,
+            embedding=self.embedding,
+            user_id=user_id,
+            batch_id=effective_batch_id,
+            kp_name=kp.name,
+            kp_description=kp.description,
+            context_text=context_text,
+            snippet_metadata=snippet_metadata,
+            existing_refs=existing_refs,
+            options=effective_options,
+        )
 
-        # 5. 抽取与质检重抽循环 (最多 2 次重抽)
+        # 4. 构造题目与质检实体 (合格品 + 残余待人工审核品)
         target_count = effective_options.count
-        retry_count = 0
-        prompt_feedback: str | None = None
-
-        candidate_items_map: dict[str, LLMGeneratedQuestionItem] = {}
-        candidate_questions_map: dict[str, CandidateQuestion] = {}
-        candidate_checks_map: dict[str, list[QuestionQualityCheck]] = {}
-
-        qualified_questions_list: list[CandidateQuestion] = []
-        last_unqualified_questions: list[CandidateQuestion] = []
-
-        while retry_count <= effective_options.max_retries:
-            needed_count = target_count - len(qualified_questions_list)
-            if needed_count <= 0:
-                break
-
-            # 构造提示词
-            messages = build_generation_prompt(
-                kp_name=kp.name,
-                kp_description=kp.description,
-                context_text=context_text,
-                question_types=effective_options.question_types,
-                count=needed_count,
-                difficulty=effective_options.difficulty,
-                feedback=prompt_feedback,
-            )
-
-            # 调用大模型结构化出题
-            output, _ = run_structured_agent_workflow(
-                messages=messages,
-                response_model=LLMQuestionBatchOutput,
-                adapter=self.llm,
-                options=LLMOptions(temperature=0.3),
-            )
-            generated_items = output.questions if output else []
-            if not generated_items:
-                if retry_count < effective_options.max_retries:
-                    retry_count += 1
-                    prompt_feedback = "上一轮未生成任何题目，请严格依据资料切片输出题目。"
-                    continue
-                break
-
-            # 向量化题干
-            embed_texts = [
-                f"{q.stem} {' '.join(str(opt.content) for opt in q.options)}".strip()
-                for q in generated_items
-            ]
-            embeddings: list[list[float]] = []
-            if embed_texts:
-                embeddings = self.embedding.embed_documents(embed_texts)
-
-            # 转换为 CandidateQuestion
-            attempt_candidates, item_map = convert_llm_items_to_candidates(
-                generated_items,
-                snippet_metadata=snippet_metadata,
-                aggregated_source_text=context_text,
-                embeddings=embeddings,
-                start_seq=len(candidate_questions_map),
-            )
-            candidate_items_map.update(item_map)
-            for cand in attempt_candidates:
-                candidate_questions_map[cand.question_id] = cand
-
-            # 纯函数质检: 校验包含已有合格题目与当前新生成题目
-            current_eval_candidates = qualified_questions_list + attempt_candidates
-            report = filter_qualified_questions(
-                candidates=current_eval_candidates,
-                existing_questions=existing_refs,
-            )
-
-            # 收集每个题目的质检明细记录
-            for res in report.results:
-                checks_for_q: list[QuestionQualityCheck] = []
-                for check_item in res.check_items:
-                    checks_for_q.append(
-                        QuestionQualityCheck(
-                            user_id=user_id,
-                            question_id=uuid.UUID(res.question_id),
-                            batch_id=effective_batch_id,
-                            check_type=check_item.check_type.value,
-                            is_passed=check_item.is_passed,
-                            reason=check_item.reason,
-                            similarity_score=check_item.similarity_score,
-                            check_metadata=check_item.metadata,
-                        )
-                    )
-                candidate_checks_map[res.question_id] = checks_for_q
-
-            # 更新合格题目与残余未通过题目
-            qualified_questions_list = list(report.qualified_questions)
-            last_unqualified_questions = list(report.unqualified_questions)
-
-            # 判定重抽与反馈
-            if len(qualified_questions_list) >= target_count:
-                break
-
-            if retry_count < effective_options.max_retries and last_unqualified_questions:
-                retry_count += 1
-                unqualified_reasons = [
-                    (
-                        f"题型[{candidate_questions_map[res.question_id].question_type}]"
-                        f"未通过原因: {res.unqualified_reason}"
-                    )
-                    for res in report.results
-                    if not res.is_qualified
-                    and res.unqualified_reason
-                    and res.question_id in candidate_questions_map
-                ]
-                prompt_feedback = "；".join(unqualified_reasons[:3])
-            else:
-                break
-
-        # 6. 构造题目主实体
-        qualified_questions: list[Question] = []
-        pending_questions: list[Question] = []
-        all_quality_checks: list[QuestionQualityCheck] = []
-
-        # 合格题目入库归档
-        for cand in qualified_questions_list[:target_count]:
-            llm_item = candidate_items_map[cand.question_id]
-            source_snip_id = (
-                uuid.UUID(cand.source_snippet_ids[0]) if cand.source_snippet_ids else None
-            )
-            rubric_dict: dict[str, Any] = {}
-            if llm_item.grading_rubric is not None:
-                rubric_dict = llm_item.grading_rubric.model_dump()
-
-            q_entity = Question(
-                id=uuid.UUID(cand.question_id),
+        qualified_questions = [
+            build_question_entity(
+                cand,
+                outcome.candidate_items_map[cand.question_id],
                 user_id=user_id,
                 material_id=material_id,
                 version_id=effective_version_id,
                 knowledge_point_id=knowledge_point_id,
-                source_snippet_id=source_snip_id,
-                question_type=cand.question_type,
+                batch_id=effective_batch_id,
                 status=QuestionStatus.AVAILABLE.value,
-                is_deleted=False,
-                batch_id=effective_batch_id,
-                stem=cand.stem,
-                options=list(cand.options),
-                answer=cand.answer,
-                analysis=cand.analysis,
-                difficulty=llm_item.difficulty,
-                grading_rubric=rubric_dict,
-                source_snippet_ids=snippet_metadata,
-                embedding=list(cand.embedding) if cand.embedding is not None else None,
+                snippet_metadata=snippet_metadata,
             )
-            qualified_questions.append(q_entity)
-            if cand.question_id in candidate_checks_map:
-                all_quality_checks.extend(candidate_checks_map[cand.question_id])
-
-        # 残余不合格题目作为 pending_review 归档入待处理区
+            for cand in outcome.qualified_questions[:target_count]
+        ]
         remaining_needed = target_count - len(qualified_questions)
-        for cand in last_unqualified_questions[:remaining_needed]:
-            llm_item = candidate_items_map[cand.question_id]
-            source_snip_id = (
-                uuid.UUID(cand.source_snippet_ids[0]) if cand.source_snippet_ids else None
-            )
-            rubric_dict = {}
-            if llm_item.grading_rubric is not None:
-                rubric_dict = llm_item.grading_rubric.model_dump()
-
-            q_entity = Question(
-                id=uuid.UUID(cand.question_id),
+        pending_questions = [
+            build_question_entity(
+                cand,
+                outcome.candidate_items_map[cand.question_id],
                 user_id=user_id,
                 material_id=material_id,
                 version_id=effective_version_id,
                 knowledge_point_id=knowledge_point_id,
-                source_snippet_id=source_snip_id,
-                question_type=cand.question_type,
-                status=QuestionStatus.PENDING_REVIEW.value,
-                is_deleted=False,
                 batch_id=effective_batch_id,
-                stem=cand.stem,
-                options=list(cand.options),
-                answer=cand.answer,
-                analysis=cand.analysis,
-                difficulty=llm_item.difficulty,
-                grading_rubric=rubric_dict,
-                source_snippet_ids=snippet_metadata,
-                embedding=list(cand.embedding) if cand.embedding is not None else None,
+                status=QuestionStatus.PENDING_REVIEW.value,
+                snippet_metadata=snippet_metadata,
             )
-            pending_questions.append(q_entity)
-            if cand.question_id in candidate_checks_map:
-                all_quality_checks.extend(candidate_checks_map[cand.question_id])
+            for cand in outcome.last_unqualified_questions[:remaining_needed]
+        ]
+        all_quality_checks = [
+            check
+            for q in qualified_questions + pending_questions
+            for check in outcome.candidate_checks_map.get(str(q.id), ())
+        ]
+        retry_count = outcome.retry_count
 
         # 7. 原子数据库事务落库
         all_entities = qualified_questions + pending_questions
@@ -1396,8 +737,6 @@ class QuestionService:
         if question is None:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
         return question
-
-    get_question_detail = get_question
 
     def attach_source_snippets(
         self,

@@ -20,7 +20,8 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from app.api.deps.auth import get_current_user
-from app.api.deps.knowledge import get_db_session, get_knowledge_service
+from app.api.deps.db import get_db_session
+from app.api.deps.knowledge import get_knowledge_service
 from app.api.v1 import api_v1_router
 from app.core.errors import (
     AppError,
@@ -547,7 +548,7 @@ async def test_tenant_cross_access_isolation(
 def test_default_dependency_providers() -> None:
     """Tests that calling default dependency providers directly raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="KnowledgeService 生产装配工厂尚未挂载"):
-        get_knowledge_service()
+        next(get_knowledge_service())
 
     with pytest.raises(NotImplementedError, match="数据库会话工厂尚未挂载"):
         get_db_session()

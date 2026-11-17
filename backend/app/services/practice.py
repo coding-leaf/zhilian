@@ -11,7 +11,6 @@
 import enum
 import json
 import logging
-import random
 import time
 import uuid
 from collections.abc import Sequence
@@ -19,13 +18,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.practice import scatter_adjacent_knowledge_questions
 from app.core.errors import (
-    AppError,
     FolderNotFoundError,
     KnowledgeNotFoundError,
     PracticeEmptyQuestionsError,
@@ -33,25 +30,20 @@ from app.core.errors import (
     PracticeStatusError,
     QueueError,
 )
+from app.core.idempotency import validate_idempotency_key
+from app.core.logging import log_structured_metric
 from app.core.security import generate_user_ref
-from app.integrations.idempotency.factory import create_idempotency_adapter
-from app.integrations.idempotency.protocol import (
-    IdempotencyProtocol,
-    validate_idempotency_key,
-)
-from app.integrations.queue.factory import create_queue_adapter
+from app.integrations.idempotency.memory import MemoryIdempotencyAdapter
+from app.integrations.idempotency.protocol import IdempotencyProtocol
+from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.queue.protocol import QueueProtocol
 from app.models.practice import (
     AttemptItem,
-    MasteryRecord,
     Practice,
     PracticeSourceType,
     PracticeStatus,
-    WrongRecord,
-    build_question_snapshot,
-    validate_question_snapshot,
 )
-from app.models.question import Question, QuestionStatus
+from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
@@ -62,6 +54,15 @@ from app.schemas.practice import (
     PracticeDetailResponse,
     PracticeItemDetailResponse,
     QuestionSnapshotDTO,
+)
+from app.services._practice_assembler import (
+    PracticeItemView,
+    PracticeView,
+    build_validated_snapshots,
+    collect_interleaved_candidates,
+    rank_candidates_by_mode,
+    select_explicit_questions,
+    wrap_practice_with_source_snippets,
 )
 from app.services.source_snippets import build_source_snippet_map
 
@@ -162,6 +163,7 @@ class PracticeService:
         material_repo: MaterialRepository | None = None,
         knowledge_repo: KnowledgeRepository | None = None,
         folder_repo: FolderRepository | None = None,
+        diagnosis_repo: DiagnosisRepository | None = None,
         idempotency: IdempotencyProtocol | None = None,
         queue: QueueProtocol | None = None,
     ) -> None:
@@ -174,6 +176,7 @@ class PracticeService:
             material_repo: 可选注入的资料仓储实例 (用于切片溯源装配)。
             knowledge_repo: 可选注入的知识点仓储实例 (课程范围考点校验)。
             folder_repo: 可选注入的课程文件夹仓储实例。
+            diagnosis_repo: 可选注入的学情诊断仓储实例 (用于薄弱点组卷查询)。
             idempotency: 可选注入的幂等适配器实例。
             queue: 可选注入的任务队列适配器实例。
         """
@@ -183,8 +186,9 @@ class PracticeService:
         self.material_repo = material_repo or MaterialRepository(session)
         self.knowledge_repo = knowledge_repo or KnowledgeRepository(session)
         self.folder_repo = folder_repo or FolderRepository(session)
-        self.idempotency = idempotency or create_idempotency_adapter("memory")
-        self.queue = queue or create_queue_adapter("memory")
+        self.diagnosis_repo = diagnosis_repo or DiagnosisRepository(session)
+        self.idempotency = idempotency or MemoryIdempotencyAdapter()
+        self.queue = queue or MemoryQueueAdapter()
 
     def _log_metric(
         self,
@@ -198,24 +202,17 @@ class PracticeService:
         extra: dict[str, Any] | None = None,
     ) -> None:
         """输出遵循规范的 8 要素脱敏结构化日志。"""
-        log_payload = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "level": "INFO" if error_code == 0 else "ERROR",
-            "logger_name": __name__,
-            "request_id": request_id,
-            "user_ref": generate_user_ref(user_id),
-            "target_id": str(target_id),
-            "duration_ms": round(duration_ms, 2),
-            "error_code": error_code,
-            "action": action,
-        }
-        if extra:
-            log_payload.update(extra)
-
-        if error_code == 0:
-            logger.info("PracticeService execution completed: %s", log_payload)
-        else:
-            logger.error("PracticeService execution error: %s", log_payload)
+        log_structured_metric(
+            logger,
+            action=action,
+            request_id=request_id,
+            user_id=user_id,
+            target_id=target_id,
+            duration_ms=duration_ms,
+            error_code=error_code,
+            extra=extra,
+            service_label="PracticeService",
+        )
 
     def _release_lock_quietly(self, clean_key: str, user_id: uuid.UUID) -> None:
         """尽力释放幂等锁，失败仅记录告警，绝不阻断主流程。"""
@@ -262,7 +259,7 @@ class PracticeService:
         user_id: uuid.UUID,
         options: CreatePracticeOptions,
         request_id: str = "",
-    ) -> Practice:
+    ) -> PracticeView:
         """创建练习会话并执行组卷与题目打散。
 
         当携带 ``idempotency_key`` 时启用幂等保护：命中已完成快照则直接回放既有
@@ -275,7 +272,7 @@ class PracticeService:
             request_id: 请求跟踪标识。
 
         Returns:
-            Practice: 已创建的练习实体。
+            PracticeView: 已创建或幂等回放的练习与溯源投影视图。
 
         Raises:
             PracticeEmptyQuestionsError: 可用题目不足以满足题量要求。
@@ -292,8 +289,7 @@ class PracticeService:
             if cached_result is not None:
                 replayed = self._replay_idempotent_practice(cached_result, user_id)
                 if replayed is not None:
-                    self._attach_source_snippets_to_items(replayed, user_id)
-                    return replayed
+                    return self._attach_source_snippets_to_items(replayed, user_id)
             self.idempotency.acquire_lock(clean_key, str(user_id))
 
         try:
@@ -326,8 +322,7 @@ class PracticeService:
                 )
                 self._release_lock_quietly(clean_key, user_id)
         # 创建响应与详情响应共用同一溯源装配实现，避免「开始作答」后原文抽屉短暂为空
-        self._attach_source_snippets_to_items(practice, user_id)
-        return practice
+        return self._attach_source_snippets_to_items(practice, user_id)
 
     def _replay_idempotent_practice(
         self,
@@ -435,151 +430,53 @@ class PracticeService:
                 )
                 return existing
 
-        # Step 2: 检索候选可用题目 (若指定 question_ids 走指定题目组卷，否则按考点抽取)
-        if options.question_ids:
-            explicit_questions = self.question_repo.list_questions_by_ids(
-                options.question_ids,
-                user_id,
-                include_deleted=False,
+        def _log_empty_questions(required_count: int, available_count: int) -> None:
+            self._log_metric(
+                action="create_practice_failed",
+                request_id=request_id,
+                user_id=user_id,
+                target_id="empty_questions",
+                duration_ms=(time.perf_counter() - start_time) * 1000,
+                error_code=40012,
+                extra={"required": required_count, "available": available_count},
             )
-            available_questions = [
-                q for q in explicit_questions if q.status == QuestionStatus.AVAILABLE.value
-            ]
-            if not available_questions:
-                duration_ms = (time.perf_counter() - start_time) * 1000
-                self._log_metric(
-                    action="create_practice_failed",
-                    request_id=request_id,
-                    user_id=user_id,
-                    target_id="empty_questions",
-                    duration_ms=duration_ms,
-                    error_code=40012,
-                    extra={"required": len(options.question_ids), "available": 0},
-                )
-                raise PracticeEmptyQuestionsError(
-                    "指定的题目不存在、越权或不可用",
-                    details={"requested_ids": [str(qid) for qid in options.question_ids]},
-                )
 
-            q_map = {q.id: q for q in available_questions}
-            ordered_explicit = [q_map[qid] for qid in options.question_ids if qid in q_map]
-            effective_kp_ids = [
-                q.knowledge_point_id for q in ordered_explicit if q.knowledge_point_id is not None
-            ]
-            effective_kp_ids = list(dict.fromkeys(effective_kp_ids))
-
-            if options.mode == PracticeAssemblyMode.RANDOM:
-                shuffled = list(ordered_explicit)
-                random.shuffle(shuffled)
-                selected_questions = shuffled[: options.question_count]
-            else:
-                selected_questions = ordered_explicit[: options.question_count]
+        # Step 2: 检索并抽选候选题目
+        if options.question_ids:
+            selected_questions, effective_kp_ids = select_explicit_questions(
+                self.question_repo,
+                user_id=user_id,
+                question_ids=options.question_ids,
+                question_count=options.question_count,
+                is_random=options.mode == PracticeAssemblyMode.RANDOM,
+                on_empty_metric=_log_empty_questions,
+            )
         else:
             effective_kp_ids = self._resolve_folder_scope_knowledge_points(user_id, options)
-            kp_questions_map: dict[uuid.UUID, list[Question]] = {}
-            total_available = 0
-            for kp_id in effective_kp_ids:
-                kp_questions = self.question_repo.list_questions_by_knowledge_point(
-                    knowledge_point_id=kp_id,
-                    user_id=user_id,
-                    status=QuestionStatus.AVAILABLE.value,
-                    include_deleted=False,
-                )
-                if options.question_types:
-                    type_set = set(options.question_types)
-                    kp_questions = [q for q in kp_questions if q.question_type in type_set]
-                if options.difficulty is not None:
-                    kp_questions = [q for q in kp_questions if q.difficulty == options.difficulty]
-                kp_questions_map[kp_id] = kp_questions
-                total_available += len(kp_questions)
+            candidates = collect_interleaved_candidates(
+                self.question_repo,
+                user_id=user_id,
+                effective_kp_ids=effective_kp_ids,
+                question_types=options.question_types,
+                difficulty=options.difficulty,
+                required_count=options.question_count,
+                on_insufficient_metric=_log_empty_questions,
+            )
+            selected_questions = rank_candidates_by_mode(
+                candidates,
+                mode_value=options.mode.value,
+                question_count=options.question_count,
+                diagnosis_repo=self.diagnosis_repo,
+                user_id=user_id,
+            )
 
-            # 题量门禁校验
-            if total_available < options.question_count:
-                duration_ms = (time.perf_counter() - start_time) * 1000
-                self._log_metric(
-                    action="create_practice_failed",
-                    request_id=request_id,
-                    user_id=user_id,
-                    target_id="empty_questions",
-                    duration_ms=duration_ms,
-                    error_code=40012,
-                    extra={"required": options.question_count, "available": total_available},
-                )
-                raise PracticeEmptyQuestionsError(
-                    "题库可用题目不足，无法满足当前出题配置要求",
-                    details={
-                        "required": options.question_count,
-                        "available": total_available,
-                    },
-                )
-
-            # 轮转交织候选题目
-            interleaved_candidates: list[Question] = []
-            max_kp_len = max((len(qs) for qs in kp_questions_map.values()), default=0)
-            for idx in range(max_kp_len):
-                for kp_id in effective_kp_ids:
-                    qs = kp_questions_map[kp_id]
-                    if idx < len(qs):
-                        interleaved_candidates.append(qs[idx])
-
-            # 去重保持唯一
-            seen_ids: set[uuid.UUID] = set()
-            filtered_candidates: list[Question] = []
-            for q in interleaved_candidates:
-                if q.id not in seen_ids:
-                    seen_ids.add(q.id)
-                    filtered_candidates.append(q)
-
-            # Step 3: 根据模式排序抽题
-            if options.mode == PracticeAssemblyMode.WEAK_POINTS:
-                # 查询未攻克错题与低掌握度知识点
-                wrong_q_stmt = select(WrongRecord.question_id).where(
-                    WrongRecord.user_id == user_id,
-                    WrongRecord.is_mastered.is_(False),
-                )
-                unmastered_wrong_ids = set(self.session.execute(wrong_q_stmt).scalars().all())
-
-                weak_kp_stmt = select(MasteryRecord.knowledge_point_id).where(
-                    MasteryRecord.user_id == user_id,
-                    MasteryRecord.mastery_score < 0.40,
-                )
-                weak_kp_ids = set(self.session.execute(weak_kp_stmt).scalars().all())
-
-                def _weakness_priority(q: Question) -> tuple[int, int]:
-                    is_wrong = 1 if q.id in unmastered_wrong_ids else 0
-                    is_weak = 1 if q.knowledge_point_id in weak_kp_ids else 0
-                    return (is_wrong, is_weak)
-
-                filtered_candidates.sort(key=_weakness_priority, reverse=True)
-                selected_questions = filtered_candidates[: options.question_count]
-            elif options.mode == PracticeAssemblyMode.RANDOM:
-                shuffled = list(filtered_candidates)
-                random.shuffle(shuffled)
-                selected_questions = shuffled[: options.question_count]
-            else:  # SEQUENTIAL
-                selected_questions = filtered_candidates[: options.question_count]
-
-        # Step 4: 纯函数同知识点不相邻打散 (FR-31)
+        # Step 3: 同知识点打散、快照校验与持久化
         scattered_questions = scatter_adjacent_knowledge_questions(
             selected_questions,
             knowledge_id_getter=lambda q: q.knowledge_point_id,
         )
+        snapshots = build_validated_snapshots(scattered_questions)
 
-        # Step 5: 题目 6 要素快照完整性校验与持久化
-        snapshots: list[dict[str, Any]] = []
-        for q in scattered_questions:
-            snapshot = build_question_snapshot(q)
-            is_valid, err_msg = validate_question_snapshot(snapshot)
-            if not is_valid:
-                raise AppError(
-                    error_code=40008,
-                    message=f"题目快照质检未通过: {err_msg}",
-                    details={"question_id": str(q.id), "reason": err_msg},
-                )
-            snapshots.append(snapshot)
-
-        # Step 4.5: 解析归属资料 (缺省时由选中题目回填，支持错题本等无资料上下文来源；
-        # 课程文件夹范围练习保持 material_id 为空，仅落库 folder_id)
         resolved_material_id = options.material_id
         if resolved_material_id is None and options.folder_id is None:
             resolved_material_id = scattered_questions[0].material_id
@@ -745,29 +642,23 @@ class PracticeService:
         self,
         practice: Practice,
         user_id: uuid.UUID,
-    ) -> None:
-        """把原文溯源投影挂到 ORM 作答项上，使创建响应与详情响应形状一致 (R5)。
-
-        仅写入未映射的瞬时属性 ``source_snippet``：``PracticeItemDetailResponse``
-        在装配快照时会把它回填进题目快照副本，因此无需改写已落库的快照 JSON。
+    ) -> PracticeView:
+        """将练习及作答项包装为携带原文溯源投影的强类型视图，杜绝 ORM 实例动态挂载属性。
 
         Args:
             practice: 已持久化的练习实体。
             user_id: 租户用户标识。
+
+        Returns:
+            PracticeView: 包装后的练习只读兼容视图。
         """
         items = list(practice.items or [])
         snippet_map = self._build_source_snippet_map(items, user_id)
-        if not snippet_map:
-            return
-
-        for item in items:
-            snippet_id = self._snapshot_source_snippet_id(item)
-            if snippet_id is None:
-                continue
-            snippet_dto = snippet_map.get(snippet_id)
-            if snippet_dto is not None:
-                # 未映射的瞬时属性，仅供响应装配读取，不会写回数据库
-                setattr(item, "source_snippet", snippet_dto)  # noqa: B010
+        return wrap_practice_with_source_snippets(
+            practice,
+            snippet_map,
+            self._snapshot_source_snippet_id,
+        )
 
     def list_practices(
         self,
@@ -937,46 +828,6 @@ class PracticeService:
         try:
             self.practice_repo.update_practice_status(
                 practice_id, user_id, PracticeStatus.IN_PROGRESS.value
-            )
-            self.session.commit()
-            refreshed = self.practice_repo.get_practice_by_id(
-                practice_id, user_id, include_items=False
-            )
-            if refreshed is None:
-                raise PracticeNotFoundError(
-                    "练习实体不存在", details={"practice_id": str(practice_id)}
-                )
-            return refreshed
-        except Exception:
-            self.session.rollback()
-            raise
-
-    def timeout_practice(
-        self,
-        user_id: uuid.UUID,
-        practice_id: uuid.UUID,
-        request_id: str = "",
-    ) -> Practice:
-        """练习作答超时归档。"""
-        practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=False)
-        if practice is None:
-            raise PracticeNotFoundError(
-                "请求的练习不存在或无权访问",
-                details={"practice_id": str(practice_id)},
-            )
-        if practice.status in (
-            PracticeStatus.SUBMITTED.value,
-            PracticeStatus.PARTIALLY_GRADED.value,
-            PracticeStatus.COMPLETED.value,
-        ):
-            raise PracticeStatusError(
-                "练习已完成，禁止标记超时",
-                details={"status": practice.status},
-            )
-
-        try:
-            self.practice_repo.update_practice_status(
-                practice_id, user_id, PracticeStatus.TIMEOUT.value
             )
             self.session.commit()
             refreshed = self.practice_repo.get_practice_by_id(
@@ -1389,8 +1240,10 @@ class PracticeService:
 __all__ = [
     "CreatePracticeOptions",
     "PracticeAssemblyMode",
+    "PracticeItemView",
     "PracticeService",
     "PracticeSubmissionResult",
+    "PracticeView",
     "SaveAnswerDTO",
     "SubmitPracticeDTO",
 ]

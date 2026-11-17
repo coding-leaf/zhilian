@@ -367,28 +367,6 @@ class PracticeRepository:
         count_val = self.session.execute(stmt).scalar()
         return int(count_val or 0)
 
-    def count_answered_items(
-        self,
-        practice_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> int:
-        """统计练习中已作答题目总数 (is_answered == True)。
-
-        Args:
-            practice_id: 练习主键。
-            user_id: 租户用户标识。
-
-        Returns:
-            int: 已作答题目数量。
-        """
-        stmt = select(func.count(AttemptItem.id)).where(
-            AttemptItem.practice_id == practice_id,
-            AttemptItem.user_id == user_id,
-            AttemptItem.is_answered.is_(True),
-        )
-        count_val = self.session.execute(stmt).scalar()
-        return int(count_val or 0)
-
     def count_total_items(
         self,
         practice_id: uuid.UUID,

@@ -141,23 +141,35 @@ def test_deps_supply_services_from_container_without_overrides() -> None:
         assert isinstance(user_svc, AuthService)
         user_service_gen.close()
 
-        mat_svc = get_material_service(fake_request)
+        mat_gen = get_material_service(fake_request)
+        mat_svc = next(mat_gen)
         assert isinstance(mat_svc, MaterialService)
+        mat_gen.close()
 
-        know_svc = get_knowledge_service(fake_request)
+        know_gen = get_knowledge_service(fake_request)
+        know_svc = next(know_gen)
         assert isinstance(know_svc, KnowledgeService)
+        know_gen.close()
 
-        quest_svc = get_question_service(fake_request)
+        quest_gen = get_question_service(fake_request)
+        quest_svc = next(quest_gen)
         assert isinstance(quest_svc, QuestionService)
+        quest_gen.close()
 
-        prac_svc = get_practice_service(fake_request)
+        prac_gen = get_practice_service(fake_request)
+        prac_svc = next(prac_gen)
         assert isinstance(prac_svc, PracticeService)
+        prac_gen.close()
 
-        grad_svc = get_grading_service(fake_request)
+        grad_gen = get_grading_service(fake_request)
+        grad_svc = next(grad_gen)
         assert isinstance(grad_svc, GradingService)
+        grad_gen.close()
 
-        diag_svc = get_diagnosis_service(fake_request)
+        diag_gen = get_diagnosis_service(fake_request)
+        diag_svc = next(diag_gen)
         assert isinstance(diag_svc, DiagnosisService)
+        diag_gen.close()
 
 
 def test_get_container_helper() -> None:
@@ -182,10 +194,10 @@ def test_deps_raise_not_implemented_when_no_container() -> None:
     fake_request.app.state = MagicMock(spec=[])  # 无 container 属性
 
     with pytest.raises(NotImplementedError):
-        get_material_service(fake_request)
+        next(get_material_service(fake_request))
 
     with pytest.raises(NotImplementedError):
-        get_knowledge_service(fake_request)
+        next(get_knowledge_service(fake_request))
 
     with pytest.raises(NotImplementedError):
         next(get_auth_service(fake_request))

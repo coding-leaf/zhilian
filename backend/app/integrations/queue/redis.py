@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from app.core.errors import PermissionDeniedError, QueueError, QueueTimeoutError
+from app.integrations._http_retry import run_with_retry
 from app.integrations.queue.protocol import (
     QueueProtocol,
     TaskMessage,
@@ -89,70 +90,53 @@ class RedisQueueAdapter(QueueProtocol):
                     details={"url": self._masked_url},
                 ) from exception
 
+    @staticmethod
+    def _classify_redis_error(exception: Exception) -> tuple[bool, bool]:
+        """判断异常是否为 (可重试异常, 是否属于超时异常)。"""
+        if isinstance(exception, PermissionDeniedError):
+            return False, False
+        if isinstance(exception, (TimeoutError, OSError)):
+            is_timeout = isinstance(exception, TimeoutError) or "timeout" in str(exception).lower()
+            return True, is_timeout
+        exception_type = type(exception).__name__
+        is_timeout = "Timeout" in exception_type or "timeout" in str(exception).lower()
+        is_connection = "Connection" in exception_type or "connection" in str(exception).lower()
+        return (is_timeout or is_connection), is_timeout
+
+    @classmethod
+    def _map_redis_error(cls, exception: Exception, attempt: int) -> Exception:
+        """将未恢复的 Redis 队列异常转译为标准 QueueError / QueueTimeoutError。"""
+        if isinstance(exception, PermissionDeniedError):
+            return exception
+        retryable, is_timeout = cls._classify_redis_error(exception)
+        if retryable:
+            if is_timeout:
+                return QueueTimeoutError(
+                    f"Redis 队列操作响应超时: {exception}",
+                    details={"attempt": attempt},
+                )
+            msg = (
+                f"Redis 队列网络异常: {exception}"
+                if isinstance(exception, OSError)
+                else f"Redis 队列网络故障: {exception}"
+            )
+            return QueueError(msg, details={"attempt": attempt})
+        return QueueError(
+            f"Redis 队列操作失败: {exception}",
+            details={"exception_type": type(exception).__name__},
+        )
+
     def _execute_with_retry(self, operation: Callable[[], T]) -> T:
-        """带指数退避的 Redis 操作重试执行器。
-
-        Args:
-            operation: 待执行的无参可调用对象。
-
-        Returns:
-            T: 操作执行结果。
-
-        Raises:
-            QueueTimeoutError: 超时重试耗尽。
-            QueueError: 连接异常或底层服务异常。
-        """
-        last_exception: Exception | None = None
-        for attempt in range(self._max_retries):
-            try:
-                return operation()
-            except PermissionDeniedError:
-                raise
-            except (TimeoutError, OSError) as exception:
-                last_exception = exception
-                is_timeout = (
-                    isinstance(exception, TimeoutError) or "timeout" in str(exception).lower()
-                )
-                if attempt == self._max_retries - 1:
-                    if is_timeout:
-                        raise QueueTimeoutError(
-                            f"Redis 队列操作响应超时: {exception}",
-                            details={"attempt": attempt + 1},
-                        ) from exception
-                    raise QueueError(
-                        f"Redis 队列网络异常: {exception}",
-                        details={"attempt": attempt + 1},
-                    ) from exception
-                time.sleep(_BASE_BACKOFF_SECONDS * (2**attempt))
-            except Exception as exception:
-                # 检查是否为 redis 模块的超时或连接异常
-                exception_type = type(exception).__name__
-                is_timeout = "Timeout" in exception_type or "timeout" in str(exception).lower()
-                is_connection = (
-                    "Connection" in exception_type or "connection" in str(exception).lower()
-                )
-
-                if is_timeout or is_connection:
-                    last_exception = exception
-                    if attempt == self._max_retries - 1:
-                        if is_timeout:
-                            raise QueueTimeoutError(
-                                f"Redis 队列操作响应超时: {exception}",
-                                details={"attempt": attempt + 1},
-                            ) from exception
-                        raise QueueError(
-                            f"Redis 队列网络故障: {exception}",
-                            details={"attempt": attempt + 1},
-                        ) from exception
-                    time.sleep(_BASE_BACKOFF_SECONDS * (2**attempt))
-                else:
-                    raise QueueError(
-                        f"Redis 队列操作失败: {exception}",
-                        details={"exception_type": exception_type},
-                    ) from exception
-
-        # 防御性回退（理论不可达）
-        raise QueueError(f"Redis 队列重试耗尽: {last_exception}")  # pragma: no cover
+        """带指数退避的 Redis 操作重试执行器。"""
+        return run_with_retry(
+            operation,
+            max_retries=max(0, self._max_retries - 1),
+            retry_delay_base=_BASE_BACKOFF_SECONDS,
+            should_retry=lambda exc: self._classify_redis_error(exc)[0],
+            map_exhausted=self._map_redis_error,
+            sleep_fn=lambda delay: time.sleep(delay),
+            total_attempts=self._max_retries,
+        )
 
     def enqueue(
         self,

@@ -54,7 +54,6 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.practice import PracticeRepository
 from app.services.diagnosis import (
     DiagnosisService,
-    MasteryRecordList,
     ReportService,
     map_mastery_level_to_db,
     normalize_error_type,
@@ -200,9 +199,6 @@ class TestCalculateAndUpdateMastery:
 
         assert len(result) == 1
         assert result[0] == expected_record
-        assert result[point_id] == expected_record
-        assert result.get(point_id) == expected_record
-        assert result.as_dict() == {point_id: expected_record}
 
         mock_repos[
             "diagnosis_repo"
@@ -257,13 +253,6 @@ class TestCalculateAndUpdateMastery:
             decayed_at=now,
             recent_records_snapshot=[],
         )
-
-    def test_dual_mode_container_key_error(self) -> None:
-        """Verify MasteryRecordList raises KeyError on unknown key and returns default on get."""
-        container = MasteryRecordList([])
-        with pytest.raises(KeyError):
-            _ = container[uuid.uuid4()]
-        assert container.get(uuid.uuid4(), "default") == "default"
 
 
 class TestGenerateDiagnosisReport:

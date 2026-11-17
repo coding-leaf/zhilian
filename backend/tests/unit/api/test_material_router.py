@@ -1286,7 +1286,7 @@ async def test_tenant_cross_access_isolation(
 def test_unimplemented_service_dependency() -> None:
     """Tests that calling default get_material_service raises NotImplementedError."""
     with pytest.raises(NotImplementedError) as exc_info:
-        get_material_service()
+        next(get_material_service())
     assert "MaterialService 生产装配工厂尚未挂载" in str(exc_info.value)
 
 

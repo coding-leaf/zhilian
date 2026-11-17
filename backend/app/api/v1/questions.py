@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Query, Request, status
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.pagination import PaginationParams, get_pagination_params
 from app.api.deps.question import get_question_service
 from app.models.user import User
 from app.schemas.question import (
@@ -259,7 +260,7 @@ async def get_question_detail(
     Raises:
         QuestionNotFoundError: 题目不存在或越权访问 (40009)。
     """
-    question = question_service.get_question_detail(
+    question = question_service.get_question(
         question_id=id,
         user_id=user.id,
     )
@@ -333,6 +334,7 @@ async def ask_scoped_coach(
 async def list_questions(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
+    pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
     folder_id: Annotated[uuid.UUID | None, Query(description="按课程文件夹标识过滤")] = None,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="按知识点标识过滤")] = None,
@@ -346,16 +348,13 @@ async def list_questions(
     unbatched: Annotated[
         bool, Query(description="只看未分批的历史题目 (batch_id IS NULL)")
     ] = False,
-    page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="每页记录数")] = 20,
-    limit: Annotated[int | None, Query(ge=1, le=100, description="单页限制 (兼容)")] = None,
-    offset: Annotated[int | None, Query(ge=0, description="游标偏移量 (兼容)")] = None,
 ) -> QuestionListResponse:
     """多条件组合筛选并分页查询题目列表。
 
     Args:
         user: 当前已认证登录租户用户对象。
         question_service: 题目领域编排服务。
+        pagination: 归一化后的分页查询参数。
         material_id: 可选的资料主键过滤。
         folder_id: 可选的课程文件夹主键过滤。
         knowledge_point_id: 可选的知识点主键过滤。
@@ -365,16 +364,10 @@ async def list_questions(
         status_filter: 别名状态过滤。
         batch_id: 可选的出题生成批次标识过滤。
         unbatched: 为 True 时只返回 batch_id 为空的历史题目。
-        page: 页码。
-        page_size: 每页记录数。
-        limit: 单页记录数限制。
-        offset: 游标偏移量。
 
     Returns:
         QuestionListResponse: 分页题目列表及总数。
     """
-    effective_limit = limit if limit is not None else page_size
-    effective_offset = offset if offset is not None else (max(page - 1, 0) * effective_limit)
     effective_status = review_status if review_status is not None else status_filter
 
     items, total = question_service.list_questions(
@@ -387,18 +380,18 @@ async def list_questions(
         review_status=effective_status,
         batch_id=batch_id,
         unbatched=unbatched,
-        page=page,
-        page_size=effective_limit,
-        limit=effective_limit,
-        offset=effective_offset,
+        page=pagination.raw_page,
+        page_size=pagination.limit,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     list_items = [QuestionDetailResponse.model_validate(q) for q in items]
     question_service.attach_source_snippets(list_items, user_id=user.id)
     return QuestionListResponse(
         items=list_items,
         total=total,
-        limit=effective_limit,
-        offset=effective_offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 

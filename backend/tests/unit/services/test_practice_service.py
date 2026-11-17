@@ -556,10 +556,6 @@ class TestPracticeServiceStateMachine:
         resumed_p = service.resume_practice(user_id, practice.id)
         assert resumed_p.status == PracticeStatus.IN_PROGRESS.value
 
-        # Timeout practice
-        timeout_p = service.timeout_practice(user_id, practice.id)
-        assert timeout_p.status == "timeout"
-
         # Resume when not paused raises PracticeStatusError
         with pytest.raises(PracticeStatusError):
             service.resume_practice(user_id, practice.id)
@@ -570,8 +566,6 @@ class TestPracticeServiceStateMachine:
             service.pause_practice(user_id, fake_id)
         with pytest.raises(PracticeNotFoundError):
             service.resume_practice(user_id, fake_id)
-        with pytest.raises(PracticeNotFoundError):
-            service.timeout_practice(user_id, fake_id)
 
     def test_save_answer_rejects_non_answerable_states(
         self, session: Session, test_setup: dict[str, Any]
@@ -608,7 +602,10 @@ class TestPracticeServiceStateMachine:
 
         # TIMEOUT rejects further answers
         service.resume_practice(user_id, practice.id)
-        service.timeout_practice(user_id, practice.id)
+        timeout_model = session.get(Practice, practice.id)
+        assert timeout_model is not None
+        timeout_model.status = PracticeStatus.TIMEOUT.value
+        session.commit()
         with pytest.raises(PracticeStatusError):
             service.save_answer(
                 user_id,
@@ -667,10 +664,6 @@ class TestPracticeServiceStateMachine:
                 user_id,
                 SaveAnswerDTO(practice_id=practice.id, question_id=q0, user_answer="B"),
             )
-
-        # Timeout completed practice raises PracticeStatusError
-        with pytest.raises(PracticeStatusError):
-            service.timeout_practice(user_id, practice.id)
 
 
 class TestPracticeServiceSubmissionAndIdempotency:

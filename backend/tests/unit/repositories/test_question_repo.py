@@ -138,7 +138,7 @@ class TestQuestionRepositoryCRUD:
             difficulty=2,
         )
 
-        saved = repo.create_question(q, user_id)
+        [saved] = repo.batch_create_questions([q], user_id)
         assert saved.id is not None
         assert saved.user_id == user_id
 
@@ -254,24 +254,19 @@ class TestQuestionRepositoryCRUD:
         )
         repo.batch_create_questions(questions, user_id)
 
-        # list_by_material without deleted
-        mat_questions = repo.list_by_material(material_id, user_id)
+        # list_questions by material without deleted
+        mat_questions, total_mat = repo.list_questions(user_id, material_id=material_id)
         assert len(mat_questions) == 6
+        assert total_mat == 6
 
-        # list_by_material with deleted
-        mat_with_deleted = repo.list_questions_by_material(
-            material_id, user_id, include_deleted=True
-        )
-        assert len(mat_with_deleted) == 7
-
-        # list_by_material with version_id and status
-        mat_version_avail = repo.list_by_material(
-            material_id,
+        # list_questions with status filter
+        mat_version_avail, total_avail = repo.list_questions(
             user_id,
-            version_id=version_id,
+            material_id=material_id,
             status=QuestionStatus.AVAILABLE.value,
         )
         assert len(mat_version_avail) == 5
+        assert total_avail == 5
 
         # list_recent_for_deduplication only returns AVAILABLE and non-deleted
         dedup_questions = repo.list_recent_for_deduplication(material_id, user_id, limit=10)
@@ -296,7 +291,7 @@ class TestQuestionRepositoryCRUD:
             answer="可视化工作流、限制在制品。",
             difficulty=3,
         )
-        saved = repo.create_question(q, user_id)
+        [saved] = repo.batch_create_questions([q], user_id)
 
         # Update difficulty and analysis
         updated = repo.update_question(
@@ -323,35 +318,6 @@ class TestQuestionRepositoryCRUD:
         assert repo.get_question_by_id(saved.id, user_id) is None
         assert repo.get_question_by_id(saved.id, user_id, include_deleted=True) is not None
 
-    def test_soft_delete_by_material(
-        self, session: Session, helper_setup: dict[str, uuid.UUID]
-    ) -> None:
-        """Verify soft_delete_by_material affects matching questions."""
-        repo = QuestionRepository(session)
-        user_id = helper_setup["user_id"]
-        material_id = helper_setup["material_id"]
-        version_id = helper_setup["version_id"]
-        point_id = helper_setup["point_id"]
-
-        questions = [
-            Question(
-                material_id=material_id,
-                version_id=version_id,
-                knowledge_point_id=point_id,
-                question_type=QuestionType.FILL_IN_BLANK.value,
-                stem=f"填空题_{idx}：极限编程简写为_____",
-                answer="XP",
-            )
-            for idx in range(4)
-        ]
-        repo.batch_create_questions(questions, user_id)
-
-        affected = repo.soft_delete_by_material(material_id, user_id, version_id=version_id)
-        assert affected == 4
-
-        remaining = repo.list_by_material(material_id, user_id)
-        assert len(remaining) == 0
-
     def test_quality_checks_and_audit_logs(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:
@@ -370,7 +336,7 @@ class TestQuestionRepositoryCRUD:
             stem="判断题：CI/CD 指持续集成与持续交付。",
             answer="正确",
         )
-        saved = repo.create_question(q, user_id)
+        [saved] = repo.batch_create_questions([q], user_id)
         batch_id = "batch_test_001"
 
         checks = [
@@ -390,9 +356,6 @@ class TestQuestionRepositoryCRUD:
         ]
         saved_checks = repo.batch_create_quality_checks(checks, user_id)
         assert len(saved_checks) == 2
-
-        by_batch = repo.list_quality_checks_by_batch(batch_id, user_id)
-        assert len(by_batch) == 2
 
         by_mat = repo.list_quality_checks_by_material(material_id, user_id)
         assert len(by_mat) == 2
@@ -437,12 +400,12 @@ class TestQuestionRepositoryTenantIsolation:
             options=[{"key": "A", "content": "是"}],
             answer="A",
         )
-        saved = repo.create_question(q, user_a)
+        [saved] = repo.batch_create_questions([q], user_a)
 
         # User B cannot read User A's question
         assert repo.get_question_by_id(saved.id, user_b) is None
         assert repo.list_questions_by_knowledge_point(point_id, user_b) == []
-        assert repo.list_questions_by_material(material_id, user_b) == []
+        assert repo.list_questions(user_b, material_id=material_id) == ([], 0)
         assert repo.list_recent_for_deduplication(material_id, user_b) == []
 
         # User B cannot update User A's question
@@ -451,7 +414,6 @@ class TestQuestionRepositoryTenantIsolation:
 
         # User B cannot soft delete User A's question
         assert repo.soft_delete_question(saved.id, user_b) is False
-        assert repo.soft_delete_by_material(material_id, user_b) == 0
 
         # User B cannot list User A's quality checks or audit logs
         batch_id = "batch_user_a"
@@ -463,7 +425,6 @@ class TestQuestionRepositoryTenantIsolation:
         )
         repo.batch_create_quality_checks([check], user_a)
 
-        assert repo.list_quality_checks_by_batch(batch_id, user_b) == []
         assert repo.list_quality_checks_by_material(material_id, user_b) == []
 
         audit = QuestionAuditLog(

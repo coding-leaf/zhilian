@@ -12,8 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, case, func, select, update
-from sqlalchemy.engine import CursorResult
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint
@@ -43,21 +42,6 @@ class QuestionRepository:
     # ==========================================
     # Question 题目主表 CRUD 操作
     # ==========================================
-
-    def create_question(self, question: Question, user_id: uuid.UUID) -> Question:
-        """创建单个题目实体并重写绑定 user_id。
-
-        Args:
-            question: 待持久化的题目实体。
-            user_id: 租户用户标识。
-
-        Returns:
-            Question: 已持久化加入会话的题目实体。
-        """
-        question.user_id = user_id
-        self.session.add(question)
-        self.session.flush()
-        return question
 
     def batch_create_questions(
         self,
@@ -168,45 +152,6 @@ class QuestionRepository:
 
     list_by_knowledge_point = list_questions_by_knowledge_point
 
-    def list_questions_by_material(
-        self,
-        material_id: uuid.UUID,
-        user_id: uuid.UUID,
-        *,
-        version_id: uuid.UUID | None = None,
-        status: str | None = None,
-        include_deleted: bool = False,
-        limit: int = 500,
-    ) -> list[Question]:
-        """按资料标识与租户用户查询题目列表。
-
-        Args:
-            material_id: 资料标识。
-            user_id: 租户用户标识。
-            version_id: 可选的资料版本标识过滤。
-            status: 可选的题目状态过滤。
-            include_deleted: 是否包含软删除题目，默认 False。
-            limit: 最大返回条数，默认 500。
-
-        Returns:
-            list[Question]: 题目实体列表。
-        """
-        stmt = select(Question).where(
-            Question.material_id == material_id,
-            Question.user_id == user_id,
-        )
-        if version_id is not None:
-            stmt = stmt.where(Question.version_id == version_id)
-        if not include_deleted:
-            stmt = stmt.where(Question.is_deleted.is_(False))
-        if status is not None:
-            stmt = stmt.where(Question.status == status)
-
-        stmt = stmt.order_by(Question.created_at.desc()).limit(limit)
-        return list(self.session.execute(stmt).scalars().all())
-
-    list_by_material = list_questions_by_material
-
     def list_questions(
         self,
         user_id: uuid.UUID,
@@ -246,59 +191,80 @@ class QuestionRepository:
         Returns:
             tuple[list[Question], int]: (题目实体列表, 总匹配数)。
         """
-        count_stmt = select(func.count(Question.id)).where(
-            Question.user_id == user_id,
+        count_stmt = select(func.count(Question.id)).where(Question.user_id == user_id)
+        count_stmt = self._apply_list_filters(
+            count_stmt,
+            user_id=user_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            version_id=version_id,
+            knowledge_point_id=knowledge_point_id,
+            question_type=question_type,
+            difficulty=difficulty,
+            status=status,
+            batch_id=batch_id,
+            unbatched=unbatched,
+            include_deleted=include_deleted,
         )
-        if not include_deleted:
-            count_stmt = count_stmt.where(Question.is_deleted.is_(False))
-        if material_id is not None:
-            count_stmt = count_stmt.where(Question.material_id == material_id)
-        if folder_id is not None:
-            count_stmt = self._apply_folder_filter(count_stmt, folder_id, user_id)
-        if version_id is not None:
-            count_stmt = count_stmt.where(Question.version_id == version_id)
-        if knowledge_point_id is not None:
-            count_stmt = count_stmt.where(Question.knowledge_point_id == knowledge_point_id)
-        if question_type is not None:
-            count_stmt = count_stmt.where(Question.question_type == question_type)
-        if difficulty is not None:
-            count_stmt = count_stmt.where(Question.difficulty == difficulty)
-        if status is not None:
-            count_stmt = count_stmt.where(Question.status == status)
-        if batch_id is not None:
-            count_stmt = count_stmt.where(Question.batch_id == batch_id)
-        if unbatched:
-            count_stmt = count_stmt.where(Question.batch_id.is_(None))
-
         total = self.session.execute(count_stmt).scalar_one()
 
-        stmt = select(Question).where(
-            Question.user_id == user_id,
+        stmt = select(Question).where(Question.user_id == user_id)
+        stmt = self._apply_list_filters(
+            stmt,
+            user_id=user_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            version_id=version_id,
+            knowledge_point_id=knowledge_point_id,
+            question_type=question_type,
+            difficulty=difficulty,
+            status=status,
+            batch_id=batch_id,
+            unbatched=unbatched,
+            include_deleted=include_deleted,
         )
-        if not include_deleted:
-            stmt = stmt.where(Question.is_deleted.is_(False))
-        if material_id is not None:
-            stmt = stmt.where(Question.material_id == material_id)
-        if folder_id is not None:
-            stmt = self._apply_folder_filter(stmt, folder_id, user_id)
-        if version_id is not None:
-            stmt = stmt.where(Question.version_id == version_id)
-        if knowledge_point_id is not None:
-            stmt = stmt.where(Question.knowledge_point_id == knowledge_point_id)
-        if question_type is not None:
-            stmt = stmt.where(Question.question_type == question_type)
-        if difficulty is not None:
-            stmt = stmt.where(Question.difficulty == difficulty)
-        if status is not None:
-            stmt = stmt.where(Question.status == status)
-        if batch_id is not None:
-            stmt = stmt.where(Question.batch_id == batch_id)
-        if unbatched:
-            stmt = stmt.where(Question.batch_id.is_(None))
 
         stmt = stmt.order_by(Question.created_at.desc()).offset(offset).limit(limit)
         items = list(self.session.execute(stmt).scalars().all())
         return items, int(total)
+
+    @classmethod
+    def _apply_list_filters(
+        cls,
+        stmt: Any,
+        *,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID | None,
+        folder_id: uuid.UUID | None,
+        version_id: uuid.UUID | None,
+        knowledge_point_id: uuid.UUID | None,
+        question_type: str | None,
+        difficulty: int | None,
+        status: str | None,
+        batch_id: str | None,
+        unbatched: bool,
+        include_deleted: bool,
+    ) -> Any:
+        """为题目列表与计数查询统一附加多条件过滤。"""
+        if not include_deleted:
+            stmt = stmt.where(Question.is_deleted.is_(False))
+        if folder_id is not None:
+            stmt = cls._apply_folder_filter(stmt, folder_id, user_id)
+        equality_filters: tuple[tuple[Any, Any], ...] = (
+            (Question.material_id, material_id),
+            (Question.version_id, version_id),
+            (Question.knowledge_point_id, knowledge_point_id),
+            (Question.question_type, question_type),
+            (Question.difficulty, difficulty),
+            (Question.status, status),
+            (Question.batch_id, batch_id),
+        )
+        for column, value in equality_filters:
+            if value is not None:
+                stmt = stmt.where(column == value)
+        if unbatched:
+            stmt = stmt.where(Question.batch_id.is_(None))
+        return stmt
 
     @staticmethod
     def _apply_folder_filter(
@@ -657,40 +623,6 @@ class QuestionRepository:
 
     soft_delete_by_id = soft_delete_question
 
-    def soft_delete_by_material(
-        self,
-        material_id: uuid.UUID,
-        user_id: uuid.UUID,
-        *,
-        version_id: uuid.UUID | None = None,
-    ) -> int:
-        """按资料标识批量软删除题目。
-
-        Args:
-            material_id: 资料标识。
-            user_id: 租户用户标识。
-            version_id: 可选的版本标识。
-
-        Returns:
-            int: 影响软删除的题目总数。
-        """
-        stmt = (
-            update(Question)
-            .where(
-                Question.material_id == material_id,
-                Question.user_id == user_id,
-                Question.is_deleted.is_(False),
-            )
-            .values(is_deleted=True)
-        )
-        if version_id is not None:
-            stmt = stmt.where(Question.version_id == version_id)
-
-        result = self.session.execute(stmt)
-        self.session.flush()
-        count = result.rowcount if isinstance(result, CursorResult) else 0
-        return int(count)
-
     # ==========================================
     # QuestionQualityCheck 质检记录操作
     # ==========================================
@@ -716,30 +648,6 @@ class QuestionRepository:
             created.append(item)
         self.session.flush()
         return created
-
-    def list_quality_checks_by_batch(
-        self,
-        batch_id: str,
-        user_id: uuid.UUID,
-    ) -> list[QuestionQualityCheck]:
-        """按出题批次号查询质检记录列表。
-
-        Args:
-            batch_id: 出题生成批次号。
-            user_id: 租户用户标识。
-
-        Returns:
-            list[QuestionQualityCheck]: 质检实体记录列表。
-        """
-        stmt = (
-            select(QuestionQualityCheck)
-            .where(
-                QuestionQualityCheck.batch_id == batch_id,
-                QuestionQualityCheck.user_id == user_id,
-            )
-            .order_by(QuestionQualityCheck.created_at.asc())
-        )
-        return list(self.session.execute(stmt).scalars().all())
 
     def list_quality_checks_by_material(
         self,

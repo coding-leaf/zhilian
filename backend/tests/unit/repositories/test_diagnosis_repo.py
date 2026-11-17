@@ -652,9 +652,6 @@ class TestWrongRecordCRUD:
 
         # Nonexistent question returns None
         assert repo.mark_wrong_record_mastered(uuid.uuid4(), user_id=user_id) is None
-        assert (
-            repo.update_wrong_record_status(uuid.uuid4(), user_id=user_id, is_mastered=True) is None
-        )
 
         repo.upsert_wrong_record(
             user_id=user_id,
@@ -672,8 +669,8 @@ class TestWrongRecordCRUD:
         assert updated.is_mastered is True
         assert updated.mastered_at is not None
 
-        # update_wrong_record_status to False
-        reopened = repo.update_wrong_record_status(question_id, user_id=user_id, is_mastered=False)
+        # mark_wrong_record_mastered with is_mastered=False
+        reopened = repo.mark_wrong_record_mastered(question_id, user_id=user_id, is_mastered=False)
         assert reopened is not None
         assert reopened.is_mastered is False
         assert reopened.mastered_at is None
@@ -887,7 +884,6 @@ class TestWrongRecordCRUD:
         assert repo.get_wrong_record_by_id(rec.id, user_id=user_b) is None
         assert repo.list_wrong_records(user_id=user_b) == []
         assert repo.mark_wrong_record_mastered(qid, user_id=user_b) is None
-        assert repo.update_wrong_record_status(qid, user_id=user_b, is_mastered=True) is None
         assert repo.delete_wrong_record(rec.id, user_id=user_b) is False
 
     def test_list_wrong_records_material_error_question_type_filters(

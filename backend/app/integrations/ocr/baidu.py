@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from app.core.errors import OCRAuthError, OCRError, OCRQuotaError, OCRTimeoutError
+from app.integrations._http_retry import RetryableAdapterError, run_with_retry
 from app.integrations.ocr.protocol import (
     OCROptions,
     OCRPoint,
@@ -180,120 +181,108 @@ class BaiduOCRAdapter(OCRProtocol):
             return f"{self.endpoint}/rest/2.0/ocr/v1/accurate"
         return f"{self.endpoint}/rest/2.0/ocr/v1/accurate_basic"
 
+    def _invalidate_token(self) -> None:
+        """清空已缓存的百度 OAuth access_token。"""
+        with self._token_lock:
+            self._token = None
+            self._token_expires_at = 0.0
+
+    def _raise_for_baidu_error(self, resp_json: dict[str, Any]) -> None:
+        """将百度 OCR JSON 业务错误码转译为标准领域异常或可重试异常。"""
+        error_code = int(resp_json["error_code"])
+        error_msg = str(resp_json.get("error_msg", ""))
+
+        if error_code in (110, 111):
+            self._invalidate_token()
+            raise OCRAuthError(
+                message=f"百度OCR访问令牌失效或过期 [{error_code}]: {error_msg}",
+                details={"error_code": error_code, "error_msg": error_msg},
+            )
+        if error_code == 100:
+            raise OCRAuthError(
+                message=f"百度OCR鉴权凭证或参数错误 [{error_code}]: {error_msg}",
+                details={"error_code": error_code, "error_msg": error_msg},
+            )
+        if error_code == 17:
+            raise OCRQuotaError(
+                message=f"百度OCR当日调用量配额超限 [{error_code}]: {error_msg}",
+                details={"error_code": error_code, "error_msg": error_msg},
+            )
+        if error_code == 18:
+            raise RetryableAdapterError(
+                OCRQuotaError(
+                    message=(
+                        f"百度OCR并发频次过高 (重试 {self.max_retries} 次后超限)"
+                        f" [{error_code}]: {error_msg}"
+                    ),
+                    details={"error_code": error_code, "retries": self.max_retries},
+                )
+            )
+        raise OCRError(
+            message=f"百度OCR服务异常 [{error_code}]: {error_msg}",
+            details={"error_code": error_code, "error_msg": error_msg},
+        )
+
+    def _post_ocr_once(self, url: str, data: dict[str, Any]) -> OCRResult:
+        """执行单次百度 OCR HTTP 请求并映射响应与可重试故障。"""
+        token = self._get_token()
+        params = {"access_token": token}
+        try:
+            start_time = time.perf_counter()
+            resp = self._client.post(
+                url,
+                params=params,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise RetryableAdapterError(
+                OCRTimeoutError(
+                    message=f"百度OCR服务响应超时 (重试 {self.max_retries} 次后失败): {exc!s}",
+                    details={"retries": self.max_retries},
+                )
+            ) from exc
+        except Exception as exc:
+            raise RetryableAdapterError(
+                OCRError(
+                    message=f"百度OCR调用异常 (重试 {self.max_retries} 次后失败): {exc!s}",
+                    details={"retries": self.max_retries},
+                )
+            ) from exc
+
+        if resp.status_code in (401, 403):
+            self._invalidate_token()
+            raise OCRAuthError(
+                message=f"百度OCR认证失败 (HTTP {resp.status_code}): {resp.text}",
+                details={"status_code": resp.status_code},
+            )
+
+        try:
+            resp_json = resp.json()
+        except Exception as exc:
+            raise OCRError(
+                message=f"百度OCR响应非合法JSON格式: {resp.text}",
+                details={"raw_text": resp.text},
+            ) from exc
+
+        if "error_code" in resp_json:
+            self._raise_for_baidu_error(resp_json)
+
+        return self._parse_response(resp_json, duration_ms)
+
     def _execute_with_retry(
         self,
         url: str,
         data: dict[str, Any],
     ) -> OCRResult:
         """执行 OCR 识别请求，具备自动 Token 注入、指数退避重试与异常分类转译能力。"""
-        last_exc: Exception | None = None
-
-        for attempt in range(self.max_retries + 1):
-            token = self._get_token()
-            params = {"access_token": token}
-            try:
-                start_time = time.perf_counter()
-                resp = self._client.post(
-                    url,
-                    params=params,
-                    data=data,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                )
-                duration_ms = (time.perf_counter() - start_time) * 1000.0
-
-                if resp.status_code in (401, 403):
-                    with self._token_lock:
-                        self._token = None
-                        self._token_expires_at = 0.0
-                    raise OCRAuthError(
-                        message=f"百度OCR认证失败 (HTTP {resp.status_code}): {resp.text}",
-                        details={"status_code": resp.status_code},
-                    )
-
-                try:
-                    resp_json = resp.json()
-                except Exception as exc:
-                    raise OCRError(
-                        message=f"百度OCR响应非合法JSON格式: {resp.text}",
-                        details={"raw_text": resp.text},
-                    ) from exc
-
-                if "error_code" in resp_json:
-                    error_code = int(resp_json["error_code"])
-                    error_msg = str(resp_json.get("error_msg", ""))
-
-                    if error_code in (110, 111):
-                        with self._token_lock:
-                            self._token = None
-                            self._token_expires_at = 0.0
-                        raise OCRAuthError(
-                            message=f"百度OCR访问令牌失效或过期 [{error_code}]: {error_msg}",
-                            details={"error_code": error_code, "error_msg": error_msg},
-                        )
-
-                    if error_code == 100:
-                        raise OCRAuthError(
-                            message=f"百度OCR鉴权凭证或参数错误 [{error_code}]: {error_msg}",
-                            details={"error_code": error_code, "error_msg": error_msg},
-                        )
-
-                    if error_code == 17:
-                        raise OCRQuotaError(
-                            message=f"百度OCR当日调用量配额超限 [{error_code}]: {error_msg}",
-                            details={"error_code": error_code, "error_msg": error_msg},
-                        )
-
-                    if error_code == 18:
-                        if attempt < self.max_retries:
-                            sleep_duration = self.retry_delay_base * (2**attempt)
-                            if sleep_duration > 0:
-                                time.sleep(sleep_duration)
-                            continue
-                        raise OCRQuotaError(
-                            message=(
-                                f"百度OCR并发频次过高 (重试 {self.max_retries} 次后超限)"
-                                f" [{error_code}]: {error_msg}"
-                            ),
-                            details={"error_code": error_code, "retries": self.max_retries},
-                        )
-
-                    raise OCRError(
-                        message=f"百度OCR服务异常 [{error_code}]: {error_msg}",
-                        details={"error_code": error_code, "error_msg": error_msg},
-                    )
-
-                return self._parse_response(resp_json, duration_ms)
-
-            except (OCRAuthError, OCRQuotaError, OCRError):
-                raise
-            except (httpx.TimeoutException, TimeoutError) as exc:
-                last_exc = exc
-                if attempt >= self.max_retries:
-                    break
-                sleep_duration = self.retry_delay_base * (2**attempt)
-                if sleep_duration > 0:
-                    time.sleep(sleep_duration)
-            except Exception as exc:
-                last_exc = exc
-                if attempt >= self.max_retries:
-                    break
-                sleep_duration = self.retry_delay_base * (2**attempt)
-                if sleep_duration > 0:
-                    time.sleep(sleep_duration)
-
-        if last_exc is None:
-            raise OCRError("百度OCR未执行有效请求")
-
-        if isinstance(last_exc, (httpx.TimeoutException, TimeoutError)):
-            raise OCRTimeoutError(
-                message=f"百度OCR服务响应超时 (重试 {self.max_retries} 次后失败): {last_exc!s}",
-                details={"retries": self.max_retries},
-            ) from last_exc
-
-        raise OCRError(
-            message=f"百度OCR调用异常 (重试 {self.max_retries} 次后失败): {last_exc!s}",
-            details={"retries": self.max_retries},
-        ) from last_exc
+        return run_with_retry(
+            lambda: self._post_ocr_once(url, data),
+            max_retries=self.max_retries,
+            retry_delay_base=self.retry_delay_base,
+            sleep_fn=lambda delay: time.sleep(delay),
+        )
 
     @staticmethod
     def _parse_response(response: dict[str, Any], duration_ms: float) -> OCRResult:

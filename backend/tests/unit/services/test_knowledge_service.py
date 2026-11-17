@@ -786,16 +786,16 @@ class TestKnowledgeServiceWorkflow:
                 user_id=user_id,
             )
 
-    def test_llm_agent_graph_fallback(
+    def test_extract_calls_generate_structured_directly(
         self, session: Session, seed_material: dict[str, Any]
     ) -> None:
-        """测试 AgentGraph 抛错时服务层降级至直接 generate_structured 抽取。"""
+        """测试服务层统一经由 LLMProtocol.generate_structured 单次抽取，不再重复调 AgentGraph。"""
         user_id = seed_material["user_id"]
         material_id = seed_material["material_id"]
         version_id = seed_material["version_id"]
 
         canned = self._make_qualified_output()
-        # 配置 AgentGraph 失败，测试 fallback 路径
+        # 若底层 generate 被直接调用会抛错，验证抽取严格走 generate_structured 单路分发
         fake_llm = StubLLM([canned], raise_agent_graph_error=True)
         fake_embed = StubEmbedding()
         service = KnowledgeService(session, fake_llm, fake_embed)
@@ -806,6 +806,7 @@ class TestKnowledgeServiceWorkflow:
             user_id=user_id,
         )
         assert len(points) == 3
+        assert fake_llm.call_count == 1
 
     def test_multi_tenant_isolation(self, session: Session, seed_material: dict[str, Any]) -> None:
         """测试租户隔离：用户 B 无法抽取或读取用户 A 的知识点。"""

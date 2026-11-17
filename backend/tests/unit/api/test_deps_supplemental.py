@@ -3,8 +3,8 @@
 覆盖目标（2026-10-04 权威口径下未覆盖行）：
 - `app/api/deps/container.py`：`get_container` 三分支（无 request / 无 app / 有 container）；
 - `app/api/deps/db.py`：`get_db_session` 未挂载报错 + 正常 yield 与退出关闭；
-- `app/api/deps/folder.py`：`get_folder_service` 三分支
-  （未挂载报错 / session 注入 / session_factory 兜底）。
+- `app/api/deps/folder.py` & `app/api/deps/_factory.py`：`get_folder_service` 三分支
+  （未挂载报错 / session 注入 / container.get_session 兜底并在 teardown 关闭）。
 
 纪律：使用 `MagicMock(spec=Session)`（禁止自定义 stub 绕过父类初始化），
 断言以「方法调用」为准（禁止依赖私有字段）。
@@ -97,30 +97,41 @@ class TestGetFolderService:
     def test_raises_when_not_mounted(self) -> None:
         """未挂载 container 时必须抛 NotImplementedError。"""
         with pytest.raises(NotImplementedError):
-            get_folder_service(None)  # type: ignore[arg-type]
+            next(get_folder_service(None))  # type: ignore[arg-type]
 
     def test_uses_injected_session_when_provided(self) -> None:
-        """传入真实 Session 实例时直接透传给服务工厂。"""
+        """传入真实 Session 实例时直接透传给服务工厂，且不触发兜底会话。"""
         injected_session = MagicMock(spec=Session)
         container = MagicMock()
         container.create_folder_service.return_value = "folder-service"
         request = _request_with_container(container)
 
-        result = get_folder_service(request, injected_session)  # type: ignore[arg-type]
+        gen = get_folder_service(request, injected_session)  # type: ignore[arg-type]
+        result = next(gen)
+        with pytest.raises(StopIteration):
+            next(gen)
 
         assert result == "folder-service"
         container.create_folder_service.assert_called_once_with(session=injected_session)
+        container.get_session.assert_not_called()
         container.session_factory.assert_not_called()
 
-    def test_falls_back_to_session_factory(self) -> None:
-        """未注入 Session 时使用 container.session_factory() 兜底。"""
-        factory_session = MagicMock(spec=Session)
+    def test_falls_back_to_managed_get_session_and_closes_on_exit(self) -> None:
+        """未注入 Session 时使用 container.get_session() 托管并在退出时关闭。"""
+        managed_session = MagicMock(spec=Session)
         container = MagicMock()
-        container.session_factory.return_value = factory_session
+        container.get_session.return_value.__enter__.return_value = managed_session
         container.create_folder_service.return_value = "folder-service"
         request = _request_with_container(container)
 
-        result = get_folder_service(request, None)  # type: ignore[arg-type]
+        gen = get_folder_service(request, None)  # type: ignore[arg-type]
+        result = next(gen)
 
         assert result == "folder-service"
-        container.create_folder_service.assert_called_once_with(session=factory_session)
+        container.create_folder_service.assert_called_once_with(session=managed_session)
+        container.get_session.return_value.__exit__.assert_not_called()
+
+        with pytest.raises(StopIteration):
+            next(gen)
+        container.get_session.return_value.__exit__.assert_called_once()
+        container.session_factory.assert_not_called()

@@ -260,6 +260,132 @@ class QuestionSnapshotDTO(BaseModel):
         return data
 
 
+_ITEM_EXTRACT_FIELDS: tuple[str, ...] = (
+    "id",
+    "attempt_item_id",
+    "question_id",
+    "order_index",
+    "status",
+    "user_answer",
+    "time_spent_seconds",
+    "duration_seconds",
+    "is_answered",
+    "score",
+    "grading_status",
+    "max_score",
+    "hit_keywords",
+    "missing_keywords",
+    "source_snippet",
+    "question_snapshot",
+)
+
+_DETAIL_EXTRACT_FIELDS: tuple[str, ...] = (
+    "id",
+    "practice_id",
+    "title",
+    "material_id",
+    "folder_id",
+    "mode",
+    "status",
+    "total_count",
+    "question_count",
+    "completed_count",
+    "total_score",
+    "max_score",
+    "source_type",
+    "source_report_id",
+    "created_at",
+    "submitted_at",
+    "completed_at",
+    "items",
+)
+
+
+def _sync_pair_alias(data: dict[str, Any], primary: str, alias: str) -> None:
+    """双向对齐主字段与兼容别名字段。"""
+    if alias not in data and primary in data:
+        data[alias] = data[primary]
+    elif primary not in data and alias in data:
+        data[primary] = data[alias]
+
+
+def _extract_item_payload(data: Any) -> Any:
+    """将 ORM/视图对象转换为作答项响应字典（仅消费已预加载关系）。"""
+    if isinstance(data, dict):
+        return data
+    extracted = {name: getattr(data, name) for name in _ITEM_EXTRACT_FIELDS if hasattr(data, name)}
+    underlying = getattr(data, "_item", data)
+    loaded_records = getattr(underlying, "__dict__", {}).get("grading_records")
+    if loaded_records is not None:
+        extracted["grading_records"] = loaded_records
+    return extracted if extracted else data
+
+
+def _enrich_item_keywords_and_snapshot(data: dict[str, Any]) -> None:
+    """合并判题记录要点并安全复制回填题干快照中的溯源片段。"""
+    final_record = _pick_final_grading_record(data.get("grading_records"))
+    if data.get("hit_keywords") is None:
+        hit_keywords = _extract_keyword_list(final_record, "hit_keywords")
+        if hit_keywords is not None:
+            data["hit_keywords"] = hit_keywords
+    if data.get("missing_keywords") is None:
+        missing_keywords = _extract_keyword_list(final_record, "missing_keywords")
+        if missing_keywords is not None:
+            data["missing_keywords"] = missing_keywords
+
+    snapshot = data.get("question_snapshot")
+    source_snippet = data.get("source_snippet")
+    if not isinstance(snapshot, dict):
+        return
+    snapshot = dict(snapshot)
+    data["question_snapshot"] = snapshot
+    if source_snippet is None and snapshot.get("source_snippet") is not None:
+        source_snippet = snapshot.get("source_snippet")
+        data["source_snippet"] = source_snippet
+    if data.get("hit_keywords") is not None:
+        snapshot.setdefault("hit_keywords", data["hit_keywords"])
+    if data.get("missing_keywords") is not None:
+        snapshot.setdefault("missing_keywords", data["missing_keywords"])
+    if source_snippet is not None:
+        snapshot.setdefault("source_snippet", source_snippet)
+
+
+def _derive_item_grading_status(data: dict[str, Any]) -> str:
+    """派生单题判题状态，避免待重判被误判为判错。"""
+    if data.get("is_answered") is False:
+        return "unanswered"
+    if data.get("score") is None:
+        return "pending_regrade"
+    return "graded"
+
+
+def _compute_detail_completed_count(items: list[Any]) -> int:
+    """由作答项列表统计已完成作答题目数。"""
+    return sum(
+        1
+        for item in items
+        if (
+            item.get("is_answered")
+            if isinstance(item, dict)
+            else getattr(item, "is_answered", False)
+        )
+    )
+
+
+def _compute_detail_elapsed_seconds(items: list[Any]) -> int:
+    """由作答项列表汇总累计作答时长（秒）。"""
+    total_duration = 0
+    for item in items:
+        if isinstance(item, dict):
+            raw_duration = item.get("duration_seconds")
+            if raw_duration is None:
+                raw_duration = item.get("time_spent_seconds")
+            total_duration += int(raw_duration or 0)
+        else:
+            total_duration += int(getattr(item, "duration_seconds", 0) or 0)
+    return total_duration
+
+
 class PracticeItemDetailResponse(BaseModel):
     """练习会话单题作答项详情响应模型。"""
 
@@ -318,99 +444,27 @@ class PracticeItemDetailResponse(BaseModel):
     @classmethod
     def synchronize_item_fields(cls, data: Any) -> Any:
         """同步主键、耗时、作答标记、要点关键词及来源切片字段。"""
+        data = _extract_item_payload(data)
         if not isinstance(data, dict):
-            field_names = (
-                "id",
-                "attempt_item_id",
-                "question_id",
-                "order_index",
-                "status",
-                "user_answer",
-                "time_spent_seconds",
-                "duration_seconds",
-                "is_answered",
-                "score",
-                "grading_status",
-                "max_score",
-                "hit_keywords",
-                "missing_keywords",
-                "source_snippet",
-                "question_snapshot",
-            )
-            extracted = {name: getattr(data, name) for name in field_names if hasattr(data, name)}
-            # 仅消费已预加载的判题记录关系，避免触发 N+1 惰性查询
-            loaded_records = getattr(data, "__dict__", {}).get("grading_records")
-            if loaded_records is not None:
-                extracted["grading_records"] = loaded_records
-            if extracted:
-                data = extracted
+            return data
 
-        if isinstance(data, dict):
-            if data.get("max_score") is None:
-                data["max_score"] = 1.0
+        if data.get("max_score") is None:
+            data["max_score"] = 1.0
+        _sync_pair_alias(data, "id", "attempt_item_id")
+        _sync_pair_alias(data, "duration_seconds", "time_spent_seconds")
 
-            # 同步 attempt_item_id 与 id
-            if "attempt_item_id" not in data and "id" in data:
-                data["attempt_item_id"] = data["id"]
-            elif "id" not in data and "attempt_item_id" in data:
-                data["id"] = data["attempt_item_id"]
+        if data.get("user_answer") is not None:
+            data.setdefault("is_answered", True)
+            if data.get("status") == "unanswered":
+                data["status"] = "answered"
 
-            # 同步 time_spent_seconds 与 duration_seconds
-            if "time_spent_seconds" not in data and "duration_seconds" in data:
-                data["time_spent_seconds"] = data["duration_seconds"]
-            elif "duration_seconds" not in data and "time_spent_seconds" in data:
-                data["duration_seconds"] = data["time_spent_seconds"]
+        if isinstance(data.get("user_answer"), str):
+            data["user_answer"] = _normalize_persisted_user_answer(data["user_answer"])
 
-            # 用户作答不为空时更新 is_answered 与 status
-            if data.get("user_answer") is not None:
-                data.setdefault("is_answered", True)
-                if data.get("status") == "unanswered":
-                    data["status"] = "answered"
-
-            # 兼容历史 Python repr 多选作答，规范化为标准 JSON 字符串 (BUG-PRAC-016)
-            if isinstance(data.get("user_answer"), str):
-                data["user_answer"] = _normalize_persisted_user_answer(data["user_answer"])
-
-            # 合并生效判题记录中的命中/遗漏要点 (BUG-GRADE-003)
-            final_record = _pick_final_grading_record(data.get("grading_records"))
-            if data.get("hit_keywords") is None:
-                hit_keywords = _extract_keyword_list(final_record, "hit_keywords")
-                if hit_keywords is not None:
-                    data["hit_keywords"] = hit_keywords
-            if data.get("missing_keywords") is None:
-                missing_keywords = _extract_keyword_list(final_record, "missing_keywords")
-                if missing_keywords is not None:
-                    data["missing_keywords"] = missing_keywords
-
-            # 同步来源切片对象并回填快照 (BUG-GRADE-004)
-            snapshot = data.get("question_snapshot")
-            source_snippet = data.get("source_snippet")
-            if isinstance(snapshot, dict):
-                snapshot = dict(snapshot)
-                data["question_snapshot"] = snapshot
-                if source_snippet is None and snapshot.get("source_snippet") is not None:
-                    source_snippet = snapshot.get("source_snippet")
-                    data["source_snippet"] = source_snippet
-                if data.get("hit_keywords") is not None:
-                    snapshot.setdefault("hit_keywords", data["hit_keywords"])
-                if data.get("missing_keywords") is not None:
-                    snapshot.setdefault("missing_keywords", data["missing_keywords"])
-                if source_snippet is not None:
-                    snapshot.setdefault("source_snippet", source_snippet)
-
-            # 计算判题状态 (仅在未显式提供时)，使“待重判”不被误判为“判错”
-            if data.get("grading_status") is None:
-                if data.get("is_answered") is False:
-                    data["grading_status"] = "unanswered"
-                elif data.get("score") is None:
-                    data["grading_status"] = "pending_regrade"
-                else:
-                    data["grading_status"] = "graded"
+        _enrich_item_keywords_and_snapshot(data)
+        if data.get("grading_status") is None:
+            data["grading_status"] = _derive_item_grading_status(data)
         return data
-
-
-# 别名定义以保持兼容性
-AttemptItemDetailResponse = PracticeItemDetailResponse
 
 
 class PracticeDetailResponse(BaseModel):
@@ -455,72 +509,28 @@ class PracticeDetailResponse(BaseModel):
     def synchronize_detail_fields(cls, data: Any) -> Any:
         """同步 practice_id 与 id，以及 total_count 与 question_count。"""
         if not isinstance(data, dict):
-            field_names = (
-                "id",
-                "practice_id",
-                "title",
-                "material_id",
-                "folder_id",
-                "mode",
-                "status",
-                "total_count",
-                "question_count",
-                "completed_count",
-                "total_score",
-                "max_score",
-                "source_type",
-                "source_report_id",
-                "created_at",
-                "submitted_at",
-                "completed_at",
-                "items",
-            )
-            extracted = {name: getattr(data, name) for name in field_names if hasattr(data, name)}
+            extracted = {
+                name: getattr(data, name) for name in _DETAIL_EXTRACT_FIELDS if hasattr(data, name)
+            }
             if extracted:
                 data = extracted
 
-        if isinstance(data, dict):
-            if data.get("source_type") is None:
-                data["source_type"] = "normal"
+        if not isinstance(data, dict):
+            return data
 
-            if data.get("mode") is None:
-                data["mode"] = "sequential"
+        if data.get("source_type") is None:
+            data["source_type"] = "normal"
+        if data.get("mode") is None:
+            data["mode"] = "sequential"
 
-            if "practice_id" not in data and "id" in data:
-                data["practice_id"] = data["id"]
-            elif "id" not in data and "practice_id" in data:
-                data["id"] = data["practice_id"]
+        _sync_pair_alias(data, "id", "practice_id")
+        _sync_pair_alias(data, "question_count", "total_count")
 
-            if "total_count" not in data and "question_count" in data:
-                data["total_count"] = data["question_count"]
-            elif "question_count" not in data and "total_count" in data:
-                data["question_count"] = data["total_count"]
-
-            # 自动统计已作答题目数：未显式提供非零 completed_count 时由 items 派生 (BUG-PRAC-011)
-            if not data.get("completed_count"):
-                items = data.get("items") or []
-                computed_completed = 0
-                for item in items:
-                    if isinstance(item, dict):
-                        if item.get("is_answered"):
-                            computed_completed += 1
-                    elif getattr(item, "is_answered", False):
-                        computed_completed += 1
-                data["completed_count"] = computed_completed
-
-            # 自动聚合累计耗时：未显式提供时由 items 单题耗时求和 (BUG-PRAC-015)
-            if not data.get("time_elapsed_seconds"):
-                items = data.get("items") or []
-                total_duration = 0
-                for item in items:
-                    if isinstance(item, dict):
-                        raw_duration = item.get("duration_seconds")
-                        if raw_duration is None:
-                            raw_duration = item.get("time_spent_seconds")
-                        total_duration += int(raw_duration or 0)
-                    else:
-                        total_duration += int(getattr(item, "duration_seconds", 0) or 0)
-                data["time_elapsed_seconds"] = total_duration
+        items = data.get("items") or []
+        if not data.get("completed_count"):
+            data["completed_count"] = _compute_detail_completed_count(items)
+        if not data.get("time_elapsed_seconds"):
+            data["time_elapsed_seconds"] = _compute_detail_elapsed_seconds(items)
         return data
 
 

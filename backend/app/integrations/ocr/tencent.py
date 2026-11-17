@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from app.core.errors import OCRAuthError, OCRError, OCRTimeoutError
+from app.integrations._http_retry import run_with_retry
 from app.integrations.ocr.protocol import (
     OCROptions,
     OCRPoint,
@@ -164,118 +165,102 @@ class TencentOCRAdapter(OCRProtocol):
 
         return (False, False, code or "GeneralError")
 
-    def _execute_with_retry(self, request_obj: Any) -> OCRResult:
-        """执行 API 调用并处理指数退避重试与异常转译。"""
-        last_exc: Exception | None = None
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                start_time = time.perf_counter()
-                response = self._client.GeneralBasicOCR(request_obj)
-                duration_ms = (time.perf_counter() - start_time) * 1000
-                return self._parse_response(response, duration_ms)
-            except Exception as exc:
-                last_exc = exc
-                is_auth, is_retryable, error_code = self._classify_error(exc)
-
-                if is_auth:
-                    raise OCRAuthError(
-                        message=f"腾讯云OCR服务认证或授权失败: {exc!s}",
-                        details={"error_code": error_code, "secret_id": self.secret_id},
-                    ) from exc
-
-                if not is_retryable or attempt >= self.max_retries:
-                    break
-
-                sleep_duration = self.retry_delay_base * (2**attempt)
-                if sleep_duration > 0:
-                    time.sleep(sleep_duration)
-
-        if last_exc is None:
-            raise OCRError("腾讯云OCR未执行有效请求")
-
-        _, _, error_code = self._classify_error(last_exc)
-
+    def _map_exhausted_error(self, exc: Exception, _attempts: int) -> Exception:
+        """将未重试或重试耗尽后的腾讯云异常映射为统一 OCR 业务异常。"""
+        is_auth, _, error_code = self._classify_error(exc)
+        if is_auth:
+            return OCRAuthError(
+                message=f"腾讯云OCR服务认证或授权失败: {exc!s}",
+                details={"error_code": error_code, "secret_id": self.secret_id},
+            )
         if (
             error_code == "Timeout"
-            or isinstance(last_exc, TimeoutError)
-            or "timeout" in str(last_exc).lower()
+            or isinstance(exc, TimeoutError)
+            or "timeout" in str(exc).lower()
         ):
-            timeout_message = (
-                f"腾讯云OCR服务调用超时 (重试 {self.max_retries} 次后失败): {last_exc!s}"
-            )
-            raise OCRTimeoutError(
-                message=timeout_message,
+            return OCRTimeoutError(
+                message=f"腾讯云OCR服务调用超时 (重试 {self.max_retries} 次后失败): {exc!s}",
                 details={"error_code": error_code, "retries": self.max_retries},
-            ) from last_exc
-
-        raise OCRError(
-            message=f"腾讯云OCR服务异常: {last_exc!s}",
+            )
+        return OCRError(
+            message=f"腾讯云OCR服务异常: {exc!s}",
             details={"error_code": error_code},
-        ) from last_exc
+        )
+
+    def _execute_with_retry(self, request_obj: Any) -> OCRResult:
+        """执行 API 调用并处理指数退避重试与异常转译。"""
+
+        def _invoke() -> OCRResult:
+            start_time = time.perf_counter()
+            response = self._client.GeneralBasicOCR(request_obj)
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            return self._parse_response(response, duration_ms)
+
+        def _should_retry(exc: Exception) -> bool:
+            is_auth, is_retryable, _ = self._classify_error(exc)
+            return not is_auth and is_retryable
+
+        return run_with_retry(
+            _invoke,
+            max_retries=self.max_retries,
+            retry_delay_base=self.retry_delay_base,
+            should_retry=_should_retry,
+            map_exhausted=self._map_exhausted_error,
+            sleep_fn=lambda delay: time.sleep(delay),
+        )
 
     @staticmethod
-    def _parse_response(response: Any, duration_ms: float) -> OCRResult:
+    def _read_field(obj: Any, attr: str, default: Any = None) -> Any:
+        """统一读取 SDK 结构体属性或字典键。"""
+        if isinstance(obj, dict):
+            return obj.get(attr, default)
+        value = getattr(obj, attr, None)
+        return default if value is None else value
+
+    @classmethod
+    def _parse_polygon(cls, item: Any) -> OCRPolygon | None:
+        """从单条腾讯云 OCR 检测结果中解析多边形坐标。"""
+        raw_polygon = cls._read_field(item, "Polygon")
+        if raw_polygon is None:
+            raw_polygon = cls._read_field(item, "ItemPolygon")
+        if not raw_polygon:
+            return None
+
+        points: list[OCRPoint] = []
+        for pt in raw_polygon:
+            coord_x = cls._read_field(pt, "X")
+            if coord_x is None:
+                coord_x = cls._read_field(pt, "x", 0)
+            coord_y = cls._read_field(pt, "Y")
+            if coord_y is None:
+                coord_y = cls._read_field(pt, "y", 0)
+            points.append(
+                OCRPoint(
+                    x=int(coord_x) if coord_x is not None else 0,
+                    y=int(coord_y) if coord_y is not None else 0,
+                )
+            )
+        return OCRPolygon(points=tuple(points)) if points else None
+
+    @classmethod
+    def _parse_response(cls, response: Any, duration_ms: float) -> OCRResult:
         """将腾讯云 SDK 响应结构体解析为标准 OCRResult 数据模型。"""
+        text_detections = cls._read_field(response, "TextDetections") or []
+        image_width = cls._read_field(response, "ImageWidth")
+        image_height = cls._read_field(response, "ImageHeight")
+
         blocks: list[OCRTextBlock] = []
         full_text_lines: list[str] = []
-
-        if isinstance(response, dict):
-            text_detections = response.get("TextDetections") or []
-            image_width = response.get("ImageWidth")
-            image_height = response.get("ImageHeight")
-        else:
-            text_detections = getattr(response, "TextDetections", None) or []
-            image_width = getattr(response, "ImageWidth", None)
-            image_height = getattr(response, "ImageHeight", None)
-
         for index, item in enumerate(text_detections, start=1):
-            detected_text = getattr(item, "DetectedText", None)
-            if detected_text is None and isinstance(item, dict):
-                detected_text = item.get("DetectedText", "")
-            detected_text = str(detected_text or "")
-
-            raw_conf = getattr(item, "Confidence", None)
-            if raw_conf is None and isinstance(item, dict):
-                raw_conf = item.get("Confidence", 0.0)
-            confidence = float(raw_conf or 0.0)
+            detected_text = str(cls._read_field(item, "DetectedText", "") or "")
+            confidence = float(cls._read_field(item, "Confidence", 0.0) or 0.0)
             if confidence > 1.0:
                 confidence = round(confidence / 100.0, 4)
-
-            polygon_points: list[OCRPoint] = []
-            raw_polygon = getattr(item, "Polygon", None)
-            if raw_polygon is None and isinstance(item, dict):
-                raw_polygon = item.get("Polygon")
-            if raw_polygon is None:
-                raw_polygon = getattr(item, "ItemPolygon", None)
-                if raw_polygon is None and isinstance(item, dict):
-                    raw_polygon = item.get("ItemPolygon")
-
-            if raw_polygon:
-                for pt in raw_polygon:
-                    coord_x = getattr(pt, "X", None)
-                    if coord_x is None and isinstance(pt, dict):
-                        coord_x = pt.get("X", pt.get("x", 0))
-                    elif coord_x is None:
-                        coord_x = getattr(pt, "x", 0)
-
-                    coord_y = getattr(pt, "Y", None)
-                    if coord_y is None and isinstance(pt, dict):
-                        coord_y = pt.get("Y", pt.get("y", 0))
-                    elif coord_y is None:
-                        coord_y = getattr(pt, "y", 0)
-
-                    x_val = int(coord_x) if coord_x is not None else 0
-                    y_val = int(coord_y) if coord_y is not None else 0
-                    polygon_points.append(OCRPoint(x=x_val, y=y_val))
-
-            polygon = OCRPolygon(points=tuple(polygon_points)) if polygon_points else None
-
             blocks.append(
                 OCRTextBlock(
                     text=detected_text,
                     confidence=confidence,
-                    polygon=polygon,
+                    polygon=cls._parse_polygon(item),
                     line_number=index,
                 )
             )

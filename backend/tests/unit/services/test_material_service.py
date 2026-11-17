@@ -1178,12 +1178,16 @@ class TestMaterialCreationAndLifecycle:
         def _rebuild(
             *, material_id: uuid.UUID, version_id: uuid.UUID, user_id: uuid.UUID
         ) -> object:
-            knowledge_repo.create_knowledge_point(
-                user_id=user_id,
-                material_id=material_id,
-                version_id=version_id,
-                name="重拍后重建知识点",
-                batch_id="rebuild-batch",
+            knowledge_repo.batch_create_knowledge_points(
+                [
+                    {
+                        "material_id": material_id,
+                        "version_id": version_id,
+                        "name": "重拍后重建知识点",
+                        "batch_id": "rebuild-batch",
+                    }
+                ],
+                user_id,
             )
             return knowledge_repo.get_knowledge_points_by_version(material_id, version_id, user_id)
 

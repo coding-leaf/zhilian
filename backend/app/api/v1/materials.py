@@ -28,6 +28,7 @@ from fastapi import (
 from app.api.deps.auth import get_current_user
 from app.api.deps.folder import get_folder_service
 from app.api.deps.material import get_material_service
+from app.api.deps.pagination import PaginationParams, get_pagination_params
 from app.container import AppContainer
 from app.core.errors import MaterialInvalidError
 from app.core.security import generate_user_ref
@@ -188,9 +189,6 @@ def run_material_pipeline_background(
         )
 
 
-run_parse_material_background = run_material_pipeline_background
-
-
 @router.post(
     "/upload",
     response_model=MaterialUploadResponse,
@@ -258,12 +256,7 @@ async def upload_material(
 async def list_materials(
     user: Annotated[User, Depends(get_current_user)],
     material_service: Annotated[MaterialService, Depends(get_material_service)],
-    page: Annotated[int, Query(ge=1, description="当前页码")] = 1,
-    page_size: Annotated[int, Query(ge=1, le=100, description="单页容量")] = 20,
-    limit: Annotated[
-        int | None, Query(ge=1, le=100, description="单页容量限制 (兼容游标分页)")
-    ] = None,
-    offset: Annotated[int | None, Query(ge=0, description="游标偏移量 (兼容游标分页)")] = None,
+    pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     keyword: Annotated[str | None, Query(max_length=100, description="标题模糊检索词")] = None,
     status_filter: Annotated[str | None, Query(alias="status", description="状态筛选")] = None,
     folder_id: Annotated[
@@ -276,10 +269,7 @@ async def list_materials(
     Args:
         user: 当前登录租户用户对象。
         material_service: 资料领域编排服务。
-        page: 当前页码 (从 1 开始)。
-        page_size: 单页容量限制。
-        limit: 可选的单页容量限制（兼容游标分页）。
-        offset: 可选的分页游标偏移量（兼容游标分页）。
+        pagination: 归一化后的分页查询参数。
         keyword: 可选标题模糊检索关键词。
         status_filter: 可选资料生命周期状态。
         folder_id: 可选课程过滤器（UUID 或 __none__ 未分类）。
@@ -287,9 +277,9 @@ async def list_materials(
     Returns:
         MaterialListResponse: 包含资料列表与分页总数的分页响应。
     """
-    calc_limit = limit if limit is not None else page_size
-    calc_offset = offset if offset is not None else (page - 1) * calc_limit
-    calc_page = (calc_offset // calc_limit) + 1 if limit is not None else page
+    calc_limit = pagination.limit
+    calc_offset = pagination.offset
+    calc_page = pagination.page
 
     cleaned_status: str | None = None
     if status_filter:
@@ -828,7 +818,6 @@ __all__ = [
     "retry_material_pipeline",
     "router",
     "run_material_pipeline_background",
-    "run_parse_material_background",
     "soft_delete_material",
     "switch_material_version",
     "trigger_material_parse",

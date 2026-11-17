@@ -285,7 +285,6 @@ class TestAttemptItemOperations:
 
         # Initial counts
         assert repo.count_total_items(practice.id, user_id) == 2
-        assert repo.count_answered_items(practice.id, user_id) == 0
         assert repo.count_unanswered_items(practice.id, user_id) == 2
 
         # Save answer for item 1
@@ -313,7 +312,6 @@ class TestAttemptItemOperations:
         assert refreshed.duration_seconds == 25
 
         # Counts after answer
-        assert repo.count_answered_items(practice.id, user_id) == 1
         assert repo.count_unanswered_items(practice.id, user_id) == 1
 
         # Clear answer (empty/None)
@@ -366,5 +364,4 @@ class TestTenantIsolation:
 
         # User B counts items -> 0
         assert repo.count_total_items(practice.id, user_b) == 0
-        assert repo.count_answered_items(practice.id, user_b) == 0
         assert repo.count_unanswered_items(practice.id, user_b) == 0

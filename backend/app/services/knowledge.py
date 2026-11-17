@@ -14,16 +14,31 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.knowledge_quality import (
     CandidateKnowledgePoint,
-    ChapterSnippetStat,
     ExtractionContext,
     verify_knowledge_points,
 )
-from app.core.algorithms.search import cosine_similarity
+from app.core.algorithms.knowledge_tree import (
+    ExtractedKnowledgeItem as ExtractedKnowledgeItem,
+)
+from app.core.algorithms.knowledge_tree import (
+    KnowledgeExtractionOutput as KnowledgeExtractionOutput,
+)
+from app.core.algorithms.knowledge_tree import (
+    compute_chapter_stats as compute_chapter_stats,
+)
+from app.core.algorithms.knowledge_tree import (
+    deduplicate_candidate_points as deduplicate_candidate_points,
+)
+from app.core.algorithms.knowledge_tree import (
+    normalize_extracted_temp_ids as normalize_extracted_temp_ids,
+)
+from app.core.algorithms.knowledge_tree import (
+    resolve_knowledge_hierarchy,
+)
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
     KnowledgeNotFoundError,
@@ -32,7 +47,6 @@ from app.core.errors import (
 )
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
-from app.integrations.llm.agent_graph import run_structured_agent_workflow
 from app.integrations.llm.protocol import (
     LLMMessage,
     LLMOptions,
@@ -44,181 +58,6 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
 
 logger = logging.getLogger(__name__)
-
-
-# ==============================================================================
-# 结构化抽取 DTO 模型
-# ==============================================================================
-
-
-class ExtractedKnowledgeItem(BaseModel):
-    """大模型抽取的单个知识点数据传输对象。"""
-
-    temp_id: str = Field(description="临时标识符，用于建立父子层级关系，例如 kp_1")
-    parent_temp_id: str | None = Field(
-        default=None,
-        description="父知识点临时标识符，根节点为 None",
-    )
-    name: str = Field(description="知识点名称，2~30 字符，严禁数字编号与占位词")
-    description: str = Field(default="", description="知识点概念简述与核心考点")
-    level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
-    chapter_title: str = Field(default="", description="归属章节名称")
-    source_snippet_indices: list[int] = Field(
-        default_factory=list,
-        description="来源片段序号列表",
-    )
-
-
-class KnowledgeExtractionOutput(BaseModel):
-    """大模型批次知识点抽取输出容器 DTO。"""
-
-    knowledge_points: list[ExtractedKnowledgeItem] = Field(default_factory=list)
-
-
-# ==============================================================================
-# 纯数据处理与拓扑构建辅助函数 (McCabe V(G) <= 8)
-# ==============================================================================
-
-
-def compute_chapter_stats(snippets: Sequence[MaterialSnippet]) -> list[ChapterSnippetStat]:
-    """统计章节切片分布情况。
-
-    Args:
-        snippets: 切片序列。
-
-    Returns:
-        list[ChapterSnippetStat]: 各章节统计信息。
-    """
-    total = len(snippets)
-    if total == 0:
-        return []
-    counts: dict[str, int] = {}
-    for s in snippets:
-        title = s.chapter_title.strip() if s.chapter_title else "默认章节"
-        counts[title] = counts.get(title, 0) + 1
-    return [
-        ChapterSnippetStat(
-            chapter_title=title,
-            snippet_count=count,
-            snippet_ratio=count / total,
-        )
-        for title, count in counts.items()
-    ]
-
-
-def deduplicate_candidate_points(
-    items: Sequence[ExtractedKnowledgeItem],
-    embeddings: Sequence[Sequence[float]],
-    similarity_threshold: float = 0.92,
-) -> list[ExtractedKnowledgeItem]:
-    """对候选知识点执行基于向量相似度的语义去重并聚合来源切片。
-
-    Args:
-        items: 候选知识点列表。
-        embeddings: 对应的定长语义向量列表。
-        similarity_threshold: 余弦相似度合并阈值，默认 0.92。
-
-    Returns:
-        list[ExtractedKnowledgeItem]: 去重合并后的知识点列表。
-    """
-    n = len(items)
-    if n <= 1:
-        # 即使仅 0/1 个候选，也必须对重复来源序号去重归一，
-        # 否则后续关联落库会命中 uq_knowledge_point_snippets_kp_snippet 唯一约束。
-        return [
-            item.model_copy(
-                update={"source_snippet_indices": sorted(set(item.source_snippet_indices))}
-            )
-            for item in items
-        ]
-
-    merged_into: dict[int, int] = {}
-    redirect_map: dict[str, str] = {}
-
-    for i in range(n):
-        if i in merged_into:
-            continue
-        for j in range(i + 1, n):
-            if j in merged_into:
-                continue
-            sim = cosine_similarity(embeddings[i], embeddings[j])
-            if sim > similarity_threshold:
-                merged_into[j] = i
-                redirect_map[items[j].temp_id] = items[i].temp_id
-
-    result: list[ExtractedKnowledgeItem] = []
-    for i, item in enumerate(items):
-        if i in merged_into:
-            continue
-        all_indices = set(item.source_snippet_indices)
-        for j, target_i in merged_into.items():
-            if target_i == i:
-                all_indices.update(items[j].source_snippet_indices)
-
-        p_ref = item.parent_temp_id
-        if p_ref and p_ref in redirect_map:
-            p_ref = redirect_map[p_ref]
-
-        merged_item = ExtractedKnowledgeItem(
-            temp_id=item.temp_id,
-            parent_temp_id=p_ref,
-            name=item.name,
-            description=item.description,
-            level=item.level,
-            chapter_title=item.chapter_title,
-            source_snippet_indices=sorted(all_indices),
-        )
-        result.append(merged_item)
-
-    return result
-
-
-def normalize_extracted_temp_ids(
-    items: Sequence[ExtractedKnowledgeItem],
-) -> list[ExtractedKnowledgeItem]:
-    """消除大模型输出中重复的 temp_id，保证每个待建实体获得独立映射。
-
-    首次出现的 temp_id 保持不变（供子节点 ``parent_temp_id`` 引用）；后续重复项
-    追加唯一后缀，从而避免字典键坍缩导致多个知识点共享同一 UUID 或节点丢失。
-
-    Args:
-        items: 候选知识点列表。
-
-    Returns:
-        list[ExtractedKnowledgeItem]: temp_id 全局唯一的候选列表（保序）。
-    """
-    # 合成后缀时必须避开「全部原始 temp_id」，否则可能把另一节点的真实 ID 抢走，
-    # 导致引用该 ID 的子节点错挂到重复节点上。
-    reserved_ids = {item.temp_id for item in items}
-    seen: set[str] = set()
-    normalized: list[ExtractedKnowledgeItem] = []
-    for idx, item in enumerate(items):
-        temp_id = item.temp_id
-        if temp_id in seen:
-            candidate = f"{temp_id}__dup_{idx}"
-            while candidate in seen or candidate in reserved_ids:
-                candidate = f"{candidate}_x"
-            normalized.append(item.model_copy(update={"temp_id": candidate}))
-            seen.add(candidate)
-        else:
-            seen.add(temp_id)
-            normalized.append(item)
-    return normalized
-
-
-def _has_cycle(
-    start_id: str,
-    parent_map: dict[str, str | None],
-) -> bool:
-    """检测从指定节点向上追溯是否存在环。"""
-    visited: set[str] = set()
-    curr: str | None = start_id
-    while curr is not None:
-        if curr in visited:
-            return True
-        visited.add(curr)
-        curr = parent_map.get(curr)
-    return False
 
 
 def build_knowledge_hierarchy(
@@ -245,46 +84,22 @@ def build_knowledge_hierarchy(
     Returns:
         tuple[list[KnowledgePoint], dict[str, uuid.UUID]]: (实体列表, temp_id 到实体 UUID 映射)。
     """
-    normalized_items = normalize_extracted_temp_ids(items)
-    temp_parents = {it.temp_id: it.parent_temp_id for it in normalized_items}
-    temp_to_uuid = {it.temp_id: uuid.uuid4() for it in normalized_items}
-
-    # 自愈环形依赖及丢失的父节点
-    safe_parents: dict[str, str | None] = {}
-    for it in normalized_items:
-        p_id = it.parent_temp_id
-        if p_id is None or p_id not in temp_to_uuid or _has_cycle(it.temp_id, temp_parents):
-            safe_parents[it.temp_id] = None
-        else:
-            safe_parents[it.temp_id] = p_id
-
-    def _calc_depth(tid: str) -> int:
-        depth = 1
-        curr = safe_parents.get(tid)
-        while curr is not None and depth < 5:
-            depth += 1
-            curr = safe_parents.get(curr)
-        return depth
-
-    result_points: list[KnowledgePoint] = []
-    for it in normalized_items:
-        p_tid = safe_parents.get(it.temp_id)
-        parent_uuid = temp_to_uuid[p_tid] if p_tid else None
-        lvl = _calc_depth(it.temp_id)
-        kp = KnowledgePoint(
-            id=temp_to_uuid[it.temp_id],
+    nodes, temp_to_uuid = resolve_knowledge_hierarchy(items)
+    result_points = [
+        KnowledgePoint(
+            id=node.id,
             user_id=user_id,
             material_id=material_id,
             version_id=version_id,
-            parent_id=parent_uuid,
-            name=it.name,
-            description=it.description,
-            level=lvl,
+            parent_id=node.parent_id,
+            name=node.name,
+            description=node.description,
+            level=node.level,
             batch_id=batch_id,
             is_low_confidence=is_low_confidence,
         )
-        result_points.append(kp)
-
+        for node in nodes
+    ]
     return result_points, temp_to_uuid
 
 
@@ -370,22 +185,111 @@ class KnowledgeService:
         messages = self._build_batch_prompt(snippets, feedback)
         options = LLMOptions(temperature=0.3, timeout=60.0)
 
-        try:
-            output, _ = run_structured_agent_workflow(
-                adapter=self.llm,
-                messages=messages,
-                response_model=KnowledgeExtractionOutput,
-                options=options,
+        output, _ = self.llm.generate_structured(
+            messages=messages,
+            response_model=KnowledgeExtractionOutput,
+            options=options,
+        )
+        return output.knowledge_points
+
+    def _validate_and_load_snippets(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[MaterialSnippet]:
+        """校验资料与版本归属并装载用于知识点抽取的切片列表。"""
+        material = self.material_repo.get_material_by_id(material_id, user_id)
+        if material is None:
+            raise MaterialNotFoundError(
+                "请求的学习资料不存在或已被删除",
+                details={"material_id": str(material_id)},
             )
-            return output.knowledge_points
-        except Exception:
-            # 降级：直接尝试强类型反序列化
-            output, _ = self.llm.generate_structured(
-                messages=messages,
-                response_model=KnowledgeExtractionOutput,
-                options=options,
+        version = self.material_repo.get_version_by_id(version_id, user_id)
+        if version is None:
+            raise MaterialNotFoundError(
+                "请求的资料版本不存在或已被删除",
+                details={"version_id": str(version_id)},
             )
-            return output.knowledge_points
+        snippets = self.material_repo.get_snippets(version_id, user_id)
+        if not snippets:
+            raise MaterialInvalidError(
+                "学习资料切片为空，无法进行知识点抽取",
+                details={"material_id": str(material_id), "version_id": str(version_id)},
+            )
+        return snippets
+
+    def _run_extraction_with_retries(
+        self,
+        snippets: list[MaterialSnippet],
+        batch_size: int,
+    ) -> tuple[list[ExtractedKnowledgeItem], bool, int]:
+        """执行分批抽取、向量语义去重与质量门禁重抽循环（最多 2 次重抽）。"""
+        chapter_stats = compute_chapter_stats(snippets)
+        total_effective_chars = sum(s.char_length for s in snippets)
+        current_batch_size = batch_size
+        prompt_feedback: str | None = None
+        re_extract_count = 0
+        is_low_confidence = False
+        deduped_items: list[ExtractedKnowledgeItem] = []
+
+        while re_extract_count <= 2:
+            batches = [
+                snippets[i : i + current_batch_size]
+                for i in range(0, len(snippets), current_batch_size)
+            ]
+            raw_extracted: list[ExtractedKnowledgeItem] = []
+            for batch in batches:
+                raw_extracted.extend(self._extract_batch_points(batch, prompt_feedback))
+
+            if not raw_extracted:
+                if re_extract_count >= 2:
+                    break
+                re_extract_count += 1
+                current_batch_size = 20
+                prompt_feedback = "上一轮未抽取到任何有效知识点，请降低粒度并认真分析片段正文内容。"
+                continue
+
+            embed_texts = [f"{it.name} {it.description}".strip() for it in raw_extracted]
+            embeddings = self.embedding.embed_documents(embed_texts)
+            deduped_items = deduplicate_candidate_points(
+                raw_extracted,
+                embeddings,
+                similarity_threshold=0.92,
+            )
+            deduped_items = normalize_extracted_temp_ids(deduped_items)
+
+            candidate_points = [
+                CandidateKnowledgePoint(
+                    name=it.name,
+                    level=it.level,
+                    chapter_title=it.chapter_title,
+                    snippet_ids=tuple(str(idx) for idx in it.source_snippet_indices),
+                    description=it.description,
+                )
+                for it in deduped_items
+            ]
+            report = verify_knowledge_points(
+                candidate_points,
+                ExtractionContext(
+                    total_snippets=len(snippets),
+                    effective_chars=total_effective_chars,
+                    chapter_stats=chapter_stats,
+                    re_extract_count=re_extract_count,
+                ),
+            )
+            if report.is_qualified:
+                break
+            if re_extract_count < 2:
+                re_extract_count += 1
+                current_batch_size = 20  # 依据 FR-17 缩小批次以提高抽取准确度
+                prompt_feedback = report.prompt_feedback
+            else:
+                is_low_confidence = True
+                break
+
+        return deduped_items, is_low_confidence, re_extract_count
 
     def extract_and_build_knowledge_tree(
         self,
@@ -414,104 +318,14 @@ class KnowledgeService:
         start_time = time.perf_counter()
         user_ref = generate_user_ref(user_id)
 
-        # 1. 资料与版本存在性及多租户归属校验
-        material = self.material_repo.get_material_by_id(material_id, user_id)
-        if material is None:
-            raise MaterialNotFoundError(
-                "请求的学习资料不存在或已被删除",
-                details={"material_id": str(material_id)},
-            )
-        version = self.material_repo.get_version_by_id(version_id, user_id)
-        if version is None:
-            raise MaterialNotFoundError(
-                "请求的资料版本不存在或已被删除",
-                details={"version_id": str(version_id)},
-            )
-
-        # 2. 检索切片并校验
-        snippets = self.material_repo.get_snippets(version_id, user_id)
-        if not snippets:
-            raise MaterialInvalidError(
-                "学习资料切片为空，无法进行知识点抽取",
-                details={"material_id": str(material_id), "version_id": str(version_id)},
-            )
-
-        chapter_stats = compute_chapter_stats(snippets)
-        total_effective_chars = sum(s.char_length for s in snippets)
-
-        # 3. 抽取与质检重抽循环 (最多 2 次重抽，共 3 轮尝试)
-        current_batch_size = batch_size
-        prompt_feedback: str | None = None
-        re_extract_count = 0
-        is_low_confidence = False
-        deduped_items: list[ExtractedKnowledgeItem] = []
-
-        while re_extract_count <= 2:
-            # 切片分批
-            batches = [
-                snippets[i : i + current_batch_size]
-                for i in range(0, len(snippets), current_batch_size)
-            ]
-
-            raw_extracted: list[ExtractedKnowledgeItem] = []
-            for batch in batches:
-                batch_points = self._extract_batch_points(batch, prompt_feedback)
-                raw_extracted.extend(batch_points)
-
-            # 若未抽取到任何知识点，直接准备重试或跳过
-            if not raw_extracted:
-                if re_extract_count < 2:
-                    re_extract_count += 1
-                    current_batch_size = 20
-                    prompt_feedback = (
-                        "上一轮未抽取到任何有效知识点，请降低粒度并认真分析片段正文内容。"
-                    )
-                    continue
-                break
-
-            # 4. 跨片段向量语义去重
-            embed_texts = [f"{it.name} {it.description}".strip() for it in raw_extracted]
-            embeddings = self.embedding.embed_documents(embed_texts)
-            deduped_items = deduplicate_candidate_points(
-                raw_extracted,
-                embeddings,
-                similarity_threshold=0.92,
-            )
-            # 防御大模型重复 temp_id：在质检与建树前规整为全局唯一标识。
-            deduped_items = normalize_extracted_temp_ids(deduped_items)
-
-            # 5. 纯函数门禁质检
-            candidate_points = [
-                CandidateKnowledgePoint(
-                    name=it.name,
-                    level=it.level,
-                    chapter_title=it.chapter_title,
-                    snippet_ids=tuple(str(idx) for idx in it.source_snippet_indices),
-                    description=it.description,
-                )
-                for it in deduped_items
-            ]
-            context = ExtractionContext(
-                total_snippets=len(snippets),
-                effective_chars=total_effective_chars,
-                chapter_stats=chapter_stats,
-                re_extract_count=re_extract_count,
-            )
-            report = verify_knowledge_points(candidate_points, context)
-
-            if report.is_qualified:
-                # 质检合格通过
-                break
-
-            # 质检未通过：重抽决策
-            if re_extract_count < 2:
-                re_extract_count += 1
-                current_batch_size = 20  # 依据 FR-17 缩小批次以提高抽取准确度
-                prompt_feedback = report.prompt_feedback
-            else:
-                # 重抽达 2 次超限熔断降级
-                is_low_confidence = True
-                break
+        snippets = self._validate_and_load_snippets(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+        deduped_items, is_low_confidence, re_extract_count = self._run_extraction_with_retries(
+            snippets, batch_size
+        )
 
         if not deduped_items:
             raise KnowledgeExtractionRetryExceededError(
@@ -523,7 +337,7 @@ class KnowledgeService:
                 },
             )
 
-        # 6. 拓扑解析与孤儿/环形自愈建树
+        # 拓扑解析与孤儿/环形自愈建树
         batch_id = f"batch_{uuid.uuid4().hex[:8]}"
         points_to_save, temp_to_uuid = build_knowledge_hierarchy(
             deduped_items,
@@ -726,14 +540,6 @@ class KnowledgeService:
             )
         return point
 
-    def get_knowledge_point(
-        self,
-        knowledge_point_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> KnowledgePoint:
-        """get_knowledge_point_detail 别名方法。"""
-        return self.get_knowledge_point_detail(knowledge_point_id, user_id)
-
     def get_snippets_for_point(
         self,
         knowledge_point_id: uuid.UUID,
@@ -754,14 +560,6 @@ class KnowledgeService:
         self.get_knowledge_point_detail(knowledge_point_id, user_id)
         return self.knowledge_repo.get_snippets_for_point(knowledge_point_id, user_id)
 
-    def get_snippets_by_point(
-        self,
-        knowledge_point_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[MaterialSnippet]:
-        """get_snippets_for_point 别名方法。"""
-        return self.get_snippets_for_point(knowledge_point_id, user_id)
-
     def get_points_for_snippet(
         self,
         snippet_id: uuid.UUID,
@@ -777,14 +575,6 @@ class KnowledgeService:
             list[KnowledgePoint]: 关联的知识点列表。
         """
         return self.knowledge_repo.get_points_for_snippet(snippet_id, user_id)
-
-    def get_points_by_snippet(
-        self,
-        snippet_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> list[KnowledgePoint]:
-        """get_points_for_snippet 别名方法。"""
-        return self.get_points_for_snippet(snippet_id, user_id)
 
     def trigger_extraction(
         self,

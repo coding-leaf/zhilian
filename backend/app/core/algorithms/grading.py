@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from app.core.question_types import QuestionType as QuestionType
+
 # ==============================================================================
 # 判题阈值与分流决策核心常量
 # 严格遵循《概要设计说明书》第 6.5 节与《软件需求规格说明书》FR-37 至 FR-44
@@ -110,18 +112,6 @@ CHINESE_DIGIT_MAPPING: dict[str, str] = {
     "八": "8",
     "九": "9",
 }
-
-
-class QuestionType(enum.StrEnum):
-    """题目类型枚举（严格对齐 FR-20 及后端数据模型）。"""
-
-    SINGLE_CHOICE = "single_choice"
-    MULTIPLE_CHOICE = "multiple_choice"
-    TRUE_FALSE = "true_false"
-    FILL_IN_BLANK = "fill_in_blank"
-    TERM_EXPLANATION = "term_explanation"
-    SHORT_ANSWER = "short_answer"
-    CASE_ANALYSIS = "case_analysis"
 
 
 # 客观题类型集合

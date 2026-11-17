@@ -36,7 +36,6 @@ def test_app_container_create_and_services() -> None:
     assert container.session_factory is not None
     assert container.engine is not None
     assert container.providers is registry
-    assert container.registry is registry
 
     # 2. 验证 8 大领域服务纯工厂方法 (传入独立 Session 产出绑定该 Session 的独立实例)
     with container.get_session() as custom_session:
@@ -71,17 +70,6 @@ def test_app_container_create_and_services() -> None:
         diag_svc = container.create_diagnosis_service(custom_session)
         assert isinstance(diag_svc, DiagnosisService)
         assert diag_svc.session is custom_session
-
-    # 3. 验证兼容性 get_*_service 方法委托
-    with container.get_session() as compat_session:
-        assert isinstance(container.get_material_service(compat_session), MaterialService)
-        assert isinstance(container.get_auth_service(compat_session), AuthService)
-        assert isinstance(container.get_user_service(compat_session), AuthService)
-        assert isinstance(container.get_knowledge_service(compat_session), KnowledgeService)
-        assert isinstance(container.get_question_service(compat_session), QuestionService)
-        assert isinstance(container.get_practice_service(compat_session), PracticeService)
-        assert isinstance(container.get_grading_service(compat_session), GradingService)
-        assert isinstance(container.get_diagnosis_service(compat_session), DiagnosisService)
 
 
 def test_app_container_get_session_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:

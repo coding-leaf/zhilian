@@ -9,7 +9,8 @@
 """
 
 import uuid
-from typing import Annotated
+from collections.abc import Sequence
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
 
@@ -114,28 +115,11 @@ async def list_folders(
     )
 
 
-@router.get(
-    "/{folder_id}/knowledge-points",
-    response_model=FolderKnowledgePointsResponse,
-    status_code=status.HTTP_200_OK,
-    summary="获取课程内按资料分组的考点列表",
-)
-async def list_folder_knowledge_points(
+def _group_folder_knowledge_points(
     folder_id: uuid.UUID,
-    user: Annotated[User, Depends(get_current_user)],
-    folder_service: Annotated[FolderService, Depends(get_folder_service)],
+    rows: Sequence[tuple[Any, uuid.UUID, str]],
 ) -> FolderKnowledgePointsResponse:
-    """获取课程内解析就绪资料的考点，按来源资料分组，供课程范围出题选择必出考点。
-
-    Args:
-        folder_id: 目标课程主键。
-        user: 当前登录租户用户对象。
-        folder_service: 课程文件夹领域编排服务。
-
-    Returns:
-        FolderKnowledgePointsResponse: 按资料分组的考点集合与总数。
-    """
-    rows = folder_service.list_folder_knowledge_points(user_id=user.id, folder_id=folder_id)
+    """将课程内考点查询行按来源资料分组聚合为响应模型。"""
     groups: dict[uuid.UUID, FolderKnowledgePointGroup] = {}
     order: list[uuid.UUID] = []
     for point, material_id, material_title in rows:
@@ -161,6 +145,31 @@ async def list_folder_knowledge_points(
         groups=[groups[material_id] for material_id in order],
         total=len(rows),
     )
+
+
+@router.get(
+    "/{folder_id}/knowledge-points",
+    response_model=FolderKnowledgePointsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="获取课程内按资料分组的考点列表",
+)
+async def list_folder_knowledge_points(
+    folder_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    folder_service: Annotated[FolderService, Depends(get_folder_service)],
+) -> FolderKnowledgePointsResponse:
+    """获取课程内解析就绪资料的考点，按来源资料分组，供课程范围出题选择必出考点。
+
+    Args:
+        folder_id: 目标课程主键。
+        user: 当前登录租户用户对象。
+        folder_service: 课程文件夹领域编排服务。
+
+    Returns:
+        FolderKnowledgePointsResponse: 按资料分组的考点集合与总数。
+    """
+    rows = folder_service.list_folder_knowledge_points(user_id=user.id, folder_id=folder_id)
+    return _group_folder_knowledge_points(folder_id, rows)
 
 
 @router.get(

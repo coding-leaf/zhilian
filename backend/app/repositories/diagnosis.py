@@ -475,29 +475,46 @@ class DiagnosisRepository:
         self.session.flush()
         return record
 
-    def update_wrong_record_status(
-        self,
-        question_id: uuid.UUID,
+    @staticmethod
+    def _apply_wrong_record_filters(
+        statement: Any,
+        *,
         user_id: uuid.UUID,
-        is_mastered: bool,
-    ) -> WrongRecord | None:
-        """更新指定错题的攻克掌握状态。
-
-        Args:
-            question_id: 题目标识。
-            user_id: 租户用户标识。
-            is_mastered: 是否已攻克掌握。
-
-        Returns:
-            WrongRecord | None: 更新后的错题实体，未命中返回 None。
-        """
-        record = self.get_wrong_record(question_id, user_id)
-        if record is None:
-            return None
-        record.is_mastered = is_mastered
-        record.mastered_at = datetime.now(UTC) if is_mastered else None
-        self.session.flush()
-        return record
+        is_mastered: bool | None = None,
+        knowledge_point_id: uuid.UUID | None = None,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+        error_type: str | None = None,
+        question_type: str | None = None,
+    ) -> Any:
+        """为错题列表或统计查询统一拼接多维度租户安全过滤条件。"""
+        if material_id is not None or folder_id is not None or unclassified:
+            statement = statement.join(
+                KnowledgePoint,
+                WrongRecord.knowledge_point_id == KnowledgePoint.id,
+            ).where(KnowledgePoint.user_id == user_id)
+            if material_id is not None:
+                statement = statement.where(KnowledgePoint.material_id == material_id)
+            if folder_id is not None or unclassified:
+                statement = statement.join(
+                    Material, KnowledgePoint.material_id == Material.id
+                ).where(Material.user_id == user_id)
+                if folder_id is not None:
+                    statement = statement.where(Material.folder_id == folder_id)
+                if unclassified:
+                    statement = statement.where(Material.folder_id.is_(None))
+        if is_mastered is not None:
+            statement = statement.where(WrongRecord.is_mastered == is_mastered)
+        if knowledge_point_id is not None:
+            statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
+        if error_type is not None:
+            statement = statement.where(WrongRecord.error_type == error_type)
+        if question_type is not None:
+            statement = statement.where(
+                WrongRecord.question_snapshot["question_type"].as_string() == question_type
+            )
+        return statement
 
     def list_wrong_records(
         self,
@@ -528,32 +545,17 @@ class DiagnosisRepository:
             list[WrongRecord]: 错题实体列表。
         """
         statement = select(WrongRecord).where(WrongRecord.user_id == user_id)
-        if material_id is not None or folder_id is not None or unclassified:
-            statement = statement.join(
-                KnowledgePoint,
-                WrongRecord.knowledge_point_id == KnowledgePoint.id,
-            ).where(KnowledgePoint.user_id == user_id)
-            if material_id is not None:
-                statement = statement.where(KnowledgePoint.material_id == material_id)
-            if folder_id is not None or unclassified:
-                statement = statement.join(
-                    Material, KnowledgePoint.material_id == Material.id
-                ).where(Material.user_id == user_id)
-                if folder_id is not None:
-                    statement = statement.where(Material.folder_id == folder_id)
-                if unclassified:
-                    statement = statement.where(Material.folder_id.is_(None))
-        if is_mastered is not None:
-            statement = statement.where(WrongRecord.is_mastered == is_mastered)
-        if knowledge_point_id is not None:
-            statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
-        if error_type is not None:
-            statement = statement.where(WrongRecord.error_type == error_type)
-        if question_type is not None:
-            statement = statement.where(
-                WrongRecord.question_snapshot["question_type"].as_string() == question_type
-            )
-
+        statement = self._apply_wrong_record_filters(
+            statement,
+            user_id=user_id,
+            is_mastered=is_mastered,
+            knowledge_point_id=knowledge_point_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+            error_type=error_type,
+            question_type=question_type,
+        )
         statement = statement.order_by(WrongRecord.updated_at.desc()).offset(offset).limit(limit)
         return list(self.session.execute(statement).scalars().all())
 
@@ -584,33 +586,39 @@ class DiagnosisRepository:
         statement = (
             select(func.count()).select_from(WrongRecord).where(WrongRecord.user_id == user_id)
         )
-        if material_id is not None or folder_id is not None or unclassified:
-            statement = statement.join(
-                KnowledgePoint,
-                WrongRecord.knowledge_point_id == KnowledgePoint.id,
-            ).where(KnowledgePoint.user_id == user_id)
-            if material_id is not None:
-                statement = statement.where(KnowledgePoint.material_id == material_id)
-            if folder_id is not None or unclassified:
-                statement = statement.join(
-                    Material, KnowledgePoint.material_id == Material.id
-                ).where(Material.user_id == user_id)
-                if folder_id is not None:
-                    statement = statement.where(Material.folder_id == folder_id)
-                if unclassified:
-                    statement = statement.where(Material.folder_id.is_(None))
-        if is_mastered is not None:
-            statement = statement.where(WrongRecord.is_mastered == is_mastered)
-        if knowledge_point_id is not None:
-            statement = statement.where(WrongRecord.knowledge_point_id == knowledge_point_id)
-        if error_type is not None:
-            statement = statement.where(WrongRecord.error_type == error_type)
-        if question_type is not None:
-            statement = statement.where(
-                WrongRecord.question_snapshot["question_type"].as_string() == question_type
-            )
-
+        statement = self._apply_wrong_record_filters(
+            statement,
+            user_id=user_id,
+            is_mastered=is_mastered,
+            knowledge_point_id=knowledge_point_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+            error_type=error_type,
+            question_type=question_type,
+        )
         return int(self.session.execute(statement).scalar_one())
+
+    def list_unmastered_wrong_question_ids(self, user_id: uuid.UUID) -> set[uuid.UUID]:
+        """查询当前用户尚未攻克的错题原题主键集合。"""
+        stmt = select(WrongRecord.question_id).where(
+            WrongRecord.user_id == user_id,
+            WrongRecord.is_mastered.is_(False),
+            WrongRecord.question_id.is_not(None),
+        )
+        return {qid for qid in self.session.execute(stmt).scalars().all() if qid is not None}
+
+    def list_weak_knowledge_point_ids(
+        self,
+        user_id: uuid.UUID,
+        threshold: float = 0.40,
+    ) -> set[uuid.UUID]:
+        """查询当前用户掌握度低于阈值的薄弱知识点主键集合。"""
+        stmt = select(MasteryRecord.knowledge_point_id).where(
+            MasteryRecord.user_id == user_id,
+            MasteryRecord.mastery_score < threshold,
+        )
+        return set(self.session.execute(stmt).scalars().all())
 
     def get_wrong_record_scopes(
         self, user_id: uuid.UUID, knowledge_point_ids: set[uuid.UUID]
