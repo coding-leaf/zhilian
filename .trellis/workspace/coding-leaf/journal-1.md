@@ -558,3 +558,29 @@
   tabBar 改名）、F1 防回归测试、**R6 举一反三覆盖率截断修复**。
 - 已知问题清单见 `09-29-question-bank-tab/prd.md` 的「里程碑收尾」小节。
 - A/B 两个子任务**未单独归档**（避免链接失效），等整树收口时一起归档。
+
+
+## Session 15: 全仓逻辑重构清洁与Git工作区规范治理 (M1-M4)
+<!-- trellis-session: v=2 fp=51048851cb08db9b -->
+
+**Date**: 2026-11-17
+**Task**: 全仓逻辑重构清洁与Git工作区规范治理 (M1-M4)
+**Branch**: `chore/m1-workspace-governance`
+
+### Summary
+
+完成M1-M4全量重构：合流origin/dev与P1-4至master并清理12个冗余本地分支与废弃AI配置；清退死代码/7个废依赖并修复跨层切片页码P0与连接泄漏；解耦五大Service(max-complexity=15)并拆解32个vue单文件<=270L；重写对齐DESIGN/README/spec并补强单测。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ca621c3` | fix(profile): 修正个人页学习足迹统计口径并支持空态与下拉刷新 (P1-4) |
+| `6abaf4e` | chore(workspace): 收敛工作区与Antigravity配置、清理废弃AI目录并落地单主干规范 |
+| `8c21cba` | refactor(backend): 清退死代码与连接泄漏、解耦巨型Service并收紧复杂度门禁至15 |
+| `653ad17` | refactor(miniprogram): 卸载7个无用依赖、修复切片页码失配并按域拆解页面与设计Token |
+| `065c819` | docs(spec): 重写对齐DESIGN.md、README.md及前后端Trellis开发规范 |
+
+### Status
+
+[OK] **Completed**
