@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-11-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~732 | Active |
+| `journal-1.md` | ~757 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-11-24 | M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治 | `351e88c`, `0c303d1`, `05b1657`, `f4ee05f` | `docs/readme-local-setup` |
 | 21 | 2026-11-24 | 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀 | `c57b789`, `94f7a35`, `e995b4b` | `docs/readme-local-setup` |
 | 20 | 2026-11-24 | 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复 | `f3e93a6`, `1cc915e`, `2462d59`, `c70e145` | `docs/readme-local-setup` |
 | 19 | 2026-11-24 | 修复RAG原文提取展示与题目问答多轮上下文 | `8561de6`, `6eb87da`, `8d8e4d7` | `fix/rag-extraction-and-coach-context` |

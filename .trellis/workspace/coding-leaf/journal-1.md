@@ -730,3 +730,28 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治
+<!-- trellis-session: v=2 fp=570ea44d59406e35 -->
+
+**Date**: 2026-11-24
+**Task**: M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+完成父任务11-24-product-ux-quality-upgrade的5路全量调研与M1里程碑3路并行实施：(1)修复中文数学题NO_SOURCE误杀+新增批量AI Judge/Repair+终态零pending_review+迁移0013软删历史待审核题+清理前端待审核UI；(2)引入katex@0.16.21 AST适配器与katex-mp.scss(.kt-s去span选择器)+FastAPI自托管40个KaTeX字体，退役旧手写公式转换器；(3)放宽deepseek-flash思考模型max_tokens(2048/4096)+结构化失败纯文本降级+修复助教孤儿气泡/快捷提问拒答/短噪声短电路/3处未登录401守卫。双端门禁与build:mp-weixin(主包674KB)全绿并沉淀规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `351e88c` | feat(backend): AI自主质检闭环、零pending_review与迁移0013 |
+| `0c303d1` | fix(backend): 适配思考模型助教502降级并托管KaTeX静态字体 |
+| `05b1657` | feat(miniprogram): 接入KaTeX公式渲染器、移除待审核UI并修复助教孤儿气泡与401守卫 |
+| `f4ee05f` | docs(spec): 沉淀KaTeX公式托管与AI自主质检/思考模型预算规范 |
+
+### Status
+
+[OK] **Completed**
