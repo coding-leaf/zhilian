@@ -7,6 +7,7 @@
 - 异常分类转译为统一业务异常体系 (30007~30009)。
 """
 
+import threading
 import time
 from collections.abc import Sequence
 from typing import Any, cast
@@ -20,8 +21,8 @@ from app.core.errors import (
 )
 from app.integrations._http_retry import (
     RetryableAdapterError,
+    build_httpx_client,
     handle_openai_http_response,
-    managed_httpx_client,
     run_with_retry,
 )
 from app.integrations.embedding.protocol import (
@@ -79,12 +80,25 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
         self.max_retries = max_retries
         self.retry_delay_base = retry_delay_base
         self._client = client
+        self._owned_client: httpx.Client | None = None
+        self._client_lock = threading.Lock()
 
     def _get_client(self) -> httpx.Client:
-        """获取或创建 HTTP 客户端。"""
+        """获取外部注入客户端或复用实例级持久化 httpx.Client 连接池。"""
         if self._client is not None:
             return cast(httpx.Client, self._client)
-        return httpx.Client(timeout=self.timeout)
+        with self._client_lock:
+            if self._owned_client is None or self._owned_client.is_closed:
+                self._owned_client = build_httpx_client(timeout=self.timeout)
+            return self._owned_client
+
+    def close(self) -> None:
+        """释放实例级持久化 httpx.Client 连接池。"""
+        with self._client_lock:
+            client = self._owned_client
+            self._owned_client = None
+        if client is not None and not client.is_closed:
+            client.close()
 
     def _send_request_with_retries(self, payload: dict[str, Any]) -> dict[str, Any]:
         """带指数退避重试的 HTTP 请求发送与异常分类转译。
@@ -105,36 +119,32 @@ class OpenAICompatibleEmbeddingAdapter(EmbeddingProtocol):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        client = self._get_client()
 
-        def _client_factory() -> httpx.Client:
-            return httpx.Client(timeout=self.timeout)
+        def _attempt() -> dict[str, Any]:
+            try:
+                response = client.post(url, json=payload, headers=headers)
+                return handle_openai_http_response(
+                    response,
+                    service_label="向量化服务",
+                    auth_error_cls=EmbeddingAuthError,
+                    service_error_cls=EmbeddingError,
+                )
+            except (httpx.TimeoutException, TimeoutError) as timeout_err:
+                raise RetryableAdapterError(
+                    EmbeddingTimeoutError("向量化服务调用超时")
+                ) from timeout_err
+            except (httpx.RequestError, ConnectionError) as req_err:
+                raise RetryableAdapterError(
+                    EmbeddingError(f"向量化网络请求异常: {req_err}")
+                ) from req_err
 
-        with managed_httpx_client(self._client, _client_factory) as client:
-
-            def _attempt() -> dict[str, Any]:
-                try:
-                    response = client.post(url, json=payload, headers=headers)
-                    return handle_openai_http_response(
-                        response,
-                        service_label="向量化服务",
-                        auth_error_cls=EmbeddingAuthError,
-                        service_error_cls=EmbeddingError,
-                    )
-                except (httpx.TimeoutException, TimeoutError) as timeout_err:
-                    raise RetryableAdapterError(
-                        EmbeddingTimeoutError("向量化服务调用超时")
-                    ) from timeout_err
-                except (httpx.RequestError, ConnectionError) as req_err:
-                    raise RetryableAdapterError(
-                        EmbeddingError(f"向量化网络请求异常: {req_err}")
-                    ) from req_err
-
-            return run_with_retry(
-                _attempt,
-                max_retries=self.max_retries,
-                retry_delay_base=self.retry_delay_base,
-                sleep_fn=lambda delay: time.sleep(delay),
-            )
+        return run_with_retry(
+            _attempt,
+            max_retries=self.max_retries,
+            retry_delay_base=self.retry_delay_base,
+            sleep_fn=lambda delay: time.sleep(delay),
+        )
 
     def embed_query(
         self,

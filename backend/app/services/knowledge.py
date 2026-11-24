@@ -276,7 +276,24 @@ class KnowledgeService:
                 "学习资料切片为空，无法进行知识点抽取",
                 details={"material_id": str(material_id), "version_id": str(version_id)},
             )
+        if snippets is None:
+            for snippet in resolved:
+                # 预读后续纯内存计算所需属性并脱离会话，避免释放只读事务后触发懒加载
+                _ = (
+                    snippet.id,
+                    snippet.snippet_index,
+                    snippet.chapter_title,
+                    snippet.content,
+                    snippet.char_length,
+                )
+                if snippet in self.session:
+                    self.session.expunge(snippet)
         return resolved
+
+    def _release_read_only_transaction(self) -> None:
+        """在长耗时外部 LLM/Embedding I/O 之前释放只读事务，归还数据库连接池。"""
+        if not self.session.new and not self.session.dirty and not self.session.deleted:
+            self.session.rollback()
 
     def _run_extraction_with_retries(
         self,
@@ -414,6 +431,8 @@ class KnowledgeService:
             user_id=user_id,
             snippets=snippets,
         )
+        # 释放只读事务，禁止在长耗时 LLM + Embedding 网络调用期间占用数据库连接
+        self._release_read_only_transaction()
         deduped_items, is_low_confidence, re_extract_count = self._run_extraction_with_retries(
             resolved_snippets,
             batch_size,

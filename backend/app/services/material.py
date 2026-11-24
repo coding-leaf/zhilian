@@ -8,6 +8,7 @@
 - 结构化脱敏日志 8 要素输出，严禁向日志记录资料全文或敏感密钥。
 """
 
+import contextlib
 import hashlib
 import logging
 import uuid
@@ -15,6 +16,7 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
@@ -26,10 +28,23 @@ from app.core.algorithms.ocr_quality import (
     verify_ocr_quality,
 )
 from app.core.errors import (
+    EmbeddingAuthError,
+    EmbeddingError,
+    EmbeddingTimeoutError,
     FolderNotFoundError,
+    LLMAuthError,
+    LLMError,
+    LLMResponseFormatError,
+    LLMTimeoutError,
     MaterialInvalidError,
     MaterialNotFoundError,
+    OCRAuthError,
+    OCRError,
+    OCRQuotaError,
+    OCRTimeoutError,
+    QueueTimeoutError,
     ReshootLimitExceededError,
+    StorageConnectionError,
 )
 from app.core.extractors import (
     MAGIC_NUMBERS as MAGIC_NUMBERS,
@@ -257,8 +272,26 @@ class MaterialService:
 
         content_hash = hashlib.sha256(file_content).hexdigest()
 
-        # 4. 事务内持久化 Material 与 Version 记录
+        # 4. 释放前置只读事务后先上传对象存储，再开启短事务写库（避免 S3 I/O 占用 DB 连接）
+        if not self.session.new and not self.session.dirty and not self.session.deleted:
+            self.session.rollback()
+
+        # 内容哈希仅用于记录与去重语义，物理对象必须为本资料独占副本。
+        # 禁止复用其它资料的 storage_key：否则源资料硬删会连带 purge 本资料对象。
+        storage_object_id = uuid.uuid4()
+        storage_key = build_material_storage_key(
+            user_id, storage_object_id, 1, content_hash, clean_format
+        )
+        uploaded_to_storage = False
         try:
+            self.storage.put_object(
+                bucket=self.bucket,
+                key=storage_key,
+                data=file_content,
+                content_type=f"application/{clean_format}",
+            )
+            uploaded_to_storage = True
+
             material = self.repo.create_material(
                 user_id=user_id,
                 title=title,
@@ -267,18 +300,6 @@ class MaterialService:
                 source_type=source_type,
                 status=MaterialStatus.PENDING.value,
                 folder_id=folder_id,
-            )
-
-            # 内容哈希仅用于记录与去重语义，物理对象必须为本资料独占副本。
-            # 禁止复用其它资料的 storage_key：否则源资料硬删会连带 purge 本资料对象。
-            storage_key = build_material_storage_key(
-                user_id, material.id, 1, content_hash, clean_format
-            )
-            self.storage.put_object(
-                bucket=self.bucket,
-                key=storage_key,
-                data=file_content,
-                content_type=f"application/{clean_format}",
             )
 
             version = self.repo.create_version(
@@ -315,6 +336,9 @@ class MaterialService:
 
         except Exception:
             self.session.rollback()
+            if uploaded_to_storage:
+                with contextlib.suppress(Exception):
+                    self.storage.delete_object(self.bucket, storage_key)
             if idempotency_key is not None and self.idempotency is not None:
                 self.idempotency.release_lock(idempotency_key, str(user_id))
             raise
@@ -457,6 +481,32 @@ class MaterialService:
         state = sa_inspect(snippets[0], raiseerr=False)
         return bool(state is not None and (state.persistent or state.pending))
 
+    @staticmethod
+    def _is_retryable_infra_error(exc: Exception) -> bool:
+        """判定异常是否属于可交由 RQ 退避重试的瞬时基础设施错误。"""
+        if isinstance(
+            exc,
+            (
+                TimeoutError,
+                ConnectionError,
+                httpx.TimeoutException,
+                httpx.RequestError,
+                LLMTimeoutError,
+                EmbeddingTimeoutError,
+                OCRTimeoutError,
+                StorageConnectionError,
+                QueueTimeoutError,
+            ),
+        ):
+            return True
+        if isinstance(exc, LLMError) and not isinstance(
+            exc, (LLMAuthError, LLMResponseFormatError)
+        ):
+            return True
+        if isinstance(exc, EmbeddingError) and not isinstance(exc, EmbeddingAuthError):
+            return True
+        return isinstance(exc, OCRError) and not isinstance(exc, (OCRAuthError, OCRQuotaError))
+
     def parse_material_pipeline(
         self,
         *,
@@ -529,6 +579,14 @@ class MaterialService:
             self.session.commit()
             set_cached_parse_progress(version_id, 45, redis_client=self._progress_redis)
 
+            # 在无未提交 DB 事务状态下提前上传提取文本，避免后续在写锁事务内执行 S3 网络 I/O
+            raw_text_key = (
+                f"users/{user_id}/materials/{material_id}/v{version.version_number}/raw_text.txt"
+            )
+            self.storage.put_object(
+                self.bucket, raw_text_key, extracted_text.encode("utf-8"), "text/plain"
+            )
+
             snippets_to_save = prepare_material_snippets(
                 embedding=self.embedding,
                 material_id=material_id,
@@ -566,14 +624,7 @@ class MaterialService:
                 self.repo.delete_snippets_by_version(version_id, user_id)
                 self.repo.create_snippets(snippets_to_save)
 
-            # 阶段 D: 全链路成功后再持久化提取文本并激活 READY 终态
-            raw_text_key = (
-                f"users/{user_id}/materials/{material_id}/v{version.version_number}/raw_text.txt"
-            )
-            self.storage.put_object(
-                self.bucket, raw_text_key, extracted_text.encode("utf-8"), "text/plain"
-            )
-
+            # 阶段 D: 短事务激活 READY 终态（仅含轻量 DB 写入，无外部网络 I/O）
             current_stage = "ready"
             self.repo.update_version_status(
                 version_id,
@@ -603,6 +654,18 @@ class MaterialService:
             return version
 
         except Exception as exc:
+            if self._is_retryable_infra_error(exc):
+                self.session.rollback()
+                logger.warning(
+                    "material pipeline retryable infra error; deferring terminal failure to worker",
+                    extra={
+                        "user_ref": user_ref,
+                        "target_id": str(material_id),
+                        "failed_stage": current_stage,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                raise
             mark_pipeline_failed(
                 repo=self.repo,
                 session=self.session,

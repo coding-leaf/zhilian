@@ -7,9 +7,11 @@
 - 绝密脱敏防泄露：严禁在日志中打印文档切片内容。
 """
 
+import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import ColumnElement, and_, case, or_, select
@@ -40,6 +42,50 @@ from app.models.material import MaterialSnippet
 
 _KEYWORD_TOKEN_LIMIT = 8
 _LIKE_ESCAPE = "\\"
+_ACTIVE_SESSION_LOCAL = threading.local()
+
+
+@contextmanager
+def use_active_search_session(session: Session) -> Iterator[Session]:
+    """Bind the current thread's active SQLAlchemy Session for read reuse in search.
+
+    Prevents nested second-connection pool exhaustion deadlocks when a request
+    already holds a pooled DB connection and invokes `PgvectorHybridSearchAdapter`
+    on the same thread. Child threads (e.g. ThreadPoolExecutor) have an empty
+    thread-local stack and safely open their own independent short sessions.
+    """
+    stack: list[Session] | None = getattr(_ACTIVE_SESSION_LOCAL, "stack", None)
+    if stack is None:
+        stack = []
+        _ACTIVE_SESSION_LOCAL.stack = stack
+    stack.append(session)
+    try:
+        yield session
+    finally:
+        if stack and stack[-1] is session:
+            stack.pop()
+        elif session in stack:
+            stack.remove(session)
+
+
+def _get_thread_active_session(session_factory: Any) -> Session | None:
+    """Return the thread-local active Session if it matches `session_factory`'s engine."""
+    stack: list[Session] | None = getattr(_ACTIVE_SESSION_LOCAL, "stack", None)
+    if not stack:
+        return None
+    candidate = stack[-1]
+    if not candidate.is_active or not candidate.in_transaction():
+        return None
+    factory_kw = getattr(session_factory, "kw", None)
+    expected_bind = factory_kw.get("bind") if isinstance(factory_kw, dict) else None
+    if expected_bind is None:
+        return None
+    try:
+        if candidate.get_bind() is not expected_bind:
+            return None
+    except Exception:
+        return None
+    return candidate
 
 
 def _escape_like(token: str) -> str:
@@ -130,6 +176,19 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
         self._session_factory = session_factory
         self._embedding_adapter = embedding_adapter
 
+    @contextmanager
+    def _read_session(self, session: Session | None = None) -> Iterator[Session]:
+        """Yield a read-only Session without nested pool checkout on the same thread."""
+        if session is not None:
+            yield session
+            return
+        active = _get_thread_active_session(self._session_factory)
+        if active is not None:
+            yield active
+            return
+        with self._session_factory() as fresh_session:
+            yield fresh_session
+
     def _recall_snippets(
         self,
         query: str,
@@ -138,12 +197,16 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
         material_id: uuid.UUID | None,
         version_id: uuid.UUID | None,
         search_options: SearchOptions,
+        *,
+        session: Session | None = None,
     ) -> list[MaterialSnippet]:
         """向量粗排 Top-K 与全库关键词候选的并集（按 id 去重，向量候选在前）。"""
         allowed_ids = search_options.allowed_snippet_ids
         snippets: list[MaterialSnippet] = []
-        with self._session_factory() as session:
-            is_sqlite = session.bind is not None and session.bind.dialect.name == "sqlite"
+        with self._read_session(session) as active_session:
+            is_sqlite = (
+                active_session.bind is not None and active_session.bind.dialect.name == "sqlite"
+            )
 
             scope = [MaterialSnippet.user_id == user_id]
             if material_id is not None:
@@ -156,7 +219,7 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
 
             if is_sqlite:
                 # SQLite 单元测试环境下回退为纯函数计算余弦相似度粗排
-                sqlite_candidates: list[MaterialSnippet] = list(session.scalars(stmt).all())
+                sqlite_candidates: list[MaterialSnippet] = list(active_session.scalars(stmt).all())
                 scored_candidates = sorted(
                     sqlite_candidates,
                     key=lambda s: _vector_score(query_vector, s.embedding),
@@ -168,13 +231,13 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
                 stmt = stmt.order_by(
                     MaterialSnippet.embedding.cosine_distance(list(query_vector)).asc()
                 ).limit(search_options.vector_top_k)
-                snippets = list(session.scalars(stmt).all())
+                snippets = list(active_session.scalars(stmt).all())
 
             # 独立关键词通道：全库 ILIKE，召回向量 Top-K 之外的精确词/公式命中
             keyword_stmt = build_keyword_statement(query, scope, limit=search_options.vector_top_k)
             if keyword_stmt is not None:
                 seen_ids = {s.id for s in snippets}
-                for kw_snippet in session.scalars(keyword_stmt).all():
+                for kw_snippet in active_session.scalars(keyword_stmt).all():
                     if kw_snippet.id not in seen_ids:
                         seen_ids.add(kw_snippet.id)
                         snippets.append(kw_snippet)
@@ -371,7 +434,7 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
             for ver, idxs in by_version.items()
         ]
         try:
-            with self._session_factory() as session:
+            with self._read_session() as session:
                 stmt = select(MaterialSnippet).where(
                     MaterialSnippet.user_id == user_id, or_(*conditions)
                 )
@@ -387,4 +450,4 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
         return f"<PgvectorHybridSearchAdapter embedding={self._embedding_adapter!r}>"
 
 
-__all__ = ["PgvectorHybridSearchAdapter"]
+__all__ = ["PgvectorHybridSearchAdapter", "use_active_search_session"]

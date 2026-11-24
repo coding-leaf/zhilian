@@ -8,6 +8,7 @@
 - 结构化输出校验委托至 LangGraph Agent 状态图自愈引擎。
 """
 
+import threading
 import time
 from collections.abc import Sequence
 from typing import Any, TypeVar, cast
@@ -22,8 +23,8 @@ from app.core.errors import (
 )
 from app.integrations._http_retry import (
     RetryableAdapterError,
+    build_httpx_client,
     handle_openai_http_response,
-    managed_httpx_client,
     run_with_retry,
 )
 from app.integrations.llm.agent_graph import run_structured_agent_workflow
@@ -96,12 +97,26 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
         self.max_retries = max_retries
         self.retry_delay_base = retry_delay_base
         self._client = client
+        self._owned_client: httpx.Client | None = None
+        self._client_lock = threading.Lock()
 
-    def _get_client(self, effective_timeout: float) -> httpx.Client:
-        """获取或创建 HTTP 客户端。"""
+    def _get_client(self, effective_timeout: float | None = None) -> httpx.Client:
+        """获取外部注入客户端或复用实例级持久化 httpx.Client 连接池。"""
         if self._client is not None:
             return cast(httpx.Client, self._client)
-        return httpx.Client(timeout=effective_timeout)
+        with self._client_lock:
+            if self._owned_client is None or self._owned_client.is_closed:
+                resolved = effective_timeout if effective_timeout is not None else self.timeout
+                self._owned_client = build_httpx_client(timeout=resolved)
+            return self._owned_client
+
+    def close(self) -> None:
+        """释放实例级持久化 httpx.Client 连接池。"""
+        with self._client_lock:
+            client = self._owned_client
+            self._owned_client = None
+        if client is not None and not client.is_closed:
+            client.close()
 
     def _send_request_with_retries(
         self,
@@ -127,45 +142,39 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        client = self._get_client(effective_timeout)
 
-        def _client_factory() -> httpx.Client:
-            return httpx.Client(timeout=effective_timeout)
-
-        with managed_httpx_client(self._client, _client_factory) as client:
-
-            def _attempt() -> dict[str, Any]:
+        def _attempt() -> dict[str, Any]:
+            try:
                 try:
-                    try:
-                        response = client.post(
-                            url,
-                            json=payload,
-                            headers=headers,
-                            timeout=effective_timeout,
-                        )
-                    except TypeError:
-                        # 兼容可能不接受 timeout 参数的 Mock Client
-                        response = client.post(url, json=payload, headers=headers)
-                    return handle_openai_http_response(
-                        response,
-                        service_label="大模型服务",
-                        auth_error_cls=LLMAuthError,
-                        service_error_cls=LLMError,
+                    response = client.post(
+                        url,
+                        json=payload,
+                        headers=headers,
+                        timeout=effective_timeout,
                     )
-                except (httpx.TimeoutException, TimeoutError) as timeout_err:
-                    raise RetryableAdapterError(
-                        LLMTimeoutError("大模型服务响应超时")
-                    ) from timeout_err
-                except (httpx.RequestError, ConnectionError) as req_err:
-                    raise RetryableAdapterError(
-                        LLMError(f"大模型服务网络请求异常: {req_err}")
-                    ) from req_err
+                except TypeError:
+                    # 兼容可能不接受 timeout 参数的 Mock Client
+                    response = client.post(url, json=payload, headers=headers)
+                return handle_openai_http_response(
+                    response,
+                    service_label="大模型服务",
+                    auth_error_cls=LLMAuthError,
+                    service_error_cls=LLMError,
+                )
+            except (httpx.TimeoutException, TimeoutError) as timeout_err:
+                raise RetryableAdapterError(LLMTimeoutError("大模型服务响应超时")) from timeout_err
+            except (httpx.RequestError, ConnectionError) as req_err:
+                raise RetryableAdapterError(
+                    LLMError(f"大模型服务网络请求异常: {req_err}")
+                ) from req_err
 
-            return run_with_retry(
-                _attempt,
-                max_retries=self.max_retries,
-                retry_delay_base=self.retry_delay_base,
-                sleep_fn=lambda delay: time.sleep(delay),
-            )
+        return run_with_retry(
+            _attempt,
+            max_retries=self.max_retries,
+            retry_delay_base=self.retry_delay_base,
+            sleep_fn=lambda delay: time.sleep(delay),
+        )
 
     def generate(
         self,
@@ -182,7 +191,11 @@ class OpenAICompatibleLLMAdapter(LLMProtocol):
             LLMResponse: 统一模型响应。
         """
         start_time = time.perf_counter()
-        effective_timeout = options.timeout if options else self.timeout
+        effective_timeout = (
+            options.timeout
+            if (options is not None and options.timeout is not None)
+            else self.timeout
+        )
         model_name = options.model if options and options.model is not None else self.model
 
         payload: dict[str, Any] = {

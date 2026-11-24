@@ -9,13 +9,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from rq.job import JobStatus
 
+from app.core.config import RedisSettings
 from app.core.errors import PermissionDeniedError, QueueError
 from app.integrations.queue.rq_adapter import RQQueueAdapter
 from app.worker import (
     TERMINAL_FAILURE_CALLBACK,
     execute_registered_task,
     handle_job_terminal_failure,
+    shutdown_worker_container,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_worker_singleton() -> Any:
+    """Ensure each test starts and ends with a clean worker container singleton."""
+    shutdown_worker_container()
+    yield
+    shutdown_worker_container()
 
 
 def test_rq_enqueues_registered_task_only() -> None:
@@ -80,7 +90,16 @@ def test_worker_dispatches_with_fresh_session() -> None:
         yield session
 
     container.get_session.side_effect = session_context
-    with patch("app.worker.AppContainer.create", return_value=container):
+    with patch("app.worker.AppContainer.create", return_value=container) as mock_create:
+        execute_registered_task(
+            "parse_material_pipeline",
+            {
+                "user_id": str(user_id),
+                "material_id": str(material_id),
+                "version_id": str(version_id),
+            },
+            str(user_id),
+        )
         execute_registered_task(
             "parse_material_pipeline",
             {
@@ -91,10 +110,14 @@ def test_worker_dispatches_with_fresh_session() -> None:
             str(user_id),
         )
 
-    container.create_material_service.assert_called_once_with(session)
-    container.create_material_service.return_value.parse_material_pipeline.assert_called_once_with(
-        material_id=material_id, version_id=version_id, user_id=user_id
-    )
+    # 进程级单例 AppContainer 在连续任务间复用，不重复重建引擎和连接池
+    mock_create.assert_called_once()
+    assert container.create_material_service.call_count == 2
+    container.create_material_service.assert_called_with(session)
+    assert container.create_material_service.return_value.parse_material_pipeline.call_count == 2
+    container.shutdown.assert_not_awaited()
+
+    shutdown_worker_container()
     container.shutdown.assert_awaited_once()
 
     with pytest.raises(ValueError, match="未授权"):
@@ -148,6 +171,8 @@ def test_terminal_failure_callback_marks_grading_recoverable() -> None:
 
     service = container.create_practice_service.return_value
     service.mark_grading_failed.assert_called_once_with(user_id, practice_id)
+    container.shutdown.assert_not_awaited()
+    shutdown_worker_container()
     container.shutdown.assert_awaited_once()
 
 
@@ -224,6 +249,8 @@ def test_terminal_failure_callback_marks_orphaned_material_parse_failed() -> Non
         failed_stage="worker_terminated",
         error_message="后台解析任务异常终止 (TimeoutError)，请重新解析",
     )
+    container.shutdown.assert_not_awaited()
+    shutdown_worker_container()
     container.shutdown.assert_awaited_once()
 
 
@@ -269,4 +296,30 @@ def test_terminal_failure_callback_swallows_writeback_errors() -> None:
     with patcher:
         handle_job_terminal_failure(job, MagicMock(), RuntimeError, RuntimeError("boom"), None)
 
+    container.shutdown.assert_not_awaited()
+    shutdown_worker_container()
     container.shutdown.assert_awaited_once()
+
+
+def test_rq_adapter_uses_redis_settings_and_close_disconnects_pool() -> None:
+    """RQQueueAdapter 应透传 RedisSettings 超时与连接池配置并在 close 时释放连接池。"""
+    settings = RedisSettings(
+        redis_url="redis://:secret@redis:6379/2", timeout=4.5, max_connections=25
+    )
+    mock_redis = MagicMock()
+    with patch("redis.from_url", return_value=mock_redis) as mock_from:
+        adapter = RQQueueAdapter(redis_settings=settings)
+        adapter.close()
+
+    mock_from.assert_called_once_with(
+        "redis://:secret@redis:6379/2",
+        socket_connect_timeout=4.5,
+        socket_timeout=4.5,
+        health_check_interval=30,
+        max_connections=25,
+        retry_on_timeout=True,
+        decode_responses=False,
+    )
+    mock_redis.close.assert_called_once()
+    mock_redis.connection_pool.disconnect.assert_called_once()
+    assert "secret" not in repr(adapter)

@@ -9,28 +9,20 @@
 """
 
 import json
-import re
 from typing import Any
 
+from app.core.config import RedisSettings
 from app.core.errors import AppError, IdempotencyConflictError
 from app.integrations.idempotency.protocol import (
     IdempotencyProtocol,
     validate_idempotency_key,
 )
+from app.integrations.redis_client import build_redis_client, close_redis_client, mask_redis_url
 
 
 def _mask_redis_url(url: str | None) -> str:
-    """脱敏 Redis 连接 URL 中的密码凭据。
-
-    Args:
-        url: 原始 Redis 连接字符串。
-
-    Returns:
-        str: 脱敏后的连接字符串。
-    """
-    if not url:
-        return "redis://localhost:6379/0"
-    return re.sub(r":([^:@]+)@", r":***@", url)
+    """脱敏 Redis 连接 URL 中的密码凭据。"""
+    return mask_redis_url(url)
 
 
 class RedisIdempotencyAdapter(IdempotencyProtocol):
@@ -41,6 +33,9 @@ class RedisIdempotencyAdapter(IdempotencyProtocol):
         *,
         redis_url: str | None = None,
         redis_client: Any | None = None,
+        redis_settings: RedisSettings | None = None,
+        socket_timeout: float | None = None,
+        max_connections: int | None = None,
         key_prefix: str = "idempotency",
     ) -> None:
         """初始化 Redis 幂等适配器。
@@ -48,22 +43,29 @@ class RedisIdempotencyAdapter(IdempotencyProtocol):
         Args:
             redis_url: Redis 连接 URI。
             redis_client: 可选外部注入的 Redis 客户端。
+            redis_settings: 可选 RedisSettings 强类型配置。
+            socket_timeout: 可选单命令读写超时（秒）。
+            max_connections: 可选连接池上限。
             key_prefix: 命名空间前缀。
 
         Raises:
             AppError: 当缺少依赖或初始化失败时抛出。
         """
         self._key_prefix = key_prefix
-        self._masked_url = _mask_redis_url(redis_url)
+        resolved_url = redis_url or (redis_settings.redis_url if redis_settings else None)
+        self._masked_url = _mask_redis_url(resolved_url)
 
         if redis_client is not None:
             self._client = redis_client
         else:
             try:
-                import redis
-
-                target_url = redis_url or "redis://localhost:6379/0"
-                self._client = redis.from_url(target_url, decode_responses=True)
+                self._client = build_redis_client(
+                    redis_url=redis_url,
+                    settings=redis_settings,
+                    socket_timeout=socket_timeout,
+                    max_connections=max_connections,
+                    decode_responses=True,
+                )
             except ImportError as exception:
                 raise AppError(
                     error_code=30015,
@@ -76,6 +78,14 @@ class RedisIdempotencyAdapter(IdempotencyProtocol):
                     message=f"初始化 Redis 客户端连接失败: {exception}",
                     details={"url": self._masked_url},
                 ) from exception
+
+    def close(self) -> None:
+        """释放 Redis 客户端与底层连接池。"""
+        close_redis_client(self._client)
+
+    def ping(self) -> bool:
+        """健康探测 Redis 连通性。"""
+        return bool(self._client.ping())
 
     def _build_lock_key(self, user_id: str, key: str) -> str:
         """生成带租户隔离的锁键。"""

@@ -99,6 +99,7 @@ def call_model_node(
             )
         else:
             effective_options = LLMOptions(
+                timeout=None,
                 tools=tools,
                 tool_choice=tool_choice,
             )

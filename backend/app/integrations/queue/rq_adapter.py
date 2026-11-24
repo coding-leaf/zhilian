@@ -9,9 +9,10 @@ from rq import Callback, Queue, Retry, cancel_job
 from rq.exceptions import NoSuchJobError
 from rq.job import Job
 
+from app.core.config import RedisSettings
 from app.core.errors import PermissionDeniedError, QueueError
 from app.integrations.queue.protocol import REGISTERED_TASK_NAMES, QueueProtocol, TaskResult
-from app.integrations.queue.redis import _mask_redis_url
+from app.integrations.redis_client import build_redis_client, close_redis_client, mask_redis_url
 
 DEFAULT_QUEUE = "zhilian"
 HIGH_QUEUE = "zhilian_high"
@@ -29,13 +30,31 @@ class RQQueueAdapter(QueueProtocol):
         *,
         redis_url: str | None = None,
         redis_client: Redis | None = None,
+        redis_settings: RedisSettings | None = None,
+        socket_timeout: float | None = None,
+        max_connections: int | None = None,
         retry_limit: int = 3,
         job_timeout: int = 1800,
     ) -> None:
-        self._url = _mask_redis_url(redis_url)
-        self._client = redis_client or Redis.from_url(redis_url or "redis://localhost:6379/0")
+        resolved_url = redis_url or (redis_settings.redis_url if redis_settings else None)
+        self._url = mask_redis_url(resolved_url)
+        self._client = redis_client or build_redis_client(
+            redis_url=redis_url,
+            settings=redis_settings,
+            socket_timeout=socket_timeout,
+            max_connections=max_connections,
+            decode_responses=False,
+        )
         self._retry_limit = max(0, retry_limit)
         self._job_timeout = job_timeout
+
+    def close(self) -> None:
+        """Close the Redis client and disconnect its connection pool."""
+        close_redis_client(self._client)
+
+    def ping(self) -> bool:
+        """Probe Redis connectivity for health checks."""
+        return bool(self._client.ping())
 
     def enqueue(
         self,

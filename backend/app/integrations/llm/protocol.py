@@ -57,7 +57,7 @@ class LLMOptions:
     model: str | None = None
     temperature: float = 0.7
     max_tokens: int | None = None
-    timeout: float = 30.0
+    timeout: float | None = None
     response_format: str | None = None
     tools: Sequence[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
@@ -66,7 +66,7 @@ class LLMOptions:
         """防御性参数合法性校验。"""
         if not (0.0 <= self.temperature <= 2.0):
             raise ValueError(f"temperature 必须在 [0.0, 2.0] 范围内，实际为: {self.temperature}")
-        if self.timeout <= 0.0:
+        if self.timeout is not None and self.timeout <= 0.0:
             raise ValueError(f"timeout 必须大于 0，实际为: {self.timeout}")
         if self.max_tokens is not None and self.max_tokens <= 0:
             raise ValueError(f"max_tokens 必须大于 0，实际为: {self.max_tokens}")
