@@ -306,3 +306,56 @@ if attempt_item_id is not None:
 
 ### 3. 后台非阻塞生题作业（`POST /api/v1/questions/jobs`）
 - **请求/响应**：前端组卷页统一通过 `useBackgroundTaskStore().startQuestionJob(params)` 调 `POST /questions/jobs`（HTTP 202，`<300ms` 返回 `{ id, status, batch_id, total_kps, completed_kps, generated_count }`），由 `backgroundTask` store 轮询 `GET /questions/jobs/{id}` 并在首页/课程页/学情页经 `<BackgroundTaskBar />` 展示实时进度，严禁在组卷页用超长同步请求阻塞用户返回或切换页面。
+
+---
+
+## Scenario: 题目级 AI 助教多轮记忆与防剧透（`POST /api/v1/questions/{id}/ask-coach`）
+
+### 1. Scope / Trigger
+改动 `QuestionService.ask_coach`、`AskCoachRequest` 或前端 `useCoachChat` / `apiAskQuestionCoach` 时。
+
+### 2. Signatures
+```python
+# backend/app/schemas/question.py::AskCoachRequest
+user_prompt: str                                # 必填，1..1000
+user_answer: str | None = None                  # 空白视为未作答，触发防剧透
+grading_points: list[str] | None = None
+thread_id: str | None = None                    # 可选，1..128；前端传 sessionKey (`q:${questionId}`)
+history: list[AskCoachHistoryItem] | None = None # 可选，最多 24 条；单条 content 1..2000
+```
+
+```typescript
+// miniprogram/src/types/question.ts
+export interface AskCoachHistoryItem { role: 'user' | 'assistant'; content: string }
+export interface AskCoachParams {
+  user_prompt: string
+  user_answer?: string
+  grading_points?: string[]
+  thread_id?: string
+  history?: AskCoachHistoryItem[]
+}
+```
+
+### 3. Contracts
+- **服务端主记忆 + 前端冷启动兜底**：`ask_coach` 按 `{user_id}:question:{question_id}:{effective_thread}` 读写 `CoachSessionMemory`（`DEFAULT_MAX_TURNS = 12`，`600/1000` 字截断）；仅当服务端记忆为空时才采纳 `history` 并补种。
+- **未作答防剧透**：当 `user_answer` 为 `None` 或全空白串时，服务端**不向 LLM 传入** `【标准答案】` 与 `【解析】`，并注入启发式防剧透约束。
+- **原生多轮消息拼装**：发往 LLM 的消息序列固定为 `[system, context_anchor_user, context_anchor_assistant, *history_turns, current_user_prompt]`（禁止将多轮历史压进单条 user 字符串）。
+
+### 4. Validation & Error Matrix
+| 条件 | 结果 |
+| --- | --- |
+| `history` 超过 24 条或单条 `content` > 2000 字 | Pydantic 422（前端 `useCoachChat` 裁剪至最近 20 条且单条 <= 2000 字） |
+| 题目不存在或越权 | `QuestionNotFoundError`（40009） |
+| `memory_store` / `material_repo` / `search_adapter` 缺失或异常 | 静默降级（不中断答疑） |
+
+### 5. Good/Base/Bad Cases
+- **Good**：`useCoachChat` 在 `ctx.questionId` 分支传 `thread_id: targetKey` 与过滤 `error` 气泡后的近期 `history`，并将聊天记录按 `zhilian:coach:history:${targetKey}` 有界持久化到 `uni.setStorageSync`。
+- **Bad**：仅在前端内存维护气泡而不传 `thread_id`/`history`（页面跳转即失忆，或只发单条消息导致模型无法回答“我刚开始问的什么”）。
+
+### 6. Tests Required
+- `backend/tests/unit/services/test_question_service.py`：验证连续多轮记忆回溯、冷启动 `history` 补种、`source_snippet_id` 原文注入、`user_answer` 为空时不透传标准答案。
+- `miniprogram/tests/useCoachChat.spec.ts`：验证题目分支携带 `thread_id` 与 `history` 且跨页持久化不丢失。
+
+### 7. Wrong vs Correct
+- **Wrong**：无条件把 `question.answer` 拼入 `ask_coach` 上下文（做题未作答前直接剧透答案）。
+- **Correct**：仅在 `user_answer` 非空（已作答/复盘态）才附带 `【标准答案】` 与 `【解析】`。
