@@ -667,9 +667,14 @@ class DiagnosisRepository:
         }
 
     def list_wrong_record_groups(
-        self, user_id: uuid.UUID, is_mastered: bool | None = None
+        self,
+        user_id: uuid.UUID,
+        is_mastered: bool | None = None,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> list[tuple[uuid.UUID | None, str | None, uuid.UUID, str, int]]:
-        """Count all wrong records per material, preserving unclassified sources."""
+        """Count wrong records per material, scoped by optional folder/unclassified filter."""
         statement = (
             select(
                 Material.folder_id,
@@ -689,13 +694,16 @@ class DiagnosisRepository:
             )
             .group_by(Material.folder_id, MaterialFolder.name, Material.id, Material.title)
         )
+        if folder_id is not None:
+            statement = statement.where(Material.folder_id == folder_id)
+        elif unclassified:
+            statement = statement.where(Material.folder_id.is_(None))
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
+        rows = self.session.execute(statement).all()
         return [
-            (folder_id, folder_name, material_id, material_title, int(count))
-            for folder_id, folder_name, material_id, material_title, count in self.session.execute(
-                statement
-            ).all()
+            (folder_id_val, folder_name, material_id, material_title, int(count))
+            for folder_id_val, folder_name, material_id, material_title, count in rows
         ]
 
     def delete_wrong_record(

@@ -160,6 +160,7 @@ class QuestionRepository:
         *,
         material_id: uuid.UUID | None = None,
         folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         version_id: uuid.UUID | None = None,
         knowledge_point_id: uuid.UUID | None = None,
         question_type: str | None = None,
@@ -171,34 +172,14 @@ class QuestionRepository:
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[list[Question], int]:
-        """多条件筛选分页查询题目列表及匹配总数。
-
-        Args:
-            user_id: 租户用户标识。
-            material_id: 可选的资料标识过滤。
-            folder_id: 可选的课程文件夹标识过滤（按 materials.folder_id join，
-                仅纳入未归档课程资料）。
-            version_id: 可选的版本标识过滤。
-            knowledge_point_id: 可选的知识点标识过滤。
-            question_type: 可选的题型过滤。
-            difficulty: 可选的难度过滤。
-            status: 可选的状态过滤。
-            batch_id: 可选的出题生成批次标识过滤。
-            unbatched: 为 True 时只返回 ``batch_id IS NULL`` 的历史题目
-                （``batch_id`` 过滤无法表达 IS NULL）。
-            include_deleted: 是否包含已软删除题目，默认 False。
-            limit: 单页记录数限制，默认 20。
-            offset: 偏移游标，默认 0。
-
-        Returns:
-            tuple[list[Question], int]: (题目实体列表, 总匹配数)。
-        """
+        """多条件筛选分页查询题目列表及匹配总数。"""
         count_stmt = select(func.count(Question.id)).where(Question.user_id == user_id)
         count_stmt = self._apply_list_filters(
             count_stmt,
             user_id=user_id,
             material_id=material_id,
             folder_id=folder_id,
+            unclassified=unclassified,
             version_id=version_id,
             knowledge_point_id=knowledge_point_id,
             question_type=question_type,
@@ -216,6 +197,7 @@ class QuestionRepository:
             user_id=user_id,
             material_id=material_id,
             folder_id=folder_id,
+            unclassified=unclassified,
             version_id=version_id,
             knowledge_point_id=knowledge_point_id,
             question_type=question_type,
@@ -238,6 +220,7 @@ class QuestionRepository:
         user_id: uuid.UUID,
         material_id: uuid.UUID | None,
         folder_id: uuid.UUID | None,
+        unclassified: bool,
         version_id: uuid.UUID | None,
         knowledge_point_id: uuid.UUID | None,
         question_type: str | None,
@@ -250,8 +233,13 @@ class QuestionRepository:
         """为题目列表与计数查询统一附加多条件过滤。"""
         if not include_deleted:
             stmt = stmt.where(Question.is_deleted.is_(False))
-        if folder_id is not None:
-            stmt = cls._apply_folder_filter(stmt, folder_id, user_id)
+        if folder_id is not None or unclassified:
+            stmt = cls._apply_folder_filter(
+                stmt,
+                folder_id,
+                user_id,
+                unclassified=unclassified,
+            )
         equality_filters: tuple[tuple[Any, Any], ...] = (
             (Question.material_id, material_id),
             (Question.version_id, version_id),
@@ -271,28 +259,30 @@ class QuestionRepository:
     @staticmethod
     def _apply_folder_filter(
         stmt: Any,
-        folder_id: uuid.UUID,
+        folder_id: uuid.UUID | None,
         user_id: uuid.UUID,
+        *,
+        unclassified: bool = False,
     ) -> Any:
-        """为题目查询追加课程文件夹归属过滤（排除已归档课程资料）。
-
-        Args:
-            stmt: 待追加过滤的 SQLAlchemy 查询语句。
-            folder_id: 课程文件夹主键。
-            user_id: 租户用户标识。
-
-        Returns:
-            Any: 已追加 join 与 where 条件的新查询语句。
-        """
-        return (
-            stmt.join(Material, Question.material_id == Material.id)
-            .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
-            .where(
-                Material.user_id == user_id,
-                Material.folder_id == folder_id,
-                MaterialFolder.archived_at.is_(None),
+        """为题目查询追加课程文件夹或未分类资料归属过滤（排除已归档课程资料）。"""
+        if folder_id is not None:
+            return (
+                stmt.join(Material, Question.material_id == Material.id)
+                .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
+                .where(
+                    Material.user_id == user_id,
+                    Material.is_deleted.is_(False),
+                    Material.folder_id == folder_id,
+                    MaterialFolder.archived_at.is_(None),
+                )
             )
-        )
+        if unclassified:
+            return stmt.join(Material, Question.material_id == Material.id).where(
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+                Material.folder_id.is_(None),
+            )
+        return stmt
 
     # ==========================================
     # 出题批次聚合 (题库视图)
@@ -302,46 +292,36 @@ class QuestionRepository:
         self,
         user_id: uuid.UUID,
         *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         limit: int = 20,
         offset: int = 0,
     ) -> list[tuple[str | None, int, int, datetime]]:
-        """按出题批次聚合分页查询批次摘要。
-
-        服务端 group by 完成聚合：前端按页拉取题目再本地分组会把题干正文
-        一并传回，且请求数随题目总量线性增长。
-
-        同一批次可横跨多份资料：``QuestionService.generate_questions_for_folder``
-        按 (material_id, version_id) 分组生成却只分配一个 batch_id。
-
-        Args:
-            user_id: 租户用户标识。
-            limit: 单页批次数量限制，默认 20。
-            offset: 分页游标偏移量，默认 0。
-
-        Returns:
-            list[tuple[str | None, int, int, datetime]]: 每项为
-                (批次标识 | None 表示未分批, 题量, 可用题量, 批次最早创建时间)，
-                按批次最早创建时间倒序；``batch_id IS NULL`` 的历史题目单独成组。
-        """
-        # sum(case ...) 而非 count(*) FILTER：两种数据库都接受，SQLite 不必依赖 3.30+。
+        """按出题批次聚合分页查询批次摘要（支持课程与未分类范围过滤）。"""
         available_count = func.sum(
             case((Question.status == QuestionStatus.AVAILABLE.value, 1), else_=0)
         ).label("available_count")
         first_created_at = func.min(Question.created_at).label("first_created_at")
 
+        stmt = select(
+            Question.batch_id,
+            func.count(Question.id).label("question_count"),
+            available_count,
+            first_created_at,
+        ).where(
+            Question.user_id == user_id,
+            Question.is_deleted.is_(False),
+            Question.status == QuestionStatus.AVAILABLE.value,
+        )
+        if folder_id is not None or unclassified:
+            stmt = self._apply_folder_filter(
+                stmt,
+                folder_id,
+                user_id,
+                unclassified=unclassified,
+            )
         stmt = (
-            select(
-                Question.batch_id,
-                func.count(Question.id).label("question_count"),
-                available_count,
-                first_created_at,
-            )
-            .where(
-                Question.user_id == user_id,
-                Question.is_deleted.is_(False),
-                Question.status == QuestionStatus.AVAILABLE.value,
-            )
-            .group_by(Question.batch_id)
+            stmt.group_by(Question.batch_id)
             .order_by(first_created_at.desc(), Question.batch_id.asc())
             .limit(limit)
             .offset(offset)
@@ -349,25 +329,27 @@ class QuestionRepository:
         rows = self.session.execute(stmt).all()
         return [(row[0], int(row[1]), int(row[2]), row[3]) for row in rows]
 
-    def count_question_batches(self, user_id: uuid.UUID) -> int:
-        """统计用户真实批次总数 (与 ``list_question_batches`` 同一 WHERE 条件)。
-
-        Args:
-            user_id: 租户用户标识。
-
-        Returns:
-            int: 未软删除可用题目覆盖的批次总数，含 ``batch_id IS NULL`` 的未分批组。
-        """
-        grouped = (
-            select(Question.batch_id)
-            .where(
-                Question.user_id == user_id,
-                Question.is_deleted.is_(False),
-                Question.status == QuestionStatus.AVAILABLE.value,
-            )
-            .group_by(Question.batch_id)
-            .subquery()
+    def count_question_batches(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> int:
+        """统计用户真实批次总数 (与 ``list_question_batches`` 同一 WHERE 条件)。"""
+        grouped_stmt = select(Question.batch_id).where(
+            Question.user_id == user_id,
+            Question.is_deleted.is_(False),
+            Question.status == QuestionStatus.AVAILABLE.value,
         )
+        if folder_id is not None or unclassified:
+            grouped_stmt = self._apply_folder_filter(
+                grouped_stmt,
+                folder_id,
+                user_id,
+                unclassified=unclassified,
+            )
+        grouped = grouped_stmt.group_by(Question.batch_id).subquery()
         total = self.session.execute(select(func.count()).select_from(grouped)).scalar_one()
         return int(total)
 
@@ -375,21 +357,11 @@ class QuestionRepository:
         self,
         user_id: uuid.UUID,
         batch_ids: Sequence[str],
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> list[tuple[str, uuid.UUID, str | None, uuid.UUID | None, str | None]]:
-        """批量查询指定批次的来源资料集合 (仅针对本页批次，禁止逐批查询)。
-
-        对 materials 与 material_folders 均使用 ``LEFT JOIN`` 且把租户条件写在
-        ON 子句：资料已被物理删除时批次来源位保留为空值，由装配层给出可读降级标签，
-        而不是因 JOIN 不中而整条批次从列表里消失。
-
-        Args:
-            user_id: 租户用户标识。
-            batch_ids: 本页批次的非空批次标识集合。
-
-        Returns:
-            list[tuple[str, uuid.UUID, str | None, uuid.UUID | None, str | None]]:
-                (批次标识, 资料主键, 资料标题, 课程主键, 课程名称)，已去重。
-        """
+        """批量查询指定批次的来源资料集合 (仅针对本页批次，禁止逐批查询)。"""
         if not batch_ids:
             return []
         stmt = (
@@ -419,10 +391,93 @@ class QuestionRepository:
                 Question.is_deleted.is_(False),
                 Question.batch_id.in_(list(batch_ids)),
             )
-            .distinct()
         )
+        if folder_id is not None:
+            stmt = stmt.where(
+                Material.is_deleted.is_(False),
+                Material.folder_id == folder_id,
+                MaterialFolder.archived_at.is_(None),
+            )
+        elif unclassified:
+            stmt = stmt.where(
+                Material.is_deleted.is_(False),
+                Material.folder_id.is_(None),
+            )
+        stmt = stmt.distinct()
         rows = self.session.execute(stmt).all()
         return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
+
+    def list_grouped_question_counts(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> list[tuple[uuid.UUID, uuid.UUID | None, int]]:
+        """单次聚合统计题库按 (讲义, 考点) 分组的可用题目数。"""
+        stmt = select(
+            Question.material_id,
+            Question.knowledge_point_id,
+            func.count(Question.id),
+        ).where(
+            Question.user_id == user_id,
+            Question.is_deleted.is_(False),
+            Question.status == QuestionStatus.AVAILABLE.value,
+        )
+        if folder_id is not None or unclassified:
+            stmt = self._apply_folder_filter(
+                stmt,
+                folder_id,
+                user_id,
+                unclassified=unclassified,
+            )
+        stmt = stmt.group_by(Question.material_id, Question.knowledge_point_id)
+        rows = self.session.execute(stmt).all()
+        return [(row[0], row[1], int(row[2])) for row in rows]
+
+    def resolve_grouped_summary_meta(
+        self,
+        user_id: uuid.UUID,
+        material_ids: Sequence[uuid.UUID],
+        kp_ids: Sequence[uuid.UUID],
+    ) -> tuple[
+        dict[uuid.UUID, tuple[str, uuid.UUID | None]],
+        dict[uuid.UUID, str],
+        dict[uuid.UUID, str],
+    ]:
+        """批量查询讲义标题/所属课程、课程名称、知识点名称（零 N+1）。"""
+        material_map: dict[uuid.UUID, tuple[str, uuid.UUID | None]] = {}
+        if material_ids:
+            mat_rows = self.session.execute(
+                select(Material.id, Material.title, Material.folder_id).where(
+                    Material.user_id == user_id,
+                    Material.id.in_(list(material_ids)),
+                )
+            ).all()
+            material_map = {mid: (title, fid) for mid, title, fid in mat_rows}
+
+        folder_ids = list({fid for _, fid in material_map.values() if fid is not None})
+        folder_map: dict[uuid.UUID, str] = {}
+        if folder_ids:
+            folder_rows = self.session.execute(
+                select(MaterialFolder.id, MaterialFolder.name).where(
+                    MaterialFolder.user_id == user_id,
+                    MaterialFolder.id.in_(folder_ids),
+                )
+            ).all()
+            folder_map = {fid: name for fid, name in folder_rows}
+
+        kp_map: dict[uuid.UUID, str] = {}
+        if kp_ids:
+            kp_rows = self.session.execute(
+                select(KnowledgePoint.id, KnowledgePoint.name).where(
+                    KnowledgePoint.user_id == user_id,
+                    KnowledgePoint.id.in_(list(kp_ids)),
+                )
+            ).all()
+            kp_map = {kpid: name for kpid, name in kp_rows}
+
+        return material_map, folder_map, kp_map
 
     def list_knowledge_points_for_folder(
         self,

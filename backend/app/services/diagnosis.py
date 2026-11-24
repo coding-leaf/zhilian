@@ -1220,24 +1220,34 @@ class DiagnosisService:
         return self.diagnosis_repo.get_wrong_record_display_meta(user_id, knowledge_point_ids)
 
     def list_wrong_record_groups(
-        self, user_id: uuid.UUID, is_mastered: bool | None = None
+        self,
+        user_id: uuid.UUID,
+        is_mastered: bool | None = None,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> list[dict[str, Any]]:
-        """Group the complete wrong-record collection by course and source."""
+        """Group the wrong-record collection by course and source, honoring folder filter."""
+        repo_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            repo_kwargs["folder_id"] = folder_id
+        if unclassified:
+            repo_kwargs["unclassified"] = True
         groups: dict[tuple[uuid.UUID | None, uuid.UUID | None], dict[str, Any]] = {}
         for (
-            folder_id,
+            group_folder_id,
             folder_name,
             material_id,
             material_title,
             count,
-        ) in self.diagnosis_repo.list_wrong_record_groups(user_id, is_mastered):
-            key = (folder_id, None if folder_id is not None else material_id)
+        ) in self.diagnosis_repo.list_wrong_record_groups(user_id, is_mastered, **repo_kwargs):
+            key = (group_folder_id, None if group_folder_id is not None else material_id)
             if key not in groups:
                 groups[key] = {
-                    "folder_id": folder_id,
+                    "folder_id": group_folder_id,
                     "folder_name": folder_name,
                     "material_id": key[1],
-                    "material_title": material_title if folder_id is None else None,
+                    "material_title": material_title if group_folder_id is None else None,
                     "count": 0,
                 }
             groups[key]["count"] += count

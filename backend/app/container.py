@@ -25,6 +25,7 @@ from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
 from app.services._material_pipeline import resolve_progress_redis_client
 from app.services.auth import AuthService
+from app.services.collection import CollectionService
 from app.services.diagnosis import DiagnosisService
 from app.services.folder import FolderService
 from app.services.grading import GradingService
@@ -286,6 +287,10 @@ class AppContainer:
     def create_diagnosis_service(self, session: Session) -> DiagnosisService:
         """纯工厂方法：构建绑定独立 Session 的 DiagnosisService。"""
         return DiagnosisService(session=session)
+
+    def create_collection_service(self, session: Session) -> CollectionService:
+        """纯工厂方法：构建绑定独立 Session 的 CollectionService。"""
+        return CollectionService(session=session)
 
     # --------------------------------------------------------------------------
     # 生命周期与健康探测

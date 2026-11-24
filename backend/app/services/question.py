@@ -76,6 +76,9 @@ from app.schemas.question import (
     QuestionDetailResponse,
     QuestionGenerateRequest,
     QuestionGenerationJobCreateRequest,
+    QuestionGroupedKnowledgePointDTO,
+    QuestionGroupedMaterialDTO,
+    QuestionGroupedSummaryResponse,
     ScopedCoachResponse,
 )
 from app.services._coach_context import build_overview_context, pick_suggested_topics
@@ -1452,6 +1455,7 @@ class QuestionService:
         *,
         status: str | None = None,
         folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         batch_id: str | None = None,
         unbatched: bool = False,
         limit: int | None = None,
@@ -1494,6 +1498,11 @@ class QuestionService:
         calc_limit = limit if limit is not None else page_size
         calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
 
+        resolved_unclassified = unclassified or bool(kwargs.get("unclassified", False))
+        extra_repo_kwargs: dict[str, Any] = {}
+        if resolved_unclassified:
+            extra_repo_kwargs["unclassified"] = True
+
         return self.question_repo.list_questions(
             user_id=resolved_user_id,
             material_id=material_id or kwargs.get("material_id"),
@@ -1508,40 +1517,38 @@ class QuestionService:
             include_deleted=include_deleted or bool(kwargs.get("include_deleted", False)),
             limit=calc_limit,
             offset=calc_offset,
+            **extra_repo_kwargs,
         )
 
     def list_question_batches(
         self,
         user_id: uuid.UUID,
         *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[QuestionBatchSummaryResponse], int]:
-        """按出题批次聚合分页查询批次摘要并装配来源。
-
-        三次批量查询完成装配：本页批次聚合、批次总数、本页批次的来源资料。
-        不对批次逐条补查来源 (N+1)。
-
-        Args:
-            user_id: 租户用户标识。
-            page: 当前页码，从 1 开始，默认 1。
-            page_size: 单页批次数量限制，默认 20。
-
-        Returns:
-            tuple[list[QuestionBatchSummaryResponse], int]: (本页批次摘要, 真实批次总数)。
-        """
+        """按出题批次聚合分页查询批次摘要并装配来源。"""
         resolved_page_size = max(1, page_size)
         offset = max(page - 1, 0) * resolved_page_size
+        scope_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            scope_kwargs["folder_id"] = folder_id
+        if unclassified:
+            scope_kwargs["unclassified"] = True
 
         rows = self.question_repo.list_question_batches(
             user_id,
             limit=resolved_page_size,
             offset=offset,
+            **scope_kwargs,
         )
-        total = self.question_repo.count_question_batches(user_id)
+        total = self.question_repo.count_question_batches(user_id, **scope_kwargs)
         sources_by_batch = self._group_batch_sources(
             user_id,
             [batch_id for batch_id, *_rest in rows],
+            **scope_kwargs,
         )
 
         items = [
@@ -1562,19 +1569,19 @@ class QuestionService:
         self,
         user_id: uuid.UUID,
         batch_ids: Sequence[str | None],
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> dict[str, list[QuestionBatchSourceDTO]]:
-        """一次查询批量装配本页批次的来源资料。
-
-        Args:
-            user_id: 租户用户标识。
-            batch_ids: 本页批次标识 (可含 None，None 不参与来源查询)。
-
-        Returns:
-            dict[str, list[QuestionBatchSourceDTO]]: 批次标识 → 来源资料投影列表。
-        """
+        """一次查询批量装配本页批次的来源资料。"""
         non_null_ids = [batch_id for batch_id in batch_ids if batch_id is not None]
+        scope_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            scope_kwargs["folder_id"] = folder_id
+        if unclassified:
+            scope_kwargs["unclassified"] = True
         grouped: dict[str, list[QuestionBatchSourceDTO]] = {}
-        for row in self.question_repo.list_batch_sources(user_id, non_null_ids):
+        for row in self.question_repo.list_batch_sources(user_id, non_null_ids, **scope_kwargs):
             grouped.setdefault(row[0], []).append(
                 QuestionBatchSourceDTO(
                     material_id=row[1],
@@ -1584,6 +1591,70 @@ class QuestionService:
                 )
             )
         return grouped
+
+    def get_grouped_summary(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> QuestionGroupedSummaryResponse:
+        """按讲义与考点聚合题库可用题目计数（单次聚合 + 批量回填标题，零 N+1）。"""
+        counts = self.question_repo.list_grouped_question_counts(
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
+        if not counts:
+            return QuestionGroupedSummaryResponse(total_questions=0, materials=[])
+
+        material_ids = list(dict.fromkeys(mat_id for mat_id, _, _ in counts))
+        kp_ids = list(dict.fromkeys(kp_id for _, kp_id, _ in counts if kp_id is not None))
+        material_map, folder_map, kp_map = self.question_repo.resolve_grouped_summary_meta(
+            user_id,
+            material_ids,
+            kp_ids,
+        )
+
+        kp_buckets: dict[uuid.UUID, list[QuestionGroupedKnowledgePointDTO]] = {}
+        mat_totals: dict[uuid.UUID, int] = {}
+        total_questions = 0
+        for mat_id, kp_id, count in counts:
+            total_questions += count
+            mat_totals[mat_id] = mat_totals.get(mat_id, 0) + count
+            kp_buckets.setdefault(mat_id, []).append(
+                QuestionGroupedKnowledgePointDTO(
+                    kp_id=kp_id,
+                    kp_name=kp_map.get(kp_id) if kp_id is not None else None,
+                    question_count=count,
+                )
+            )
+
+        materials: list[QuestionGroupedMaterialDTO] = []
+        for mat_id, mat_total in mat_totals.items():
+            mat_title, mat_folder_id = material_map.get(mat_id, ("未命名资料", None))
+            sorted_kps = sorted(
+                kp_buckets.get(mat_id, []),
+                key=lambda item: (-item.question_count, item.kp_name or ""),
+            )
+            materials.append(
+                QuestionGroupedMaterialDTO(
+                    material_id=mat_id,
+                    material_title=mat_title,
+                    folder_id=mat_folder_id,
+                    folder_name=(
+                        folder_map.get(mat_folder_id) if mat_folder_id is not None else None
+                    ),
+                    question_count=mat_total,
+                    knowledge_points=sorted_kps,
+                )
+            )
+
+        materials.sort(key=lambda item: (-item.question_count, item.material_title))
+        return QuestionGroupedSummaryResponse(
+            total_questions=total_questions,
+            materials=materials,
+        )
 
     def update_question(
         self,

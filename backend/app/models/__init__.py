@@ -1,6 +1,7 @@
 """持久化数据模型导出模块。"""
 
 from app.models.base import Base, TenantModelMixin, TimestampMixin
+from app.models.collection import QuestionCollection, QuestionCollectionItem
 from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import (
     Material,
@@ -72,6 +73,8 @@ __all__ = [
     "QualityCheckType",
     "Question",
     "QuestionAuditLog",
+    "QuestionCollection",
+    "QuestionCollectionItem",
     "QuestionGenerationJob",
     "QuestionGenerationJobStatus",
     "QuestionQualityCheck",

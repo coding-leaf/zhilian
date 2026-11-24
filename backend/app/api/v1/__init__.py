@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.collections import router as collections_router
 from app.api.v1.diagnosis import router as diagnosis_router
 from app.api.v1.folders import router as folders_router
 from app.api.v1.grading import router as grading_router
@@ -19,6 +20,7 @@ api_v1_router.include_router(materials_router)
 api_v1_router.include_router(folders_router)
 api_v1_router.include_router(knowledge_router)
 api_v1_router.include_router(questions_router)
+api_v1_router.include_router(collections_router)
 api_v1_router.include_router(practices_router)
 api_v1_router.include_router(grading_router)
 api_v1_router.include_router(diagnosis_router)
@@ -26,6 +28,7 @@ api_v1_router.include_router(diagnosis_router)
 __all__ = [
     "api_v1_router",
     "auth_router",
+    "collections_router",
     "diagnosis_router",
     "folders_router",
     "grading_router",

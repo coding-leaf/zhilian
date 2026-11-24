@@ -243,6 +243,38 @@ class QuestionBatchListResponse(BaseModel):
     offset: int = Field(default=0, ge=0, description="分页游标偏移量")
 
 
+class QuestionGroupedKnowledgePointDTO(BaseModel):
+    """题库讲义/考点分组内的考点计数摘要。"""
+
+    kp_id: uuid.UUID | None = Field(default=None, description="知识点主键")
+    kp_name: str | None = Field(default=None, description="知识点名称")
+    question_count: int = Field(..., ge=0, description="该考点下可用题目数")
+
+
+class QuestionGroupedMaterialDTO(BaseModel):
+    """题库讲义/考点分组内的讲义聚合摘要。"""
+
+    material_id: uuid.UUID = Field(..., description="讲义主键")
+    material_title: str = Field(..., description="讲义标题")
+    folder_id: uuid.UUID | None = Field(default=None, description="所属课程主键")
+    folder_name: str | None = Field(default=None, description="所属课程名称")
+    question_count: int = Field(..., ge=0, description="该讲义下可用题目总数")
+    knowledge_points: list[QuestionGroupedKnowledgePointDTO] = Field(
+        default_factory=list,
+        description="按考点拆分的题目计数列表",
+    )
+
+
+class QuestionGroupedSummaryResponse(BaseModel):
+    """题库按讲义与考点结构化聚合视图响应模型。"""
+
+    total_questions: int = Field(..., ge=0, description="当前范围活跃题目总数")
+    materials: list[QuestionGroupedMaterialDTO] = Field(
+        default_factory=list,
+        description="按讲义分组的题目计数与考点明细",
+    )
+
+
 class QuestionListQuery(BaseModel):
     """题目多条件分页筛选查询参数模型。"""
 
@@ -502,6 +534,9 @@ __all__ = [
     "QuestionGenerationJobCreateRequest",
     "QuestionGenerationJobListResponse",
     "QuestionGenerationJobResponse",
+    "QuestionGroupedKnowledgePointDTO",
+    "QuestionGroupedMaterialDTO",
+    "QuestionGroupedSummaryResponse",
     "QuestionJobSourceType",
     "QuestionListQuery",
     "QuestionListResponse",

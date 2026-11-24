@@ -44,6 +44,7 @@ from app.models.practice import (
     PracticeSourceType,
     PracticeStatus,
 )
+from app.repositories.collection import CollectionRepository
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.folder import FolderRepository
 from app.repositories.grading import GradingRepository
@@ -55,6 +56,7 @@ from app.schemas.material import SourceSnippetDTO
 from app.schemas.practice import (
     PracticeDetailResponse,
     PracticeItemDetailResponse,
+    PracticeSummaryResponse,
     QuestionSnapshotDTO,
 )
 from app.services._grading_llm import grade_offline_attempt_item
@@ -67,9 +69,11 @@ from app.services._practice_assembler import (
     select_explicit_questions,
     wrap_practice_with_source_snippets,
 )
+from app.services.collection import CollectionNotFoundError
 from app.services.source_snippets import build_source_snippet_map
 
 logger = logging.getLogger(__name__)
+MAX_PRACTICE_QUESTIONS = 50
 
 
 def _serialize_user_answer(user_answer: Any) -> Any:
@@ -118,6 +122,7 @@ class CreatePracticeOptions:
     idempotency_key: str | None = None
     folder_id: uuid.UUID | None = None
     question_ids: Sequence[uuid.UUID] | None = None
+    collection_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +172,7 @@ class PracticeService:
         knowledge_repo: KnowledgeRepository | None = None,
         folder_repo: FolderRepository | None = None,
         diagnosis_repo: DiagnosisRepository | None = None,
+        collection_repo: CollectionRepository | None = None,
         idempotency: IdempotencyProtocol | None = None,
         queue: QueueProtocol | None = None,
     ) -> None:
@@ -180,6 +186,7 @@ class PracticeService:
             knowledge_repo: 可选注入的知识点仓储实例 (课程范围考点校验)。
             folder_repo: 可选注入的课程文件夹仓储实例。
             diagnosis_repo: 可选注入的学情诊断仓储实例 (用于薄弱点组卷查询)。
+            collection_repo: 可选注入的自定义题单仓储实例。
             idempotency: 可选注入的幂等适配器实例。
             queue: 可选注入的任务队列适配器实例。
         """
@@ -190,6 +197,7 @@ class PracticeService:
         self.knowledge_repo = knowledge_repo or KnowledgeRepository(session)
         self.folder_repo = folder_repo or FolderRepository(session)
         self.diagnosis_repo = diagnosis_repo or DiagnosisRepository(session)
+        self.collection_repo = collection_repo or CollectionRepository(session)
         self.idempotency = idempotency or MemoryIdempotencyAdapter()
         self.queue = queue or MemoryQueueAdapter()
 
@@ -477,12 +485,33 @@ class PracticeService:
             )
 
         # Step 2: 检索并抽选候选题目
+        effective_folder_id = options.folder_id
         if options.question_ids:
             selected_questions, effective_kp_ids = select_explicit_questions(
                 self.question_repo,
                 user_id=user_id,
                 question_ids=options.question_ids,
                 question_count=options.question_count,
+                is_random=options.mode == PracticeAssemblyMode.RANDOM,
+                on_empty_metric=_log_empty_questions,
+            )
+        elif options.collection_id is not None:
+            collection = self.collection_repo.get_collection_by_id(options.collection_id, user_id)
+            if collection is None:
+                raise CollectionNotFoundError(details={"collection_id": str(options.collection_id)})
+            if effective_folder_id is None and collection.folder_id is not None:
+                effective_folder_id = collection.folder_id
+            collection_q_ids = self.collection_repo.list_active_question_ids(
+                options.collection_id,
+                user_id,
+                limit=MAX_PRACTICE_QUESTIONS,
+            )
+            target_count = min(options.question_count, MAX_PRACTICE_QUESTIONS)
+            selected_questions, effective_kp_ids = select_explicit_questions(
+                self.question_repo,
+                user_id=user_id,
+                question_ids=collection_q_ids,
+                question_count=target_count,
                 is_random=options.mode == PracticeAssemblyMode.RANDOM,
                 on_empty_metric=_log_empty_questions,
             )
@@ -524,13 +553,13 @@ class PracticeService:
         snapshots = build_validated_snapshots(scattered_questions, kp_name_map=kp_name_map)
 
         resolved_material_id = options.material_id
-        if resolved_material_id is None and options.folder_id is None:
+        if resolved_material_id is None and effective_folder_id is None:
             resolved_material_id = scattered_questions[0].material_id
 
         try:
             practice = Practice(
                 material_id=resolved_material_id,
-                folder_id=options.folder_id,
+                folder_id=effective_folder_id,
                 title=options.title,
                 knowledge_point_ids=[str(kp) for kp in effective_kp_ids],
                 question_types=list(options.question_types) if options.question_types else [],
@@ -762,6 +791,8 @@ class PracticeService:
         user_id: uuid.UUID,
         *,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         status: str | None = None,
         limit: int = 20,
         offset: int = 0,
@@ -770,10 +801,49 @@ class PracticeService:
         return self.practice_repo.list_practices(
             user_id,
             material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
             status=status,
             limit=limit,
             offset=offset,
         )
+
+    def count_practices(
+        self,
+        user_id: uuid.UUID,
+        *,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+        status: str | None = None,
+    ) -> int:
+        """统计符合过滤条件的练习真实总数。"""
+        return self.practice_repo.count_practices(
+            user_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+            status=status,
+        )
+
+    def build_practice_summaries(
+        self,
+        practices: Sequence[Practice],
+        *,
+        user_id: uuid.UUID,
+    ) -> list[PracticeSummaryResponse]:
+        """批量回填课程名与资料标题并组装练习摘要响应列表（零 N+1）。"""
+        folder_by_id, material_by_id = self.practice_repo.resolve_practice_display_names(
+            user_id,
+            practices,
+        )
+        summaries: list[PracticeSummaryResponse] = []
+        for practice in practices:
+            summary = PracticeSummaryResponse.model_validate(practice)
+            summary.folder_name = folder_by_id.get(practice.id)
+            summary.material_title = material_by_id.get(practice.id)
+            summaries.append(summary)
+        return summaries
 
     def save_answer(
         self,
