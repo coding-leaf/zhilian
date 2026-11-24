@@ -423,3 +423,17 @@ practice_title: str | None = None
   - `coach_graph.py` 意图/改写节点 `max_tokens=2048`，答疑生成与 `question.py::ask_coach` `max_tokens=4096`（严禁再用 `120`/`900` 触发思考 token 截断 502）；
   - 结构化解析异常时 `generate_overview`/`generate_grounded` 自动降级纯文本 `llm.generate()`，且 `agent_graph.py` 异常对外返回脱敏中文文案；
   - `useCoachChat.ts` 禁止 `isThinking` 并发双发，持久化前剥离未获回复的孤儿用户气泡。
+
+## Scenario: 学情 4 Tab 课程过滤、自定义题单收藏夹与复习级知识卡（2026-11-25）
+
+- **统一课程过滤参数（`backend/app/api/v1/_filters.py::parse_folder_filter`）**：
+  - 全量支持 `?folder_id=<uuid|__none__>`（`GET /wrong-records` 同时保留 `unclassified=true` 向后兼容，`GET /mastery` 非法 UUID 保留 HTTP 400）。
+  - `GET /practices` 通过 `OUTER JOIN Material` 同时匹配课程级练习（`Practice.folder_id == X`）与单资料练习（`Practice.folder_id IS NULL AND Material.folder_id == X`），返回真实 `count_practices` `total` 并批量回填 `folder_name` / `material_title`；`POST /practices` 支持可选 `collection_id` 整单开练（上限 `MAX_PRACTICE_QUESTIONS=50`）。
+  - `GET /questions/grouped-summary` 注册于 `/questions/{question_id}` 之前，零迁移单次聚合返回「讲义 → 考点」题目树。
+  - 前端 `useReviewCenter.ts` 切换顶部课程时带 `filterEpoch` 防竞态，并发刷新 4 Tab 并清理错题勾选、题库三态勾选与批次展开缓存。
+- **自定义题单 API（严禁 `PATCH`，仅 `GET/POST/PUT/DELETE`）**：
+  - `GET/POST /collections`、`PUT/DELETE /collections/{id}`（删题单仅级联删关联项，绝不删原题）、`GET /collections/{id}/questions`（自动排除软删题）、`POST /collections/{id}/items`（幂等批量收纳）、`DELETE /collections/{id}/items/{question_id}`、`GET/POST /questions/{id}/collections`（单题原子同步归属）。
+  - 前端收纳入口统一挂载单例 `CollectionPickerDrawer.vue`（<= 250 行，`env(safe-area-inset-bottom)`）。
+- **考前复习级知识卡与 PDF/PPT 去噪（零 DB 迁移）**：
+  - `KnowledgePoint.structured_content`（JSONB）向后兼容新增可选 `derivation_steps: string[]` 与 `common_mistakes: string[]`，`core_summary` 改用 `trim_excerpt_cleanly(..., max_chars=200)` 保护公式；`SnippetSourceResponse` 新增可选 `page_end: int | None`（持久化于 `MaterialSnippet.source_info["page_end"]`）。
+  - `document_denoising.py` 负责跨页页眉/页脚/校名水印剔除、`PageRole` 模板页过滤（致谢/目录/空小结）及写入/读取双层原文依据过滤排序（老资料过滤后为空返回 `[]` 而非回吐「谢谢！」）；`ocr_quality.py` 与前端 `richText.ts::isGarbledSnippetText` 同步识别 `☒`（`\u2612`）/ `\ufffd` / `▯`。

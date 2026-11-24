@@ -25,7 +25,7 @@
 {
   "__usePrivacyCheck__": true,
   "lazyCodeLoading": "requiredComponents",
-  "setting": { "urlCheck": false, "es6": true, "enhance": true, "postcss": true, "minified": true },
+  "setting": { "urlCheck": false, "es6": true, "enhance": true, "postcss": true, "minified": true, "ignoreDevUnusedFiles": false, "ignoreUploadUnusedFiles": false }, // 避免 lazyCodeLoading 下微信静态分析误剔除共享组件间接 require 的工具模块（如 utils/katexRichText.js）
   "networkTimeout": { "request": 60000, "uploadFile": 60000 }
 }
 ```
