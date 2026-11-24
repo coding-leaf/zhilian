@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-11-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~708 | Active |
+| `journal-1.md` | ~732 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-11-24 | 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀 | `c57b789`, `94f7a35`, `e995b4b` | `docs/readme-local-setup` |
 | 20 | 2026-11-24 | 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复 | `f3e93a6`, `1cc915e`, `2462d59`, `c70e145` | `docs/readme-local-setup` |
 | 19 | 2026-11-24 | 修复RAG原文提取展示与题目问答多轮上下文 | `8561de6`, `6eb87da`, `8d8e4d7` | `fix/rag-extraction-and-coach-context` |
 | 18 | 2026-11-18 | RAG P0-P2, PyMuPDF + VLM/Rerank & Adaptive Corrective LangGraph | `fe04fbc`, `fd347e7`, `db4e792` | `master` |

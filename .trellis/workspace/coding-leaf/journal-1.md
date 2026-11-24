@@ -706,3 +706,27 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀
+<!-- trellis-session: v=2 fp=928844d9fbde66ec -->
+
+**Date**: 2026-11-24
+**Task**: 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+3路并行审计源码与dist/mp-weixin编译产物并2路并行修复：(1)后端folders增补PUT别名、前端清零动态import()与PATCH、manifest隐私/60s超时/es2018编译/chooseMedia/safeNavigateTo/safeShowToast/loginWithWechat单飞；(2)浮层textarea:fixed/隐藏底层输入/填空缓冲、去WXSS[disabled]/补button::after/修双sticky/生命周期竞态与button:loading+:disabled配对；(3)新增mpWeixinCompatGuard.spec.ts自动化门禁并沉淀mp-weixin-compatibility.md，双端门禁与build:mp-weixin产物扫描全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c57b789` | feat(backend): 课程重命名接口增补 PUT 别名以兼容微信小程序 wx.request |
+| `94f7a35` | fix(miniprogram): 修复微信小程序编译产物、API、原生输入与 WXSS 兼容缺陷并新增静态门禁 |
+| `e995b4b` | docs(spec): 沉淀微信小程序兼容性规范 mp-weixin-compatibility.md |
+
+### Status
+
+[OK] **Completed**
