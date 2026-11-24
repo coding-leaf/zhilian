@@ -134,3 +134,13 @@ request({ url: `/folders/${id}`, method: 'PUT', data })
 // 3. loading 必须配对 disabled
 // <button :loading="submitting" :disabled="submitting" @tap="submit">提交</button>
 ```
+
+
+---
+
+## Scenario: KaTeX 公式渲染器与自有字体托管（2026-11-24）
+
+- **渲染架构**：由 `katex@0.16.21` + [katexRichText.ts](../../../miniprogram/src/utils/katexRichText.ts)（`katex.__renderToDomTree` → `<rich-text>` `RichTextNode[]`）替代旧手写正则转换器（已退役 `richTextMath.ts`/`latexSymbols.ts`），`<RichContent />` 外部 Props 保持不变且设置 `styleIsolation: 'apply-shared'`。
+- **定界符规则**：[richText.ts](../../../miniprogram/src/utils/richText.ts) 数学解析优先级高于 Markdown `_`/`*`，统一支持块级 `$$...$$`、`\[...\]`（含尾部标点 `\]。`）、裸 `\begin{env}...\end{env}`、`` ```latex `` 围栏，以及行内 `$...$`（支持 `\$` 转义、货币防误判与跨软换行合并）与 `\(...\)`。
+- **WXSS 与零第三方 CDN 字体**：[katex-mp.scss](../../../miniprogram/src/styles/katex-mp.scss) 全局引入于 `App.vue`，零 `@font-face`、零非法 WXSS 选择器、零裸 Hex；40 个 `.woff2`/`.ttf` 字体文件由 FastAPI `GET /static/fonts/katex/{font_path}` 只读托管（带 `immutable` 缓存与 CORS），前端 [katexFonts.ts](../../../miniprogram/src/utils/katexFonts.ts) 在 `App.vue::onLaunch` 通过 `wx.loadFontFace({ global: true })` 静默加载（非 HTTPS/测试环境静默跳过）。
+- **超时与未登录守卫**：`LONG_REQUEST_TIMEOUT_MS` 收敛至 `60000ms`（严格对齐微信硬上限）；`review/index.vue`、`BackgroundTaskBar.vue`、`useMaterialUpload.ts` 发起鉴权请求前必须校验 `useAuthStore().isLoggedIn()`。

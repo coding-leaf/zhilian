@@ -409,3 +409,17 @@ practice_title: str | None = None
 ### 7. Wrong vs Correct
 - **Wrong**：`watch(job.status === 'completed')` 里自动调用 `uni.redirectTo('/subpackages/practice/pages/session/index')` 或展开 `QuestionPreviewPanel`。
 - **Correct**：出题页仅切至 `mode = 'ready'` 渲染极简 `QuestionReadyCard`，其他页由 `<BackgroundTaskBar />` 提醒，由用户主动点击进入练习。
+
+
+---
+
+## Scenario: AI 自主出题质检闭环与思考模型助教预算（2026-11-24）
+
+- **终态零 `pending_review`**：
+  - `backend/app/core/algorithms/question_quality.py` 采用去 LaTeX 命令 + 中文 2-gram + 大小写不敏感分词，输出三态 `PASS / SOFT_FLAG / HARD_DEFECT`。
+  - `backend/app/services/_question_quality_judge.py` 将非 `PASS` 题合并为 1 次批量 AI Judge/Repair（`max_tokens=4096`），`approve` 仅允许用于 `SOFT_FLAG`，`repair` 必须重过确定性结构校验，`reject` 丢弃；缺口按 `0.3 -> 0.5 -> 0.65` 提温避重补抽。
+  - 严禁向学生端落库或展示 `pending_review`（存量记录由迁移 `0013_retire_pending_review` 软删除；响应保留 `pending_count=0`/`pending_review_count=0` 向后兼容）；整批 0 合格题时异步任务直接置 `failed`。
+- **思考模型（如 `deepseek-flash`）助教预算与降级**：
+  - `coach_graph.py` 意图/改写节点 `max_tokens=2048`，答疑生成与 `question.py::ask_coach` `max_tokens=4096`（严禁再用 `120`/`900` 触发思考 token 截断 502）；
+  - 结构化解析异常时 `generate_overview`/`generate_grounded` 自动降级纯文本 `llm.generate()`，且 `agent_graph.py` 异常对外返回脱敏中文文案；
+  - `useCoachChat.ts` 禁止 `isThinking` 并发双发，持久化前剥离未获回复的孤儿用户气泡。
