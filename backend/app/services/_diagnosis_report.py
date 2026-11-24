@@ -2,6 +2,8 @@
 
 import contextlib
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +13,7 @@ from app.core.algorithms.diagnosis import (
     MistakeEvidence,
 )
 from app.core.errors import PracticeNotGradedError
+from app.core.question_types import QuestionType
 from app.models.practice import (
     AttemptItem,
     DiagnosisReport,
@@ -22,7 +25,25 @@ from app.models.practice import (
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.knowledge import KnowledgeRepository
 
-_SUBJECTIVE_TYPES: frozenset[str] = frozenset(("short_answer", "essay", "subjective"))
+_SUBJECTIVE_TYPES: frozenset[str] = frozenset(
+    {
+        QuestionType.FILL_IN_BLANK.value,
+        QuestionType.TERM_EXPLANATION.value,
+        QuestionType.SHORT_ANSWER.value,
+        QuestionType.CASE_ANALYSIS.value,
+        # 兼容历史快照中的遗留主观题型别名
+        "essay",
+        "subjective",
+    }
+)
+
+
+@dataclass(frozen=True)
+class MasteryBaselineSnapshot:
+    """不可变练习前掌握度基线快照，避免 SQLAlchemy Identity Map 就地覆盖 previous_score。"""
+
+    mastery_score: float
+    last_practiced_at: datetime | None
 
 
 def ensure_utc(dt: datetime | None) -> datetime | None:
@@ -142,8 +163,8 @@ def build_evaluation_inputs_and_mistakes(
     knowledge_repo: KnowledgeRepository,
     user_id: uuid.UUID,
     sorted_point_ids: list[uuid.UUID],
-    previous_record_map: dict[uuid.UUID, MasteryRecord],
-    current_record_map: dict[uuid.UUID, MasteryRecord],
+    previous_record_map: Mapping[uuid.UUID, MasteryRecord | MasteryBaselineSnapshot],
+    current_record_map: Mapping[uuid.UUID, MasteryRecord],
     item_evaluations: list[dict[str, Any]],
     evaluation_time: datetime,
 ) -> tuple[list[KnowledgeEvaluationInput], list[MistakeEvidence], bool, uuid.UUID | None]:
@@ -152,9 +173,14 @@ def build_evaluation_inputs_and_mistakes(
     mistake_evidences: list[MistakeEvidence] = []
     is_structure_degraded = False
     fallback_point_id = sorted_point_ids[0] if sorted_point_ids else None
+    knowledge_point_map = (
+        {kp.id: kp for kp in knowledge_repo.list_by_ids(sorted_point_ids, user_id)}
+        if sorted_point_ids
+        else {}
+    )
 
     for point_id in sorted_point_ids:
-        knowledge_point = knowledge_repo.get_by_id(point_id, user_id)
+        knowledge_point = knowledge_point_map.get(point_id)
         if knowledge_point and getattr(knowledge_point, "is_low_confidence", False):
             is_structure_degraded = True
 
@@ -257,19 +283,15 @@ def sync_wrong_records_from_evaluations(
             )
 
 
-def build_diagnosis_report_entity(
-    *,
-    report_id: uuid.UUID,
-    practice_id: uuid.UUID,
-    user_id: uuid.UUID,
+def _serialize_synthesis_fields(
     synthesis_result: DiagnosisReportResult,
-    total_questions: int,
-    unanswered_count: int,
-    wrong_count: int,
-    score_rate: float,
-    is_structure_degraded: bool,
-) -> DiagnosisReport:
-    """将纯函数诊断合成结果转换为可持久化的 DiagnosisReport ORM 实体。"""
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """将纯函数诊断合成结果序列化为 DiagnosisReport JSON 列载荷。"""
     weak_knowledge_data = [
         {
             "knowledge_id": item.knowledge_id,
@@ -314,6 +336,33 @@ def build_diagnosis_report_entity(
     actionable_suggestions_data = [
         {"action": action} for action in synthesis_result.suggested_review_actions
     ]
+    return (
+        weak_knowledge_data,
+        regressed_knowledge_data,
+        analysis_causes_data,
+        actionable_suggestions_data,
+    )
+
+
+def build_diagnosis_report_entity(
+    *,
+    report_id: uuid.UUID,
+    practice_id: uuid.UUID,
+    user_id: uuid.UUID,
+    synthesis_result: DiagnosisReportResult,
+    total_questions: int,
+    unanswered_count: int,
+    wrong_count: int,
+    score_rate: float,
+    is_structure_degraded: bool,
+) -> DiagnosisReport:
+    """将纯函数诊断合成结果转换为可持久化的 DiagnosisReport ORM 实体。"""
+    (
+        weak_knowledge_data,
+        regressed_knowledge_data,
+        analysis_causes_data,
+        actionable_suggestions_data,
+    ) = _serialize_synthesis_fields(synthesis_result)
     return DiagnosisReport(
         id=report_id,
         practice_id=practice_id,
@@ -331,7 +380,39 @@ def build_diagnosis_report_entity(
     )
 
 
+def apply_diagnosis_report_updates(
+    report: DiagnosisReport,
+    *,
+    synthesis_result: DiagnosisReportResult,
+    total_questions: int,
+    unanswered_count: int,
+    wrong_count: int,
+    score_rate: float,
+    is_structure_degraded: bool,
+) -> DiagnosisReport:
+    """原地更新既有 DiagnosisReport 行的诊断指标（用于自评或重判改分后的同步刷新）。"""
+    (
+        weak_knowledge_data,
+        regressed_knowledge_data,
+        analysis_causes_data,
+        actionable_suggestions_data,
+    ) = _serialize_synthesis_fields(synthesis_result)
+    report.weak_knowledge_points = weak_knowledge_data
+    report.regressed_knowledge_points = regressed_knowledge_data
+    report.analysis_causes = analysis_causes_data
+    report.actionable_suggestions = actionable_suggestions_data
+    report.unanswered_count = unanswered_count
+    report.wrong_count = wrong_count
+    report.pending_regrade_count = 0
+    report.total_questions = total_questions
+    report.score_rate = score_rate
+    report.is_structure_degraded = is_structure_degraded
+    return report
+
+
 __all__ = [
+    "MasteryBaselineSnapshot",
+    "apply_diagnosis_report_updates",
     "build_diagnosis_report_entity",
     "build_evaluation_inputs_and_mistakes",
     "collect_involved_point_ids",

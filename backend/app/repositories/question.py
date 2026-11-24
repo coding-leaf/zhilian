@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models.knowledge import KnowledgePoint
@@ -789,3 +789,67 @@ class QuestionRepository:
         ordered = stmt.order_by(QuestionGenerationJob.created_at.desc())
         items = list(self.session.execute(ordered).scalars().all())
         return items, total
+
+    def find_generation_job_by_idempotency_key(
+        self,
+        user_id: uuid.UUID,
+        idempotency_key: str,
+    ) -> QuestionGenerationJob | None:
+        """按租户与幂等键查询最近一条非失败的异步出题任务。"""
+        stmt = (
+            select(QuestionGenerationJob)
+            .where(
+                QuestionGenerationJob.user_id == user_id,
+                QuestionGenerationJob.idempotency_key == idempotency_key,
+                QuestionGenerationJob.status != QuestionGenerationJobStatus.FAILED.value,
+            )
+            .order_by(QuestionGenerationJob.created_at.desc())
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalars().first()
+
+    def list_active_generation_jobs(
+        self,
+        user_id: uuid.UUID,
+        *,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        source_type: str | None = None,
+        source_practice_id: uuid.UUID | None = None,
+    ) -> list[QuestionGenerationJob]:
+        """查询当前用户匹配范围的进行中(queued/running)异步出题任务。"""
+        stmt = select(QuestionGenerationJob).where(
+            QuestionGenerationJob.user_id == user_id,
+            QuestionGenerationJob.status.in_(
+                (
+                    QuestionGenerationJobStatus.QUEUED.value,
+                    QuestionGenerationJobStatus.RUNNING.value,
+                )
+            ),
+            QuestionGenerationJob.material_id == material_id,
+            QuestionGenerationJob.folder_id == folder_id,
+            QuestionGenerationJob.source_type == source_type,
+            QuestionGenerationJob.source_practice_id == source_practice_id,
+        )
+        ordered = stmt.order_by(QuestionGenerationJob.created_at.desc())
+        return list(self.session.execute(ordered).scalars().all())
+
+    def update_generation_job_progress(
+        self,
+        job_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        completed_kps: int,
+    ) -> None:
+        """原子更新指定异步出题任务的已完成知识点计数。"""
+        stmt = (
+            update(QuestionGenerationJob)
+            .where(
+                QuestionGenerationJob.id == job_id,
+                QuestionGenerationJob.user_id == user_id,
+                QuestionGenerationJob.status == QuestionGenerationJobStatus.RUNNING.value,
+            )
+            .values(completed_kps=completed_kps)
+        )
+        self.session.execute(stmt)
+        self.session.flush()

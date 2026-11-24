@@ -10,6 +10,7 @@
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
@@ -176,8 +177,10 @@ class PracticeRepository:
         practice_id: uuid.UUID,
         user_id: uuid.UUID,
         *,
-        from_status: str,
+        from_status: str | Sequence[str],
         to_status: str,
+        submit_idempotency_key: str | None = None,
+        submitted_at: datetime | None = None,
     ) -> bool:
         """以条件更新原子地跃迁练习状态 (compare-and-swap)。
 
@@ -188,20 +191,33 @@ class PracticeRepository:
         Args:
             practice_id: 练习标识。
             user_id: 租户用户标识。
-            from_status: 期望的当前状态。
+            from_status: 期望的当前状态或允许状态集合。
             to_status: 目标状态。
+            submit_idempotency_key: 可选同步写入的交卷幂等键。
+            submitted_at: 可选同步写入的交卷时间戳。
 
         Returns:
             bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
         """
+        status_cond = (
+            Practice.status == from_status
+            if isinstance(from_status, str)
+            else Practice.status.in_(tuple(from_status))
+        )
+        values: dict[str, Any] = {"status": to_status}
+        if submit_idempotency_key is not None:
+            values["submit_idempotency_key"] = submit_idempotency_key
+        if submitted_at is not None:
+            values["submitted_at"] = submitted_at
+
         stmt = (
             update(Practice)
             .where(
                 Practice.id == practice_id,
                 Practice.user_id == user_id,
-                Practice.status == from_status,
+                status_cond,
             )
-            .values(status=to_status)
+            .values(**values)
             .execution_options(synchronize_session="fetch")
         )
         result = self.session.execute(stmt)

@@ -222,7 +222,33 @@ class PracticeService:
         try:
             self.idempotency.release_lock(clean_key, str(user_id))
         except Exception:
-            logger.warning("Idempotency lock release degraded for user_ref=%s", user_id)
+            logger.warning(
+                "Idempotency lock release degraded for user_ref=%s",
+                generate_user_ref(user_id),
+            )
+
+    def _compensate_grading_enqueue_failure(
+        self,
+        practice_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> None:
+        """Commit-First 入队失败后的补偿短事务：将 SUBMITTED 回写为 PARTIALLY_GRADED。"""
+        try:
+            self.practice_repo.try_transition_status(
+                practice_id,
+                user_id,
+                from_status=PracticeStatus.SUBMITTED.value,
+                to_status=PracticeStatus.PARTIALLY_GRADED.value,
+            )
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            logger.exception(
+                "Compensating status rollback to partially_graded failed for "
+                "user_ref=%s target_id=%s",
+                generate_user_ref(user_id),
+                practice_id,
+            )
 
     def _rebuild_persisted_submission(
         self,
@@ -262,6 +288,8 @@ class PracticeService:
         user_id: uuid.UUID,
         options: CreatePracticeOptions,
         request_id: str = "",
+        *,
+        defer_commit: bool = False,
     ) -> PracticeView:
         """创建练习会话并执行组卷与题目打散。
 
@@ -273,6 +301,7 @@ class PracticeService:
             user_id: 租户用户标识。
             options: 组卷配置选项。
             request_id: 请求跟踪标识。
+            defer_commit: 若为 True 仅 flush 而不 commit，由外层事务统一提交。
 
         Returns:
             PracticeView: 已创建或幂等回放的练习与溯源投影视图。
@@ -301,6 +330,7 @@ class PracticeService:
                 options=options,
                 request_id=request_id,
                 start_time=start_time,
+                defer_commit=defer_commit,
             )
         except Exception:
             if clean_key is not None:
@@ -320,7 +350,7 @@ class PracticeService:
                 logger.warning(
                     "Idempotency snapshot persist degraded for create_practice; "
                     "user_ref=%s target_id=%s",
-                    user_id,
+                    generate_user_ref(user_id),
                     practice.id,
                 )
                 self._release_lock_quietly(clean_key, user_id)
@@ -404,6 +434,8 @@ class PracticeService:
         options: CreatePracticeOptions,
         request_id: str,
         start_time: float,
+        *,
+        defer_commit: bool = False,
     ) -> Practice:
         """执行组卷、快照校验与原子落库 (由 create_practice 幂等外壳调用)。
 
@@ -524,7 +556,10 @@ class PracticeService:
                 for idx, q in enumerate(scattered_questions, start=1)
             ]
             self.practice_repo.create_attempt_items(attempt_items, user_id)
-            self.session.commit()
+            if defer_commit:
+                self.session.flush()
+            else:
+                self.session.commit()
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             self._log_metric(
@@ -540,7 +575,8 @@ class PracticeService:
             )
             return created_practice
         except Exception:
-            self.session.rollback()
+            if not defer_commit:
+                self.session.rollback()
             raise
 
     def get_practice(
@@ -1036,24 +1072,49 @@ class PracticeService:
                     },
                 )
 
-            # 4. 事务原子更新交卷时间与同步/异步判题分流
+            # 4. 事务原子 CAS 跃迁交卷状态 + 客观题即时判分 (Commit-First，严禁先入队后提交)
             now = datetime.now(UTC)
-            updated_practice = self.practice_repo.update_practice_status(
+            transitioned = self.practice_repo.try_transition_status(
                 dto.practice_id,
                 user_id,
-                PracticeStatus.SUBMITTED.value,
+                from_status=practice.status,
+                to_status=PracticeStatus.SUBMITTED.value,
                 submit_idempotency_key=clean_key,
                 submitted_at=now,
             )
-            final_status, task_id, enqueued_async = self._process_submission_grading(
-                practice=updated_practice or practice,
+            if not transitioned:
+                raise PracticeStatusError(
+                    "练习已提交或状态已变更，请勿重复提交",
+                    details={"status": practice.status},
+                )
+            refreshed_practice = (
+                self.practice_repo.get_practice_by_id(dto.practice_id, user_id, include_items=False)
+                or practice
+            )
+            final_status, needs_async = self._process_submission_grading(
+                practice=refreshed_practice,
                 practice_id=dto.practice_id,
                 user_id=user_id,
                 submitted_at=now,
             )
 
             self.session.commit()
-            if not enqueued_async and isinstance(self.session, Session):
+
+            task_id = ""
+            if needs_async:
+                try:
+                    task_id = self.queue.enqueue(
+                        task_name="grading_jobs",
+                        payload={
+                            "practice_id": str(dto.practice_id),
+                            "user_id": str(user_id),
+                        },
+                        user_id=str(user_id),
+                    )
+                except Exception:
+                    self._compensate_grading_enqueue_failure(dto.practice_id, user_id)
+                    raise
+            elif isinstance(self.session, Session):
                 from app.services.diagnosis import DiagnosisService
 
                 DiagnosisService(self.session).ensure_diagnosis_report(
@@ -1094,7 +1155,7 @@ class PracticeService:
                 logger.warning(
                     "Idempotency snapshot persist degraded; relying on DB key replay "
                     "for user_ref=%s target_id=%s",
-                    user_id,
+                    generate_user_ref(user_id),
                     dto.practice_id,
                 )
                 # 释放处理中锁，确保同键重试可重新进入并走 DB 级回放。
@@ -1116,7 +1177,7 @@ class PracticeService:
             return result
         except Exception:
             self.session.rollback()
-            self.idempotency.release_lock(clean_key, str(user_id))
+            self._release_lock_quietly(clean_key, user_id)
             raise
 
     def _process_submission_grading(
@@ -1126,8 +1187,8 @@ class PracticeService:
         practice_id: uuid.UUID,
         user_id: uuid.UUID,
         submitted_at: datetime,
-    ) -> tuple[str, str, bool]:
-        """交卷即时客观题判分、学习状态联动及主观题队列派发分流。"""
+    ) -> tuple[str, bool]:
+        """交卷即时客观题判分与状态推进（仅写 DB，不在此处入队以确保 Commit-First）。"""
         items = self.practice_repo.list_attempt_items(practice_id, user_id)
         grading_repo = GradingRepository(self.session)
         needs_async_grading = False
@@ -1161,16 +1222,9 @@ class PracticeService:
             practice.status = PracticeStatus.COMPLETED.value
             practice.completed_at = submitted_at
             self.session.flush()
-            if isinstance(self.session, Session):
-                from app.services.diagnosis import DiagnosisService
-
-                DiagnosisService(self.session).sync_practice_learning_state(
-                    user_id=user_id,
-                    practice_id=practice_id,
-                    partial_ok=True,
-                    commit=False,
-                )
-            return PracticeStatus.COMPLETED.value, "", False
+            # COMPLETED 路径不提前调用 sync_practice_learning_state，避免双写覆盖
+            # previous_score 导致退步知识点恒为空；交由提交后的 ensure_diagnosis_report 单次完成。
+            return PracticeStatus.COMPLETED.value, False
 
         if graded_any and isinstance(self.session, Session):
             self.session.flush()
@@ -1183,15 +1237,7 @@ class PracticeService:
                 commit=False,
             )
 
-        task_id = self.queue.enqueue(
-            task_name="grading_jobs",
-            payload={
-                "practice_id": str(practice_id),
-                "user_id": str(user_id),
-            },
-            user_id=str(user_id),
-        )
-        return PracticeStatus.SUBMITTED.value, task_id, True
+        return PracticeStatus.SUBMITTED.value, True
 
     # --------------------------------------------------------------------------
     # 判题任务终态失败回写与主动重试 (AC-9 / design.md 第 19 条)
@@ -1319,6 +1365,19 @@ class PracticeService:
                     "判题任务已在重试中，请勿重复提交",
                     details={"status": practice.status},
                 )
+            # Commit-First：必须先提交 SUBMITTED 状态，再投递队列，避免 Worker 抢跑读到旧状态。
+            self.session.commit()
+        except SQLAlchemyError as exc:
+            self.session.rollback()
+            raise PracticeStatusError(
+                "判题任务状态更新失败，请稍后重试",
+                details={"reason": str(exc), "original_type": type(exc).__name__},
+            ) from exc
+        except PracticeStatusError:
+            self.session.rollback()
+            raise
+
+        try:
             task_id = self.queue.enqueue(
                 task_name="grading_jobs",
                 payload={
@@ -1328,20 +1387,13 @@ class PracticeService:
                 user_id=str(user_id),
                 priority=1,
             )
-            self.session.commit()
         except (QueueError, SQLAlchemyError) as exc:
-            # BUG-FIX: 之前 except Exception 太宽，会吞掉 KeyboardInterrupt 等非业务异常；
-            # 改为捕获队列与数据库两类基础设施异常。状态跃迁+入队失败必须回滚，
-            # 避免练习永久停在「判题中」而无可恢复入口。
-            self.session.rollback()
+            # 入队失败时开启补偿短事务将 SUBMITTED 回写为 PARTIALLY_GRADED，避免卡死。
+            self._compensate_grading_enqueue_failure(practice_id, user_id)
             raise PracticeStatusError(
                 "判题任务入队失败，请稍后重试",
                 details={"reason": str(exc), "original_type": type(exc).__name__},
             ) from exc
-        except PracticeStatusError:
-            # PracticeStatusError（并发冲突）不需要包装，原始错误向上抛
-            self.session.rollback()
-            raise
 
         # BUG-FIX: get_practice_by_id 检查也必须纳入事务边界，否则并发删除导致实体消失时
         # 状态已跃迁到 SUBMITTED 但抛错无 rollback → 练习永久卡住无法重判。

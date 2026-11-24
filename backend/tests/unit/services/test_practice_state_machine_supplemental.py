@@ -214,8 +214,13 @@ class TestRetryGradingQueueFailureRollback:
         assert exc_info.value.error_code == 40011
         assert "redis down" in exc_info.value.details.get("reason", "")
 
-        # 关键断言：session.rollback 必须被调用（防「永久判题中」）
-        service.session.rollback.assert_called_once()
+        # 关键断言（Commit-First）：先 commit SUBMITTED，再入队失败后通过补偿短事务
+        # 将状态回写回 PARTIALLY_GRADED（防「永久判题中」）。
+        assert repo.try_transition_status.call_count == 2
+        second_call = repo.try_transition_status.call_args_list[1]
+        assert second_call.kwargs["from_status"] == PracticeStatus.SUBMITTED.value
+        assert second_call.kwargs["to_status"] == PracticeStatus.PARTIALLY_GRADED.value
+        assert service.session.commit.call_count == 2
 
         queue.set_fault_injection("enqueue", None)
 

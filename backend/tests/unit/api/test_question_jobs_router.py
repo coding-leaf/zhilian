@@ -104,6 +104,10 @@ async def test_create_question_generation_job_returns_202_and_exact_contract() -
         "generated_count",
         "batch_id",
         "question_ids",
+        "result_practice_id",
+        "source_type",
+        "source_practice_id",
+        "practice_title",
         "error_message",
         "created_at",
         "updated_at",
@@ -163,3 +167,67 @@ async def test_list_and_get_question_generation_jobs() -> None:
 
     assert missing_resp.status_code == 404
     assert missing_resp.json()["code"] == 40022
+
+
+@pytest.mark.asyncio
+async def test_async_job_accepts_count_50_idempotency_header_and_sync_generate_deprecated() -> None:
+    """POST /questions/jobs supports count<=50 & Idempotency-Key; sync /generate is deprecated."""
+    app = _create_test_app()
+    user = User(id=uuid.uuid4(), nickname="tester", is_active=True, token_version=1)
+    material_id = uuid.uuid4()
+    kp_id = uuid.uuid4()
+    source_practice_id = uuid.uuid4()
+    result_practice_id = uuid.uuid4()
+    job = _make_job(user.id, material_id=material_id, total_kps=1)
+    job.source_type = "wrong_record"
+    job.source_practice_id = source_practice_id
+    job.result_practice_id = result_practice_id
+    job.request_payload = {"practice_title": "错题巩固卷"}
+
+    mock_service = MagicMock()
+    mock_service.create_generation_job.return_value = job
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_question_service] = lambda: mock_service
+
+    openapi = app.openapi()
+    assert openapi["paths"]["/api/v1/questions/generate"]["post"].get("deprecated") is True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async_resp = await client.post(
+            "/api/v1/questions/jobs",
+            headers={"Idempotency-Key": "job-key-50"},
+            json={
+                "material_id": str(material_id),
+                "knowledge_point_ids": [str(kp_id)],
+                "question_types": ["single_choice"],
+                "count": 50,
+                "difficulty": 3,
+                "auto_create_practice": True,
+                "practice_title": "错题巩固卷",
+                "source_type": "wrong_record",
+                "source_practice_id": str(source_practice_id),
+            },
+        )
+        sync_over_limit = await client.post(
+            "/api/v1/questions/generate",
+            json={
+                "material_id": str(material_id),
+                "knowledge_point_ids": [str(kp_id)],
+                "question_types": ["single_choice"],
+                "count": 21,
+                "difficulty": 3,
+            },
+        )
+
+    assert async_resp.status_code == 202
+    body = async_resp.json()
+    assert body["result_practice_id"] == str(result_practice_id)
+    assert body["source_type"] == "wrong_record"
+    assert body["source_practice_id"] == str(source_practice_id)
+    assert body["practice_title"] == "错题巩固卷"
+    call_kwargs = mock_service.create_generation_job.call_args.kwargs
+    assert call_kwargs["idempotency_key"] == "job-key-50"
+    assert call_kwargs["payload"].count == 50
+    assert call_kwargs["payload"].auto_create_practice is True
+
+    assert sync_over_limit.status_code == 422

@@ -11,7 +11,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Query, Request, status
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.pagination import PaginationParams, get_pagination_params
@@ -28,6 +28,7 @@ from app.schemas.question import (
     QuestionEditLogResponse,
     QuestionGenerateRequest,
     QuestionGenerateResponse,
+    QuestionGenerationJobCreateRequest,
     QuestionGenerationJobListResponse,
     QuestionGenerationJobResponse,
     QuestionListResponse,
@@ -120,7 +121,8 @@ def _build_generate_response(
     "/questions/generate",
     response_model=QuestionGenerateResponse,
     status_code=status.HTTP_200_OK,
-    summary="触发出题生成与质检门禁",
+    deprecated=True,
+    summary="触发出题生成与质检门禁（已废弃，请改用 POST /questions/jobs）",
 )
 def generate_questions(
     user: Annotated[User, Depends(get_current_user)],
@@ -211,10 +213,18 @@ def generate_questions(
 def create_question_generation_job(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
-    payload: Annotated[QuestionGenerateRequest, Body(description="异步出题配置请求体")],
+    payload: Annotated[QuestionGenerationJobCreateRequest, Body(description="异步出题配置请求体")],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", description="可选幂等键，用于防重入与复用同源任务"),
+    ] = None,
 ) -> QuestionGenerationJobResponse:
     """创建后台异步出题任务并入队调度，立即返回 queued 状态任务凭证。"""
-    job = question_service.create_generation_job(user_id=user.id, payload=payload)
+    job = question_service.create_generation_job(
+        user_id=user.id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
     return QuestionGenerationJobResponse.model_validate(job)
 
 

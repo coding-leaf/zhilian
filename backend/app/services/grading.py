@@ -43,6 +43,8 @@ from app.repositories.practice import PracticeRepository
 from app.services._grading_llm import (
     LLMGradingOutput,
     LLMGradingRubricEvaluation,
+    LLMSubjectiveGradeResult,
+    evaluate_offline_item_pure,
     grade_offline_attempt_item,
     invoke_subjective_llm_grading,
     refresh_practice_grading_state,
@@ -108,6 +110,19 @@ class PracticeGradingSummary:
 # ==============================================================================
 
 
+@dataclass(frozen=True)
+class _ItemGradingPlan:
+    """整卷判题读阶段产出的纯内存单题分流计划，供释放 DB 事务后执行外部 LLM I/O。"""
+
+    item_id: uuid.UUID
+    kind: str  # "skip" | "unanswered" | "offline" | "llm" | "pending_regrade"
+    max_score: float = 1.0
+    snapshot: dict[str, Any] | None = None
+    user_answer: str = ""
+    offline_result: Any | None = None
+    error_msg: str = ""
+
+
 class GradingService:
     """判题编排与结果分流领域服务。
 
@@ -171,13 +186,201 @@ class GradingService:
     # 1. 整卷判题主流水线 (grade_practice / grade_practice_submission)
     # --------------------------------------------------------------------------
 
+    def _plan_practice_grading(
+        self,
+        *,
+        practice: Practice,
+        existing_records: dict[uuid.UUID, GradingRecord],
+    ) -> list[_ItemGradingPlan]:
+        """在短只读事务内完成逐题幂等判断与离线纯算法分流，产出纯内存计划。"""
+        plans: list[_ItemGradingPlan] = []
+        can_reuse_existing = (
+            practice.status
+            in (
+                PracticeStatus.SUBMITTED.value,
+                PracticeStatus.PARTIALLY_GRADED.value,
+            )
+            or practice.completed_at is not None
+        )
+        for item in practice.items:
+            existing = existing_records.get(item.id)
+            if (
+                existing is not None
+                and existing.status == GradingStatus.SUCCESS.value
+                and existing.channel != GradingChannel.USER_SELF.value
+                and can_reuse_existing
+            ):
+                plans.append(_ItemGradingPlan(item_id=item.id, kind="skip"))
+                continue
+
+            snapshot = dict(item.question_snapshot or {})
+            try:
+                is_unanswered, offline_result, requires_llm = evaluate_offline_item_pure(
+                    is_answered=bool(item.is_answered),
+                    user_answer=item.user_answer,
+                    snapshot=snapshot,
+                    max_score=float(item.max_score),
+                    allow_high_confidence_subjective=True,
+                    grader_fn=match_and_grade_answer,
+                )
+            except Exception as exc:
+                logger.warning("单题判分算法异常，安全降级为待重判: %s", str(exc)[:200])
+                plans.append(
+                    _ItemGradingPlan(
+                        item_id=item.id,
+                        kind="pending_regrade",
+                        error_msg=str(exc)[:200],
+                    )
+                )
+                continue
+
+            if is_unanswered:
+                plans.append(_ItemGradingPlan(item_id=item.id, kind="unanswered"))
+            elif requires_llm:
+                plans.append(
+                    _ItemGradingPlan(
+                        item_id=item.id,
+                        kind="llm",
+                        max_score=float(item.max_score),
+                        snapshot=snapshot,
+                        user_answer=item.user_answer or "",
+                    )
+                )
+            else:
+                plans.append(
+                    _ItemGradingPlan(
+                        item_id=item.id,
+                        kind="offline",
+                        offline_result=offline_result,
+                    )
+                )
+        return plans
+
+    def _run_llm_plans_outside_tx(
+        self,
+        llm_plans: list[_ItemGradingPlan],
+    ) -> dict[uuid.UUID, tuple[LLMSubjectiveGradeResult | None, str | None]]:
+        """在释放 DB 事务后执行主观题外部 LLM 调用，返回每题评分结果或降级错误。"""
+        results: dict[uuid.UUID, tuple[LLMSubjectiveGradeResult | None, str | None]] = {}
+        for plan in llm_plans:
+            if self.llm_adapter is None:
+                results[plan.item_id] = (None, "未配置大模型适配器")
+                continue
+            system_prompt = (
+                "你是一位严格公正的专业判题阅卷专家。请依据题干、标准参考答案与评分细则对考生的主观题作答进行打分。"
+                f"本题满分基准为 {plan.max_score} 分。请严格输出结构化 JSON 格式数据，"
+                "包含 score, confidence, feedback, hit_keywords, "
+                "missing_keywords, evaluations 字段。"
+            )
+            try:
+                graded = invoke_subjective_llm_grading(
+                    self.llm_adapter,
+                    snapshot=plan.snapshot or {},
+                    user_answer=plan.user_answer,
+                    max_score=plan.max_score,
+                    system_prompt=system_prompt,
+                )
+                results[plan.item_id] = (graded, None)
+            except Exception as exc:
+                logger.warning("LLM判题异常或超时降级为待重判: %s", str(exc)[:200])
+                results[plan.item_id] = (None, str(exc)[:200])
+        return results
+
+    def _persist_planned_item_record(
+        self,
+        *,
+        item: AttemptItem,
+        practice_id: uuid.UUID,
+        user_id: uuid.UUID,
+        plan: _ItemGradingPlan,
+        existing_records: dict[uuid.UUID, GradingRecord],
+        llm_results: dict[uuid.UUID, tuple[LLMSubjectiveGradeResult | None, str | None]],
+    ) -> tuple[GradingRecord, bool]:
+        """在短写事务内落库单题判题结果并返回 (生效记录, 是否待重判)。"""
+        if plan.kind == "skip":
+            existing = existing_records.get(item.id)
+            if existing is not None:
+                return existing, False
+        if plan.kind == "unanswered":
+            record, _ = grade_offline_attempt_item(
+                item,
+                practice_id=practice_id,
+                user_id=user_id,
+                grading_repo=self.grading_repo,
+                allow_high_confidence_subjective=True,
+                grader_fn=match_and_grade_answer,
+            )
+            if record is not None:
+                return record, False
+        if plan.kind == "offline" and plan.offline_result is not None:
+            result = plan.offline_result
+            item.score = result.score
+            self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
+            record = GradingRecord(
+                id=uuid.uuid4(),
+                practice_id=practice_id,
+                attempt_item_id=item.id,
+                question_id=item.question_id,
+                channel=GradingChannel.OFFLINE.value,
+                status=GradingStatus.SUCCESS.value,
+                is_final=True,
+                score=result.score,
+                max_score=item.max_score,
+                confidence=result.confidence,
+                similarity_score=result.match_score,
+                hit_keywords=list(result.hit_keywords),
+                missing_keywords=list(result.missing_keywords),
+                feedback=result.reasoning,
+                grading_metadata={
+                    "method": result.grading_method.value,
+                    "is_correct": result.is_correct,
+                },
+            )
+            self.grading_repo.create_record(record, user_id=user_id)
+            return record, False
+        if plan.kind == "llm":
+            graded, err_msg = llm_results.get(item.id, (None, "LLM 判题结果缺失"))
+            if graded is None:
+                return self._build_pending_regrade_record(
+                    item=item,
+                    practice_id=practice_id,
+                    user_id=user_id,
+                    error_msg=err_msg or "LLM 判题降级",
+                )
+            item.score = graded.final_score
+            self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=user_id)
+            record = GradingRecord(
+                id=uuid.uuid4(),
+                practice_id=practice_id,
+                attempt_item_id=item.id,
+                question_id=item.question_id,
+                channel=GradingChannel.AI.value,
+                status=GradingStatus.SUCCESS.value,
+                is_final=True,
+                score=graded.final_score,
+                max_score=item.max_score,
+                confidence=graded.confidence,
+                feedback=graded.feedback,
+                hit_keywords=graded.hit_keywords,
+                missing_keywords=graded.missing_keywords,
+                grading_metadata=graded.grading_metadata,
+            )
+            self.grading_repo.create_record(record, user_id=user_id)
+            return record, False
+        return self._build_pending_regrade_record(
+            item=item,
+            practice_id=practice_id,
+            user_id=user_id,
+            error_msg=plan.error_msg or "单题判题降级",
+        )
+
     def grade_practice(
         self,
         user_id: uuid.UUID,
         practice_id: uuid.UUID,
         request_id: str = "",
     ) -> PracticeGradingSummary:
-        """整卷判题流水线。
+        """整卷判题流水线（短事务读 → 释放连接跑外部 LLM → 短事务写回与单次诊断联动）。
 
         对练习的每个作答项执行分流判定：未答零分、客观题离线秒判、主观题双阈值分流与
         大模型结构化评分；大模型超时/故障降级为 pending_regrade。
@@ -196,6 +399,7 @@ class GradingService:
         """
         start_time = time.perf_counter()
 
+        # Phase 1: 短只读事务读取练习、作答项与已有生效记录，规划分流方案
         practice = self.practice_repo.get_practice_by_id(practice_id, user_id, include_items=True)
         if practice is None:
             raise PracticeNotFoundError(
@@ -213,50 +417,56 @@ class GradingService:
                 details={"status": practice.status, "practice_id": str(practice_id)},
             )
 
-        items = practice.items
-        saved_records: list[GradingRecord] = []
-        has_pending_regrade = False
-
         existing_records = {
             record.attempt_item_id: record
             for record in self.grading_repo.list_final_records_by_practice(practice_id, user_id)
         }
+        plans = self._plan_practice_grading(practice=practice, existing_records=existing_records)
+        plan_map = {plan.item_id: plan for plan in plans}
+        llm_plans = [plan for plan in plans if plan.kind == "llm"]
 
+        # Phase 2: 如需调用外部 LLM，先结束只读事务归还连接池，再执行纯外部 I/O
+        llm_results: dict[uuid.UUID, tuple[LLMSubjectiveGradeResult | None, str | None]] = {}
+        if llm_plans:
+            self.session.commit()
+            llm_results = self._run_llm_plans_outside_tx(llm_plans)
+            # Phase 3 前重开短写事务加载最新实体
+            practice = self.practice_repo.get_practice_by_id(
+                practice_id, user_id, include_items=True
+            )
+            if practice is None:
+                raise PracticeNotFoundError(
+                    "请求的练习不存在或无权访问",
+                    details={"practice_id": str(practice_id)},
+                )
+            existing_records = {
+                record.attempt_item_id: record
+                for record in self.grading_repo.list_final_records_by_practice(practice_id, user_id)
+            }
+
+        # Phase 3: 短写事务一次性落库并提交
+        items = practice.items
+        saved_records: list[GradingRecord] = []
+        has_pending_regrade = False
         for item in items:
-            existing = existing_records.get(item.id)
-            # 幂等重放: 已由系统判成功的题不重复判题 (避免队列重投重复消耗 LLM 与分数漂移);
-            # 用户自评记录除外, 整卷判题须重新推演并保留旧记录为历史 (GRADE-016 / FR-44)
-            if (
-                existing is not None
-                and existing.status == GradingStatus.SUCCESS.value
-                and existing.channel != GradingChannel.USER_SELF.value
-                and (
-                    practice.status
-                    in (
-                        PracticeStatus.SUBMITTED.value,
-                        PracticeStatus.PARTIALLY_GRADED.value,
-                    )
-                    or practice.completed_at is not None
-                )
-            ):
-                record, item_has_pending = existing, False
-            else:
-                record, item_has_pending = self._grade_attempt_item(
-                    item=item,
-                    practice=practice,
-                    user_id=user_id,
-                )
+            plan = plan_map.get(item.id, _ItemGradingPlan(item_id=item.id, kind="pending_regrade"))
+            record, item_has_pending = self._persist_planned_item_record(
+                item=item,
+                practice_id=practice_id,
+                user_id=user_id,
+                plan=plan,
+                existing_records=existing_records,
+                llm_results=llm_results,
+            )
             saved_records.append(record)
             if item_has_pending:
                 has_pending_regrade = True
 
-        # 汇总得分与推演状态机
         total_score = round(sum(it.score or 0.0 for it in items), 2)
         max_score = round(sum(it.max_score for it in items), 2)
         practice.total_score = total_score
         practice.max_score = max_score
 
-        # 状态机决策: 存在待重判必须置为 PARTIALLY_GRADED (FR-42 阻断报告); 全判完置为 COMPLETED
         all_graded = bool(items) and all(
             r.status == GradingStatus.SUCCESS.value for r in saved_records
         )
@@ -268,22 +478,13 @@ class GradingService:
             if not practice.completed_at:
                 practice.completed_at = datetime.now(UTC)
 
-        # 事务边界：整卷判题结果在此一次性提交。
-        #
-        # 本方法已是 service 层最外层（worker / API / CLI 三条调用路径都只提供
-        # `AppContainer.get_session()` 产出的裸会话，见 container.py::get_session——正常退出
-        # **不**自动 commit，只 close）。因此提交责任在这里；漏掉的表现是：
-        # 判题全部算完、任务报 `Job OK`、`grading_records` 却为 0。
-        #
-        # 不要改为让 get_session() 自动提交：那会改变全项目事务语义（含刻意只读、
-        # 以及依赖异常回滚的调用点）。见 .trellis/spec/backend/database-guidelines.md
-        # 「Transactions & Session Lifecycle」。
-        #
-        # 提交粒度刻意取整卷一次（非逐题）：逐题提交会引入「部分完成」这一现有状态机
-        # 不认识的中间态；整卷提交的中途崩溃恢复路径已由 RQ 重试 +
-        # handle_job_terminal_failure → mark_grading_failed 覆盖。
+        final_status = practice.status
         self.session.commit()
-        self._sync_diagnosis_after_grading(user_id=user_id, practice_id=practice_id)
+        self._sync_diagnosis_after_grading(
+            user_id=user_id,
+            practice_id=practice_id,
+            force_refresh=False,
+        )
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
@@ -296,13 +497,13 @@ class GradingService:
                 "total_items": len(items),
                 "total_score": total_score,
                 "has_pending_regrade": has_pending_regrade,
-                "final_status": practice.status,
+                "final_status": final_status,
             },
         )
 
         return PracticeGradingSummary(
             practice_id=practice_id,
-            status=practice.status,
+            status=final_status,
             total_score=total_score,
             max_score=max_score,
             total_items=len(items),
@@ -327,22 +528,46 @@ class GradingService:
         *,
         user_id: uuid.UUID,
         practice_id: uuid.UUID,
+        force_refresh: bool = False,
     ) -> None:
-        """在判题、自评或重判落库后自动联动错题本、掌握度并预生成全卷诊断报告。"""
+        """在判题、自评或重判落库后执行单次学习状态与诊断报告联动。
+
+        - 练习已达 COMPLETED：仅执行单次诊断流水线（首次生成用 ensure_diagnosis_report，
+          自评/重判改分后用 refresh_diagnosis_report 原地刷新），绝不先调
+          sync_practice_learning_state 覆盖练习前 previous_score 基线。
+        - 练习尚未 COMPLETED（如 PARTIALLY_GRADED / SUBMITTED）：仅调用
+          sync_practice_learning_state(partial_ok=True) 同步已判完题目的掌握度与错题。
+        """
         if not isinstance(self.session, Session):
+            return
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if practice is None:
             return
         from app.services.diagnosis import DiagnosisService
 
         diagnosis_service = DiagnosisService(self.session)
+        if practice.status == PracticeStatus.COMPLETED.value and practice.completed_at is not None:
+            if force_refresh:
+                diagnosis_service.refresh_diagnosis_report(
+                    user_id=user_id,
+                    practice_id=practice_id,
+                )
+            else:
+                diagnosis_service.ensure_diagnosis_report(
+                    user_id=user_id,
+                    practice_id=practice_id,
+                )
+            return
+
         diagnosis_service.sync_practice_learning_state(
             user_id=user_id,
             practice_id=practice_id,
             partial_ok=True,
             commit=True,
-        )
-        diagnosis_service.ensure_diagnosis_report(
-            user_id=user_id,
-            practice_id=practice_id,
         )
 
     def _grade_attempt_item(
@@ -611,8 +836,13 @@ class GradingService:
         # 事务边界：自评结果在此提交。理由同 grade_practice —— 调用方
         # AppContainer.get_session() 正常退出不提交；漏掉的表现是用户点一下自评
         # 界面毫无变化：记录与总分随会话关闭一并丢弃。
+        practice_id = item.practice_id
         self.session.commit()
-        self._sync_diagnosis_after_grading(user_id=resolved_user_id, practice_id=item.practice_id)
+        self._sync_diagnosis_after_grading(
+            user_id=resolved_user_id,
+            practice_id=practice_id,
+            force_refresh=True,
+        )
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
@@ -636,9 +866,10 @@ class GradingService:
         user_id: uuid.UUID | None = None,
         dto: RegradeAttemptDTO | None = None,
         attempt_item_id: uuid.UUID | None = None,
+        reason: str | None = None,
         request_id: str = "",
     ) -> GradingRecord:
-        """主观题重新判题流程。
+        """主观题重新判题流程（短事务读 → 释放连接调 LLM → 短事务写回与诊断原地刷新）。
 
         支持多种调用签名：
         - regrade_attempt(user_id, dto)
@@ -650,6 +881,7 @@ class GradingService:
             user_id: 租户用户标识。
             dto: 重判传输对象。
             attempt_item_id: 作答项标识。
+            reason: 可选的考生申诉理由。
             request_id: 请求跟踪标识。
 
         Returns:
@@ -662,18 +894,19 @@ class GradingService:
         """
         start_time = time.perf_counter()
 
-        resolved_user_id, resolved_item_id = resolve_regrade_args(
+        resolved_user_id, resolved_item_id, resolved_reason = resolve_regrade_args(
             args,
             user_id=user_id,
             dto=dto,
             attempt_item_id=attempt_item_id,
             dto_type=RegradeAttemptDTO,
+            reason=reason,
         )
 
         if resolved_user_id is None or resolved_item_id is None:
             raise GradingNotAllowedError("重判必须提供 user_id 与 attempt_item_id 参数")
 
-        # 1. 检索作答项并校验归属
+        # 1. 短只读事务检索作答项、校验归属与题型并提取纯内存快照
         item = self.practice_repo.get_attempt_item_by_id(
             resolved_item_id,
             user_id=resolved_user_id,
@@ -684,8 +917,7 @@ class GradingService:
                 details={"attempt_item_id": str(resolved_item_id)},
             )
 
-        # 2. 题型校验：仅主观题支持重判
-        snapshot = item.question_snapshot or {}
+        snapshot = dict(item.question_snapshot or {})
         q_type = snapshot.get("question_type", "")
         if q_type in OBJECTIVE_QUESTION_TYPES:
             raise GradingNotAllowedError(
@@ -699,26 +931,35 @@ class GradingService:
                 details={"attempt_item_id": str(resolved_item_id)},
             )
 
-        # 3. 调用大模型评分
         if self.llm_adapter is None:
             raise GradingExecutionError(
                 "未配置大模型适配器，无法执行重新判题",
                 details={"attempt_item_id": str(resolved_item_id)},
             )
 
+        item_id = item.id
+        practice_id = item.practice_id
+        item_max_score = float(item.max_score)
+        user_answer_text = str(item.user_answer)
+
+        # 结束只读事务归还连接池，严禁在同步 LLM 请求期间持有 idle in transaction
+        self.session.commit()
+
+        # 2. 外部 LLM 重判调用（含防 Prompt Injection 包裹的考生申诉理由）
         system_prompt = (
             "你是一位严格公正的专业阅卷专家。请依据题干、标准参考答案与评分细则对考生主观题作答重新打分。"
-            f"本题满分为 {item.max_score} 分。"
+            f"本题满分为 {item_max_score} 分。"
             "输出严格 JSON 格式：score, confidence, feedback, evaluations。"
         )
         try:
             graded = invoke_subjective_llm_grading(
                 self.llm_adapter,
-                item=item,
                 snapshot=snapshot,
-                user_answer=item.user_answer,
+                user_answer=user_answer_text,
+                max_score=item_max_score,
                 system_prompt=system_prompt,
                 extra_metadata={"regrade": True},
+                regrade_reason=resolved_reason,
             )
         except Exception as exc:
             logger.warning("大模型重判异常失败: %s", str(exc)[:200])
@@ -727,7 +968,16 @@ class GradingService:
                 details={"attempt_item_id": str(resolved_item_id)},
             ) from exc
 
-        # 4. 原记录置为失效并持久化新 AI 重判记录
+        # 3. 短写事务：重新加载作答项，失效旧记录并持久化新 AI 重判记录
+        item = self.practice_repo.get_attempt_item_by_id(
+            item_id,
+            user_id=resolved_user_id,
+        )
+        if item is None:
+            raise AttemptItemNotFoundError(
+                "请求的作答题目明细不存在或无权访问",
+                details={"attempt_item_id": str(resolved_item_id)},
+            )
         self.grading_repo.set_records_non_final_by_attempt_id(item.id, user_id=resolved_user_id)
         record = GradingRecord(
             id=uuid.uuid4(),
@@ -747,7 +997,7 @@ class GradingService:
         )
         self.grading_repo.create_record(record, user_id=resolved_user_id)
 
-        # 5. 更新 AttemptItem 与练习状态
+        # 4. 更新 AttemptItem 与练习状态并提交
         item.score = graded.final_score
         refresh_practice_grading_state(
             self.practice_repo,
@@ -756,11 +1006,12 @@ class GradingService:
             user_id=resolved_user_id,
         )
 
-        # 事务边界：重判结果在此提交。理由同 grade_practice —— 调用方
-        # AppContainer.get_session() 正常退出不提交；漏掉的表现是重判消耗了大模型
-        # 配额却什么都没留下。
         self.session.commit()
-        self._sync_diagnosis_after_grading(user_id=resolved_user_id, practice_id=item.practice_id)
+        self._sync_diagnosis_after_grading(
+            user_id=resolved_user_id,
+            practice_id=practice_id,
+            force_refresh=True,
+        )
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         self._log_metric(
