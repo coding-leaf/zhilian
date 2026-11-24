@@ -212,6 +212,28 @@ export function parseInline(line: string): RichTextNode[] {
   return mergeAdjacentText(out)
 }
 
+function unwrapCjkParaLines(paraLines: string[]): string[] {
+  if (paraLines.length <= 1) return paraLines
+  const merged: string[] = []
+  for (const rawLine of paraLines) {
+    if (merged.length === 0) {
+      merged.push(rawLine)
+      continue
+    }
+    const prev = merged[merged.length - 1].trimEnd()
+    const currTrimmed = rawLine.trimStart()
+    const startsWithCjk = /^[\u4e00-\u9fff]/.test(currTrimmed)
+    const shouldUnwrap = startsWithCjk
+      && ((prev.length >= 10 && /[\u4e00-\u9fff]$/.test(prev)) || /[，、]$/.test(prev))
+    if (shouldUnwrap) {
+      merged[merged.length - 1] = `${prev}${currTrimmed}`
+    } else {
+      merged.push(rawLine)
+    }
+  }
+  return merged
+}
+
 function buildMultilineChildren(lines: string[]): RichTextNode[] {
   const children: RichTextNode[] = []
   lines.forEach((line, idx) => {
@@ -389,7 +411,7 @@ export function parseRichContent(raw: string | null | undefined): RichTextNode[]
       nodes.push({
         name: 'p',
         attrs: { class: 'rt-p', style: STYLES.paragraph },
-        children: buildMultilineChildren(paraLines),
+        children: buildMultilineChildren(unwrapCjkParaLines(paraLines)),
       })
     } else {
       i += 1
@@ -403,13 +425,68 @@ const SYMBOL_SOUP_CLUSTER = /[!"#$%&'*=?@^~]{3,}/g
 const SYMBOL_PAIR_CLUSTER = /[!"#$%&'*=?@^~]{2,}/g
 const REPEATED_SAFE_TOKEN = /^(?:\*{3,}|={3,}|"{3,}|'{3,}|!={2,}|~{3,})$/
 const SYMBOL_AMP_LINE = /(?:[A-Z]{1,2}&){2,}/
+const EXTENDED_LATIN_MATH_GARBLE = /(?:[\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de][A-Za-z0-9_=+\-^/*]|[A-Za-z0-9_=+\-^/*][\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de]|[\u0100-\u024f](?=[A-Za-z0-9_]*\d)|\d(?=[A-Za-z0-9_]*[\u0100-\u024f]))/
+const PUA_CHAR_RE = /[\ue000-\uf8ff]/
+const DANGLING_INDEX_LINE_RE = /^\d+\s*,\s*(?:\.{2,3}\s*,\s*)?[A-Za-z\u0370-\u03ff][A-Za-z0-9]{0,3}$/
+
+function hasDenseSingleLetterFragments(text: string): boolean {
+  const nonCodeLines: string[] = []
+  let inFence = false
+  for (const rawLine of text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')) {
+    const trimmed = rawLine.trim()
+    if (!trimmed) continue
+    if (trimmed.startsWith('```')) {
+      inFence = !inFence
+      continue
+    }
+    if (!inFence) nonCodeLines.push(trimmed)
+  }
+
+  let singleLetterLines = 0
+  let shortFormulaLines = 0
+  let danglingLines = 0
+  let consecutiveSingle = 0
+  let maxConsecutiveSingle = 0
+
+  for (const ln of nonCodeLines) {
+    if (ln.length === 1 && /^[A-Za-z]$/.test(ln)) {
+      singleLetterLines += 1
+      consecutiveSingle += 1
+      if (consecutiveSingle > maxConsecutiveSingle) maxConsecutiveSingle = consecutiveSingle
+    } else {
+      consecutiveSingle = 0
+    }
+    if (
+      ln.length <= 8
+      && !/[\u4e00-\u9fff]/.test(ln)
+      && /[\d=+\-\u2212\u00d7\u00f7\u2211\u221a^_/\u0370-\u03ff]/.test(ln)
+    ) {
+      shortFormulaLines += 1
+    }
+    if (
+      ln.length <= 24
+      && !/[\u4e00-\u9fff]/.test(ln)
+      && (DANGLING_INDEX_LINE_RE.test(ln) || (/[=([]$/.test(ln) && /[A-Za-z0-9\u0370-\u03ff]/.test(ln)))
+    ) {
+      danglingLines += 1
+    }
+  }
+
+  if (danglingLines >= 1 && maxConsecutiveSingle >= 3) return true
+  if (nonCodeLines.length >= 6 && singleLetterLines >= 3) {
+    return (singleLetterLines + shortFormulaLines + danglingLines) / nonCodeLines.length >= 0.35
+  }
+  return false
+}
 
 /**
- * 检测历史未重解析 PDF 切片是否残留 `SymbolMT` ASCII 符号乱码簇（如 `AB&A&`、`"#$"$`、`!"#!#`）。
+ * 检测历史未重解析 PDF 切片是否残留 `SymbolMT` ASCII 符号乱码簇、扩展拉丁数学乱码（如 `ħx1`）或密集单字母碎行。
  */
 export function isGarbledSnippetText(text: string | null | undefined): boolean {
   if (!text || !text.trim()) return false
   const cleaned = text.replace(/\$\$/g, ' ').replace(/\*{3,}/g, ' ')
+  if (EXTENDED_LATIN_MATH_GARBLE.test(cleaned) || PUA_CHAR_RE.test(cleaned)) return true
+
   const clusters = cleaned.match(SYMBOL_SOUP_CLUSTER) ?? []
   const suspicious = clusters.filter((token) => !REPEATED_SAFE_TOKEN.test(token))
   if (suspicious.length >= 1) return true
@@ -424,5 +501,6 @@ export function isGarbledSnippetText(text: string | null | undefined): boolean {
     const symbolChars = (nonSpace.match(/[!"#$%&'*=?@^~]/g) ?? []).length
     if (nonSpace.length > 0 && symbolChars / nonSpace.length > 0.25) return true
   }
-  return false
+
+  return hasDenseSingleLetterFragments(text)
 }

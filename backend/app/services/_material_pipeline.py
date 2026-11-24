@@ -13,7 +13,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.algorithms.markdown_blocks import split_markdown_blocks
+from app.core.algorithms.markdown_blocks import (
+    split_markdown_blocks,
+    unwrap_pdf_visual_line_breaks,
+)
 from app.core.algorithms.material_chunking import (
     ParagraphInput,
     split_material_into_snippets,
@@ -335,8 +338,13 @@ def _repair_pdf_page_text(
     ocr: OCRProtocol | None,
     llm: LLMProtocol | None,
 ) -> str:
-    """对标记为符号字体乱码/缺失 ToUnicode 的单页 PDF 文本执行 OCR+LLM 定向修复。"""
+    """对标记为符号字体乱码/缺失 ToUnicode/图文少字页的单页 PDF 文本执行 OCR+LLM 定向修复。"""
     if not page.needs_repair and page.text.strip():
+        if page.needs_visual_ocr:
+            ocr_hint = _try_ocr_pdf_page(page, pdf_bytes, ocr)
+            if ocr_hint:
+                base = page.text.strip()
+                return ocr_hint if base in ocr_hint else f"{base}\n\n{ocr_hint}"
         return page.text
 
     ocr_hint = _try_ocr_pdf_page(page, pdf_bytes, ocr)
@@ -428,8 +436,8 @@ def _transcribe_page_with_vlm(
 
 
 def _page_needs_vlm(page: PdfPageExtraction) -> bool:
-    """仅公式乱码 / 缺字库 / 无文字（扫描图）的脏页才送 VLM；干净页零成本。"""
-    return page.needs_repair or not page.text.strip()
+    """仅公式乱码 / 缺字库 / 图文少字页 / 无文字（扫描图）的脏页才送 VLM；干净页零成本。"""
+    return page.needs_repair or page.needs_visual_ocr or not page.text.strip()
 
 
 def transcribe_dirty_pages_with_vlm(
@@ -487,6 +495,50 @@ def transcribe_dirty_pages_with_vlm(
     return results
 
 
+_MD_HEADING_BLOCK_RE: re.Pattern[str] = re.compile(r"^(#{1,6})\s+.+$")
+_PLAIN_HEADING_FORBIDDEN_CHARS: frozenset[str] = frozenset("。！？!?;:，,=$\\|`")
+_PLAIN_LIST_OR_QUOTE_RE: re.Pattern[str] = re.compile(r"^(?:[-*•]\s+|\d+[.)]\s+|>\s?|```|\|)")
+_DOTTED_WORD_RE: re.Pattern[str] = re.compile(r"[A-Za-z]\.[A-Za-z]")
+_PLAIN_HEADING_TRAILING_STOP: tuple[str, ...] = (
+    ".",
+    "。",
+    "！",
+    "？",
+    "!",
+    "?",
+    "：",
+    ":",
+    "的",
+    "了",
+    "和",
+    "与",
+    "或",
+    "在",
+    "对",
+    "将",
+    "把",
+    "被",
+)
+
+
+def is_heading_block(block: str) -> bool:
+    """判断单个文本块是否为 Markdown 标题或独立短小节标题（如“基本概念”）。"""
+    stripped = block.strip()
+    if not stripped or "\n" in stripped:
+        return False
+    if _MD_HEADING_BLOCK_RE.match(stripped):
+        return True
+    if not (2 <= len(stripped) <= 20):
+        return False
+    if stripped.isdigit() or _PLAIN_LIST_OR_QUOTE_RE.match(stripped):
+        return False
+    if any(ch in _PLAIN_HEADING_FORBIDDEN_CHARS for ch in stripped):
+        return False
+    if _DOTTED_WORD_RE.search(stripped):
+        return False
+    return not stripped.endswith(_PLAIN_HEADING_TRAILING_STOP)
+
+
 def repair_garbled_pdf_pages(
     pages: Sequence[PdfPageExtraction],
     pdf_bytes: bytes,
@@ -500,7 +552,7 @@ def repair_garbled_pdf_pages(
 ) -> tuple[list[ParagraphInput], str]:
     """逐页检测修复 PDF 乱码，产出保留页码溯源的段落列表与合并全文。
 
-    混合路由：干净页直接使用 PyMuPDF 文本（零成本）；脏页（公式乱码/缺字库/扫描图）
+    混合路由：干净页直接使用 PyMuPDF 文本（零成本）；脏页（公式乱码/缺字库/图文少字页/扫描图）
     在配置了 VLM 时并发渲染 150 DPI PNG 送 VLM 转录为 Markdown+LaTeX，单页失败回退到
     OCR+LLM 文本修复 / 清洗后的 PyMuPDF 文本，不阻断整份文档。
     """
@@ -515,23 +567,45 @@ def repair_garbled_pdf_pages(
             timeout=vlm_timeout,
         )
 
-    paragraphs: list[ParagraphInput] = []
-    page_texts: list[str] = []
+    page_entries: list[tuple[int, str, list[str]]] = []
     for page in pages:
-        repaired_text = (
-            vlm_transcripts.get(page.page_number)
-            or _repair_pdf_page_text(page, pdf_bytes, ocr, llm)
-        ).strip()
+        vlm_text = vlm_transcripts.get(page.page_number)
+        if vlm_text is not None:
+            repaired_text = vlm_text.strip()
+        else:
+            raw_repaired = _repair_pdf_page_text(page, pdf_bytes, ocr, llm).strip()
+            repaired_text = unwrap_pdf_visual_line_breaks(raw_repaired) if raw_repaired else ""
         if not repaired_text:
             continue
+        page_entries.append((page.page_number, repaired_text, split_markdown_blocks(repaired_text)))
+
+    has_substantive_body = any(
+        not is_heading_block(blk) for _pn, _txt, blks in page_entries for blk in blks
+    )
+    paragraphs: list[ParagraphInput] = []
+    page_texts: list[str] = []
+    for page_number, repaired_text, blocks in page_entries:
         page_texts.append(repaired_text)
-        for block in split_markdown_blocks(repaired_text):
+        page_has_body = any(not is_heading_block(blk) for blk in blocks)
+        for block in blocks:
+            md_match = _MD_HEADING_BLOCK_RE.match(block.strip())
+            if md_match:
+                is_title = True
+                title_level = len(md_match.group(1))
+            elif is_heading_block(block) and (page_has_body or has_substantive_body):
+                is_title = True
+                title_level = 1
+            else:
+                is_title = False
+                title_level = 0
             paragraphs.append(
                 ParagraphInput(
                     text=block,
-                    source_ref=f"第 {page.page_number} 页",
+                    source_ref=f"第 {page_number} 页",
                     doc_type="pdf",
-                    page_number=page.page_number,
+                    is_title=is_title,
+                    title_level=title_level,
+                    page_number=page_number,
                 )
             )
     return paragraphs, "\n\n".join(page_texts)
@@ -661,6 +735,7 @@ __all__ = [
     "clear_cached_parse_progress",
     "get_cached_parse_progress",
     "get_cached_parse_progress_batch",
+    "is_heading_block",
     "mark_pipeline_failed",
     "prepare_material_snippets",
     "process_initial_ocr_page",

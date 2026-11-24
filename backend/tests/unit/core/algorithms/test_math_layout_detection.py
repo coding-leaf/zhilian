@@ -109,3 +109,61 @@ class TestSanitizeSymbolGarbleExtended:
         cleaned = sanitize_symbol_garble("正常文字 AB&A& 继续")
         assert "AB&A&" not in cleaned
         assert "正常文字" in cleaned
+
+    def test_removes_extended_latin_and_pua_garble(self) -> None:
+        cleaned = sanitize_symbol_garble("设集合 ħx1, ħx2, ħxm 满足 x \uf0ce A。")
+        assert "ħx1" not in cleaned
+        assert "ħxm" not in cleaned
+        assert "\uf0ce" not in cleaned
+        assert "设集合" in cleaned
+
+
+class TestExtendedLatinAndSingleLetterLayout:
+    """覆盖 ħx1 等扩展拉丁/PUA 乱码及孤立单字母维度碎行检测，且不误伤正常词句与代码。"""
+
+    def test_extended_latin_math_garble_detected(self) -> None:
+        text = "样本矩阵包含 ħx1, ħx2, ..., ħxm 等特征向量。"
+        assert detect_broken_math_layout(text) is True
+        is_garbled, ratio, frags = detect_symbol_garble(text)
+        assert is_garbled is True
+        assert ratio > 0.0
+        assert any("ħx1" in f for f in frags)
+
+    def test_pua_symbol_garble_detected(self) -> None:
+        text = "令元素 x \uf0ce A 且满足线性约束。"
+        assert detect_broken_math_layout(text) is True
+        is_garbled, _ratio, frags = detect_symbol_garble(text)
+        assert is_garbled is True
+        assert "\uf0ce" in frags
+
+    def test_stacked_single_letter_lines_with_dangling_indices_detected(self) -> None:
+        page = "\n".join(
+            [
+                "降维的目的就是降低数据的维度从而方便后续对数据的存储、可视化、建模等操作。",
+                "1, xi",
+                "2, ..., xi",
+                "m",
+                "m",
+                "n",
+                "d",
+                "X",
+            ]
+        )
+        assert detect_broken_math_layout(page) is True
+
+    def test_stacked_single_letter_lines_high_ratio_detected(self) -> None:
+        page = "\n".join(["说明文本行内容较完整。", "m", "n", "d", "X", "k"])
+        assert detect_broken_math_layout(page) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "咖啡馆 café 提供 naïve 与 résumé，über 体验良好。",
+            "汉语拼音 nǐ hǎo shì jiè 用于注音。",
+            "```python\nX =\na\nb\nc\nd\n```\n这是正常的代码示例说明。",
+            "- a\n- b\n- c\n- d\n- e\n- f",
+        ],
+    )
+    def test_no_false_positive_on_diacritics_pinyin_code_or_lists(self, text: str) -> None:
+        assert detect_broken_math_layout(text) is False
+        assert detect_symbol_garble(text)[0] is False

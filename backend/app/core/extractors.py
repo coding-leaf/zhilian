@@ -83,7 +83,22 @@ _SYMBOL_FONT_MARKERS: tuple[str, ...] = (
     "webding",
     "math",
     "zapfdingbats",
+    "cmr",
+    "cmmi",
+    "cmsy",
+    "cmex",
+    "msam",
+    "msbm",
+    "cambria",
+    "stix",
+    "latinmodern",
+    "eusm",
+    "euex",
+    "wasy",
 )
+
+_VISUAL_OCR_MAX_VALID_CHARS: int = 60
+_VISUAL_OCR_MIN_DRAWINGS: int = 8
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,7 @@ class PdfPageExtraction:
     suspicious_fragments: tuple[str, ...] = ()
     embedded_images: tuple[bytes, ...] = ()
     has_broken_math_layout: bool = False
+    needs_visual_ocr: bool = False
 
     @property
     def needs_repair(self) -> bool:
@@ -167,11 +183,14 @@ def _build_page_extraction(
     raw_text: str,
     lacks_tounicode: bool,
     image_loader: Callable[[], tuple[bytes, ...]],
+    has_visual_content: bool = False,
 ) -> PdfPageExtraction:
     """基于单页文本与字体诊断构造 PdfPageExtraction（pypdf / PyMuPDF 共用）。"""
     has_garble, _ratio, frags = detect_symbol_garble(raw_text)
     broken_math = detect_broken_math_layout(raw_text)
-    dirty = lacks_tounicode or has_garble or broken_math
+    non_ws_count = sum(1 for ch in raw_text if not ch.isspace())
+    needs_visual_ocr = has_visual_content and non_ws_count < _VISUAL_OCR_MAX_VALID_CHARS
+    dirty = lacks_tounicode or has_garble or broken_math or needs_visual_ocr
     embedded_images = image_loader() if (dirty or not raw_text) else ()
     return PdfPageExtraction(
         page_number=page_number,
@@ -181,6 +200,7 @@ def _build_page_extraction(
         suspicious_fragments=frags,
         embedded_images=embedded_images,
         has_broken_math_layout=broken_math,
+        needs_visual_ocr=needs_visual_ocr,
     )
 
 
@@ -278,6 +298,34 @@ def _pymupdf_page_images(doc: Any, page: Any) -> tuple[bytes, ...]:
     return tuple(collected)
 
 
+def _pymupdf_page_has_visual_content(page: Any) -> bool:
+    """判断 PyMuPDF 单页是否包含内嵌位图或复杂矢量绘图（>= 8 条路径）。"""
+    has_images = False
+    try:
+        get_images = getattr(page, "get_images", None)
+        if callable(get_images):
+            has_images = len(get_images(full=True)) > 0
+    except Exception:
+        has_images = False
+    if has_images:
+        return True
+    try:
+        get_drawings = getattr(page, "get_drawings", None)
+        if callable(get_drawings):
+            return len(get_drawings()) >= _VISUAL_OCR_MIN_DRAWINGS
+    except Exception:
+        return False
+    return False
+
+
+def _pypdf_page_has_visual_content(page: Any) -> bool:
+    """判断 pypdf 单页是否包含内嵌图片对象。"""
+    try:
+        return bool(getattr(page, "images", None))
+    except Exception:
+        return False
+
+
 def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | None:
     """PyMuPDF 优先通道：坐标/块感知阅读顺序抽取。无法打开或无任何文本时返回 None 让调用方降级。"""
     try:
@@ -298,6 +346,7 @@ def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | Non
                     raw_text=raw_text,
                     lacks_tounicode=_pymupdf_page_lacks_tounicode(doc, page),
                     image_loader=partial(_pymupdf_page_images, doc, page),
+                    has_visual_content=_pymupdf_page_has_visual_content(page),
                 )
             )
     except Exception:
@@ -319,6 +368,7 @@ def _extract_pages_with_pypdf(content: bytes) -> list[PdfPageExtraction]:
                 raw_text=(page.extract_text() or "").strip(),
                 lacks_tounicode=_inspect_page_symbol_fonts_missing_tounicode(page),
                 image_loader=partial(_extract_page_embedded_images, page),
+                has_visual_content=_pypdf_page_has_visual_content(page),
             )
             for idx, page in enumerate(reader.pages, start=1)
         ]

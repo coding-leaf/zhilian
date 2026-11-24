@@ -360,6 +360,57 @@ class TestVlmRouting:
 
         assert [p.text for p in paragraphs] == [sanitize_symbol_garble(garbled_text)]
 
+    def test_visual_ocr_page_with_short_heading_routes_to_vlm(self) -> None:
+        pdf = _make_pdf(2)
+        vlm = StubVLM(
+            lambda n: f"## 基本概念\n\n第{n}页包含示意图的完整说明文字，阐述了线性降维的基本概念。"
+        )
+        visual_page = PdfPageExtraction(
+            page_number=1,
+            text="基本概念",
+            lacks_tounicode_symbol_font=False,
+            has_symbol_garble=False,
+            needs_visual_ocr=True,
+        )
+        clean_page = _page(2, "第二页正常正文内容。")
+
+        paragraphs, _ = _repair([visual_page, clean_page], pdf, vlm=vlm)
+
+        assert vlm.called_pages == {1}
+        assert paragraphs[0].text == "## 基本概念"
+        assert paragraphs[0].is_title is True
+        assert paragraphs[0].title_level == 2
+        assert "示意图" in paragraphs[1].text
+
+    def test_non_vlm_page_unwraps_hard_line_breaks_and_absorbs_short_heading(self) -> None:
+        pdf = _make_pdf(2)
+        pages = [
+            _page(1, "基本概念"),
+            _page(
+                2,
+                "降维的目的就是降低数据的维度\n从而方便后续对数据的存储、可\n视化、\n建模等操作。",
+            ),
+        ]
+
+        paragraphs, _ = _repair(pages, pdf, vlm=None)
+
+        expected_body = "降维的目的就是降低数据的维度从而方便后续对数据的存储、可视化、建模等操作。"
+        assert paragraphs[0].text == "基本概念"
+        assert paragraphs[0].is_title is True
+        assert paragraphs[1].text == expected_body
+        assert paragraphs[1].is_title is False
+
+        snippets = prepare_material_snippets(
+            embedding=RecordingEmbedding(),
+            material_id=uuid.uuid4(),
+            version_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            paragraphs=paragraphs,
+        )
+        assert len(snippets) == 1
+        assert snippets[0].chapter_title == "基本概念"
+        assert snippets[0].content == expected_body
+
 
 class TestVlmConcurrency:
     def test_peak_in_flight_does_not_exceed_max_concurrency(self) -> None:

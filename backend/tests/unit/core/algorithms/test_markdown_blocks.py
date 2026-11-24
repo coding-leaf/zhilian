@@ -2,7 +2,10 @@
 
 import pytest
 
-from app.core.algorithms.markdown_blocks import split_markdown_blocks
+from app.core.algorithms.markdown_blocks import (
+    split_markdown_blocks,
+    unwrap_pdf_visual_line_breaks,
+)
 
 
 class TestSplitMarkdownBlocks:
@@ -102,3 +105,54 @@ class TestSplitMarkdownBlocks:
         assert blocks[0].startswith("$$")
         assert blocks[0].endswith("$$")
         assert blocks[-1] == "尾"
+
+
+class TestUnwrapPdfVisualLineBreaks:
+    def test_unwraps_cjk_mid_sentence_hard_wraps(self) -> None:
+        raw = (
+            "降维的目的就是降低数据的维度\n"
+            "从而方便后续对数据的存储、可\n视化、\n建模等操作。\n"
+            "下一段从这里开始。"
+        )
+        unwrapped = unwrap_pdf_visual_line_breaks(raw)
+        assert unwrapped == (
+            "降维的目的就是降低数据的维度从而方便后续对数据的存储、可视化、建模等操作。\n"
+            "下一段从这里开始。"
+        )
+
+    def test_unwraps_english_words_and_hyphenation(self) -> None:
+        raw = "Principal component analy-\nsis is a linear\ntechnique.\nNext sentence here."
+        assert unwrap_pdf_visual_line_breaks(raw) == (
+            "Principal component analysis is a linear technique.\nNext sentence here."
+        )
+
+    def test_preserves_markdown_blocks_and_standalone_short_heading(self) -> None:
+        raw = "\n".join(
+            [
+                "基本概念",
+                "线性降维将高维数据",
+                "映射到低维空间。",
+                "",
+                "# 章节标题",
+                "- 列表第一项",
+                "1. 编号列表项",
+                "> 引用说明",
+                "```python",
+                "a = 1",
+                "b = 2",
+                "```",
+                "| col1 | col2 |",
+                "| --- | --- |",
+                "| 1 | 2 |",
+                "$$",
+                "x = a + b",
+                "y = c + d",
+                "$$",
+            ]
+        )
+        unwrapped = unwrap_pdf_visual_line_breaks(raw)
+        assert "基本概念\n线性降维将高维数据映射到低维空间。" in unwrapped
+        assert "# 章节标题\n- 列表第一项\n1. 编号列表项\n> 引用说明" in unwrapped
+        assert "```python\na = 1\nb = 2\n```" in unwrapped
+        assert "| col1 | col2 |\n| --- | --- |\n| 1 | 2 |" in unwrapped
+        assert "$$\nx = a + b\ny = c + d\n$$" in unwrapped
