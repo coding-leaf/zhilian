@@ -44,6 +44,7 @@
           @regrade="detail.openGrading('regrade', $event)"
           @self-evaluate="detail.openGrading('self-evaluate', $event)"
           @coach="openCoach"
+          @collect="openCollect"
         />
       </view>
     </template>
@@ -81,6 +82,11 @@
       :user-answer="coachUserAnswer"
       :grading-points="coachGradingPoints"
     />
+
+    <CollectionPickerDrawer
+      v-model:visible="showCollectDrawer"
+      :question-id="collectQuestionId"
+    />
   </view>
 </template>
 
@@ -90,6 +96,7 @@ import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app'
 import type { AttemptResult } from '@/types'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import CollectionPickerDrawer from '@/components/CollectionPickerDrawer.vue'
 import { safeShowToast } from '@/utils/loadingGuard'
 import ReportSummaryCard from '../../components/ReportSummaryCard.vue'
 import AttemptResultCard from '../../components/AttemptResultCard.vue'
@@ -107,6 +114,8 @@ const coachKnowledgePointId = ref<string | undefined>()
 const coachContext = ref('')
 const coachUserAnswer = ref('')
 const coachGradingPoints = ref<string[]>([])
+const showCollectDrawer = ref(false)
+const collectQuestionId = ref('')
 
 onLoad((options) => {
   const id = options?.practice_id
@@ -141,6 +150,12 @@ const openCoach = (result: AttemptResult) => {
     ? result.missingKeywords
     : result.gradingPoints
   showCoach.value = true
+}
+
+const openCollect = (result: AttemptResult) => {
+  if (!result.questionId) return
+  collectQuestionId.value = result.questionId
+  showCollectDrawer.value = true
 }
 
 const handleBackHome = () => {

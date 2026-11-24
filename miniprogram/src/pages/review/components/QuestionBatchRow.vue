@@ -43,6 +43,7 @@
           @toggle="emit('toggle-question', question.id)"
           @toggle-detail="emit('toggle-detail', question.id)"
           @retry-detail="emit('retry-detail', question.id)"
+          @collect="emit('collect', question.id)"
         >
           <!-- 动作位（由 09-29-question-bank-page 预留）：记入错题 / 取消标记 -->
           <template #action>
@@ -101,6 +102,7 @@ const emit = defineEmits<{
   (e: 'toggle-wrong', questionId: string): void
   (e: 'toggle-detail', questionId: string): void
   (e: 'retry-detail', questionId: string): void
+  (e: 'collect', questionId: string): void
 }>()
 
 const label = computed(() => describeBatchLabel(props.batch))

@@ -22,20 +22,16 @@
           <view class="sheet-inner">
             <template v-if="showStructured">
               <view v-if="coreSummary" class="point-section">
-                <text class="sec-label">核心定义</text>
+                <text class="sec-label">核心定义与直觉</text>
                 <view class="sec-card">
                   <RichContent :content="coreSummary" />
                 </view>
               </view>
 
-              <view v-if="structured?.key_takeaways.length" class="point-section">
-                <text class="sec-label">关键结论</text>
+              <view v-if="keyTakeaways.length" class="point-section">
+                <text class="sec-label">关键结论与要点</text>
                 <view class="sec-card bullet-list">
-                  <view
-                    v-for="(item, tIdx) in structured.key_takeaways"
-                    :key="tIdx"
-                    class="bullet-row"
-                  >
+                  <view v-for="(item, tIdx) in keyTakeaways" :key="tIdx" class="bullet-row">
                     <view class="bullet-dot" />
                     <view class="bullet-body">
                       <RichContent :content="item" compact />
@@ -44,28 +40,47 @@
                 </view>
               </view>
 
-              <view v-if="structured?.key_formulas.length" class="point-section">
+              <view v-if="keyFormulas.length" class="point-section">
                 <text class="sec-label">核心公式与符号</text>
-                <view
-                  v-for="(formula, fIdx) in structured.key_formulas"
-                  :key="fIdx"
-                  class="formula-card"
-                >
+                <view v-for="(formula, fIdx) in keyFormulas" :key="fIdx" class="formula-card">
                   <RichContent :content="formula" />
                 </view>
               </view>
 
-              <view v-if="structured?.boundary_notes.length" class="point-section">
+              <view v-if="derivationSteps.length" class="point-section">
+                <text class="sec-label">推导 / 解题步骤</text>
+                <view class="step-card">
+                  <view v-for="(step, dIdx) in derivationSteps" :key="dIdx" class="step-row">
+                    <text class="step-index">{{ dIdx + 1 }}</text>
+                    <view class="step-body">
+                      <RichContent :content="step" compact />
+                    </view>
+                  </view>
+                </view>
+              </view>
+
+              <view v-if="boundaryNotes.length" class="point-section">
                 <text class="sec-label">适用条件与易错边界</text>
                 <view class="boundary-card bullet-list">
-                  <view
-                    v-for="(note, bIdx) in structured.boundary_notes"
-                    :key="bIdx"
-                    class="bullet-row"
-                  >
+                  <view v-for="(note, bIdx) in boundaryNotes" :key="bIdx" class="bullet-row">
                     <view class="bullet-dot bullet-dot-amber" />
                     <view class="bullet-body">
                       <RichContent :content="note" compact />
+                    </view>
+                  </view>
+                </view>
+              </view>
+
+              <view v-if="commonMistakes.length" class="point-section">
+                <view class="mistake-head">
+                  <text class="sec-label mistake-title">高频易错点</text>
+                  <text class="mistake-tag">易错辨析</text>
+                </view>
+                <view class="mistake-card bullet-list">
+                  <view v-for="(mistake, mIdx) in commonMistakes" :key="mIdx" class="bullet-row">
+                    <view class="bullet-dot bullet-dot-danger" />
+                    <view class="bullet-body">
+                      <RichContent :content="mistake" compact />
                     </view>
                   </view>
                 </view>
@@ -79,45 +94,12 @@
               </view>
             </view>
 
-            <view class="point-section">
-              <view class="snippet-toggle-row" @tap="snippetsExpanded = !snippetsExpanded">
-                <text class="snippet-toggle-title">
-                  {{ loadingSnippets ? '正在检索教材原文依据...' : `查看教材原文依据 (${snippets.length}处)` }}
-                </text>
-                <text class="snippet-toggle-action">
-                  {{ snippetsExpanded ? '收起' : '展开' }}
-                </text>
-              </view>
-
-              <view v-if="snippetsExpanded" class="snippets-list">
-                <view v-if="loadingSnippets" class="empty-snippets">
-                  <text class="empty-snippets-text">正在检索教材溯源切片...</text>
-                </view>
-                <template v-else-if="snippets.length > 0">
-                  <view
-                    v-for="(snip, sIdx) in snippets"
-                    :key="snip.id || sIdx"
-                    class="snippet-item"
-                  >
-                    <view class="snip-meta">
-                      <text class="snip-page">第 {{ snip.page_index || 1 }} 页</text>
-                      <text v-if="snip.chapter_title" class="snip-chapter">{{ snip.chapter_title }}</text>
-                    </view>
-                    <view v-if="isGarbled(snip.content)" class="garbled-hint-box">
-                      <text class="garbled-hint-text">
-                        检测到旧版讲义公式编码异常，点击右上角「重新解析」即可修复
-                      </text>
-                    </view>
-                    <RichContent v-else :content="snip.content" compact muted />
-                  </view>
-                </template>
-                <view v-else class="empty-snippets">
-                  <text class="empty-snippets-text">
-                    {{ snippetLoadFailed ? '原文切片加载失败，请稍后重试。' : '此知识点暂无可展示的原文切片。' }}
-                  </text>
-                </view>
-              </view>
-            </view>
+            <KnowledgeEvidenceList
+              :snippets="snippets"
+              :loading="loadingSnippets"
+              :load-failed="snippetLoadFailed"
+              :reset-key="evidenceResetKey"
+            />
           </view>
         </scroll-view>
       </view>
@@ -135,11 +117,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import RichContent from '@/components/RichContent.vue'
-import { isGarbledSnippetText } from '@/utils/richText'
 import type { KnowledgePointDetail, KnowledgeSnippet, KnowledgeTreeNode } from '@/types'
 import { hasStructuredContent, resolveMasteryBadge, type MasteryEntry } from '../utils/courseStudy'
+import KnowledgeEvidenceList from './KnowledgeEvidenceList.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -157,15 +139,6 @@ const emit = defineEmits<{
   (e: 'ask-coach'): void
   (e: 'practice'): void
 }>()
-
-const snippetsExpanded = ref(false)
-
-watch(
-  () => [props.visible, props.point?.id],
-  () => {
-    snippetsExpanded.value = false
-  },
-)
 
 const activePoint = computed(() => {
   if (props.pointDetail && props.point && props.pointDetail.id === props.point.id) {
@@ -185,11 +158,16 @@ const coreSummary = computed(
     || props.point?.description
     || '',
 )
+const keyTakeaways = computed(() => structured.value?.key_takeaways ?? [])
+const keyFormulas = computed(() => structured.value?.key_formulas ?? [])
+const derivationSteps = computed(() => structured.value?.derivation_steps ?? [])
+const boundaryNotes = computed(() => structured.value?.boundary_notes ?? [])
+const commonMistakes = computed(() => structured.value?.common_mistakes ?? [])
 const fallbackDescription = computed(
   () => activePoint.value?.description || props.point?.description || '该知识点暂无定义说明。',
 )
 const masteryBadge = computed(() => resolveMasteryBadge(props.masteryEntry))
-const isGarbled = (content: string) => isGarbledSnippetText(content)
+const evidenceResetKey = computed(() => `${props.visible ? '1' : '0'}-${props.point?.id ?? ''}`)
 
 const close = () => {
   emit('update:visible', false)
@@ -200,6 +178,72 @@ const close = () => {
 @import '../../../styles/modal.scss';
 @import '../course.scss';
 
-.empty-snippets { padding: 12rpx 4rpx; }
-.empty-snippets-text { font-size: 24rpx; color: var(--color-ink-muted); }
+.step-card {
+  background: var(--color-teal-bg);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 12rpx;
+  padding: 18rpx 22rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+}
+
+.step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14rpx;
+}
+
+.step-index {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 999rpx;
+  background: var(--color-academic-teal);
+  color: var(--color-ink-on-primary);
+  font-size: 21rpx;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4rpx;
+  flex-shrink: 0;
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mistake-head {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-bottom: 12rpx;
+}
+
+.mistake-title {
+  margin-bottom: 0;
+  color: var(--color-danger-strong);
+}
+
+.mistake-tag {
+  font-size: 20rpx;
+  font-weight: 600;
+  color: var(--color-wrong);
+  background: var(--color-danger-bg-soft);
+  border: 1px solid var(--color-danger-border);
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+}
+
+.mistake-card {
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
+  border-radius: 12rpx;
+  padding: 18rpx 22rpx;
+}
+
+.bullet-dot-danger {
+  background: var(--color-wrong);
+}
 </style>

@@ -83,6 +83,7 @@ export interface QuestionGenerateResult {
 }
 
 export interface QuestionBatchQuery {
+  folder_id?: string
   page?: number
   page_size?: number
 }
@@ -92,6 +93,10 @@ export interface QuestionBankQuery {
   batchId?: string | null
   /** 只看 `batch_id IS NULL` 的历史题目（后端 batch_id 过滤无法表达 IS NULL）。 */
   unbatched?: boolean
+  folder_id?: string
+  unclassified?: boolean
+  material_id?: string
+  knowledge_point_id?: string
   reviewStatus?: 'available' | 'pending_review'
   page?: number
   page_size?: number

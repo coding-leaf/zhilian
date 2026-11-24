@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
+  PracticeListQuery,
   PracticeSession,
   QuestionItem,
   RegradeResponse,
@@ -53,6 +54,7 @@ export const usePracticeStore = defineStore('practice', () => {
   const isSubmitting = ref<boolean>(false)
   const isSavingDrafts = ref<boolean>(false)
   const draftFailures = ref<string[]>([])
+  const practiceTotal = ref<number>(0)
 
   const questions = computed<QuestionItem[]>(() => currentSession.value?.questions || [])
   const attemptResults = computed<AttemptResult[]>(() => buildAttemptResults(currentSession.value))
@@ -189,8 +191,13 @@ export const usePracticeStore = defineStore('practice', () => {
   }
 
   // 5. 查询本人练习列表：学情页恢复未完成练习与打开历史报告
-  const loadPractices = async (status?: string, limit = 20) => {
-    const res = await apiListPractices({ status, limit })
+  const loadPractices = async (statusOrQuery?: string | PracticeListQuery, limit = 20) => {
+    const query: PracticeListQuery =
+      typeof statusOrQuery === 'object' && statusOrQuery !== null
+        ? statusOrQuery
+        : { status: statusOrQuery, limit }
+    const res = await apiListPractices(query)
+    practiceTotal.value = res.total ?? (res.items?.length || 0)
     return res.items || []
   }
 
@@ -219,6 +226,7 @@ export const usePracticeStore = defineStore('practice', () => {
     isSubmitting.value = false
     isSavingDrafts.value = false
     draftFailures.value = []
+    practiceTotal.value = 0
   }
 
   return {
@@ -228,6 +236,7 @@ export const usePracticeStore = defineStore('practice', () => {
     isSubmitting,
     isSavingDrafts,
     draftFailures,
+    practiceTotal,
     questions,
     attemptResults,
     currentQuestion,

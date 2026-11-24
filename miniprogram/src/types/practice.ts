@@ -85,6 +85,7 @@ export interface CreatePracticeParams {
   title: string
   material_id?: string
   folder_id?: string
+  collection_id?: string
   knowledge_point_ids?: string[]
   question_ids?: string[]
   question_count?: number
@@ -98,6 +99,7 @@ export interface CreatePracticeParams {
 export interface PracticeListQuery {
   status?: string
   material_id?: string
+  folder_id?: string
   offset?: number
   limit?: number
 }

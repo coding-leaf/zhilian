@@ -10,7 +10,7 @@ const QUESTION_PAGE_SIZE = 50
 const MAX_QUESTION_PAGES = 20
 
 /** 按批次缓存与按需展开题目列表（未展开的批次不预取）。 */
-export function useBatchQuestionsCache() {
+export function useBatchQuestionsCache(folderIdGetter: () => string = () => 'all') {
   const expanded = ref<BatchKey[]>([])
   const questionsByBatch = ref<Map<BatchKey, QuestionBankItem[]>>(new Map())
   const loadingQuestions = ref<BatchKey[]>([])
@@ -51,11 +51,13 @@ export function useBatchQuestionsCache() {
     reviewStatus?: 'available',
   ): Promise<QuestionBankItem[]> => {
     const collected: QuestionBankItem[] = []
+    const folderId = folderIdGetter()
     let total = 0
     for (let page = 1; page <= MAX_QUESTION_PAGES; page += 1) {
       const result = await apiListQuestionBankItems({
         batchId,
         unbatched: batchId === null,
+        ...(folderId && folderId !== 'all' ? { folder_id: folderId } : {}),
         reviewStatus,
         page,
         page_size: QUESTION_PAGE_SIZE,
@@ -123,6 +125,16 @@ export function useBatchQuestionsCache() {
     await loadQuestionDetail(questionId)
   }
 
+  const resetCache = () => {
+    expanded.value = []
+    questionsByBatch.value = new Map()
+    loadingQuestions.value = []
+    questionErrors.value = new Map()
+    expandedDetailIds.value = []
+    questionDetails.value = new Map()
+    detailErrors.value = new Map()
+  }
+
   return {
     expanded,
     loadingQuestions,
@@ -140,5 +152,6 @@ export function useBatchQuestionsCache() {
     retryBatchQuestions,
     loadQuestionDetail,
     toggleQuestionDetail,
+    resetCache,
   }
 }

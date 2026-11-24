@@ -17,7 +17,9 @@
       "es6": true,
       "enhance": true,
       "postcss": true,
-      "minified": true
+      "minified": true,
+      "ignoreDevUnusedFiles": false,
+      "ignoreUploadUnusedFiles": false
     },
     "networkTimeout": {
       "request": 60000,

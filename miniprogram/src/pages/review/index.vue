@@ -65,6 +65,7 @@
     <WrongBookSection
       v-if="review.activeTab.value === 'wrong'"
       :records="review.visibleRecords.value"
+      :folder-id="review.selectedFolderId.value"
       :group-options="review.groupOptions.value"
       :selected-group-key="review.selectedGroupKey.value"
       :active-group="review.activeGroup.value"
@@ -84,6 +85,7 @@
       @restart-selected="review.handleRestartSelectedWrongs"
       @batch-regenerate="review.handleBatchRegenerate"
       @practice="review.handleSingleKpPractice"
+      @collect="openCollectFromWrong"
     />
 
     <view v-if="review.activeTab.value === 'practices'" class="practice-list-section">
@@ -114,9 +116,19 @@
       <QuestionBankSection
         ref="bankSection"
         :wrong-records="review.wrongRecords.value"
+        :folder-id="review.selectedFolderId.value"
+        :is-active="review.activeTab.value === 'bank'"
         @wrong-changed="handleWrongChanged"
+        @collect="openCollectDrawer"
       />
     </view>
+
+    <CollectionPickerDrawer
+      v-model:visible="collectDrawerVisible"
+      :question-id="collectQuestionId"
+      :folder-id="review.selectedFolderId.value"
+      @saved="handleCollectionSaved"
+    />
   </view>
 </template>
 
@@ -124,6 +136,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import CollectionPickerDrawer from '@/components/CollectionPickerDrawer.vue'
+import type { WrongRecordItem } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useFolderStore } from '@/stores/folder'
@@ -141,17 +155,33 @@ const taskStore = useBackgroundTaskStore()
 const review = useReviewCenter()
 const bankSection = ref<InstanceType<typeof QuestionBankSection> | null>(null)
 const hasVisitedBank = ref(false)
+const collectDrawerVisible = ref(false)
+const collectQuestionId = ref('')
 let hasCompletedInitialLoad = false
 
 const segmentTabs = computed<Array<{ key: ReviewSegment; label: string; count: number }>>(() => [
   { key: 'mastery', label: '考点掌握', count: review.masteryOverview.value?.total_knowledge_points ?? 0 },
   { key: 'wrong', label: '错题本', count: review.pendingCount.value },
-  { key: 'practices', label: '练习记录', count: review.practices.value.length },
+  { key: 'practices', label: '练习记录', count: review.practiceTotal.value },
   { key: 'bank', label: '我的题库', count: 0 },
 ])
 
 const refreshBank = async () => {
   await bankSection.value?.refresh()
+}
+
+const openCollectDrawer = (questionId: string) => {
+  if (!questionId) return
+  collectQuestionId.value = questionId
+  collectDrawerVisible.value = true
+}
+
+const openCollectFromWrong = (record: WrongRecordItem) => {
+  if (record.question_id) openCollectDrawer(record.question_id)
+}
+
+const handleCollectionSaved = async () => {
+  await bankSection.value?.refreshCollections()
 }
 
 const handleRefreshAll = () => review.refreshAll({ refreshBank })

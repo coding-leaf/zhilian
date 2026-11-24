@@ -2,7 +2,9 @@ export interface KnowledgeStructuredContent {
   core_summary: string
   key_takeaways: string[]
   key_formulas: string[]
+  derivation_steps?: string[]
   boundary_notes: string[]
+  common_mistakes?: string[]
 }
 
 export interface KnowledgeTreeNode {
@@ -46,6 +48,7 @@ export interface KnowledgeSnippet {
   material_id?: string
   version_id?: string
   page_index: number
+  pageEnd?: number | null
   snippet_index?: number
   chapter_title?: string | null
   content: string

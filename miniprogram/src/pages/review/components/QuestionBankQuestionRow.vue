@@ -16,6 +16,9 @@
         <view class="bank-detail-btn" @tap="emit('toggle-detail')">
           <text class="bank-detail-text">{{ detailExpanded ? '收起解析' : '查看解析' }}</text>
         </view>
+        <view class="bank-collect-btn" @tap="emit('collect')">
+          <text class="bank-collect-text">收纳</text>
+        </view>
         <!-- 动作位：由 QuestionBatchRow 填充「记入错题 / 取消标记」（09-29-manual-wrong-mark） -->
         <slot name="action" />
       </view>
@@ -74,6 +77,7 @@ const emit = defineEmits<{
   (e: 'toggle'): void
   (e: 'toggle-detail'): void
   (e: 'retry-detail'): void
+  (e: 'collect'): void
 }>()
 
 const typeLabel = computed(() => questionTypeLabel(props.question.type))

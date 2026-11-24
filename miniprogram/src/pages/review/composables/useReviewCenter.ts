@@ -71,6 +71,7 @@ export function useReviewCenter() {
   const markingWrongIds = ref<string[]>([])
 
   const practices = ref<PracticeSummary[]>([])
+  const practiceTotal = ref(0)
   const isLoadingPractices = ref(false)
   const practiceError = ref('')
 
@@ -85,6 +86,7 @@ export function useReviewCenter() {
   const bankDirty = ref(false)
 
   let inFlightRefresh: Promise<void> | null = null
+  let filterEpoch = 0
 
   const sortedMasteryPoints = computed(() => mergeMasteryPoints(masteryOverview.value))
   const weakMasteryPoints = computed(() =>
@@ -109,34 +111,49 @@ export function useReviewCenter() {
     () => masteryError.value || wrongError.value || practiceError.value || '',
   )
 
-  const loadMastery = async () => {
+  const loadMastery = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     masteryLoading.value = true
     masteryError.value = ''
     try {
-      masteryOverview.value = await apiGetMasteryOverview(selectedFolderId.value)
+      const overview = await apiGetMasteryOverview(folderId)
+      if (epoch !== filterEpoch) return
+      masteryOverview.value = overview
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load mastery overview', error)
       masteryError.value = describeFailure(error, '掌握度总览加载失败，请重试')
     } finally {
-      masteryLoading.value = false
+      if (epoch === filterEpoch) masteryLoading.value = false
     }
   }
 
-  const loadWrongs = async () => {
+  const loadWrongs = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     isLoadingWrongs.value = true
     wrongError.value = ''
     try {
       const collected: WrongRecordItem[] = []
       let total = 0
+      let firstPageGroups: WrongGroupOption[] = []
+      const scopeQuery =
+        folderId === '__none__'
+          ? { unclassified: true }
+          : folderId && folderId !== 'all'
+            ? { folder_id: folderId }
+            : {}
       for (let page = 1; page <= MAX_PAGES; page += 1) {
-        const res = await apiListWrongRecords({ page, page_size: PAGE_SIZE })
+        const res = await apiListWrongRecords({ ...scopeQuery, page, page_size: PAGE_SIZE })
+        if (epoch !== filterEpoch) return
         collected.push(...(res.items || []))
         total = res.total ?? collected.length
         if (page === 1) {
-          groupOptions.value = buildWrongGroupOptions(res.groups || [])
+          firstPageGroups = buildWrongGroupOptions(res.groups || [])
         }
         if (collected.length >= total) break
       }
+      if (epoch !== filterEpoch) return
+      groupOptions.value = firstPageGroups
       wrongRecords.value = collected
       const validIds = new Set(collected.filter((r) => !r.is_mastered).map((r) => r.id))
       selectedWrongIds.value = selectedWrongIds.value.filter((id) => validIds.has(id))
@@ -146,23 +163,32 @@ export function useReviewCenter() {
         selectedGroupKey.value = ''
       }
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load wrong records', error)
       wrongError.value = describeFailure(error, '错题本加载失败，请重试')
     } finally {
-      isLoadingWrongs.value = false
+      if (epoch === filterEpoch) isLoadingWrongs.value = false
     }
   }
 
-  const loadPractices = async () => {
+  const loadPractices = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     isLoadingPractices.value = true
     practiceError.value = ''
     try {
-      practices.value = await practiceStore.loadPractices(undefined, 20)
+      const items = await practiceStore.loadPractices({
+        limit: 20,
+        ...(folderId && folderId !== 'all' ? { folder_id: folderId } : {}),
+      })
+      if (epoch !== filterEpoch) return
+      practices.value = items
+      practiceTotal.value = practiceStore.practiceTotal
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load practices', error)
       practiceError.value = describeFailure(error, '练习记录加载失败，请重试')
     } finally {
-      isLoadingPractices.value = false
+      if (epoch === filterEpoch) isLoadingPractices.value = false
     }
   }
 
@@ -174,14 +200,15 @@ export function useReviewCenter() {
       await inFlightRefresh
       return
     }
+    const epoch = filterEpoch
     inFlightRefresh = (async () => {
       try {
         await Promise.all([
           folderStore.loadFolders(),
           backgroundTaskStore.refreshActiveTasks(),
-          loadMastery(),
-          loadWrongs(),
-          loadPractices(),
+          loadMastery(epoch),
+          loadWrongs(epoch),
+          loadPractices(epoch),
           activeTab.value === 'bank' && options?.refreshBank
             ? options.refreshBank().then(() => { bankDirty.value = false })
             : Promise.resolve(),
@@ -196,9 +223,25 @@ export function useReviewCenter() {
     await inFlightRefresh
   }
 
-  const selectFolderFilter = async (folderId: string) => {
+  const selectFolderFilter = async (folderId: string, refreshBank?: () => Promise<void>) => {
+    filterEpoch += 1
+    const epoch = filterEpoch
     selectedFolderId.value = folderId
-    await loadMastery()
+    selectedWrongIds.value = []
+    selectedGroupKey.value = ''
+    if (activeTab.value !== 'bank') {
+      bankDirty.value = true
+    }
+    await Promise.all([
+      loadMastery(epoch),
+      loadWrongs(epoch),
+      loadPractices(epoch),
+      activeTab.value === 'bank' && refreshBank
+        ? refreshBank().then(() => {
+            if (epoch === filterEpoch) bankDirty.value = false
+          })
+        : Promise.resolve(),
+    ])
   }
 
   const switchTab = async (tab: ReviewSegment, refreshBank?: () => Promise<void>) => {
@@ -436,6 +479,7 @@ export function useReviewCenter() {
     selectedWrongIds,
     markingWrongIds,
     practices,
+    practiceTotal,
     isLoadingPractices,
     practiceError,
     isGenerating,

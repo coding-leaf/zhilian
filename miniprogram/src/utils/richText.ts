@@ -781,7 +781,14 @@ const SYMBOL_PAIR_CLUSTER = /[!"#$%&'*=?@^~]{2,}/g
 const REPEATED_SAFE_TOKEN = /^(?:\*{3,}|={3,}|"{3,}|'{3,}|!={2,}|~{3,})$/
 const SYMBOL_AMP_LINE = /(?:[A-Z]{1,2}&){2,}/
 const EXTENDED_LATIN_MATH_GARBLE = /(?:[\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de][A-Za-z0-9_=+\-^/*]|[A-Za-z0-9_=+\-^/*][\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de]|[\u0100-\u024f](?=[A-Za-z0-9_]*\d)|\d(?=[A-Za-z0-9_]*[\u0100-\u024f]))/
-const PUA_CHAR_RE = /[\ue000-\uf8ff\ufffd]/
+const CORRUPT_GLYPH_RE = /[\ue000-\uf8ff\ufffd\u2612\u25af]/
+const BOX_PLACEHOLDER = '[\\u2610\\u25a1\\u25a0\\u25aa\\u25ab\\u25c7\\u25c6]'
+const MATH_ADJACENT_BOX_RE = new RegExp(
+  `(?:(?:[A-Za-z0-9_=+<>≤≥(\\u0370-\\u03ff]|[^\\s][ \\t]*-)[ \\t]*${BOX_PLACEHOLDER}`
+  + `|${BOX_PLACEHOLDER}[ \\t]*[=+\\-<>≤≥_^*\\/{}\\u0370-\\u03ff]`
+  + `|${BOX_PLACEHOLDER}[A-Za-z0-9](?![A-Za-z.])`
+  + `|${BOX_PLACEHOLDER}[ \\t]+[A-Za-z0-9\\u0370-\\u03ff]+[ \\t]*[_^=+\\-<>≤≥*/])`,
+)
 const DANGLING_INDEX_LINE_RE = /^\d+\s*,\s*(?:\.{2,3}\s*,\s*)?[A-Za-z\u0370-\u03ff][A-Za-z0-9]{0,3}$/
 
 function hasDenseSingleLetterFragments(text: string): boolean {
@@ -835,12 +842,19 @@ function hasDenseSingleLetterFragments(text: string): boolean {
 }
 
 /**
- * 检测历史未重解析 PDF 切片是否残留 `SymbolMT` ASCII 符号乱码簇、扩展拉丁数学乱码（如 `ħx1`）或密集单字母碎行。
+ * 检测历史未重解析 PDF 切片是否残留 `SymbolMT` ASCII 符号乱码簇、扩展拉丁数学乱码（如 `ħx1`）、
+ * 替代符/缺字形豆腐块（`\ufffd`、`☒`、`▯` 或数学邻接方框）或密集单字母碎行。
  */
 export function isGarbledSnippetText(text: string | null | undefined): boolean {
   if (!text || !text.trim()) return false
   const cleaned = text.replace(/\$\$/g, ' ').replace(/\*{3,}/g, ' ')
-  if (EXTENDED_LATIN_MATH_GARBLE.test(cleaned) || PUA_CHAR_RE.test(cleaned)) return true
+  if (
+    EXTENDED_LATIN_MATH_GARBLE.test(cleaned)
+    || CORRUPT_GLYPH_RE.test(cleaned)
+    || MATH_ADJACENT_BOX_RE.test(cleaned)
+  ) {
+    return true
+  }
 
   const clusters = cleaned.match(SYMBOL_SOUP_CLUSTER) ?? []
   const suspicious = clusters.filter((token) => !REPEATED_SAFE_TOKEN.test(token))

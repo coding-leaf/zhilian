@@ -11,7 +11,9 @@ interface WireKnowledgeStructuredContent {
   core_summary?: unknown
   key_takeaways?: unknown
   key_formulas?: unknown
+  derivation_steps?: unknown
   boundary_notes?: unknown
+  common_mistakes?: unknown
 }
 
 export interface WireKnowledgeTreeNode {
@@ -65,7 +67,9 @@ export function adaptStructuredContent(raw: unknown): KnowledgeStructuredContent
     core_summary: typeof record.core_summary === 'string' ? record.core_summary.trim() : '',
     key_takeaways: normalizeStringArray(record.key_takeaways),
     key_formulas: normalizeStringArray(record.key_formulas),
+    derivation_steps: normalizeStringArray(record.derivation_steps),
     boundary_notes: normalizeStringArray(record.boundary_notes),
+    common_mistakes: normalizeStringArray(record.common_mistakes),
   }
 }
 
@@ -111,11 +115,12 @@ export function adaptKnowledgePointDetail(detail: WireKnowledgePointDetail): Kno
   }
 }
 
-interface WireKnowledgeSnippet {
+export interface WireKnowledgeSnippet {
   id: string
   material_id?: string
   version_id?: string
   page_index?: number | null
+  page_end?: number | null
   snippet_index?: number
   chapter_title?: string | null
   content?: string | null
@@ -128,7 +133,7 @@ export interface WirePointSourceList {
 }
 
 /**
- * 原文溯源切片归一化：对齐后端 `SnippetSourceResponse`（1-based `page_index`）。
+ * 原文溯源切片归一化：对齐后端 `SnippetSourceResponse`（1-based `page_index` 与可选 `page_end`）。
  * 缺失或非法页码安全回退为 1，避免出现第 0 页或 undefined。
  */
 export function adaptKnowledgeSnippet(snippet: WireKnowledgeSnippet): KnowledgeSnippet {
@@ -136,6 +141,11 @@ export function adaptKnowledgeSnippet(snippet: WireKnowledgeSnippet): KnowledgeS
   const pageIndex = typeof rawPage === 'number' && Number.isFinite(rawPage) && rawPage >= 1
     ? Math.floor(rawPage)
     : 1
+  const rawPageEnd = snippet.page_end
+  const parsedPageEnd = typeof rawPageEnd === 'number' && Number.isFinite(rawPageEnd) && rawPageEnd >= 1
+    ? Math.floor(rawPageEnd)
+    : null
+  const pageEnd = parsedPageEnd !== null && parsedPageEnd > pageIndex ? parsedPageEnd : null
   const chapterTitle = typeof snippet.chapter_title === 'string' && snippet.chapter_title.trim()
     ? snippet.chapter_title.trim()
     : null
@@ -145,6 +155,7 @@ export function adaptKnowledgeSnippet(snippet: WireKnowledgeSnippet): KnowledgeS
     material_id: snippet.material_id,
     version_id: snippet.version_id,
     page_index: pageIndex,
+    pageEnd,
     snippet_index: snippet.snippet_index,
     chapter_title: chapterTitle,
     content: snippet.content ?? '',

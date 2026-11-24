@@ -7,7 +7,12 @@ import {
   type PracticeSession,
   type PracticeSummary,
 } from '@/types'
-import { adaptPractice, type WirePracticeDetail } from '../adapters'
+import {
+  adaptPractice,
+  adaptPracticeList,
+  type WirePracticeDetail,
+  type WirePracticeListResult,
+} from '../adapters'
 
 export { MAX_PRACTICE_QUESTIONS }
 export type { CreatePracticeParams, PracticeSummary }
@@ -31,10 +36,15 @@ export function apiListPractices(params?: PracticeListQuery): Promise<PracticeLi
   const queryParts: string[] = []
   if (params?.status) queryParts.push(`status=${encodeURIComponent(params.status)}`)
   if (params?.material_id) queryParts.push(`material_id=${encodeURIComponent(params.material_id)}`)
+  if (params?.folder_id && params.folder_id !== 'all') {
+    queryParts.push(`folder_id=${encodeURIComponent(params.folder_id)}`)
+  }
   if (params?.offset !== undefined) queryParts.push(`offset=${params.offset}`)
   if (params?.limit !== undefined) queryParts.push(`limit=${params.limit}`)
   const qs = queryParts.length ? `?${queryParts.join('&')}` : ''
-  return request<PracticeListResult>({ url: `/practices${qs}`, method: 'GET' })
+  return request<WirePracticeListResult>({ url: `/practices${qs}`, method: 'GET' }).then(
+    adaptPracticeList,
+  )
 }
 
 export function apiSavePracticeDraft(

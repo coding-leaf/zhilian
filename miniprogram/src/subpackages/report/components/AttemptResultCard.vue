@@ -106,6 +106,13 @@
       >
         自行评分
       </button>
+      <button
+        v-if="result.questionId"
+        class="collect-action-btn"
+        @tap="emit('collect', result)"
+      >
+        收纳
+      </button>
       <button class="coach-action-btn" @tap="emit('coach', result)">
         问 AI 助教
       </button>
@@ -135,6 +142,7 @@ const emit = defineEmits<{
   (e: 'regrade', result: AttemptResult): void
   (e: 'self-evaluate', result: AttemptResult): void
   (e: 'coach', result: AttemptResult): void
+  (e: 'collect', result: AttemptResult): void
 }>()
 
 const badge = computed(() => resolveResultBadge(props.result))
@@ -161,4 +169,23 @@ const optionBadgeLabel = (option: QuestionOption, idx: number): string => {
 
 <style lang="scss" scoped>
 @import '../report.scss';
+
+.collect-action-btn {
+  flex: 1;
+  height: 64rpx;
+  font-size: 24rpx;
+  border-radius: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  line-height: 1.4;
+  background: var(--color-teal-bg);
+  color: var(--color-teal-dark);
+  border: 1px solid var(--color-border-slate);
+
+  &::after {
+    border: none;
+  }
+}
 </style>

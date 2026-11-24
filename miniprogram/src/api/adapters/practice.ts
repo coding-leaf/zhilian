@@ -2,10 +2,40 @@ import type {
   AttemptResult,
   GradingStatus,
   PracticeItem,
+  PracticeListResult,
   PracticeSession,
+  PracticeSummary,
   QuestionType,
 } from '@/types'
 import { adaptQuestion, isSubjectiveType, type WireQuestion } from './question'
+
+export interface WirePracticeSummary extends Omit<PracticeSummary, 'folder_name' | 'material_title'> {
+  folder_name?: string | null
+  material_title?: string | null
+}
+
+export interface WirePracticeListResult {
+  items?: WirePracticeSummary[] | null
+  total?: number | null
+  limit?: number | null
+  offset?: number | null
+}
+
+export function adaptPracticeList(
+  wire: WirePracticeListResult | null | undefined,
+): PracticeListResult {
+  const items: PracticeSummary[] = (wire?.items ?? []).map((item) => ({
+    ...item,
+    folder_name: item.folder_name ?? null,
+    material_title: item.material_title ?? null,
+  }))
+  return {
+    items,
+    total: wire?.total ?? items.length,
+    limit: wire?.limit ?? 20,
+    offset: wire?.offset ?? 0,
+  }
+}
 
 /** 后端 PracticeDetailResponse.items[] 的 wire 形状。 */
 type WirePracticeItem = Omit<PracticeItem, 'question_snapshot'> & {

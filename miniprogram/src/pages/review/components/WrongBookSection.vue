@@ -5,7 +5,7 @@
       <button class="inline-retry-btn" @tap="emit('retry')">重试</button>
     </view>
 
-    <view v-if="groupOptions.length" class="group-scroll">
+    <view v-if="showGroupSelector" class="group-scroll">
       <scroll-view scroll-x class="group-scroll" :show-scrollbar="false">
         <view class="group-tabs">
           <view
@@ -77,6 +77,7 @@
         @practice="emit('practice', $event)"
         @toggle-select="emit('toggle-select', $event)"
         @mark-mastered="emit('mark-mastered', $event)"
+        @collect="emit('collect', $event)"
       />
       <view v-if="records.length === 0 && !error" class="empty-state">
         <text class="empty-text">
@@ -95,6 +96,7 @@ import WrongRecordCard from './WrongRecordCard.vue'
 
 const props = defineProps<{
   records: WrongRecordItem[]
+  folderId?: string
   groupOptions: WrongGroupOption[]
   selectedGroupKey: string
   activeGroup: WrongGroupOption | null
@@ -117,7 +119,15 @@ const emit = defineEmits<{
   (e: 'restart-selected'): void
   (e: 'batch-regenerate'): void
   (e: 'practice', record: WrongRecordItem): void
+  (e: 'collect', record: WrongRecordItem): void
 }>()
+
+const showGroupSelector = computed(() => {
+  if (!props.groupOptions.length) return false
+  const isSpecificCourse = Boolean(props.folderId && props.folderId !== 'all' && props.folderId !== '__none__')
+  if (isSpecificCourse && props.groupOptions.length <= 1) return false
+  return true
+})
 
 const unmasteredIds = computed(() => props.records.filter((r) => !r.is_mastered).map((r) => r.id))
 const unmasteredCount = computed(() => unmasteredIds.value.length)
