@@ -276,7 +276,9 @@ def build_structured_agent_graph(adapter: LLMProtocol | None = None) -> Any:
     workflow.add_edge("repair_prompt_node", "call_model_node")
     workflow.add_edge("fallback_node", END)
 
-    return workflow.compile()
+    # 禁用 checkpointer：避免在父图（如 coach_graph MemorySaver）节点内调用时继承其检查点，
+    # 从而尝试将 response_model（ModelMetaclass）或 adapter 实例做 msgpack 序列化报错。
+    return workflow.compile(checkpointer=False)
 
 
 def run_structured_agent_workflow[T: BaseModel](

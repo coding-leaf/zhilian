@@ -45,6 +45,7 @@ from app.integrations.llm.protocol import (
     LLMUsage,
 )
 from app.models.base import Base
+from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import Material, MaterialSnippet, MaterialVersion, ParseStatus
 from app.repositories.material import MaterialRepository
 from app.services.knowledge import (
@@ -934,3 +935,90 @@ class TestKnowledgeServiceWorkflow:
 
         with pytest.raises(KnowledgeNotFoundError):
             service.get_snippets_for_point(kp_id, other_user_id)
+
+    def test_get_snippets_for_point_filters_legacy_noise_title_snippets(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """历史未重解析脏切片中的纯标题/单字母噪声在存在实质切片时被安全过滤。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        kp = KnowledgePoint(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="基本概念与极限",
+            description="desc",
+            batch_id="b_legacy",
+        )
+        session.add(kp)
+        session.flush()
+
+        noise_title = MaterialSnippet(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            snippet_index=10,
+            content="基本概念",
+            char_length=4,
+            start_offset=3000,
+            end_offset=3004,
+            chapter_title="基本概念",
+        )
+        noise_letter = MaterialSnippet(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            snippet_index=11,
+            content="m",
+            char_length=1,
+            start_offset=3005,
+            end_offset=3006,
+            chapter_title="基本概念",
+        )
+        real_snippet = seed_material["snippets"][0]
+        session.add_all([noise_title, noise_letter])
+        session.flush()
+
+        session.add_all(
+            [
+                KnowledgePointSnippet(
+                    user_id=user_id, knowledge_point_id=kp.id, snippet_id=noise_title.id
+                ),
+                KnowledgePointSnippet(
+                    user_id=user_id, knowledge_point_id=kp.id, snippet_id=noise_letter.id
+                ),
+                KnowledgePointSnippet(
+                    user_id=user_id, knowledge_point_id=kp.id, snippet_id=real_snippet.id
+                ),
+            ]
+        )
+        session.commit()
+
+        service = KnowledgeService(session, StubLLM(), StubEmbedding())
+        filtered = service.get_snippets_for_point(kp.id, user_id)
+        assert [s.id for s in filtered] == [real_snippet.id]
+
+        # 若某知识点仅关联短切片，则保留防空
+        kp_only_short = KnowledgePoint(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="孤立短片节点",
+            description="desc",
+            batch_id="b_legacy",
+        )
+        session.add(kp_only_short)
+        session.flush()
+        session.add(
+            KnowledgePointSnippet(
+                user_id=user_id, knowledge_point_id=kp_only_short.id, snippet_id=noise_title.id
+            )
+        )
+        session.commit()
+        assert [s.id for s in service.get_snippets_for_point(kp_only_short.id, user_id)] == [
+            noise_title.id
+        ]

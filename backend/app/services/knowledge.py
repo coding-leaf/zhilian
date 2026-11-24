@@ -60,6 +60,23 @@ from app.repositories.material import MaterialRepository
 logger = logging.getLogger(__name__)
 
 
+def _is_legacy_noise_title_snippet(snippet: MaterialSnippet) -> bool:
+    """识别历史未重解析入库的孤立纯标题/单字母噪声切片，供查询期兜底过滤。"""
+    stripped = (snippet.content or "").strip()
+    if not stripped:
+        return True
+    chapter = (snippet.chapter_title or "").strip()
+    if chapter and stripped == chapter and len(stripped) <= 30:
+        return True
+    if len(stripped) >= 15:
+        return False
+    if any(ch in "。！？!?." for ch in stripped):
+        return False
+    if any(ch.isdigit() for ch in stripped):
+        return False
+    return "$" not in stripped and "=" not in stripped
+
+
 def build_knowledge_hierarchy(
     items: Sequence[ExtractedKnowledgeItem],
     *,
@@ -641,7 +658,11 @@ class KnowledgeService:
             KnowledgeNotFoundError: 知识点不存在或所属租户不匹配。
         """
         self.get_knowledge_point_detail(knowledge_point_id, user_id)
-        return self.knowledge_repo.get_snippets_for_point(knowledge_point_id, user_id)
+        snippets = self.knowledge_repo.get_snippets_for_point(knowledge_point_id, user_id)
+        if len(snippets) <= 1:
+            return snippets
+        filtered = [s for s in snippets if not _is_legacy_noise_title_snippet(s)]
+        return filtered if filtered else snippets
 
     def get_points_for_snippet(
         self,

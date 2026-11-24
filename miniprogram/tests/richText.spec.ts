@@ -121,10 +121,38 @@ describe('richText AST parser', () => {
   it('detects legacy SymbolMT garbled snippet soup without false positives on normal math', () => {
     expect(isGarbledSnippetText('!"\n!"!#" =\n!"#!#!#\n#AB#BAB !=')).toBe(true)
     expect(isGarbledSnippetText('AB&A&\nAB&A&\nB&\n"#$"$\n!" ! #')).toBe(true)
+    expect(isGarbledSnippetText('样本集合包含 ħx1, ħx2, ..., ħxm 等向量')).toBe(true)
+    expect(isGarbledSnippetText('集合公式 x \uf0ce A')).toBe(true)
+    expect(isGarbledSnippetText('降维操作说明。\n1, xi\n2, ..., xi\nm\nm\nn\nd\nX')).toBe(true)
     expect(isGarbledSnippetText('正常数学表达式 $$P(Y=c_k) = \\frac{1}{2}$$ 与 **重点**')).toBe(false)
     expect(isGarbledSnippetText('Python 判断 `a !== b` 与 ***分隔***')).toBe(false)
+    expect(isGarbledSnippetText('```python\nX =\na\nb\nc\nd\n```\n正常说明')).toBe(false)
     expect(isGarbledSnippetText('')).toBe(false)
     expect(isGarbledSnippetText(null)).toBe(false)
+  })
+
+  it('gently unwraps mid-sentence CJK PDF hard wraps while preserving markdown blocks', () => {
+    const raw = [
+      '### 核心内容',
+      '降维的目的就是降低数据的维度从而方便后续对数据的存储、可',
+      '视化、',
+      '建模等操作。',
+      '第二段说明。',
+      '',
+      '- 列表第一项',
+      '$$x^2 + y^2 = r^2$$',
+    ].join('\n')
+    const nodes = parseRichContent(raw)
+    expect(nodes[0]).toMatchObject({ name: 'div', attrs: { class: 'rt-h rt-h3' } })
+    expect(nodes[1]).toMatchObject({ name: 'p', attrs: { class: 'rt-p' } })
+    const paraText = flattenText([nodes[1]])
+    expect(paraText).toContain('存储、可视化、建模等操作。')
+    expect(paraText).toContain('第二段说明。')
+    // 句末句号后的换行应保留 <br>，而行中可/视化、建模等操作不应产生多余 <br>
+    const pChildren = (nodes[1] as RichTextElementNode).children ?? []
+    expect(pChildren.filter((child) => 'name' in child && child.name === 'br')).toHaveLength(1)
+    expect(nodes[2]).toMatchObject({ name: 'div', attrs: { class: 'rt-list' } })
+    expect(nodes[3]).toMatchObject({ name: 'div', attrs: { class: 'rt-math-block' } })
   })
 })
 

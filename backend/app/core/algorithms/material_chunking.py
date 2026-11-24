@@ -79,6 +79,8 @@ _TABLE_BLOCK_RE: re.Pattern[str] = re.compile(
 PSEUDO_BULLET_LINE_PATTERN: re.Pattern[str] = re.compile(
     r"(?m)^([ \t]*)(?:l|n|ü|[\uf06c\uf06e\uf0fc\uf0a7\uf0b7\uf0d8\uf076])\s+"
 )
+_MD_HEADING_PREFIX_RE: re.Pattern[str] = re.compile(r"^#{1,6}\s+")
+_ULTRA_SHORT_NOISE_MAX_CHARS: int = 15
 
 
 @dataclass(frozen=True)
@@ -500,6 +502,41 @@ def merge_isolated_short_snippets(
     ]
 
 
+def _is_ultra_short_noise_snippet(snippet: Snippet) -> bool:
+    """判定合并后仍残留的孤立无信息短片（如孤立标题或单字母碎片，不含句末标点/数字/公式）。"""
+    stripped = snippet.content.strip()
+    if len(stripped) >= _ULTRA_SHORT_NOISE_MAX_CHARS:
+        return False
+    if any(ch in "。！？!?." for ch in stripped):
+        return False
+    if any(ch.isdigit() for ch in stripped):
+        return False
+    return "$" not in stripped and "=" not in stripped
+
+
+def _filter_ultra_short_noise_snippets(snippets: list[Snippet]) -> list[Snippet]:
+    """在至少保留一条实质切片的前提下，过滤孤立极短无信息碎片并重排 index。"""
+    if len(snippets) <= 1:
+        return snippets
+    kept = [item for item in snippets if not _is_ultra_short_noise_snippet(item)]
+    if not kept or len(kept) == len(snippets):
+        return snippets
+    return [
+        Snippet(
+            index=idx,
+            content=item.content,
+            char_count=item.char_count,
+            start_offset=item.start_offset,
+            end_offset=item.end_offset,
+            chapter_title=item.chapter_title,
+            source_ref=item.source_ref,
+            doc_type=item.doc_type,
+            page_number=item.page_number,
+        )
+        for idx, item in enumerate(kept)
+    ]
+
+
 def split_material_into_snippets(
     paragraphs: Sequence[str | ParagraphInput],
     max_chars: int = DEFAULT_MAX_CHARS,
@@ -509,6 +546,8 @@ def split_material_into_snippets(
     default_doc_type: str = "txt",
     default_source_ref: str = "段落",
     target_chars: int = DEFAULT_TARGET_CHARS,
+    *,
+    filter_short_noise: bool | None = None,
 ) -> ChunkingResult:
     """把解析后的段落序列切分为可检索的知识片段。
 
@@ -576,7 +615,7 @@ def split_material_into_snippets(
             continue
 
         if is_title:
-            current_chapter_title = cleaned_text.strip()
+            current_chapter_title = _MD_HEADING_PREFIX_RE.sub("", cleaned_text.strip()).strip()
             continue
 
         para_start_offset = global_char_offset
@@ -604,6 +643,12 @@ def split_material_into_snippets(
     optimized_snippets = merge_isolated_short_snippets(
         raw_snippets, min_chars, max_chars, target_chars
     )
+
+    # 阶段 2.5: 过滤合并后仍残留的孤立无信息极短残片（默认仅在正常合并阈值 >= 40 时启用）
+    should_filter = (min_chars >= 40) if filter_short_noise is None else filter_short_noise
+    if should_filter:
+        optimized_snippets = _filter_ultra_short_noise_snippets(optimized_snippets)
+
     total_count = len(optimized_snippets)
 
     # 阶段 3: 3000 上限安全截断

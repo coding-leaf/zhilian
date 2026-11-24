@@ -342,6 +342,25 @@ class TestPageTextAndFontHelpers:
             is False
         )
 
+        assert (
+            _pymupdf_page_lacks_tounicode(
+                *make(
+                    [(10, "Type1", "Type1", "ABCDEF+CMMI10", "F3", "Custom")],
+                    lambda x, k: ("null", "null"),
+                )
+            )
+            is True
+        )
+        assert (
+            _pymupdf_page_lacks_tounicode(
+                *make(
+                    [(11, "ttf", "TrueType", "CambriaMath", "F4", "Identity-H")],
+                    lambda x, k: ("xref", "12 0 R"),
+                )
+            )
+            is False
+        )
+
         def raising(_xref: int, _key: str) -> Any:
             raise RuntimeError("bad xref")
 
@@ -494,3 +513,43 @@ class TestRenderPdfPagePng:
             render_pdf_page_png(b"x", 1)
         assert exc_info.value.details["error"] == "RuntimeError"
         assert _Doc.closed is True
+
+
+class TestNeedsVisualOcrGate:
+    def test_short_heading_page_with_embedded_image_sets_needs_visual_ocr(self) -> None:
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Basic Concept", fontname="helv")
+        page.insert_image(pymupdf.Rect(50, 120, 300, 320), stream=_tiny_png())
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        extracted = extract_pdf_pages_with_diagnostics(pdf_bytes)
+        assert len(extracted) == 1
+        assert extracted[0].needs_visual_ocr is True
+        assert extracted[0].embedded_images
+
+    def test_short_heading_page_with_complex_drawings_sets_needs_visual_ocr(self) -> None:
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Basic Concept", fontname="helv")
+        for idx in range(10):
+            page.draw_line((50, 120 + idx * 10), (250, 120 + idx * 10))
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        extracted = extract_pdf_pages_with_diagnostics(pdf_bytes)
+        assert len(extracted) == 1
+        assert extracted[0].needs_visual_ocr is True
+
+    def test_dense_text_page_with_embedded_image_does_not_trigger_visual_ocr(self) -> None:
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), CLEAN_TEXT + " Extra prose words here.", fontname="helv")
+        page.insert_image(pymupdf.Rect(50, 120, 150, 220), stream=_tiny_png())
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        extracted = extract_pdf_pages_with_diagnostics(pdf_bytes)
+        assert len(extracted) == 1
+        assert extracted[0].needs_visual_ocr is False

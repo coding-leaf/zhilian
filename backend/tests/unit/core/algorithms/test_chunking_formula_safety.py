@@ -399,6 +399,20 @@ class TestSplitMaterialIntegration:
         result = split_material_into_snippets(items)
         assert [s.chapter_title for s in result.snippets] == ["第一章", "第二章"]
 
+    def test_markdown_title_strips_hashes_and_filters_ultra_short_noise_fragments(self) -> None:
+        body = "主成分分析是一种常用的线性降维方法，它通过正交变换提取主方向。" * 3
+        items = [
+            ParagraphInput(text="## 基本概念", is_title=True, doc_type="pdf", page_number=1),
+            ParagraphInput(text="m", doc_type="pdf", page_number=1),
+            ParagraphInput(text=body, doc_type="pdf", page_number=2),
+            ParagraphInput(text="基本概念", doc_type="pdf", page_number=3),
+        ]
+        result = split_material_into_snippets(items)
+        assert len(result.snippets) == 1
+        assert result.snippets[0].chapter_title == "基本概念"
+        assert "主成分分析" in result.snippets[0].content
+        assert result.snippets[0].index == 0
+
     def test_target_chars_validation(self) -> None:
         with pytest.raises(ValueError, match="target_chars"):
             split_material_into_snippets(["测试"], target_chars=-1)

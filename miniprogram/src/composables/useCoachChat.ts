@@ -1,6 +1,6 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { apiAskQuestionCoach, apiAskScopedCoach } from '@/api'
-import type { CoachSource } from '@/types'
+import type { AskCoachHistoryItem, CoachSource } from '@/types'
 
 export interface CoachMessage {
   id: string
@@ -22,6 +22,103 @@ export interface CoachContextParams {
   folderId?: string
   materialId?: string
   knowledgePointId?: string
+}
+
+const COACH_HISTORY_STORAGE_PREFIX = 'zhilian:coach:history:'
+const MAX_PERSISTED_MESSAGES = 30
+const MAX_REQUEST_HISTORY_ITEMS = 20
+
+const buildStorageKey = (sessionKey: string): string =>
+  `${COACH_HISTORY_STORAGE_PREFIX}${sessionKey}`
+
+function sanitizeStoredMessages(raw: unknown): CoachMessage[] {
+  let parsed: unknown = raw
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return []
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(parsed)) return []
+
+  const cleaned: CoachMessage[] = []
+  for (let idx = 0; idx < parsed.length; idx += 1) {
+    const item = parsed[idx] as Record<string, unknown> | null | undefined
+    if (!item || typeof item !== 'object') continue
+    if (item.error === true) continue
+    if (item.role !== 'user' && item.role !== 'assistant') continue
+    if (typeof item.content !== 'string' || !item.content.trim()) continue
+
+    cleaned.push({
+      id: typeof item.id === 'string' && item.id ? item.id : `coach-restored-${idx}`,
+      role: item.role,
+      content: item.content,
+      suggestions: Array.isArray(item.suggestions)
+        ? item.suggestions.filter((s): s is string => typeof s === 'string')
+        : undefined,
+      sources: Array.isArray(item.sources) ? (item.sources as CoachSource[]) : undefined,
+    })
+  }
+  return cleaned.slice(-MAX_PERSISTED_MESSAGES)
+}
+
+function readPersistedHistory(sessionKey: string): CoachMessage[] {
+  try {
+    if (typeof uni === 'undefined' || typeof uni.getStorageSync !== 'function') return []
+    const raw = uni.getStorageSync(buildStorageKey(sessionKey))
+    if (!raw) return []
+    return sanitizeStoredMessages(raw)
+  } catch {
+    return []
+  }
+}
+
+function writePersistedHistory(sessionKey: string, messages: CoachMessage[]): void {
+  try {
+    if (typeof uni === 'undefined' || typeof uni.setStorageSync !== 'function') return
+    const valid = messages
+      .filter((msg) => !msg.error && msg.content.trim().length > 0)
+      .slice(-MAX_PERSISTED_MESSAGES)
+    if (valid.length === 0) {
+      if (typeof uni.removeStorageSync === 'function') {
+        uni.removeStorageSync(buildStorageKey(sessionKey))
+      }
+      return
+    }
+    uni.setStorageSync(buildStorageKey(sessionKey), JSON.stringify(valid))
+  } catch {
+    // 忽略测试或受限环境下的本地存储异常，不阻断对话主流程。
+  }
+}
+
+function removePersistedHistory(sessionKey: string): void {
+  try {
+    if (typeof uni === 'undefined' || typeof uni.removeStorageSync !== 'function') return
+    uni.removeStorageSync(buildStorageKey(sessionKey))
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function buildRequestHistory(
+  messages: CoachMessage[],
+  skipTrailingUserQuery?: string,
+): AskCoachHistoryItem[] {
+  const valid = messages.filter((msg) => !msg.error && msg.content.trim().length > 0)
+  const trimmedList =
+    skipTrailingUserQuery &&
+    valid.length > 0 &&
+    valid[valid.length - 1].role === 'user' &&
+    valid[valid.length - 1].content.trim() === skipTrailingUserQuery
+      ? valid.slice(0, -1)
+      : valid
+
+  return trimmedList.slice(-MAX_REQUEST_HISTORY_ITEMS).map((msg) => ({
+    role: msg.role,
+    content: msg.content.trim().slice(0, 2000),
+  }))
 }
 
 export function buildCoachSessionKey(ctx: CoachContextParams): string {
@@ -61,13 +158,33 @@ export function useCoachChat(getContext: () => CoachContextParams) {
 
   const nextId = (): string => {
     msgSeq += 1
-    return `coach-msg-${msgSeq}`
+    return `coach-msg-${Date.now().toString(36)}-${msgSeq}`
   }
 
   const sessionKey = computed(() => buildCoachSessionKey(getContext()))
 
+  const ensureSessionHydrated = (key: string): CoachMessage[] => {
+    const inMemory = sessionHistories.value.get(key)
+    if (inMemory !== undefined) return inMemory
+    const restored = readPersistedHistory(key)
+    if (restored.length > 0) {
+      const nextMap = new Map(sessionHistories.value)
+      nextMap.set(key, restored)
+      sessionHistories.value = nextMap
+    }
+    return restored
+  }
+
+  watch(
+    sessionKey,
+    (key) => {
+      ensureSessionHydrated(key)
+    },
+    { immediate: true },
+  )
+
   const messageList = computed<CoachMessage[]>(
-    () => sessionHistories.value.get(sessionKey.value) ?? [],
+    () => sessionHistories.value.get(sessionKey.value) ?? readPersistedHistory(sessionKey.value),
   )
 
   const isThinking = computed(() => thinkingKeys.value.has(sessionKey.value))
@@ -82,20 +199,23 @@ export function useCoachChat(getContext: () => CoachContextParams) {
 
   const appendMessage = (key: string, msg: CoachMessage): void => {
     const nextMap = new Map(sessionHistories.value)
-    const current = nextMap.get(key) ?? []
-    nextMap.set(key, [...current, msg])
+    const current = nextMap.get(key) ?? readPersistedHistory(key)
+    const updated = [...current, msg]
+    nextMap.set(key, updated)
     sessionHistories.value = nextMap
+    if (!msg.error) {
+      writePersistedHistory(key, updated)
+    }
   }
 
   const removeMessage = (key: string, messageId: string): void => {
     const nextMap = new Map(sessionHistories.value)
     const current = nextMap.get(key)
     if (!current) return
-    nextMap.set(
-      key,
-      current.filter((item) => item.id !== messageId),
-    )
+    const updated = current.filter((item) => item.id !== messageId)
+    nextMap.set(key, updated)
     sessionHistories.value = nextMap
+    writePersistedHistory(key, updated)
   }
 
   const setThinking = (key: string, active: boolean): void => {
@@ -111,10 +231,12 @@ export function useCoachChat(getContext: () => CoachContextParams) {
 
   const clearCurrentSession = (): void => {
     const key = sessionKey.value
-    if (!sessionHistories.value.has(key)) return
-    const nextMap = new Map(sessionHistories.value)
-    nextMap.delete(key)
-    sessionHistories.value = nextMap
+    if (sessionHistories.value.has(key)) {
+      const nextMap = new Map(sessionHistories.value)
+      nextMap.delete(key)
+      sessionHistories.value = nextMap
+    }
+    removePersistedHistory(key)
   }
 
   const sendMessage = async (
@@ -127,6 +249,12 @@ export function useCoachChat(getContext: () => CoachContextParams) {
     if (!query || thinkingKeys.value.has(targetKey)) return
 
     const ctx = { ...getContext() }
+    const priorMessages = ensureSessionHydrated(targetKey)
+    const requestHistory = buildRequestHistory(
+      priorMessages,
+      options?.skipUserBubble ? query : undefined,
+    )
+
     if (!options?.skipUserBubble) {
       appendMessage(targetKey, { id: nextId(), role: 'user', content: query })
     }
@@ -142,6 +270,10 @@ export function useCoachChat(getContext: () => CoachContextParams) {
           query,
           ctx.userAnswer,
           ctx.gradingPoints,
+          {
+            threadId: targetKey,
+            history: requestHistory,
+          },
         )
         appendMessage(targetKey, {
           id: nextId(),

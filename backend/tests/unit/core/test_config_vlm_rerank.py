@@ -28,7 +28,7 @@ class TestVLMSettings:
 
     def test_app_settings_embeds_vlm_and_rerank(self) -> None:
         """AppSettings 暴露 vlm / rerank 子配置。"""
-        settings = AppSettings()
+        settings = AppSettings(_env_file=None)  # type: ignore[call-arg]
 
         assert isinstance(settings.vlm, VLMSettings)
         assert isinstance(settings.rerank, RerankSettings)

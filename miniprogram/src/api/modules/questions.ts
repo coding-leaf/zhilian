@@ -1,6 +1,8 @@
 import { request } from '@/utils/request'
 import { LONG_REQUEST_TIMEOUT_MS } from '@/utils/requestError'
 import type {
+  AskCoachHistoryItem,
+  AskCoachParams,
   AskCoachResponse,
   GenerateQuestionsParams,
   QuestionBankListResult,
@@ -27,6 +29,8 @@ import {
 } from '../adapters'
 
 export type {
+  AskCoachHistoryItem,
+  AskCoachParams,
   GenerateQuestionsParams,
   QuestionGenerateResult,
   QuestionBatchQuery,
@@ -124,20 +128,34 @@ export function apiListQuestionBankItems(
   }).then(adaptQuestionBankList)
 }
 
+export interface AskQuestionCoachOptions {
+  threadId?: string
+  history?: AskCoachHistoryItem[]
+}
+
 export function apiAskQuestionCoach(
   questionId: string,
   userPrompt: string,
   userAnswer?: string,
   gradingPoints?: string[],
+  options?: AskQuestionCoachOptions,
 ): Promise<AskCoachResponse> {
+  const payload: AskCoachParams = {
+    user_prompt: userPrompt,
+    user_answer: userAnswer,
+    grading_points: gradingPoints,
+  }
+  if (options?.threadId) {
+    payload.thread_id = options.threadId
+  }
+  if (options?.history && options.history.length > 0) {
+    payload.history = options.history
+  }
+
   return request<AskCoachResponse>({
     url: `/questions/${questionId}/ask-coach`,
     method: 'POST',
-    data: {
-      user_prompt: userPrompt,
-      user_answer: userAnswer,
-      grading_points: gradingPoints,
-    },
+    data: payload,
     // 助教答疑同步等大模型生成回答。
     timeout: LONG_REQUEST_TIMEOUT_MS,
   })

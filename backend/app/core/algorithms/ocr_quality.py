@@ -103,6 +103,20 @@ _LEGIT_GREEK_SUFFIXES: tuple[str, ...] = (
 _EDGE_STRIP_CHARS: str = ".,;:!?()[]{}<>\"'`"
 _CJK_RE: re.Pattern[str] = re.compile(r"[\u4e00-\u9fff]")
 _GREEK_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0391-\u03a9\u03b1-\u03c9]")
+_PUA_CHAR_RE: re.Pattern[str] = re.compile(r"[\ue000-\uf8ff]")
+_EXTENDED_LATIN_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0100-\u024f]")
+_STROKE_EXTENDED_LATIN_RE: re.Pattern[str] = re.compile(
+    r"[\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de]"
+)
+_PINYIN_VOWEL_CHARS: frozenset[str] = frozenset("āēīōūǖĀĒĪŌŪǕáéíóúǘǎěǐǒǔǚǍĚǏǑǓǙàèìòùǜńňǹ")
+_ASCII_ALNUM_OR_MATH_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9_=+\-^/*()\[\]{}]")
+_DIGIT_OR_MATH_OP_RE: re.Pattern[str] = re.compile(r"[0-9_=+^/*]")
+_DANGLING_INDEX_LINE_RE: re.Pattern[str] = re.compile(
+    r"^\d+\s*,\s*(?:\.{2,3}\s*,\s*)?[A-Za-z\u0370-\u03ff][A-Za-z0-9]{0,3}$"
+)
+_MARKDOWN_BLOCK_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^(?:#{1,6}\s+|[-*•]\s+|\d+[.)]\s+|>\s?|```|\|)"
+)
 _MATH_SYMBOL_CHARS: frozenset[str] = frozenset(
     "=+-\u2212\u2013\u00d7\u00f7\u2211\u222b\u221a\u221e\u2248\u2264\u2265\u2260\u00b1^_/\u2202\u2207\u2208\u2200\u2203\u00b7\u220f"
 )
@@ -111,6 +125,7 @@ _MATH_SYMBOL_CHARS: frozenset[str] = frozenset(
 _FORMULA_FRAGMENT_MAX_LINE_CHARS: int = 8
 _FORMULA_FRAGMENT_MIN_LINES: int = 6
 _FORMULA_FRAGMENT_LINE_RATIO: float = 0.45
+_COMBINED_FRAGMENT_LINE_RATIO: float = 0.35
 
 
 class UnqualifiedReasonCode(enum.StrEnum):
@@ -270,8 +285,26 @@ def _is_glued_greek_latin_token(token: str) -> bool:
     return False
 
 
+def _is_extended_latin_math_garble(core: str, *, line_has_cjk_or_math: bool) -> bool:
+    """判断 token 是否包含数学字体错映射的扩展拉丁字符（如 `ħx1`）或私用区 PUA 字符。"""
+    if _PUA_CHAR_RE.search(core):
+        return True
+    if _STROKE_EXTENDED_LATIN_RE.search(core) and _ASCII_ALNUM_OR_MATH_RE.search(core):
+        return True
+    if not _EXTENDED_LATIN_CHAR_RE.search(core):
+        return False
+    if _DIGIT_OR_MATH_OP_RE.search(core):
+        return True
+    if not line_has_cjk_or_math:
+        return False
+    has_non_pinyin_ext = any(
+        "\u0100" <= ch <= "\u024f" and ch not in _PINYIN_VOWEL_CHARS for ch in core
+    )
+    return has_non_pinyin_ext and any(ch.isascii() and ch.isalnum() for ch in core)
+
+
 def _math_garble_tokens(tokens: Sequence[str]) -> list[str]:
-    """返回单行 token 中属于数学字体映射错乱的碎片（希腊字母粘连、西里尔字母混入）。
+    """返回单行 token 中属于数学字体映射错乱的碎片（希腊字母粘连、西里尔、扩展拉丁/PUA）。
 
     西里尔判定仅在整行没有"真实西里尔词"（连续 >= 3 个西里尔字母）且行内存在
     拉丁/希腊/汉字时生效，以免误伤俄语、塞尔维亚语等真实西里尔正文。
@@ -284,13 +317,18 @@ def _math_garble_tokens(tokens: Sequence[str]) -> list[str]:
         and _CYRILLIC_WORD_RE.search(line) is None
         and _LATIN_GREEK_CJK_RE.search(line) is not None
     )
+    line_has_cjk_or_math = bool(
+        _CJK_RE.search(line) or any(ch in _MATH_SYMBOL_CHARS for ch in line)
+    )
     garbled: list[str] = []
     for tok in tokens:
         core = tok.strip(_EDGE_STRIP_CHARS)
         if not core:
             continue
-        if _is_glued_greek_latin_token(core) or (
-            stray_cyrillic_applies and _CYRILLIC_CHAR_RE.search(core) is not None
+        if (
+            _is_glued_greek_latin_token(core)
+            or (stray_cyrillic_applies and _CYRILLIC_CHAR_RE.search(core) is not None)
+            or _is_extended_latin_math_garble(core, line_has_cjk_or_math=line_has_cjk_or_math)
         ):
             garbled.append(tok)
     return garbled
@@ -362,14 +400,16 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
         if is_sym_line:
             sym_only_lines += 1
 
-    # ASCII 符号簇按符号字符计；数学字体错乱碎片（σpiupi/ђvpi，不含 ASCII 符号）按整段长度计
+    # ASCII 符号簇按符号字符计；数学字体错乱碎片（σpiupi/ђvpi/ħx1，不含 ASCII 符号）按整段长度计
     garble_char_total = sum(
         sum(1 for ch in frag if ch in _ALL_ASCII_SYMBOL_CHARS) or len(frag)
         for frag in all_fragments
     )
+    has_pua = _PUA_CHAR_RE.search(text) is not None
     garble_ratio = min(1.0, garble_char_total / non_ws_total)
     is_garbled = (
-        sym_only_lines >= 1
+        has_pua
+        or sym_only_lines >= 1
         or len(all_fragments) >= 2
         or (len(all_fragments) == 1 and garble_ratio >= 0.15)
     )
@@ -380,7 +420,7 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
 def sanitize_symbol_garble(text: str) -> str:
     """在缺少视觉/大模型修复时确定性清除不可读符号乱码噪声。
 
-    除 ASCII 符号簇外，同样移除数学字体映射错乱的碎片（`σpiupi`、`ђvpi` 等）。
+    除 ASCII 符号簇外，同样移除数学字体映射错乱的碎片（`σpiupi`、`ђvpi`、`ħx1`、PUA 等）。
     """
     cleaned_lines: list[str] = []
     for line in text.splitlines():
@@ -390,9 +430,11 @@ def sanitize_symbol_garble(text: str) -> str:
         tokens = line.split()
         math_garbled = set(_math_garble_tokens(tokens))
         kept_tokens = [
-            tok for tok in tokens if tok not in math_garbled and not _is_garble_cluster_token(tok)
+            _PUA_CHAR_RE.sub("", tok)
+            for tok in tokens
+            if tok not in math_garbled and not _is_garble_cluster_token(tok)
         ]
-        rebuilt = " ".join(kept_tokens).strip()
+        rebuilt = " ".join(tok for tok in kept_tokens if tok).strip()
         if rebuilt:
             cleaned_lines.append(rebuilt)
     return "\n".join(cleaned_lines)
@@ -400,7 +442,11 @@ def sanitize_symbol_garble(text: str) -> str:
 
 def _is_formula_fragment_line(line: str) -> bool:
     """判断单行是否为超短公式碎片（<= 8 字符、不含汉字、含希腊字母/数学符号/数字）。"""
-    if len(line) > _FORMULA_FRAGMENT_MAX_LINE_CHARS or _CJK_RE.search(line):
+    if (
+        len(line) > _FORMULA_FRAGMENT_MAX_LINE_CHARS
+        or _CJK_RE.search(line)
+        or _MARKDOWN_BLOCK_PREFIX_RE.match(line)
+    ):
         return False
     return any(
         ch.isdigit() or ch in _MATH_SYMBOL_CHARS or _GREEK_CHAR_RE.match(ch) is not None
@@ -408,18 +454,53 @@ def _is_formula_fragment_line(line: str) -> bool:
     )
 
 
+def _is_single_ascii_letter_line(line: str) -> bool:
+    """判断单行是否为孤立单字母变量行（如独立成行的 `m`、`n`、`d`、`X`）。"""
+    return len(line) == 1 and line.isascii() and line.isalpha()
+
+
+def _is_dangling_math_fragment(line: str) -> bool:
+    """判断单行是否为残缺上下标/悬空符号断行（如 `1, xi`、`2, ..., xi`、`X =`、`f(`）。"""
+    if len(line) > 24 or _CJK_RE.search(line) or _MARKDOWN_BLOCK_PREFIX_RE.match(line):
+        return False
+    if _DANGLING_INDEX_LINE_RE.match(line):
+        return True
+    if line.endswith(("=", "(", "[", ",")):
+        has_symbol_or_var = any(
+            ch.isalpha() or ch in _MATH_SYMBOL_CHARS or _GREEK_CHAR_RE.match(ch) is not None
+            for ch in line
+        )
+        return has_symbol_or_var
+    return False
+
+
+def _extract_non_code_lines(text: str) -> list[str]:
+    """抽取非空且不在围栏代码块内的行（用于排版损坏统计，避免误伤示例代码）。"""
+    lines: list[str] = []
+    in_fence = False
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            lines.append(stripped)
+    return lines
+
+
 def detect_broken_math_layout(text: str) -> bool:
     """探测 PDF 文本层中数学公式排版/字体映射损坏的页面。
 
     命中任一条件即返回 True（调用方据此触发视觉/大模型修复）：
 
-    1. 希腊字母粘连 >= 3 个拉丁小写字母（`σpiupi`，`\\b[α-ωΑ-Ω][a-z]{3,}`），
-       ``σmax``/``μmol`` 等合法缩写除外；
-    2. 西里尔字母（如 `ђ`）混入拉丁/希腊/汉字文本，且整行没有真实西里尔词；
-    3. 稠密超短公式碎片页：非空行 >= 6 且 > 45% 的行 <= 8 字符、不含汉字、
-       含希腊字母/数学符号/数字（上下标、求和上下限被拆成独立短行）。
+    1. 希腊字母粘连、孤立西里尔字母、扩展拉丁映射错乱（如 `ħx1`）或 PUA 字符；
+    2. 稠密超短公式碎片页：非空行 >= 6 且 > 45% 的行 <= 8 字符、不含汉字、
+       含希腊字母/数学符号/数字（上下标、求和上下限被拆成独立短行）；
+    3. 孤立单字母变量行堆积（如连续 `m`/`n`/`d`/`X`）或与残缺公式碎行共现。
 
-    正常中英文段落与 ``E=mc^2``、``σ = 0.5`` 这类独立短公式不会命中。
+    正常中英文段落、Markdown 列表/代码块与 ``E=mc^2``、``σ = 0.5`` 这类独立短公式不会命中。
 
     Args:
         text: 待检测的页面文本。
@@ -430,14 +511,44 @@ def detect_broken_math_layout(text: str) -> bool:
     if not text or not text.strip():
         return False
 
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if any(_math_garble_tokens(ln.split()) for ln in lines):
+    non_code_lines = _extract_non_code_lines(text)
+    if any(_math_garble_tokens(ln.split()) for ln in non_code_lines):
         return True
 
-    if len(lines) < _FORMULA_FRAGMENT_MIN_LINES:
+    fragment_lines = 0
+    single_letter_lines = 0
+    dangling_lines = 0
+    consecutive_single = 0
+    max_consecutive_single = 0
+
+    for ln in non_code_lines:
+        is_single = _is_single_ascii_letter_line(ln)
+        if is_single:
+            single_letter_lines += 1
+            consecutive_single += 1
+            max_consecutive_single = max(max_consecutive_single, consecutive_single)
+        else:
+            consecutive_single = 0
+        if _is_formula_fragment_line(ln):
+            fragment_lines += 1
+        if _is_dangling_math_fragment(ln):
+            dangling_lines += 1
+
+    if dangling_lines >= 1 and max_consecutive_single >= 3:
+        return True
+
+    if len(non_code_lines) < _FORMULA_FRAGMENT_MIN_LINES:
         return False
-    fragment_lines = sum(1 for ln in lines if _is_formula_fragment_line(ln))
-    return fragment_lines / len(lines) > _FORMULA_FRAGMENT_LINE_RATIO
+
+    if fragment_lines / len(non_code_lines) > _FORMULA_FRAGMENT_LINE_RATIO:
+        return True
+
+    if single_letter_lines >= 3:
+        combined = fragment_lines + single_letter_lines + dangling_lines
+        if combined / len(non_code_lines) >= _COMBINED_FRAGMENT_LINE_RATIO:
+            return True
+
+    return False
 
 
 def calculate_median_length(lengths: Sequence[int]) -> float:

@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/prd.md", "reason": "Task requirements, scope, and acceptance criteria"}
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/design.md", "reason": "Technical design, cross-layer contracts, and edge-case rules"}
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/implement.md", "reason": "Ordered implementation checklist and risky file notes"}
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/research/rag-extraction-chain.md", "reason": "End-to-end audit of PDF parsing, chunking, and snippet display"}
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/research/chat-context-chain.md", "reason": "End-to-end audit of question coach stateless design vs scoped coach"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend module layering and import-linter boundaries"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend complexity limits, typing, and test conventions"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error classes and graceful degradation rules"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured logging and privacy rules (never log chat content)"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Miniprogram SFC and composable patterns"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "API module and request/adapter conventions"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend lint, vue-tsc, and Vitest expectations"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Backend schema to frontend types/adapter field alignment"}

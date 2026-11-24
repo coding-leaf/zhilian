@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/prd.md", "reason": "Acceptance criteria to verify against final diff"}
+{"file": ".trellis/tasks/11-18-rag-source-extraction-audit/design.md", "reason": "Contract and architecture invariants to check"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend ruff, mypy strict, import-linter, pytest >=80% rules"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify core.algorithms remains pure without I/O imports"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend eslint, vue-tsc, and vitest gate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify AskCoachRequest/AskCoachParams snake_case field pinning"}
