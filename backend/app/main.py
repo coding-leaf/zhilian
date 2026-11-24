@@ -13,13 +13,14 @@
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.v1 import api_v1_router
 from app.container import AppContainer
@@ -157,6 +158,45 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 # 挂载 API v1 路由总线
 app.include_router(api_v1_router)
+
+_KATEX_FONTS_DIR = (Path(__file__).resolve().parent / "static" / "fonts" / "katex").resolve()
+_ALLOWED_FONT_MEDIA_TYPES: dict[str, str] = {
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+}
+_FONT_CACHE_HEADERS: dict[str, str] = {
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin": "*",
+}
+
+
+@app.get(
+    "/static/fonts/katex/{font_path:path}",
+    tags=["static"],
+    include_in_schema=False,
+)
+async def serve_katex_font(font_path: str) -> FileResponse:
+    """只读提供自托管 KaTeX 数学字体（.woff2 / .ttf），带强缓存与路径穿越防护。"""
+    if (
+        not font_path
+        or "/" in font_path
+        or "\\" in font_path
+        or "\x00" in font_path
+        or ".." in font_path
+        or font_path.startswith(".")
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    suffix = Path(font_path).suffix.lower()
+    media_type = _ALLOWED_FONT_MEDIA_TYPES.get(suffix)
+    if media_type is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    target = (_KATEX_FONTS_DIR / font_path).resolve()
+    if not target.is_relative_to(_KATEX_FONTS_DIR) or not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    return FileResponse(path=target, media_type=media_type, headers=_FONT_CACHE_HEADERS)
 
 
 @app.get("/health", tags=["system"], summary="服务健康检查")

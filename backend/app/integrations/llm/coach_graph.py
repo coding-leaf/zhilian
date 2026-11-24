@@ -4,6 +4,7 @@
 
     START -> route_intent
         chitchat  -> conversational_reply -> END          (零检索、零 LLM)
+        noise     -> noise_reply          -> END          (零检索、零 LLM，引导点击推荐话题)
         overview  -> generate_overview    -> END          (读取结构化知识点概览)
         detail_qa -> retrieve_and_rerank -> [确定性 Rerank 分数门禁]
                          generate_grounded -> verify_citations -> END
@@ -36,6 +37,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from app.core.algorithms.text_excerpt import merge_adjacent_snippet_texts, trim_excerpt_cleanly
+from app.core.errors import LLMResponseFormatError
 from app.integrations.llm.coach_memory import CoachTurn
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.rerank.protocol import RerankProtocol
@@ -48,7 +50,7 @@ from app.integrations.search.protocol import (
 
 logger = logging.getLogger(__name__)
 
-CoachIntent = Literal["chitchat", "overview", "detail_qa"]
+CoachIntent = Literal["chitchat", "overview", "noise", "detail_qa"]
 CoachMode = Literal["chitchat", "overview", "grounded", "fallback"]
 
 
@@ -185,14 +187,33 @@ _IDENTITY_PHRASES = (
     "自我介绍",
 )
 _OVERVIEW_PATTERN = re.compile(
-    r"梳理|框架|概览|总览|概括|大纲|思维导图|知识结构|知识体系|主要内容|整体内容"
+    r"梳理|框架|概览|总览|概括|大纲|思维导图|知识结构|知识体系|知识框架|主要内容|整体内容"
+    r"|关键适用条件|适用条件|易错点|重难点|核心考点|易混|混淆|边界条件|大白话|典型场景|推导思路"
     r"|总结(?:一下)?(?:这|本|该|整)?一?(?:章|节|课|篇|份|资料|文档|讲)"
-    r"|总结.{0,4}(?:重点|考点|要点|内容)"
+    r"|总结.{0,4}(?:重点|考点|要点|内容|核心)"
+    r"|总结"
     r"|(?:核心|主要|重要)?(?:考点|重点|知识点)(?:有哪些|是什么|都有什么|有什么)"
     r"|有哪些(?:考点|重点|知识点)|复习(?:重点|范围)"
 )
+_NOISE_STRIP_PATTERN = re.compile(r"[\W_]+")
+_NOISE_FILLER_CHARS = frozenset({"啊", "哦", "嗯", "额", "呃", "哈", "呵"})
 
 ChitchatKind = Literal["greeting", "thanks", "bye", "identity"]
+
+
+def is_short_noise(query: str) -> bool:
+    """识别纯数字、纯标点、重复单字符或极短无意义填充词。"""
+    text = query.strip()
+    if not text:
+        return False
+    compact = _NOISE_STRIP_PATTERN.sub("", text.lower())
+    if not compact:
+        return True
+    if compact.isdigit():
+        return True
+    if len(compact) >= 2 and len(set(compact)) == 1:
+        return True
+    return len(compact) == 1 and compact in _NOISE_FILLER_CHARS
 
 
 def classify_chitchat(query: str) -> ChitchatKind | None:
@@ -232,9 +253,11 @@ def classify_chitchat(query: str) -> ChitchatKind | None:
 
 
 def classify_intent(query: str, *, has_overview: bool) -> CoachIntent:
-    """确定性意图分类：寒暄 / 概览（需有结构化知识点）/ 细节答疑。"""
+    """确定性意图分类：寒暄 / 短噪声 / 概览（需有结构化知识点）/ 细节答疑。"""
     if classify_chitchat(query) is not None:
         return "chitchat"
+    if is_short_noise(query):
+        return "noise"
     if has_overview and _OVERVIEW_PATTERN.search(query):
         return "overview"
     return "detail_qa"
@@ -243,9 +266,13 @@ def classify_intent(query: str, *, has_overview: bool) -> CoachIntent:
 _DEFAULT_TOPIC_SUGGESTIONS = ["帮我梳理本章重点", "解释一个核心概念", "举个例子帮我理解"]
 
 
+def _default_suggestions(topics: Sequence[str]) -> list[str]:
+    return ([f"讲讲「{t}」" for t in topics[:3]] or list(_DEFAULT_TOPIC_SUGGESTIONS))[:3]
+
+
 def build_chitchat_reply(kind: ChitchatKind, topics: Sequence[str]) -> tuple[str, list[str]]:
     """生成零成本的亲切引导回复与 2-3 条学习建议。"""
-    suggestions = [f"讲讲「{t}」" for t in topics[:3]] or list(_DEFAULT_TOPIC_SUGGESTIONS)
+    suggestions = _default_suggestions(topics)
     replies = {
         "greeting": "你好呀～我是你的课程助教。可以直接问我资料里的概念、公式或题目，"
         "也可以让我帮你梳理本章重点，我会尽量依据你的资料来回答。",
@@ -254,7 +281,17 @@ def build_chitchat_reply(kind: ChitchatKind, topics: Sequence[str]) -> tuple[str
         "identity": "我是你的课程助教，只依据你上传的学习资料答疑：讲解概念与公式、"
         "梳理章节考点、解析题目思路。想从哪里开始？",
     }
-    return replies[kind], suggestions[:3]
+    return replies[kind], suggestions
+
+
+def build_noise_reply(topics: Sequence[str]) -> tuple[str, list[str]]:
+    """短噪声/无意义输入时的友好引导回复，避免无效检索与 LLM 改写开销。"""
+    suggestions = _default_suggestions(topics)
+    reply = (
+        "没太明白你想了解的具体内容～可以直接问我资料里的概念、公式或题目，"
+        "也可以点击下方推荐话题开始学习。"
+    )
+    return reply, suggestions
 
 
 def build_fallback_reply(topics: Sequence[str]) -> tuple[str, list[str]]:
@@ -263,8 +300,8 @@ def build_fallback_reply(topics: Sequence[str]) -> tuple[str, list[str]]:
         "这份资料里暂时没找到能可靠回答这个问题的依据，我就不随便猜测了。"
         "换个更具体的说法再试试，或者从资料里已有的内容问起。"
     )
-    suggestions = [f"讲讲「{t}」" for t in topics[:3]] or list(_DEFAULT_TOPIC_SUGGESTIONS)
-    return reply, suggestions[:3]
+    suggestions = _default_suggestions(topics)
+    return reply, suggestions
 
 
 # ---------------------------------------------------------------------------
@@ -481,25 +518,61 @@ class _CoachNodes:
         result = CoachGraphResult(reply=reply, suggestions=suggestions, cited=[], mode="chitchat")
         return {"result": result, "status": "ready"}
 
+    @staticmethod
+    def noise_reply(state: CoachGraphState) -> dict[str, Any]:
+        reply, suggestions = build_noise_reply(state["suggested_topics"])
+        result = CoachGraphResult(reply=reply, suggestions=suggestions, cited=[], mode="chitchat")
+        return {"result": result, "status": "ready"}
+
+    def _generate_plain_fallback(
+        self,
+        *,
+        system_prompt: str,
+        user_content: str,
+        options: LLMOptions,
+        topics: Sequence[str],
+    ) -> tuple[str, list[str]]:
+        plain_messages = [
+            LLMMessage(
+                role="system",
+                content=f"{system_prompt}\n请直接用自然语言回复，不要输出 JSON。",
+            ),
+            LLMMessage(role="user", content=user_content),
+        ]
+        plain = self.llm.generate(messages=plain_messages, options=options)
+        plain_text = plain.content.strip() if isinstance(plain.content, str) else ""
+        if not plain_text:
+            return build_fallback_reply(topics)
+        return plain_text, _default_suggestions(topics)
+
     def generate_overview(self, state: CoachGraphState) -> dict[str, Any]:
         history = _format_history(state["history"], self.cfg.max_history_turns)
-        draft, _ = self.llm.generate_structured(
-            messages=[
-                LLMMessage(role="system", content=_OVERVIEW_SYSTEM_PROMPT),
-                LLMMessage(
-                    role="user",
-                    content=(
-                        f"{history}问题：{state['query']}\n\n"
-                        f"【知识点梳理】\n{state['overview_context']}"
-                    ),
-                ),
-            ],
-            response_model=CoachOverviewDraft,
-            options=LLMOptions(temperature=0.45, max_tokens=900),
+        user_content = (
+            f"{history}问题：{state['query']}\n\n【知识点梳理】\n{state['overview_context']}"
         )
+        options = LLMOptions(temperature=0.45, max_tokens=4096)
+        try:
+            draft, _ = self.llm.generate_structured(
+                messages=[
+                    LLMMessage(role="system", content=_OVERVIEW_SYSTEM_PROMPT),
+                    LLMMessage(role="user", content=user_content),
+                ],
+                response_model=CoachOverviewDraft,
+                options=options,
+            )
+            reply = draft.reply
+            suggestions = list(draft.suggestions)[:3]
+        except LLMResponseFormatError:
+            logger.warning("coach overview structured output degraded to plain generate")
+            reply, suggestions = self._generate_plain_fallback(
+                system_prompt=_OVERVIEW_SYSTEM_PROMPT,
+                user_content=user_content,
+                options=options,
+                topics=state["suggested_topics"],
+            )
         result = CoachGraphResult(
-            reply=draft.reply,
-            suggestions=list(draft.suggestions)[:3],
+            reply=reply,
+            suggestions=suggestions,
             cited=[],
             mode="overview",
         )
@@ -562,7 +635,7 @@ class _CoachNodes:
                     ),
                 ],
                 response_model=RewrittenQuery,
-                options=LLMOptions(temperature=0.1, max_tokens=120),
+                options=LLMOptions(temperature=0.1, max_tokens=2048),
             )
             new_query = rewritten.query.strip() or fallback_query
         except Exception as exc:
@@ -597,17 +670,33 @@ class _CoachNodes:
             for item in state["candidates"]
         )
         history = _format_history(state["history"], self.cfg.max_history_turns)
-        answer, _ = self.llm.generate_structured(
-            messages=[
-                LLMMessage(role="system", content=_GROUNDED_SYSTEM_PROMPT),
-                LLMMessage(
-                    role="user",
-                    content=f"{history}问题：{state['query']}\n\n资料：\n{evidence}",
-                ),
-            ],
-            response_model=CoachDraft,
-            options=LLMOptions(temperature=0.45, max_tokens=900),
-        )
+        user_content = f"{history}问题：{state['query']}\n\n资料：\n{evidence}"
+        options = LLMOptions(temperature=0.45, max_tokens=4096)
+        try:
+            answer, _ = self.llm.generate_structured(
+                messages=[
+                    LLMMessage(role="system", content=_GROUNDED_SYSTEM_PROMPT),
+                    LLMMessage(role="user", content=user_content),
+                ],
+                response_model=CoachDraft,
+                options=options,
+            )
+        except LLMResponseFormatError:
+            logger.warning("coach grounded structured output degraded to plain generate")
+            top_ids = [c.snippet_id for c in state["candidates"][:2]]
+            if not top_ids:
+                return {"answer": None}
+            reply, suggestions = self._generate_plain_fallback(
+                system_prompt=_GROUNDED_SYSTEM_PROMPT,
+                user_content=user_content,
+                options=options,
+                topics=state["suggested_topics"],
+            )
+            answer = CoachDraft(
+                reply=reply,
+                suggestions=suggestions,
+                citation_ids=top_ids,
+            )
         return {"answer": answer}
 
     @staticmethod
@@ -641,6 +730,7 @@ def build_coach_graph(
     graph = StateGraph(CoachGraphState)
     graph.add_node("route_intent", nodes.route_intent)
     graph.add_node("conversational_reply", nodes.conversational_reply)
+    graph.add_node("noise_reply", nodes.noise_reply)
     graph.add_node("generate_overview", nodes.generate_overview)
     graph.add_node("retrieve_and_rerank", nodes.retrieve_and_rerank)
     graph.add_node("rewrite_query", nodes.rewrite_query)
@@ -653,6 +743,7 @@ def build_coach_graph(
         nodes.route_after_intent,
         {
             "chitchat": "conversational_reply",
+            "noise": "noise_reply",
             "overview": "generate_overview",
             "detail_qa": "retrieve_and_rerank",
         },
@@ -669,6 +760,7 @@ def build_coach_graph(
     graph.add_edge("rewrite_query", "retrieve_and_rerank")
     graph.add_edge("generate_grounded", "verify_citations")
     graph.add_edge("conversational_reply", END)
+    graph.add_edge("noise_reply", END)
     graph.add_edge("generate_overview", END)
     graph.add_edge("honest_fallback", END)
     graph.add_edge("verify_citations", END)
@@ -787,8 +879,10 @@ __all__ = [
     "build_chitchat_reply",
     "build_coach_graph",
     "build_fallback_reply",
+    "build_noise_reply",
     "classify_chitchat",
     "classify_intent",
+    "is_short_noise",
     "run_coach_graph",
     "verify_citations",
 ]

@@ -164,7 +164,7 @@ class TestAgentGraphWorkflow:
         fake_adapter.set_canned_response("持续损坏", persistent_bad)
 
         with pytest.raises(
-            LLMResponseFormatError, match="结构化 Agent 状态图校验自愈失败"
+            LLMResponseFormatError, match="AI 输出格式暂时异常，请稍后重试"
         ) as exc_info:
             run_structured_agent_workflow(
                 adapter=fake_adapter,
@@ -176,6 +176,9 @@ class TestAgentGraphWorkflow:
         assert err.error_code == 30014
         assert err.status_code == 502
         assert err.details.get("retry_count") == 1
+        assert "bad_syntax" not in err.message
+        assert "ValidationError" not in err.message
+        assert "last_content_preview" not in err.details
 
     def test_graph_concurrency_safety(self) -> None:
         """测试多线程并发执行状态图互不干扰。"""
@@ -312,10 +315,11 @@ class TestAgentGraphUnitNodes:
         assert decide_after_validation(state3) == "fallback_node"
 
     def test_repair_prompt_node_context_injection(self) -> None:
-        """测试 repair_prompt_node 追加上下文与递增计数。"""
+        """测试 repair_prompt_node 追加上下文、目标字段说明与递增计数。"""
         state: AgentWorkflowState = {
             "retry_count": 0,
             "messages": [LLMMessage(role="user", content="请输出报告")],
+            "response_model": StudentReport,
             "raw_response": LLMResponse(
                 content="残缺输出",
                 usage=LLMUsage(),
@@ -331,6 +335,9 @@ class TestAgentGraphUnitNodes:
         assert msgs[1].content == "残缺输出"
         assert msgs[2].role == "user"
         assert "缺少必需字段 student_id" in msgs[2].content
+        assert "student_id" in msgs[2].content
+        assert "mastery_rate" in msgs[2].content
+        assert "suggestions" in msgs[2].content
 
     def test_fallback_node(self) -> None:
         """测试 fallback_node 状态输出。"""
@@ -383,10 +390,13 @@ class TestAgentGraphUnitNodes:
             lambda adapter=None: mock_graph,
         )
 
-        with pytest.raises(LLMResponseFormatError, match="模拟图执行失败") as exc_info:
+        with pytest.raises(
+            LLMResponseFormatError, match="AI 输出格式暂时异常，请稍后重试"
+        ) as exc_info:
             run_structured_agent_workflow(
                 adapter=fake_adapter,
                 messages=[LLMMessage(role="user", content="测试")],
                 response_model=StudentReport,
             )
-        assert exc_info.value.details.get("last_content_preview") == ""
+        assert "模拟图执行失败" not in exc_info.value.message
+        assert "last_content_preview" not in exc_info.value.details
