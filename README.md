@@ -68,30 +68,60 @@ docs/               设计规范、开发过程文档、待解决问题、截图
 
 ## 4 快速开始
 
-前置：Docker、[uv](https://docs.astral.sh/uv/)、Node 22+、pnpm、微信开发者工具。
+前置：Docker Desktop、[uv](https://docs.astral.sh/uv/)（Python 3.13）、Node 22+、pnpm、微信开发者工具（仅联调小程序时需要）。
+
+> **Windows 提示**：所有后端（`uv`）与前端（`pnpm`）命令直接在本机 PowerShell 运行即可，无需进入 WSL。
 
 ```bash
-# 1) 起中间件（postgres+pgvector / redis / minio / worker）
-docker compose -f deploy/docker-compose.yml up -d
+# 1) 先准备后端环境变量（必须在 docker compose 之前执行，否则 worker 挂载 env_file 会报错）
+cp backend/.env.example backend/.env   # 默认全是 memory / fake，不填任何 API Key 即可启动并跑黑盒/接口测试
 
-# 2) 后端
+# 2) 启动基础中间件
+#    仅做接口联调 / 黑盒测试（免构建 worker 镜像，速度最快）：
+docker compose -f deploy/docker-compose.yml up -d postgres redis minio
+#    如需同时启动 Docker 版后台异步 worker：
+# docker compose -f deploy/docker-compose.yml up -d
+
+# 3) 安装依赖、迁移数据库并启动后端
 cd backend
-cp .env.example .env          # 默认全是 memory / fake，不接外部服务也能起来
 uv sync
 uv run alembic upgrade head
-uv run uvicorn app.main:app --reload      # http://localhost:8000/docs
+uv run uvicorn app.main:app --reload   # 启动后访问 http://localhost:8000/docs（Swagger 接口页）
+#    如需让同局域网队友访问本机接口，加 --host 0.0.0.0：
+# uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 3) 小程序端
+# 4) 启动小程序端（如仅用 Swagger / Postman / pytest 测后端接口，可跳过本步）
 cd ../miniprogram
 pnpm install
-pnpm run dev:mp-weixin        # 产物在 dist/dev/mp-weixin
+pnpm run dev:mp-weixin                 # 编译产物输出在 miniprogram/dist/dev/mp-weixin
 ```
 
-然后用微信开发者工具**导入 `miniprogram/dist/dev/mp-weixin` 目录**（`appid` 为 `touristappid`，免登录）。
+### 微信开发者工具导入与联调要点
 
-要让出题 / 抽取 / 判题真正调用大模型，把 `backend/.env` 里的 `ZHILIAN_LLM__PROVIDER`
-改成 `deepseek` / `openai` / `dashscope` / `siliconflow` 并填上 `BASE_URL` 与 `API_KEY`。
-队列需真实消费时，把 `ZHILIAN_QUEUE__PROVIDER` 设为 `redis`，另开一个终端跑 `task worker`。
+1. 打开微信开发者工具，选择**导入项目**，目录填 **`miniprogram/dist/dev/mp-weixin`**（注意不是 `miniprogram/` 根目录），AppID 可选测试号或 `touristappid`。
+2. **必须勾选**：点击右上角「详情 → 本地设置」，勾选 **「不校验合法域名、web-view（业务域名）、TLS 版本以及 HTTPS 证书」**，否则无法请求本地 `http://localhost:8000`。
+3. 如需连接其他电脑或服务器的后端，在 `miniprogram/` 下新建 `.env.local` 并重新运行 `pnpm run dev:mp-weixin`：
+   ```env
+   VITE_API_BASE_URL=http://<后端IP>:8000/api/v1
+   ```
+
+### 可选：开启真实 AI / 存储 / 队列能力
+
+默认 `.env.example` 全为 `fake` / `memory`，适合零成本启动与确定性黑盒测试。如需真实调用外部模型，修改 `backend/.env`（切勿提交含密钥的 `.env`）：
+
+- **大模型 / 向量化 / OCR**：将 `ZHILIAN_LLM__PROVIDER`、`ZHILIAN_EMBEDDING__PROVIDER`、`ZHILIAN_OCR__PROVIDER` 改为对应服务商（如 `openai` / `deepseek` / `dashscope` / `siliconflow` / `baidu`）并填入 `BASE_URL`、`API_KEY`、`MODEL`。
+- **云端 VLM 脏页转录与 Rerank 精排**（可选）：将 `ZHILIAN_VLM__ENABLED=true`、`ZHILIAN_RERANK__ENABLED=true` 并配置对应 `PROVIDER` / `MODEL` / `API_KEY`。
+- **真实对象存储 / 检索 / 队列**（可选）：
+  - MinIO：`ZHILIAN_STORAGE__PROVIDER=minio`（`deploy/docker-compose.yml` 默认账号密码见文件内 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`）；
+  - 向量检索：`ZHILIAN_SEARCH__PROVIDER=pgvector`；
+  - 异步队列：`ZHILIAN_QUEUE__PROVIDER=redis`、`ZHILIAN_IDEMPOTENCY__PROVIDER=redis`，并确保 Docker `worker` 运行或另开终端执行 `task worker`。
+
+### 仅跑离线自动化测试（零 Docker / 零密钥）
+
+```bash
+cd backend && uv run pytest tests
+cd miniprogram && pnpm run test:unit
+```
 
 ## 5 质量门禁
 
