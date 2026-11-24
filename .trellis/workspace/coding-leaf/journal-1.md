@@ -755,3 +755,32 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地
+<!-- trellis-session: v=2 fp=669823a623bb869a -->
+
+**Date**: 2026-11-25
+**Task**: M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+Swarm 4轨并行落地M2：学情4 Tab课程全量联动过滤与自定义题单收藏夹（迁移0014）、PDF/PPT去噪切片与乱码VLM/OCR兜底、三层封杀元考点与考前复习级知识卡、跨页收纳抽屉与微信ignoreDevUnusedFiles配置固化；全量后端(92.29% cov)与前端(38 files/311 tests, 0 span warning)门禁通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a22902` | feat(backend): 学情4 Tab课程全量联动过滤与自定义题单收藏夹（迁移0014） |
+| `4fd53e0` | feat(backend): PDF/PPT去噪切片、乱码VLM/OCR兜底与复习级知识点卡片 |
+| `c57c143` | feat(miniprogram): 学情联动、题库三视图收纳抽屉与复习级知识卡 |
+| `e3df28e` | docs(spec): 沉淀M2课程过滤、题单API、知识卡与微信构建配置规范 |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 可按需生成PR文档或推进M3（Academic Editorial全站UI视觉精修）并归档父任务11-24-product-ux-quality-upgrade。
