@@ -44,7 +44,7 @@ from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.queue.protocol import QueueProtocol
 from app.integrations.rerank.protocol import RerankProtocol
-from app.integrations.search.protocol import SearchProtocol
+from app.integrations.search.protocol import SearchOptions, SearchProtocol
 from app.models.knowledge import KnowledgePoint
 from app.models.material import Material, MaterialStatus
 from app.models.question import (
@@ -62,6 +62,7 @@ from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
 from app.schemas.material import SourceSnippetDTO
 from app.schemas.question import (
+    AskCoachHistoryItem,
     AskCoachResponse,
     CoachSourceResponse,
     QuestionBatchSourceDTO,
@@ -1588,6 +1589,152 @@ class QuestionService:
 
     list_quality_checks_by_material = list_quality_checks
 
+    def _resolve_question_source_context(
+        self,
+        question: Question,
+        user_id: uuid.UUID,
+    ) -> str | None:
+        """读取题目关联的教材原文切片；未绑定时通过轻量检索补充教材依据。"""
+        if question.source_snippet_id is not None and self.material_repo is not None:
+            snippet_map = build_source_snippet_map(
+                self.material_repo,
+                [question.source_snippet_id],
+                user_id,
+            )
+            snippet = snippet_map.get(question.source_snippet_id)
+            if snippet is not None and snippet.snippet_content.strip():
+                header = (
+                    f"（{snippet.chapter_title} · 第 {snippet.page_index} 页）"
+                    if snippet.chapter_title
+                    else f"（第 {snippet.page_index} 页）"
+                )
+                excerpt = trim_excerpt_cleanly(snippet.snippet_content, max_chars=900)
+                return f"{header}\n{excerpt}"
+
+        if self.search_adapter is None:
+            return None
+
+        try:
+            search_res = self.search_adapter.search(
+                query=question.stem,
+                user_id=user_id,
+                material_id=question.material_id,
+                version_id=question.version_id,
+                options=SearchOptions(top_k=2, vector_top_k=6),
+            )
+        except Exception as exc:
+            logger.warning(
+                "question coach fallback search failed: question_id=%s error=%s",
+                question.id,
+                type(exc).__name__,
+            )
+            return None
+
+        parts: list[str] = []
+        for item in search_res.items[:2]:
+            content = item.content.strip()
+            if not content:
+                continue
+            prefix = f"[{item.chapter_title}] " if item.chapter_title else ""
+            parts.append(f"{prefix}{trim_excerpt_cleanly(content, max_chars=450)}")
+        return "\n\n".join(parts) if parts else None
+
+    def _build_question_coach_context(
+        self,
+        *,
+        question: Question,
+        user_id: uuid.UUID,
+        user_answer: str | None,
+        grading_points: list[str] | None,
+    ) -> tuple[str, str]:
+        """构建题目助教的 system prompt 与题目/教材锚点上下文（含未作答防剧透）。"""
+        cleaned_answer = user_answer.strip() if user_answer else ""
+        has_user_answer = bool(cleaned_answer)
+
+        system_lines = [
+            "你是一位亲切耐心的 AI 助教，像老师一对一轻声点拨那样帮学生搞懂这道题。",
+            "【表达规范】",
+            "1. 先用 1~2 句话直接给出核心结论或错因要点；",
+            "2. 再补充 2~3 条简短要点讲清判断依据或直观小例子，语气自然温暖、通俗口语；",
+            "3. 总长控制在 150~250 字左右，方便手机阅读；",
+            "4. 严禁使用「一、二、三、」教科书式大纲或长篇大论；",
+            (
+                "5. 若存在多轮历史对话，请结合完整对话脉络回答当前追问"
+                "（如准确回顾学生早先提出的问题或上下文指代）；"
+            ),
+            "6. suggestions 给出 2~3 条简短自然的延伸追问建议（每条不超过 15 字）。",
+        ]
+        if not has_user_answer:
+            system_lines.append(
+                "7. 【防剧透规则】学生尚未提交本题作答，请优先通过思路拆解与教材知识点启发引导，"
+                "严禁直接说出正确选项字母或标准答案原文。"
+            )
+        system_content = "\n".join(system_lines)
+
+        context_parts = [
+            f"【题干】\n{question.stem}",
+            f"【题目类型】\n{question.question_type}",
+        ]
+        if has_user_answer:
+            context_parts.append(f"【标准答案】\n{question.answer}")
+        if question.options:
+            context_parts.append(f"【选项】\n{json.dumps(question.options, ensure_ascii=False)}")
+        if has_user_answer and question.analysis:
+            context_parts.append(f"【解析】\n{question.analysis}")
+        if has_user_answer:
+            context_parts.append(f"【学生作答】\n{cleaned_answer}")
+        if grading_points:
+            context_parts.append(f"【采分点/关键词】\n{', '.join(grading_points)}")
+        source_context = self._resolve_question_source_context(question, user_id)
+        if source_context:
+            context_parts.append(f"【教材原文依据】\n{source_context}")
+
+        return system_content, "\n\n".join(context_parts)
+
+    def _load_question_history(
+        self,
+        *,
+        memory_key: str,
+        fallback_history: Sequence[AskCoachHistoryItem] | None,
+    ) -> tuple[list[LLMMessage], bool]:
+        """优先从服务端会话记忆加载历史轮次；为空时回退使用前端传入的兜底 history。"""
+        turns = self.memory_store.load(memory_key) if self.memory_store is not None else []
+        if turns:
+            history_messages: list[LLMMessage] = []
+            for turn in turns:
+                history_messages.append(LLMMessage(role="user", content=turn.user))
+                history_messages.append(LLMMessage(role="assistant", content=turn.assistant))
+            return history_messages, False
+
+        if not fallback_history:
+            return [], False
+
+        fallback_messages = [
+            LLMMessage(role=item.role, content=item.content.strip())
+            for item in fallback_history
+            if item.content.strip()
+        ]
+        return fallback_messages, bool(fallback_messages)
+
+    def _seed_question_memory(
+        self,
+        memory_key: str,
+        history_messages: Sequence[LLMMessage],
+    ) -> None:
+        """将冷启动回退 history 中的完整问答对补种进服务端记忆。"""
+        if self.memory_store is None:
+            return
+        idx = 0
+        total = len(history_messages)
+        while idx + 1 < total:
+            current = history_messages[idx]
+            nxt = history_messages[idx + 1]
+            if current.role == "user" and nxt.role == "assistant":
+                self.memory_store.append(memory_key, current.content, nxt.content)
+                idx += 2
+            else:
+                idx += 1
+
     def ask_coach(
         self,
         question_id: uuid.UUID,
@@ -1595,15 +1742,19 @@ class QuestionService:
         user_prompt: str,
         user_answer: str | None = None,
         grading_points: list[str] | None = None,
+        thread_id: str | None = None,
+        history: Sequence[AskCoachHistoryItem] | None = None,
     ) -> AskCoachResponse:
-        """AI 助教结合题目上下文、用户作答与采分点进行深度启发式答疑。
+        """AI 助教结合题目上下文、教材原文依据与多轮记忆进行深度启发式答疑。
 
         Args:
             question_id: 题目主键 UUID。
             user_id: 租户用户主键。
             user_prompt: 学生追问内容。
-            user_answer: 学生原始作答（可选）。
+            user_answer: 学生原始作答（可选；为空时启用防剧透引导）。
             grading_points: 相关采分点（可选）。
+            thread_id: 可选会话线程标识（默认按题目隔离）。
+            history: 可选前端兜底历史消息（服务端记忆为空时启用）。
 
         Returns:
             AskCoachResponse: AI 助教答疑内容与延伸思考建议。
@@ -1615,34 +1766,29 @@ class QuestionService:
         if question is None:
             raise QuestionNotFoundError("请求的题目不存在或无权访问")
 
-        system_content = (
-            "你是一位亲切耐心的 AI 助教，像老师一对一轻声点拨那样帮学生搞懂这道题。\n"
-            "【表达规范】\n"
-            "1. 先用 1~2 句话直接给出核心结论或错因要点；\n"
-            "2. 再补充 2~3 条简短要点讲清判断依据或直观小例子，语气自然温暖、通俗口语；\n"
-            "3. 总长控制在 150~250 字左右，方便手机阅读；\n"
-            "4. 严禁使用「一、二、三、」教科书式大纲或长篇大论；\n"
-            "5. suggestions 给出 2~3 条简短自然的延伸追问建议（每条不超过 15 字）。"
-        )
-        context_parts = [
-            f"【题干】\n{question.stem}",
-            f"【题目类型】\n{question.question_type}",
-            f"【标准答案】\n{question.answer}",
-        ]
-        if question.options:
-            context_parts.append(f"【选项】\n{json.dumps(question.options, ensure_ascii=False)}")
-        if question.analysis:
-            context_parts.append(f"【解析】\n{question.analysis}")
-        if user_answer:
-            context_parts.append(f"【学生作答】\n{user_answer}")
-        if grading_points:
-            context_parts.append(f"【采分点/关键词】\n{', '.join(grading_points)}")
-        context_parts.append(f"【学生追问】\n{user_prompt}")
+        effective_thread = (thread_id or "").strip() or f"q:{question_id}"
+        memory_key = f"{user_id}:question:{question_id}:{effective_thread}"
 
-        user_content = "\n\n".join(context_parts)
+        system_content, question_context = self._build_question_coach_context(
+            question=question,
+            user_id=user_id,
+            user_answer=user_answer,
+            grading_points=grading_points,
+        )
+        history_messages, from_fallback = self._load_question_history(
+            memory_key=memory_key,
+            fallback_history=history,
+        )
+
         messages = [
             LLMMessage(role="system", content=system_content),
-            LLMMessage(role="user", content=user_content),
+            LLMMessage(role="user", content=question_context),
+            LLMMessage(
+                role="assistant",
+                content="好的，我已经了解这道题和相关教材内容，请随时告诉我你的疑问。",
+            ),
+            *history_messages,
+            LLMMessage(role="user", content=user_prompt),
         ]
         options = LLMOptions(temperature=0.65, max_tokens=900)
 
@@ -1651,6 +1797,10 @@ class QuestionService:
             response_model=AskCoachResponse,
             options=options,
         )
+        if self.memory_store is not None:
+            if from_fallback and history_messages:
+                self._seed_question_memory(memory_key, history_messages)
+            self.memory_store.append(memory_key, user_prompt, output.reply)
         return output
 
     def _resolve_coach_scope(

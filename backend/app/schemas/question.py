@@ -8,7 +8,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -309,12 +309,30 @@ class QuestionQualityCheckListResponse(MaterialQualityChecksResponse):
     """题目质检拦截记录响应模型 (兼容别名)。"""
 
 
+class AskCoachHistoryItem(BaseModel):
+    """题目助教多轮对话单条历史消息契约。"""
+
+    role: Literal["user", "assistant"] = Field(..., description="消息角色")
+    content: str = Field(..., min_length=1, max_length=2000, description="消息正文")
+
+
 class AskCoachRequest(BaseModel):
     """AI 助教深度答疑追问请求入参模型。"""
 
     user_prompt: str = Field(..., min_length=1, max_length=1000, description="学生追问内容")
     user_answer: str | None = Field(default=None, description="学生的原始作答")
     grading_points: list[str] | None = Field(default=None, description="相关采分点")
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="可选会话线程标识；同一题目与线程的追问共享多轮对话记忆",
+    )
+    history: list[AskCoachHistoryItem] | None = Field(
+        default=None,
+        max_length=24,
+        description="可选前端兜底历史消息（服务端记忆为空时用于冷启动恢复）",
+    )
 
 
 class AskCoachResponse(BaseModel):
@@ -408,6 +426,7 @@ class ScopedCoachResponse(AskCoachResponse):
 
 
 __all__ = [
+    "AskCoachHistoryItem",
     "AskCoachRequest",
     "AskCoachResponse",
     "CoachSourceResponse",

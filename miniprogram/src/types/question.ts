@@ -86,6 +86,21 @@ export interface QuestionBankQuery {
   page_size?: number
 }
 
+export interface AskCoachHistoryItem {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface AskCoachParams {
+  user_prompt: string
+  user_answer?: string
+  grading_points?: string[]
+  /** 多轮对话线程 ID（前端传 sessionKey）；与 backend AskCoachRequest.thread_id 对齐，可选。 */
+  thread_id?: string
+  /** 近期历史对话（仅作服务端冷启动兜底）；与 backend AskCoachRequest.history 对齐，可选。 */
+  history?: AskCoachHistoryItem[]
+}
+
 export interface ScopedCoachParams {
   folder_id?: string
   material_id?: string

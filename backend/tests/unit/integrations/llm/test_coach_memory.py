@@ -52,18 +52,18 @@ class DictRedis:
 class TestInMemory:
     def test_roundtrip_and_empty_load(self) -> None:
         memory = CoachSessionMemory()
-        assert memory.max_turns == 6
+        assert memory.max_turns == 12
         assert memory.load("t") == []
         memory.append("t", "问题1", "回答1")
         memory.append("t", "问题2", "回答2")
         assert memory.load("t") == [CoachTurn("问题1", "回答1"), CoachTurn("问题2", "回答2")]
 
-    def test_sliding_window_keeps_last_six(self) -> None:
+    def test_sliding_window_keeps_last_twelve(self) -> None:
         memory = CoachSessionMemory()
-        for i in range(10):
+        for i in range(16):
             memory.append("t", f"q{i}", f"a{i}")
         turns = memory.load("t")
-        assert [t.user for t in turns] == [f"q{i}" for i in range(4, 10)]
+        assert [t.user for t in turns] == [f"q{i}" for i in range(4, 16)]
 
     def test_custom_max_turns_and_validation(self) -> None:
         memory = CoachSessionMemory(max_turns=2)
@@ -83,10 +83,10 @@ class TestInMemory:
 
     def test_truncation_and_strip(self) -> None:
         memory = CoachSessionMemory()
-        memory.append("t", "  " + "问" * 600 + "  ", "答" * 900)
+        memory.append("t", "  " + "问" * 700 + "  ", "答" * 1100)
         (turn,) = memory.load("t")
-        assert turn.user == "问" * 500
-        assert turn.assistant == "答" * 800
+        assert turn.user == "问" * 600
+        assert turn.assistant == "答" * 1000
 
     def test_ttl_expiry(self, clock: Clock) -> None:
         memory = CoachSessionMemory(ttl_seconds=60)
@@ -149,10 +149,10 @@ class TestRedisPath:
 
     def test_window_applies_on_load_of_oversized_payload(self) -> None:
         redis = DictRedis()
-        payload = [{"user": f"q{i}", "assistant": f"a{i}"} for i in range(10)]
+        payload = [{"user": f"q{i}", "assistant": f"a{i}"} for i in range(16)]
         redis.store["zhilian:coach:memory:t"] = json.dumps(payload)
         memory = CoachSessionMemory(redis_client=redis)
-        assert [t.user for t in memory.load("t")] == [f"q{i}" for i in range(4, 10)]
+        assert [t.user for t in memory.load("t")] == [f"q{i}" for i in range(4, 16)]
 
     def test_non_list_and_malformed_items(self) -> None:
         redis = DictRedis()

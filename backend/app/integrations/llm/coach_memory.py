@@ -1,6 +1,6 @@
 """课程助教多轮会话滑动窗口记忆 (CoachSessionMemory)。
 
-- 仅保留最近 N 轮 (默认 6 轮) 的 (用户问题, 助教回复)，24 小时 TTL；
+- 仅保留最近 N 轮 (默认 12 轮) 的 (用户问题, 助教回复)，24 小时 TTL；
 - 优先落 Redis（跨进程/重启可用，鸭子类型客户端：get/set），无 Redis 时降级为进程内 LRU；
 - 零数据库迁移，离线单测零网络；
 - 任何 Redis 故障只降级为内存，绝不阻断问答；日志只记录异常类型，从不记录会话内容。
@@ -18,11 +18,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_TURNS = 6
+DEFAULT_MAX_TURNS = 12
 DEFAULT_TTL_SECONDS = 24 * 3600
 DEFAULT_MAX_LOCAL_THREADS = 512
-_MAX_USER_CHARS = 500
-_MAX_ASSISTANT_CHARS = 800
+_MAX_USER_CHARS = 600
+_MAX_ASSISTANT_CHARS = 1000
 _REDIS_KEY_PREFIX = "zhilian:coach:memory:"
 
 

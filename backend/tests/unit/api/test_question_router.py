@@ -838,6 +838,52 @@ async def test_ask_coach_success(mock_user: User, mock_question_service: MagicMo
         user_prompt="为什么这里可以使用贪心选择？",
         user_answer="我的选择是 A",
         grading_points=["无后效性", "最优子结构"],
+        thread_id=None,
+        history=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_coach_forwards_thread_id_and_history(
+    mock_user: User, mock_question_service: MagicMock
+) -> None:
+    """Tests POST /api/v1/questions/{id}/ask-coach forwards thread_id and history."""
+    from app.schemas.question import AskCoachHistoryItem, AskCoachResponse
+
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_question_service] = lambda: mock_question_service
+
+    question_id = uuid.uuid4()
+    mock_question_service.ask_coach.return_value = AskCoachResponse(
+        reply="你最开始问的是为什么选A。",
+        suggestions=["继续追问"],
+    )
+
+    payload = {
+        "user_prompt": "我刚开始问的什么",
+        "thread_id": f"q:{question_id}",
+        "history": [
+            {"role": "user", "content": "为什么选A？"},
+            {"role": "assistant", "content": "因为满足核心前提。"},
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/v1/questions/{question_id}/ask-coach", json=payload)
+
+    assert response.status_code == 200
+    mock_question_service.ask_coach.assert_called_once_with(
+        question_id=question_id,
+        user_id=mock_user.id,
+        user_prompt="我刚开始问的什么",
+        user_answer=None,
+        grading_points=None,
+        thread_id=f"q:{question_id}",
+        history=[
+            AskCoachHistoryItem(role="user", content="为什么选A？"),
+            AskCoachHistoryItem(role="assistant", content="因为满足核心前提。"),
+        ],
     )
 
 

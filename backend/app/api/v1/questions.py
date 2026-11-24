@@ -364,6 +364,8 @@ def ask_coach(
         user_prompt=payload.user_prompt,
         user_answer=payload.user_answer,
         grading_points=payload.grading_points,
+        thread_id=payload.thread_id,
+        history=payload.history,
     )
 
 

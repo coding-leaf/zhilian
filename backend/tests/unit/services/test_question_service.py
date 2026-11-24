@@ -1552,6 +1552,303 @@ class TestQuestionServiceCRUDAndAudit:
                 user_prompt="test",
             )
 
+    def test_ask_coach_multi_turn_memory_and_recall_order(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify ask_coach preserves ordered native multi-turn messages and isolates threads."""
+        from app.integrations.llm.coach_memory import CoachSessionMemory
+        from app.schemas.question import AskCoachResponse
+
+        user_id = helper_setup["user_id"]
+
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.side_effect = [
+            (
+                AskCoachResponse(reply="第一轮答复：先看均值中心化。", suggestions=["追问1"]),
+                MagicMock(),
+            ),
+            (
+                AskCoachResponse(reply="你最开始问的是为什么选A。", suggestions=["追问2"]),
+                MagicMock(),
+            ),
+            (AskCoachResponse(reply="新线程从头开始。", suggestions=[]), MagicMock()),
+        ]
+
+        memory = CoachSessionMemory()
+        service = QuestionService(
+            session=session,
+            llm=mock_llm,
+            embedding=FakeEmbeddingAdapter(),
+            memory_store=memory,
+        )
+        q = Question(
+            material_id=helper_setup["material_id"],
+            version_id=helper_setup["version_id"],
+            knowledge_point_id=helper_setup["point_id"],
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="PCA 降维前为何通常要进行均值中心化？",
+            answer="A",
+            analysis="确保协方差矩阵以原点为中心。",
+            difficulty=3,
+        )
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
+
+        service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="为什么选A？",
+            user_answer="A",
+            thread_id=f"q:{saved.id}",
+        )
+        service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="我刚开始问的什么？",
+            user_answer="A",
+            thread_id=f"q:{saved.id}",
+        )
+        service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="换个线程问",
+            user_answer="A",
+            thread_id="other-thread",
+        )
+
+        turn2_messages = mock_llm.generate_structured.call_args_list[1].kwargs["messages"]
+        assert [m.role for m in turn2_messages] == [
+            "system",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert "PCA 降维" in turn2_messages[1].content
+        assert turn2_messages[3].content == "为什么选A？"
+        assert turn2_messages[4].content == "第一轮答复：先看均值中心化。"
+        assert turn2_messages[5].content == "我刚开始问的什么？"
+
+        other_thread_messages = mock_llm.generate_structured.call_args_list[2].kwargs["messages"]
+        assert [m.role for m in other_thread_messages] == ["system", "user", "assistant", "user"]
+        assert all("为什么选A" not in m.content for m in other_thread_messages)
+
+    def test_ask_coach_falls_back_to_request_history_and_seeds_memory(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify cold-start ask_coach uses request history and seeds CoachSessionMemory."""
+        from app.integrations.llm.coach_memory import CoachSessionMemory
+        from app.schemas.question import AskCoachHistoryItem, AskCoachResponse
+
+        user_id = helper_setup["user_id"]
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.return_value = (
+            AskCoachResponse(reply="你最早问的是降维的核心目的。", suggestions=[]),
+            MagicMock(),
+        )
+        memory = CoachSessionMemory()
+        service = QuestionService(
+            session=session,
+            llm=mock_llm,
+            embedding=FakeEmbeddingAdapter(),
+            memory_store=memory,
+        )
+        q = Question(
+            material_id=helper_setup["material_id"],
+            version_id=helper_setup["version_id"],
+            knowledge_point_id=helper_setup["point_id"],
+            question_type=QuestionType.SHORT_ANSWER.value,
+            stem="简述主成分分析的核心思想。",
+            answer="正交投影保留最大方差。",
+            difficulty=2,
+        )
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
+
+        service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="我刚开始问的什么？",
+            user_answer="保留主要特征",
+            thread_id=f"q:{saved.id}",
+            history=[
+                AskCoachHistoryItem(role="user", content="降维的主要目的是什么？"),
+                AskCoachHistoryItem(role="assistant", content="降低冗余维度并保留主要信息。"),
+            ],
+        )
+
+        sent_messages = mock_llm.generate_structured.call_args.kwargs["messages"]
+        assert [m.role for m in sent_messages] == [
+            "system",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert sent_messages[3].content == "降维的主要目的是什么？"
+        assert sent_messages[4].content == "降低冗余维度并保留主要信息。"
+        assert sent_messages[5].content == "我刚开始问的什么？"
+
+        seeded_turns = memory.load(f"{user_id}:question:{saved.id}:q:{saved.id}")
+        assert len(seeded_turns) == 2
+        assert seeded_turns[0].user == "降维的主要目的是什么？"
+        assert seeded_turns[1].user == "我刚开始问的什么？"
+
+    def test_ask_coach_injects_bound_source_snippet_and_search_fallback(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify ask_coach injects bound source snippet or lightweight search fallback."""
+        from app.schemas.question import AskCoachResponse
+
+        user_id = helper_setup["user_id"]
+        material_id = helper_setup["material_id"]
+        version_id = helper_setup["version_id"]
+        point_id = helper_setup["point_id"]
+
+        snippet = MaterialSnippet(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            snippet_index=10,
+            content="PCA 通过正交变换将高维特征投影到主成分子空间。",
+            char_length=28,
+            start_offset=0,
+            end_offset=28,
+            chapter_title="第三章 降维",
+            source_info={"page_number": 12},
+        )
+        session.add(snippet)
+        session.flush()
+
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.return_value = (
+            AskCoachResponse(reply="结合教材第12页来看。", suggestions=[]),
+            MagicMock(),
+        )
+        search = FakeSearchAdapter()
+        search.set_canned_candidates(
+            [
+                SearchSnippetCandidate(
+                    snippet_id=uuid.uuid4(),
+                    material_id=material_id,
+                    version_id=version_id,
+                    content="特征值分解是 PCA 的核心数学步骤。",
+                    chapter_title="第三章 推导",
+                    source_info={"page_number": 15},
+                    vector_score=0.88,
+                    final_score=0.03,
+                )
+            ]
+        )
+        service = QuestionService(
+            session=session,
+            llm=mock_llm,
+            embedding=FakeEmbeddingAdapter(),
+            search_adapter=search,
+            memory_store=None,
+        )
+
+        q_bound = Question(
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=point_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="PCA 的数学本质是什么？",
+            answer="A",
+            source_snippet_id=snippet.id,
+        )
+        q_unbound = Question(
+            material_id=material_id,
+            version_id=version_id,
+            knowledge_point_id=point_id,
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="如何求主成分方向？",
+            answer="B",
+            source_snippet_id=None,
+        )
+        [saved_bound, saved_unbound] = service.question_repo.batch_create_questions(
+            [q_bound, q_unbound], user_id
+        )
+
+        service.ask_coach(
+            question_id=saved_bound.id,
+            user_id=user_id,
+            user_prompt="教材原话怎么说的？",
+            user_answer="A",
+        )
+        bound_anchor = mock_llm.generate_structured.call_args.kwargs["messages"][1].content
+        assert "【教材原文依据】" in bound_anchor
+        assert "第三章 降维" in bound_anchor
+        assert "第 12 页" in bound_anchor
+        assert "PCA 通过正交变换将高维特征投影到主成分子空间" in bound_anchor
+
+        service.ask_coach(
+            question_id=saved_unbound.id,
+            user_id=user_id,
+            user_prompt="怎么推导的？",
+            user_answer="B",
+        )
+        unbound_anchor = mock_llm.generate_structured.call_args.kwargs["messages"][1].content
+        assert "【教材原文依据】" in unbound_anchor
+        assert "特征值分解是 PCA 的核心数学步骤" in unbound_anchor
+
+    def test_ask_coach_prevents_spoiler_when_unanswered_and_reveals_when_answered(
+        self, session: Session, helper_setup: dict[str, uuid.UUID]
+    ) -> None:
+        """Verify ask_coach omits answer/analysis and enforces anti-spoiler when unanswered."""
+        from app.schemas.question import AskCoachResponse
+
+        user_id = helper_setup["user_id"]
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.return_value = (
+            AskCoachResponse(reply="先想想协方差矩阵的性质。", suggestions=[]),
+            MagicMock(),
+        )
+        service = QuestionService(
+            session=session,
+            llm=mock_llm,
+            embedding=FakeEmbeddingAdapter(),
+        )
+        q = Question(
+            material_id=helper_setup["material_id"],
+            version_id=helper_setup["version_id"],
+            knowledge_point_id=helper_setup["point_id"],
+            question_type=QuestionType.SINGLE_CHOICE.value,
+            stem="协方差矩阵的特征值一定满足什么性质？",
+            options=[{"key": "A", "content": "全为负"}, {"key": "C", "content": "非负"}],
+            answer="C",
+            analysis="本题选 C，因为协方差矩阵半正定。",
+        )
+        [saved] = service.question_repo.batch_create_questions([q], user_id)
+
+        # 未作答（None 与空白串）均触发防剧透
+        for blank_answer in (None, "   "):
+            service.ask_coach(
+                question_id=saved.id,
+                user_id=user_id,
+                user_prompt="直接告诉我选哪个？",
+                user_answer=blank_answer,
+            )
+            messages = mock_llm.generate_structured.call_args.kwargs["messages"]
+            assert "防剧透" in messages[0].content
+            assert "严禁直接说出正确选项字母或标准答案原文" in messages[0].content
+            assert "【标准答案】" not in messages[1].content
+            assert "【解析】" not in messages[1].content
+            assert "本题选 C" not in messages[1].content
+
+        # 已作答场景正常提供标准答案与解析
+        service.ask_coach(
+            question_id=saved.id,
+            user_id=user_id,
+            user_prompt="为什么我选 A 不对？",
+            user_answer="A",
+        )
+        answered_messages = mock_llm.generate_structured.call_args.kwargs["messages"]
+        assert "防剧透" not in answered_messages[0].content
+        assert "【标准答案】\nC" in answered_messages[1].content
+        assert "【解析】\n本题选 C，因为协方差矩阵半正定。" in answered_messages[1].content
+        assert "【学生作答】\nA" in answered_messages[1].content
+
 
 class TestQuestionSourceSnippetAssembly:
     """Test suite for QuestionService 原文来源切片装配 (source_snippet)."""
