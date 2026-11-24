@@ -199,6 +199,12 @@ def get_folder(
     return _to_detail_response(aggregate)
 
 
+@router.put(
+    "/{folder_id}",
+    response_model=FolderDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="重命名课程文件夹",
+)
 @router.patch(
     "/{folder_id}",
     response_model=FolderDetailResponse,

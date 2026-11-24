@@ -213,6 +213,25 @@ async def test_rename_folder(mock_user: User, mock_folder_service: MagicMock) ->
 
 
 @pytest.mark.asyncio
+async def test_rename_folder_via_put(mock_user: User, mock_folder_service: MagicMock) -> None:
+    """PUT /folders/{id} alias renames and returns 200 (mp-weixin wx.request compat)."""
+    app = create_test_app()
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_folder_service] = lambda: mock_folder_service
+    folder = _make_folder("新名称-PUT")
+    mock_folder_service.rename_folder.return_value = _make_aggregate(folder)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.put(f"/api/v1/folders/{folder.id}", json={"name": "新名称-PUT"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "新名称-PUT"
+    mock_folder_service.rename_folder.assert_called_once_with(
+        user_id=mock_user.id, folder_id=folder.id, name="新名称-PUT"
+    )
+
+
+@pytest.mark.asyncio
 async def test_archive_folder(mock_user: User, mock_folder_service: MagicMock) -> None:
     """DELETE /folders/{id} archives and returns purge_after."""
     app = create_test_app()
