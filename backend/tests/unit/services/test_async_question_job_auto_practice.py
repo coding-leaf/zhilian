@@ -146,7 +146,7 @@ class _CountingValidQuestionLLM:
             raise self.raise_exc
 
         items: list[LLMGeneratedQuestionItem] = []
-        for idx in range(self.count_per_call):
+        for _idx in range(self.count_per_call):
             self._seq += 1
             if self.produce_invalid:
                 items.append(
@@ -160,18 +160,30 @@ class _CountingValidQuestionLLM:
                     )
                 )
             else:
+                distinct_stems = (
+                    "死锁的四个必要条件中，互斥条件具体含义是什么？",
+                    "死锁的四个必要条件中，请求与保持条件是什么？",
+                    "死锁的四个必要条件中，不可剥夺条件是什么？",
+                    "死锁的四个必要条件中，循环等待条件是什么？",
+                    "时间片轮转调度算法如何保证就绪进程获得 CPU 执行机会？",
+                    "就绪进程在时间片轮转调度算法中如何获得 CPU 执行机会？",
+                    "优先权调度可能引发什么问题并可通过什么技术缓解？",
+                    "老化技术可缓解优先权调度引发的什么饥饿问题？",
+                    "时间片轮转调度算法在有限时间内如何服务每个就绪进程？",
+                    "在死锁的四个必要条件中，互斥条件与循环等待条件有何联系？",
+                    "优先权调度引发饥饿问题时，老化技术如何缓解该问题？",
+                    "关于死锁四个必要条件与时间片轮转调度算法，以下哪项正确？",
+                )
+                stem_text = distinct_stems[(self._seq - 1) % len(distinct_stems)]
                 items.append(
                     LLMGeneratedQuestionItem(
                         question_type="single_choice",
-                        stem=(
-                            f"关于死锁四个必要条件与时间片轮转调度的独立考点判断 #{self._seq}"
-                            f"（场景 {idx}，互斥/请求保持/不可剥夺/循环等待），以下哪项准确？"
-                        ),
+                        stem=f"{stem_text}（题号{self._seq}）",
                         options=[
-                            f"死锁需满足互斥、请求保持、不可剥夺和循环等待（场景{self._seq}）",
-                            f"时间片轮转会导致死锁必然发生（场景{self._seq}）",
-                            f"老化技术会加重进程饥饿问题（场景{self._seq}）",
-                            f"循环等待不是死锁必要条件（场景{self._seq}）",
+                            f"选项A：死锁满足互斥与保持条件（{self._seq}）",
+                            f"选项B：时间片轮转导致死锁（{self._seq}）",
+                            f"选项C：老化技术加剧饥饿（{self._seq}）",
+                            f"选项D：循环等待非必要条件（{self._seq}）",
                         ],
                         answer="A",
                         explanation="依据第2章讲义，死锁四个必要条件为互斥、请求与保持、不可剥夺和循环等待。",
@@ -287,8 +299,8 @@ def test_run_generation_job_auto_creates_practice_with_all_available_and_short_t
     assert len(practice.items) == 12
 
 
-def test_run_generation_job_zero_available_leaves_result_practice_none(session: Session) -> None:
-    """When all generated questions fail quality gate, result_practice_id stays None with notice."""
+def test_run_generation_job_zero_available_marks_job_failed(session: Session) -> None:
+    """When zero qualified questions survive, job is marked FAILED with zero pending_review."""
     env = _seed_material_with_kp(session)
     llm = _CountingValidQuestionLLM(count_per_call=2, produce_invalid=True)
     service = QuestionService(
@@ -309,12 +321,14 @@ def test_run_generation_job_zero_available_leaves_result_practice_none(session: 
         source_type="initial_compose",
     )
     job = service.create_generation_job(user_id=env["user_id"], payload=payload)
-    completed = service.run_generation_job(job_id=job.id, user_id=env["user_id"])
+    finished = service.run_generation_job(job_id=job.id, user_id=env["user_id"])
 
-    assert completed.status == QuestionGenerationJobStatus.COMPLETED.value
-    assert completed.result_practice_id is None
-    assert completed.error_message is not None
-    assert "暂无可用题目" in completed.error_message
+    assert finished.status == QuestionGenerationJobStatus.FAILED.value
+    assert finished.generated_count == 0
+    assert finished.question_ids == []
+    assert finished.result_practice_id is None
+    assert finished.error_message is not None
+    assert "未能" in finished.error_message
 
 
 def test_run_generation_job_retryable_vs_non_retryable_errors(session: Session) -> None:

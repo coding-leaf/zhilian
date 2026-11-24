@@ -158,9 +158,9 @@ class TestListQuestionBatchesService:
         assert len(items) == 1
         summary = items[0]
         assert summary.batch_id == "batch_course"
-        assert summary.question_count == 3
+        assert summary.question_count == 2
         assert summary.available_count == 2
-        assert summary.pending_review_count == 1
+        assert summary.pending_review_count == 0
         assert {source.material_title for source in summary.sources} == {
             "讲义一.pdf",
             "讲义二.pdf",
@@ -185,8 +185,9 @@ class TestListQuestionBatchesService:
 
         assert total == 1
         assert items[0].batch_id is None
-        assert items[0].question_count == 2
+        assert items[0].question_count == 1
         assert items[0].available_count == 1
+        assert items[0].pending_review_count == 0
         assert items[0].sources == [], "未分批组不借它的资料拼一个假来源"
 
     def test_sources_are_fetched_once_for_the_whole_page(self, session: Session) -> None:

@@ -51,12 +51,17 @@ class _StructuredQuestionStubLLM(LLMProtocol):
         options: LLMOptions | None = None,
     ) -> tuple[T, LLMResponse]:
         prompt = messages[-1].content
-        token = "kp2" if "KP_TWO" in prompt else "kp1"
+        is_kp2 = "KP_TWO" in prompt
+        stem_body = (
+            "虚拟内存通过页表与 TLB 快表实现逻辑地址到物理页框映射，下列哪项描述准确？"
+            if is_kp2
+            else "进程同步使用信号量与 PV 原语防止竞态条件与临界区冲突，下列哪项描述准确？"
+        )
         output = LLMQuestionBatchOutput(
             questions=[
                 LLMGeneratedQuestionItem(
                     question_type="single_choice",
-                    stem=f"关于{token}的核心概念，下列哪项描述准确？({uuid.uuid4().hex[:6]})",
+                    stem=f"{stem_body}({uuid.uuid4().hex[:6]})",
                     options=["概念定义准确", "干扰项二", "干扰项三", "干扰项四"],
                     answer="A",
                     explanation="严格依据切片原文得出正确解析。",

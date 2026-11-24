@@ -136,21 +136,39 @@ def test_calculate_text_similarity() -> None:
 
 
 def test_extract_keywords_and_content_words() -> None:
-    """测试实词提取正则：支持中英文实词，过滤单字与标点。"""
+    """测试实词提取：LaTeX 清洗、中文 2-gram 切分与英文大小写归一化。"""
     assert CONTENT_WORD_PATTERN.pattern == r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{2,}"
     assert "以上都对" in AMBIGUOUS_TRIGGER_WORDS
     text = "二叉树（Binary Tree）深度优先遍历算法，包括preorder与inorder！"
     keywords = extract_keywords(text)
-    assert "二叉树" in keywords
-    assert "Binary" in keywords
-    assert "Tree" in keywords
-    assert "深度优先遍历算法" in keywords
+    assert "二叉" in keywords
+    assert "叉树" in keywords
+    assert "binary" in keywords
+    assert "tree" in keywords
+    assert "深度" in keywords
+    assert "算法" in keywords
     assert "preorder" in keywords
     assert "inorder" in keywords
 
     # extract_content_words 是同义别名
     assert extract_content_words(text) == keywords
     assert extract_keywords("的 在 和 1 2 3 ， 。 ！") == []
+
+    # 真实中文 SVM + LaTeX 公式题干不被命令词污染且能匹配纯文本/大小写混合来源
+    svm_stem = (
+        r"在支持向量机(SVM)中，若超平面方程为 $\mathbf{w}^T \mathbf{x} + b = 0$，"
+        r"求 $\min \frac{1}{2} \sum_{i=1}^n \alpha_i$ 的几何间隔定义。"
+    )
+    svm_keywords = extract_keywords(svm_stem)
+    assert "mathbf" not in svm_keywords
+    assert "frac" not in svm_keywords
+    assert "sum" not in svm_keywords
+    assert "alpha" not in svm_keywords
+    assert "svm" in svm_keywords
+    assert "支持" in svm_keywords
+    assert "超平" in svm_keywords
+    assert "几何" in svm_keywords
+    assert "间隔" in svm_keywords
 
 
 # ==============================================================================
@@ -244,10 +262,10 @@ def test_tc_qq_05_source_grounding_c1_3_no_keywords_in_stem() -> None:
 def test_tc_qq_06_source_grounding_c1_4_low_ratio() -> None:
     """TC-QQ-06: C1-4 实词重合率低于 30.0% -> 不通过 (NO_SOURCE)。"""
     config = QuestionQualityConfig()
-    # 构造实词集合：操作系统 进程调度 虚拟内存 页面置换 文件系统 (5个词)
-    # 来源只出现 1 个词 (操作系统) -> 1/5 = 20% < 30%
-    stem = "操作系统 进程调度 虚拟内存 页面置换 文件系统"
-    source_text = "这是关于操作系统的教材"
+    # 构造 5 个独立 2 字实词（无跨词 2-gram 重叠）：进程 调度 内存 置换 磁盘
+    # 来源只出现 1 个词 (进程) -> 1/5 = 20% < 30%
+    stem = "进程 调度 内存 置换 磁盘"
+    source_text = "这是关于进程管理的教材"
     is_valid, reason, ratio = check_source_grounding(
         stem=stem,
         source_text=source_text,
@@ -262,22 +280,21 @@ def test_tc_qq_06_source_grounding_c1_4_low_ratio() -> None:
 def test_tc_qq_07_source_grounding_c1_5_boundary_ratio() -> None:
     """TC-QQ-07: C1-5 实词重合率恰好等于 30.0% 临界闭区间 -> 通过 (B-5)。"""
     config = QuestionQualityConfig(min_source_keyword_ratio=0.30)
-    # 构造 10 个实词，来源恰好包含 3 个
-    # 词：二叉树 堆排序 快速排序 冒泡排序 插入排序 希尔排序 归并排序 基数排序 拓扑排序 关键路径
+    # 构造 10 个独立 2 字实词，来源恰好包含前 3 个 -> 3/10 = 0.30
     words = [
-        "二叉树",
-        "堆排序",
-        "快速排序",
-        "冒泡排序",
-        "插入排序",
-        "希尔排序",
-        "归并排序",
-        "基数排序",
-        "拓扑排序",
-        "关键路径",
+        "栈顶",
+        "队列",
+        "链表",
+        "哈希",
+        "图论",
+        "递归",
+        "分治",
+        "贪心",
+        "动态",
+        "回溯",
     ]
     stem = " ".join(words)
-    source_text = "二叉树 堆排序 快速排序"
+    source_text = "栈顶 队列 链表"
     is_valid, reason, ratio = check_source_grounding(
         stem=stem,
         source_text=source_text,
@@ -836,11 +853,14 @@ def test_tc_qq_31_b1_empty_candidates() -> None:
 def test_tc_qq_32_b2_batch_duplicate_sequence() -> None:
     """TC-QQ-32: B-2 批次内同题干重复，按 created_at_seq 保留首发题目。"""
     # 构造 3 道题，第 1 道与第 3 道题干相同
-    q1 = _build_candidate(question_id="q-1", created_at_seq=1)
+    q1 = _build_candidate(question_id="q-1", created_at_seq=1, embedding=(1.0, 0.0, 0.0, 0.0))
     q2 = _build_candidate(
-        question_id="q-2", created_at_seq=2, stem="二叉树遍历算法，红黑树性质正确的是"
+        question_id="q-2",
+        created_at_seq=2,
+        stem="二叉树遍历算法，红黑树性质正确的是",
+        embedding=(0.0, 1.0, 0.0, 0.0),
     )
-    q3 = _build_candidate(question_id="q-3", created_at_seq=3)
+    q3 = _build_candidate(question_id="q-3", created_at_seq=3, embedding=(1.0, 0.0, 0.0, 0.0))
 
     report = filter_qualified_questions(candidates=(q3, q1, q2))
     assert report.total_candidates == 3
@@ -887,13 +907,14 @@ def test_tc_qq_34_b4_overall_degraded_flag() -> None:
 
 def test_tc_qq_35_all_qualified_report() -> None:
     """TC-QQ-35: 批次全量题目质检合格通过报告。"""
-    q1 = _build_candidate(question_id="q-1", created_at_seq=1)
+    q1 = _build_candidate(question_id="q-1", created_at_seq=1, embedding=(1.0, 0.0, 0.0, 0.0))
     q2 = _build_candidate(
         question_id="q-2",
         created_at_seq=2,
         stem="关系型数据库事务，描述正确的是",
         source_text="关系型数据库事务具备ACID四大特性，包括原子性、一致性、隔离性与持久性。",
         analysis="ACID四大特性",
+        embedding=(0.0, 1.0, 0.0, 0.0),
     )
     report = filter_qualified_questions(candidates=(q1, q2))
     assert report.total_candidates == 2
@@ -971,27 +992,55 @@ def test_tc_qq_37_conflict_stem_similarity_fallback_and_non_objective() -> None:
 
 
 def test_tc_qq_38_evaluate_single_question_conflict_veto() -> None:
-    """TC-QQ-38: evaluate_single_question 触发 ANSWER_CONFLICT 一票否决与 3 项明细。"""
+    """TC-QQ-38: evaluate_single_question 触发 ANSWER_CONFLICT（0.88..0.95 软标记 vs 硬冲突）。"""
+    from app.core.algorithms.question_quality import QualitySeverity
+
     config = QuestionQualityConfig()
     candidate = _build_candidate(
         stem="二叉树遍历算法，单题冲突否决测试",
         embedding=(1.0, 0.0),
         answer="A",
     )
-    existing_same_stem = _build_existing(
+    existing_paraphrased = _build_existing(
         stem="二叉树遍历算法，不同表述题目",
-        embedding=(0.89, math.sqrt(1 - 0.89**2)),  # cos = 0.89 >= 0.88, < 0.90 (不触发重复)
-        answer="B",  # 触发冲突
+        embedding=(0.89, math.sqrt(1 - 0.89**2)),  # cos = 0.89 >= 0.88, < 0.90
+        answer="B",
     )
-    result, _is_degraded = evaluate_single_question(
+    soft_result, _is_degraded = evaluate_single_question(
         candidate=candidate,
-        existing=(existing_same_stem,),
+        existing=(existing_paraphrased,),
         prior_candidates=(),
         config=config,
     )
-    assert result.is_qualified is False
-    assert result.unqualified_type == QualityCheckType.ANSWER_CONFLICT
-    assert len(result.check_items) == 3
+    assert soft_result.is_qualified is False
+    assert soft_result.severity == QualitySeverity.SOFT_FLAG
+    assert soft_result.unqualified_type == QualityCheckType.ANSWER_CONFLICT
+    # SOFT_FLAG 不短路 AMBIGUITY，确保全部 4 项检查执行完毕
+    assert len(soft_result.check_items) == 4
+
+    existing_degraded_hard = _build_existing(
+        stem="二叉树遍历算法单题冲突测试",
+        embedding=None,
+        answer="B",
+    )
+    cand_degraded = _build_candidate(
+        stem="二叉树遍历算法单题冲突测验",
+        embedding=None,
+        answer="A",
+    )
+    hard_config = QuestionQualityConfig(
+        conflict_vector_threshold=0.70, duplicate_text_threshold=0.95
+    )
+    hard_result, _ = evaluate_single_question(
+        candidate=cand_degraded,
+        existing=(existing_degraded_hard,),
+        prior_candidates=(),
+        config=hard_config,
+    )
+    assert hard_result.is_qualified is False
+    assert hard_result.severity == QualitySeverity.HARD_DEFECT
+    assert hard_result.unqualified_type == QualityCheckType.ANSWER_CONFLICT
+    assert len(hard_result.check_items) == 3
 
 
 def test_tc_qq_39_evaluate_single_question_ambiguity_veto() -> None:

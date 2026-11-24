@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.algorithms.question_quality import (
     ExistingQuestionReference,
     extract_keywords,
+    strip_latex_commands,
 )
 from app.core.algorithms.text_excerpt import trim_excerpt_cleanly
 from app.core.config import RerankSettings
@@ -357,8 +358,10 @@ class QuestionService:
             elif snippet.id in search_map:
                 score = search_map[snippet.id].score
             elif kp_words:
-                hit_count = sum(1 for w in set(kp_words) if w in snippet.content)
-                score = hit_count / len(set(kp_words))
+                normalized_snippet = strip_latex_commands(snippet.content).lower()
+                unique_kp_words = set(kp_words)
+                hit_count = sum(1 for w in unique_kp_words if w in normalized_snippet)
+                score = hit_count / len(unique_kp_words)
             else:
                 score = 1.0
 
@@ -470,7 +473,7 @@ class QuestionService:
             options=effective_options,
         )
 
-        # 4. 构造题目与质检实体 (合格品 + 残余待人工审核品)
+        # 4. 仅构造质检合格的可用题目与质检审计实体（严禁落库 pending_review）
         target_count = effective_options.count
         qualified_questions = [
             build_question_entity(
@@ -486,30 +489,17 @@ class QuestionService:
             )
             for cand in outcome.qualified_questions[:target_count]
         ]
-        remaining_needed = target_count - len(qualified_questions)
-        pending_questions = [
-            build_question_entity(
-                cand,
-                outcome.candidate_items_map[cand.question_id],
-                user_id=user_id,
-                material_id=material_id,
-                version_id=effective_version_id,
-                knowledge_point_id=knowledge_point_id,
-                batch_id=effective_batch_id,
-                status=QuestionStatus.PENDING_REVIEW.value,
-                snippet_metadata=snippet_metadata,
-            )
-            for cand in outcome.last_unqualified_questions[:remaining_needed]
-        ]
+        pending_questions: list[Question] = []
+        discarded_count = len(outcome.last_unqualified_questions)
         all_quality_checks = [
             check
-            for q in qualified_questions + pending_questions
+            for q in qualified_questions
             for check in outcome.candidate_checks_map.get(str(q.id), ())
         ]
         retry_count = outcome.retry_count
 
         # 7. 原子数据库事务落库
-        all_entities = qualified_questions + pending_questions
+        all_entities = qualified_questions
         try:
             with self.session.begin_nested():
                 saved_questions = self.question_repo.batch_create_questions(all_entities, user_id)
@@ -537,7 +527,8 @@ class QuestionService:
                 "error_code": 0,
                 "total_generated": len(saved_questions),
                 "qualified_count": len(qualified_questions),
-                "pending_count": len(pending_questions),
+                "pending_count": 0,
+                "discarded_count": discarded_count,
                 "checks_count": len(saved_checks),
                 "retry_count": retry_count,
             },
@@ -973,10 +964,11 @@ class QuestionService:
         batch_id: str,
         outcomes: Sequence[tuple[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome]],
     ) -> tuple[list[Question], list[QuestionQualityCheck], int]:
-        """在调用线程将并发生成结果映射为 Question 与质检 ORM 实体列表。"""
+        """在调用线程将并发生成结果映射为仅包含合格可用题目的 Question 与质检 ORM 实体列表。"""
         all_entities: list[Question] = []
         all_checks: list[QuestionQualityCheck] = []
         total_retry = 0
+        discarded_count = 0
 
         for spec, outcome in outcomes:
             target_count = spec.options.count
@@ -995,26 +987,22 @@ class QuestionService:
                 )
                 for cand in outcome.qualified_questions[:target_count]
             ]
-            remaining_needed = target_count - len(qualified)
-            pending = [
-                build_question_entity(
-                    cand,
-                    outcome.candidate_items_map[cand.question_id],
-                    user_id=user_id,
-                    material_id=spec.material_id,
-                    version_id=spec.version_id,
-                    knowledge_point_id=spec.knowledge_point_id,
-                    batch_id=batch_id,
-                    status=QuestionStatus.PENDING_REVIEW.value,
-                    snippet_metadata=snippet_meta_list,
-                )
-                for cand in outcome.last_unqualified_questions[:remaining_needed]
-            ]
-            kp_entities = qualified + pending
-            all_entities.extend(kp_entities)
-            for q in kp_entities:
+            discarded_count += len(outcome.last_unqualified_questions)
+            all_entities.extend(qualified)
+            for q in qualified:
                 all_checks.extend(outcome.candidate_checks_map.get(str(q.id), ()))
             total_retry += outcome.retry_count
+
+        if discarded_count > 0:
+            logger.info(
+                "discarded unqualified candidates after autonomous quality gate",
+                extra={
+                    "request_id": batch_id,
+                    "user_ref": generate_user_ref(user_id),
+                    "qualified_count": len(all_entities),
+                    "discarded_count": discarded_count,
+                },
+            )
 
         return all_entities, all_checks, total_retry
 
@@ -1343,15 +1331,31 @@ class QuestionService:
                 saved_questions = self.question_repo.batch_create_questions(all_entities, user_id)
                 self.question_repo.batch_create_quality_checks(all_checks, user_id)
 
+            persisted_job = self.question_repo.get_generation_job_by_id(job_id, user_id)
+            if persisted_job is None:
+                raise QuestionGenerationJobNotFoundError()
+
+            if not saved_questions:
+                persisted_job.status = QuestionGenerationJobStatus.FAILED.value
+                persisted_job.batch_id = batch_id
+                persisted_job.generated_count = 0
+                persisted_job.question_ids = []
+                persisted_job.result_practice_id = None
+                persisted_job.error_message = (
+                    "AI 质检未能从当前资料切片生成合格题目，请调整考点、题型或补充讲义后重试"
+                )
+                persisted_job.completed_kps = len(specs)
+                persisted_job.completed_at = datetime.now(UTC)
+                self.session.commit()
+                self.session.refresh(persisted_job)
+                return persisted_job
+
             result_practice_id, auto_practice_notice = self._auto_create_practice_for_job(
                 user_id=user_id,
                 payload=payload,
                 saved_questions=saved_questions,
             )
 
-            persisted_job = self.question_repo.get_generation_job_by_id(job_id, user_id)
-            if persisted_job is None:
-                raise QuestionGenerationJobNotFoundError()
             persisted_job.status = QuestionGenerationJobStatus.COMPLETED.value
             persisted_job.batch_id = batch_id
             persisted_job.generated_count = len(saved_questions)
@@ -1485,6 +1489,8 @@ class QuestionService:
         effective_status = (
             review_status if review_status is not None else (status or kwargs.get("status"))
         )
+        if effective_status is None:
+            effective_status = QuestionStatus.AVAILABLE.value
         calc_limit = limit if limit is not None else page_size
         calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
 
@@ -1965,7 +1971,7 @@ class QuestionService:
             *history_messages,
             LLMMessage(role="user", content=user_prompt),
         ]
-        options = LLMOptions(temperature=0.65, max_tokens=900)
+        options = LLMOptions(temperature=0.65, max_tokens=4096)
         # 释放只读事务归还数据库连接，避免同步 LLM 调用期间长时间占用连接池。
         if not self.session.new and not self.session.dirty and not self.session.deleted:
             self.session.commit()

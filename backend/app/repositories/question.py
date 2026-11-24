@@ -339,6 +339,7 @@ class QuestionRepository:
             .where(
                 Question.user_id == user_id,
                 Question.is_deleted.is_(False),
+                Question.status == QuestionStatus.AVAILABLE.value,
             )
             .group_by(Question.batch_id)
             .order_by(first_created_at.desc(), Question.batch_id.asc())
@@ -355,13 +356,14 @@ class QuestionRepository:
             user_id: 租户用户标识。
 
         Returns:
-            int: 未软删除题目覆盖的批次总数，含 ``batch_id IS NULL`` 的未分批组。
+            int: 未软删除可用题目覆盖的批次总数，含 ``batch_id IS NULL`` 的未分批组。
         """
         grouped = (
             select(Question.batch_id)
             .where(
                 Question.user_id == user_id,
                 Question.is_deleted.is_(False),
+                Question.status == QuestionStatus.AVAILABLE.value,
             )
             .group_by(Question.batch_id)
             .subquery()

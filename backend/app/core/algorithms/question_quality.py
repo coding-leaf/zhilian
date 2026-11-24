@@ -20,19 +20,20 @@ from app.core.question_types import QuestionType as QuestionType
 # ==============================================================================
 
 # 依据：概要设计说明书第 6.4 节与 FR-24，重复题向量余弦相似度门禁上限为 0.90
-# 题干+选项语义向量余弦相似度 >= 0.90 判定为语义重复题，闭区间拦截
+# 题干+选项语义向量余弦相似度 >= 0.90 判定为疑似重复 (SOFT_FLAG)，>= 0.95 判定为硬重复 (HARD_DEFECT)
 DEFAULT_DUPLICATE_VECTOR_THRESHOLD: float = 0.90
+DEFAULT_HARD_DUPLICATE_VECTOR_THRESHOLD: float = 0.95
 
 # 依据：概要设计说明书第 6.4 节与 FR-24，重复题字符级相似度门禁上限为 0.85
 # 字符 2-gram Jaccard 相似度 >= 0.85 判定为字面重复题，闭区间拦截
 DEFAULT_DUPLICATE_TEXT_THRESHOLD: float = 0.85
 
 # 依据：概要设计说明书第 6.4 节与 FR-24，客观题答案冲突的题干相似度门禁下限为 0.88
-# 当两道客观题题干相似度 >= 0.88 且标准答案集合不一致时，判定为答案冲突，闭区间拦截
+# 两道客观题题干相似度 >= 0.88 且答案不同时，按字面/向量强度划分 SOFT_FLAG 或 HARD_DEFECT
 DEFAULT_CONFLICT_VECTOR_THRESHOLD: float = 0.88
 
 # 依据：概要设计说明书第 6.4 节与 FR-24，来源片段实词重合率门禁下限为 30% (0.30)
-# 题干中实词（长度>=2的中英文词）在来源片段中的出现比例 < 0.30 判定为脱离资料的幻觉题目
+# 题干中实词（中文 2-gram 与英文词）在来源片段中的出现比例 < 0.30 判定为 SOFT_FLAG 交由 AI 裁判复核
 DEFAULT_MIN_SOURCE_KEYWORD_RATIO: float = 0.30
 
 # 依据：概要设计说明书第 6.4 节与 FR-24，题干字符数绝对下限为 6 字符
@@ -45,6 +46,12 @@ MAX_EXISTING_QUESTIONS_WINDOW: int = 500
 
 # 预编译正则：中英文有效实词（长度 >= 2 的连续汉字或连续英文字母）
 CONTENT_WORD_PATTERN: re.Pattern[str] = re.compile(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{2,}")
+_TOKEN_SEGMENT_PATTERN: re.Pattern[str] = re.compile(
+    r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{2,}|[a-zA-Z]\d+"
+)
+_LATEX_ENV_PATTERN: re.Pattern[str] = re.compile(r"\\(?:begin|end)\{[^}]*\}")
+_LATEX_COMMAND_PATTERN: re.Pattern[str] = re.compile(r"\\[a-zA-Z]+\*?")
+_LATEX_SYMBOL_PATTERN: re.Pattern[str] = re.compile(r"[\$\{\}\[\]\(\)^_&\\]+")
 
 # 预编译正则：布尔真值字符串集合
 TRUE_BOOLEAN_VALUES: frozenset[str] = frozenset(
@@ -69,6 +76,14 @@ class QualityCheckType(enum.StrEnum):
     DUPLICATE = "DUPLICATE"
     ANSWER_CONFLICT = "ANSWER_CONFLICT"
     AMBIGUITY = "AMBIGUITY"
+
+
+class QualitySeverity(enum.StrEnum):
+    """确定性预检三态严重度枚举。"""
+
+    PASS = "pass"  # noqa: S105
+    SOFT_FLAG = "soft_flag"
+    HARD_DEFECT = "hard_defect"
 
 
 # 别名以保持与规范命名契约完全兼容
@@ -134,6 +149,7 @@ class QuestionQualityConfig:
     """题目质检门禁可配置参数。"""
 
     duplicate_vector_threshold: float = DEFAULT_DUPLICATE_VECTOR_THRESHOLD
+    hard_duplicate_vector_threshold: float = DEFAULT_HARD_DUPLICATE_VECTOR_THRESHOLD
     duplicate_text_threshold: float = DEFAULT_DUPLICATE_TEXT_THRESHOLD
     conflict_vector_threshold: float = DEFAULT_CONFLICT_VECTOR_THRESHOLD
     min_source_keyword_ratio: float = DEFAULT_MIN_SOURCE_KEYWORD_RATIO
@@ -148,6 +164,8 @@ class QuestionQualityConfig:
         """
         if not (0.0 <= self.duplicate_vector_threshold <= 1.0):
             raise ValueError("duplicate_vector_threshold must be between 0.0 and 1.0")
+        if not (0.0 <= self.hard_duplicate_vector_threshold <= 1.0):
+            raise ValueError("hard_duplicate_vector_threshold must be between 0.0 and 1.0")
         if not (0.0 <= self.duplicate_text_threshold <= 1.0):
             raise ValueError("duplicate_text_threshold must be between 0.0 and 1.0")
         if not (0.0 <= self.conflict_vector_threshold <= 1.0):
@@ -169,6 +187,7 @@ class QuestionQualityCheckItem:
     reason: str | None = None
     similarity_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    severity: QualitySeverity = QualitySeverity.PASS
 
 
 @dataclass(frozen=True)
@@ -181,6 +200,7 @@ class SingleQuestionQualityResult:
     unqualified_reason: str | None
     similarity_score: float | None
     check_items: tuple[QuestionQualityCheckItem, ...]
+    severity: QualitySeverity = QualitySeverity.PASS
 
     def __post_init__(self) -> None:
         """保障检查明细转化为不可变元组。"""
@@ -269,8 +289,25 @@ def calculate_text_similarity(text_a: str, text_b: str) -> float:
     return len(grams_a & grams_b) / len(union_grams)
 
 
+def strip_latex_commands(text: str) -> str:
+    """剥离 LaTeX 环境、命令名与定界符号，保留语义词与自然语言正文。
+
+    Args:
+        text: 原始含公式文本。
+
+    Returns:
+        清洗后的纯文本。
+    """
+    cleaned = _LATEX_ENV_PATTERN.sub(" ", text)
+    cleaned = _LATEX_COMMAND_PATTERN.sub(" ", cleaned)
+    return _LATEX_SYMBOL_PATTERN.sub(" ", cleaned)
+
+
 def extract_keywords(text: str) -> list[str]:
-    """提取文本中长度 >= 2 的中英文实词列表。
+    """提取文本中的中文 2-gram 与大小写归一化英文实词。
+
+    先剥离 LaTeX 命令，防止 ``\\mathbf``、``\\frac`` 等语法名污染实词分母；
+    对连续汉字采用 2-gram 切分，对英文与字母数字标记统一转为小写。
 
     Args:
         text: 待提取实词的文本。
@@ -278,7 +315,15 @@ def extract_keywords(text: str) -> list[str]:
     Returns:
         匹配到的实词列表。
     """
-    return CONTENT_WORD_PATTERN.findall(text)
+    cleaned = strip_latex_commands(text)
+    tokens: list[str] = []
+    for match in _TOKEN_SEGMENT_PATTERN.finditer(cleaned):
+        segment = match.group(0)
+        if "\u4e00" <= segment[0] <= "\u9fa5":
+            tokens.extend(segment[index : index + 2] for index in range(len(segment) - 1))
+        else:
+            tokens.append(segment.lower())
+    return tokens
 
 
 extract_content_words = extract_keywords
@@ -386,11 +431,59 @@ def _check_batch_duplication(
     return any(candidate_stem == "".join(prior.stem.split()) for prior in prior_candidates)
 
 
+def _evaluate_batch_duplication(
+    candidate: CandidateQuestion,
+    prior_candidates: Sequence[CandidateQuestion],
+    config: QuestionQualityConfig,
+) -> tuple[bool, str | None, float | None, QualitySeverity, dict[str, Any]]:
+    """对同批次前序题目执行字面与语义向量查重。"""
+    if _check_batch_duplication(candidate, prior_candidates):
+        return (
+            False,
+            "同批次内题干完全重复（保留首发题目）",
+            1.0,
+            QualitySeverity.HARD_DEFECT,
+            {},
+        )
+
+    hard_vec_thr = max(config.duplicate_vector_threshold, config.hard_duplicate_vector_threshold)
+    soft_hit: tuple[str, float, dict[str, Any]] | None = None
+    for prior in prior_candidates:
+        text_sim = calculate_text_similarity(candidate.stem, prior.stem)
+        if text_sim >= config.duplicate_text_threshold:
+            return (
+                False,
+                "同批次内题干字符相似度超限",
+                text_sim,
+                QualitySeverity.HARD_DEFECT,
+                {"matched_question_id": prior.question_id, "matched_stem": prior.stem},
+            )
+        if candidate.embedding is not None and prior.embedding is not None:
+            vec_sim = calculate_cosine_similarity(candidate.embedding, prior.embedding)
+            meta = {"matched_question_id": prior.question_id, "matched_stem": prior.stem}
+            if vec_sim >= hard_vec_thr:
+                return (
+                    False,
+                    "同批次内语义向量相似度超限",
+                    vec_sim,
+                    QualitySeverity.HARD_DEFECT,
+                    meta,
+                )
+            if vec_sim >= config.duplicate_vector_threshold and (
+                soft_hit is None or vec_sim > soft_hit[1]
+            ):
+                soft_hit = ("同批次内语义向量相似度超限", vec_sim, meta)
+
+    if soft_hit is not None:
+        return False, soft_hit[0], soft_hit[1], QualitySeverity.SOFT_FLAG, soft_hit[2]
+    return True, None, None, QualitySeverity.PASS, {}
+
+
 def _check_stem_and_options_structure(
     candidate: CandidateQuestion,
     config: QuestionQualityConfig,
 ) -> tuple[bool, str | None]:
-    """校验题干长度与选项内容是否重复。
+    """校验题干长度与选项内容是否重复或为空。
 
     Args:
         candidate: 候选题目。
@@ -404,10 +497,21 @@ def _check_stem_and_options_structure(
 
     if candidate.options:
         contents = [str(option.get("content", "")).strip() for option in candidate.options]
+        if any(not content for content in contents):
+            return False, "选项内容不能为空"
         if len(contents) != len(set(contents)):
             return False, "选项存在重复内容"
 
     return True, None
+
+
+def _extract_valid_option_keys(options: Sequence[dict[str, Any]]) -> set[str]:
+    """提取题目选项集合中的有效选项字母键。"""
+    return {
+        str(option.get("key", "")).strip().upper()
+        for option in options
+        if str(option.get("key", "")).strip()
+    }
 
 
 def _check_multiple_choice_rules(
@@ -429,6 +533,9 @@ def _check_multiple_choice_rules(
         return False, "多选题正确答案少于 2 项"
     if len(keys) >= option_count:
         return False, "多选题正确答案包含全量选项"
+    option_keys = _extract_valid_option_keys(candidate.options)
+    if option_keys and not keys.issubset(option_keys):
+        return False, "多选题正确答案不在选项列表内"
     return True, None
 
 
@@ -444,9 +551,14 @@ def _check_type_specific_rules(
         (是否通过, 错误原因)。
     """
     if candidate.question_type == QuestionType.SINGLE_CHOICE:
+        if len(candidate.options) < 2:
+            return False, "单选题选项总数少于 2 项"
         keys = _parse_option_keys(candidate.answer)
         if len(keys) != 1:
             return False, "单选题正确答案数不为 1"
+        option_keys = _extract_valid_option_keys(candidate.options)
+        if option_keys and not keys.issubset(option_keys):
+            return False, "单选题正确答案不在选项列表内"
         return True, None
 
     if candidate.question_type == QuestionType.MULTIPLE_CHOICE:
@@ -497,6 +609,19 @@ def _check_logic_contradiction(
 # ==============================================================================
 
 
+def _source_grounding_severity(
+    source_snippet_ids: Sequence[str],
+    source_text: str,
+    is_passed: bool,
+) -> QualitySeverity:
+    """判定来源检查未通过时的严重度分级。"""
+    if is_passed:
+        return QualitySeverity.PASS
+    if not source_snippet_ids or not source_text.strip():
+        return QualitySeverity.HARD_DEFECT
+    return QualitySeverity.SOFT_FLAG
+
+
 def check_source_grounding(
     stem: str,
     source_text: str,
@@ -523,8 +648,9 @@ def check_source_grounding(
     if not keywords:
         return False, "题干未包含有效实词", 0.0
 
+    normalized_source = strip_latex_commands(source_text).lower()
     unique_keywords = set(keywords)
-    hit_count = sum(1 for word in unique_keywords if word in source_text)
+    hit_count = sum(1 for word in unique_keywords if word in normalized_source)
     ratio = hit_count / len(unique_keywords)
     if ratio < config.min_source_keyword_ratio:
         return (
@@ -534,6 +660,72 @@ def check_source_grounding(
         )
 
     return True, None, ratio
+
+
+def _evaluate_duplication(
+    candidate: CandidateQuestion,
+    existing: Sequence[ExistingQuestionReference],
+    prior_candidates: Sequence[CandidateQuestion],
+    config: QuestionQualityConfig,
+) -> tuple[bool, str | None, float | None, bool, QualitySeverity, dict[str, Any]]:
+    """校验候选题目是否在批次内或同已有题库重复并返回三态严重度与匹配参考元数据。"""
+    batch_valid, batch_reason, batch_score, batch_severity, batch_meta = (
+        _evaluate_batch_duplication(candidate, prior_candidates, config)
+    )
+    if batch_severity == QualitySeverity.HARD_DEFECT:
+        return batch_valid, batch_reason, batch_score, False, batch_severity, batch_meta
+
+    hard_vec_thr = max(config.duplicate_vector_threshold, config.hard_duplicate_vector_threshold)
+    max_similarity: float = batch_score if batch_score is not None else 0.0
+    is_degraded = False
+    soft_hit: tuple[str, float, dict[str, Any]] | None = (
+        (batch_reason or "同批次内语义向量相似度超限", batch_score, batch_meta)
+        if batch_severity == QualitySeverity.SOFT_FLAG and batch_score is not None
+        else None
+    )
+
+    for existing_question in existing:
+        ref_meta = {
+            "matched_question_id": existing_question.question_id,
+            "matched_stem": existing_question.stem,
+            "matched_answer": existing_question.answer,
+        }
+        if candidate.embedding is not None and existing_question.embedding is not None:
+            vec_sim = calculate_cosine_similarity(candidate.embedding, existing_question.embedding)
+            max_similarity = max(max_similarity, vec_sim)
+            if vec_sim >= hard_vec_thr:
+                return (
+                    False,
+                    "与已有题目语义向量相似度超限",
+                    vec_sim,
+                    is_degraded,
+                    QualitySeverity.HARD_DEFECT,
+                    ref_meta,
+                )
+            if vec_sim >= config.duplicate_vector_threshold and (
+                soft_hit is None or vec_sim > soft_hit[1]
+            ):
+                soft_hit = ("与已有题目语义向量相似度超限", vec_sim, ref_meta)
+        else:
+            is_degraded = True
+
+        text_sim = calculate_text_similarity(candidate.stem, existing_question.stem)
+        max_similarity = max(max_similarity, text_sim)
+        if text_sim >= config.duplicate_text_threshold:
+            return (
+                False,
+                "与已有题目字符相似度超限",
+                text_sim,
+                is_degraded,
+                QualitySeverity.HARD_DEFECT,
+                ref_meta,
+            )
+
+    if soft_hit is not None:
+        return False, soft_hit[0], soft_hit[1], is_degraded, QualitySeverity.SOFT_FLAG, soft_hit[2]
+
+    similarity_score = max_similarity if max_similarity > 0.0 else None
+    return True, None, similarity_score, is_degraded, QualitySeverity.PASS, {}
 
 
 def check_duplication(
@@ -553,30 +745,84 @@ def check_duplication(
     Returns:
         (是否通过, 失败原因描述, 最高相似度分值, 是否发生向量缺失降级)。
     """
-    if _check_batch_duplication(candidate, prior_candidates):
-        return False, "同批次内题干完全重复（保留首发题目）", 1.0, False
+    is_valid, reason, similarity_score, is_degraded, _severity, _meta = _evaluate_duplication(
+        candidate, existing, prior_candidates, config
+    )
+    return is_valid, reason, similarity_score, is_degraded
 
+
+def _evaluate_answer_conflict(
+    candidate: CandidateQuestion,
+    existing: Sequence[ExistingQuestionReference],
+    config: QuestionQualityConfig,
+) -> tuple[bool, str | None, float | None, bool, QualitySeverity, dict[str, Any]]:
+    """校验客观题在题干高度相似时标准答案是否发生冲突并返回三态严重度。"""
+    if candidate.question_type not in OBJECTIVE_QUESTION_TYPES:
+        return True, None, None, False, QualitySeverity.PASS, {}
+
+    candidate_answer = _normalize_objective_answer(candidate.question_type, candidate.answer)
+    hard_vec_thr = max(config.conflict_vector_threshold, config.hard_duplicate_vector_threshold)
     max_similarity: float = 0.0
     is_degraded = False
+    soft_hit: tuple[float, dict[str, Any]] | None = None
 
     for existing_question in existing:
-        if candidate.embedding is not None and existing_question.embedding is not None:
-            vector_similarity = calculate_cosine_similarity(
-                candidate.embedding, existing_question.embedding
-            )
-            max_similarity = max(max_similarity, vector_similarity)
-            if vector_similarity >= config.duplicate_vector_threshold:
-                return False, "与已有题目语义向量相似度超限", vector_similarity, is_degraded
-        else:
-            is_degraded = True
+        if existing_question.question_type not in OBJECTIVE_QUESTION_TYPES:
+            continue
 
-        text_similarity = calculate_text_similarity(candidate.stem, existing_question.stem)
-        max_similarity = max(max_similarity, text_similarity)
-        if text_similarity >= config.duplicate_text_threshold:
-            return False, "与已有题目字符相似度超限", text_similarity, is_degraded
+        stem_similarity, item_degraded = _calculate_stem_similarity(candidate, existing_question)
+        if item_degraded:
+            is_degraded = True
+        max_similarity = max(max_similarity, stem_similarity)
+
+        if stem_similarity < config.conflict_vector_threshold:
+            continue
+
+        candidate_is_tf = candidate.question_type == QuestionType.TRUE_FALSE
+        existing_is_tf = existing_question.question_type == QuestionType.TRUE_FALSE
+        if candidate_is_tf != existing_is_tf:
+            continue
+
+        existing_answer = _normalize_objective_answer(
+            existing_question.question_type, existing_question.answer
+        )
+        if candidate_answer == existing_answer:
+            continue
+
+        text_sim = calculate_text_similarity(candidate.stem, existing_question.stem)
+        ref_meta = {
+            "matched_question_id": existing_question.question_id,
+            "matched_stem": existing_question.stem,
+            "matched_answer": existing_question.answer,
+        }
+        if (
+            item_degraded
+            or text_sim >= config.duplicate_text_threshold
+            or stem_similarity >= hard_vec_thr
+        ):
+            return (
+                False,
+                "题干高度相似但客观题标准答案冲突",
+                stem_similarity,
+                is_degraded,
+                QualitySeverity.HARD_DEFECT,
+                ref_meta,
+            )
+        if soft_hit is None or stem_similarity > soft_hit[0]:
+            soft_hit = (stem_similarity, ref_meta)
+
+    if soft_hit is not None:
+        return (
+            False,
+            "题干高度相似但客观题标准答案冲突",
+            soft_hit[0],
+            is_degraded,
+            QualitySeverity.SOFT_FLAG,
+            soft_hit[1],
+        )
 
     similarity_score = max_similarity if max_similarity > 0.0 else None
-    return True, None, similarity_score, is_degraded
+    return True, None, similarity_score, is_degraded, QualitySeverity.PASS, {}
 
 
 def check_answer_conflict(
@@ -596,44 +842,10 @@ def check_answer_conflict(
     Returns:
         (是否通过, 失败原因描述, 最高相似度分值, 是否发生向量缺失降级)。
     """
-    if candidate.question_type not in OBJECTIVE_QUESTION_TYPES:
-        return True, None, None, False
-
-    candidate_answer = _normalize_objective_answer(candidate.question_type, candidate.answer)
-    max_similarity: float = 0.0
-    is_degraded = False
-
-    for existing_question in existing:
-        if existing_question.question_type not in OBJECTIVE_QUESTION_TYPES:
-            continue
-
-        stem_similarity, item_degraded = _calculate_stem_similarity(candidate, existing_question)
-        if item_degraded:
-            is_degraded = True
-        max_similarity = max(max_similarity, stem_similarity)
-
-        if stem_similarity >= config.conflict_vector_threshold:
-            # 答案冲突仅在「同一答案域」内比对：判断题答案域为布尔，选择题答案域为
-            # 选项键集合，二者跨类型比较永不相等（如 True != frozenset({'A'})），
-            # 若强行比对会把题型不同的近似题误判为一票否决的答案冲突。
-            candidate_is_true_false = candidate.question_type == QuestionType.TRUE_FALSE
-            existing_is_true_false = existing_question.question_type == QuestionType.TRUE_FALSE
-            if candidate_is_true_false != existing_is_true_false:
-                continue
-
-            existing_answer = _normalize_objective_answer(
-                existing_question.question_type, existing_question.answer
-            )
-            if candidate_answer != existing_answer:
-                return (
-                    False,
-                    "题干高度相似但客观题标准答案冲突",
-                    stem_similarity,
-                    is_degraded,
-                )
-
-    similarity_score = max_similarity if max_similarity > 0.0 else None
-    return True, None, similarity_score, is_degraded
+    is_valid, reason, similarity_score, is_degraded, _severity, _meta = _evaluate_answer_conflict(
+        candidate, existing, config
+    )
+    return is_valid, reason, similarity_score, is_degraded
 
 
 def check_ambiguity(
@@ -671,10 +883,11 @@ def evaluate_single_question(
     prior_candidates: Sequence[CandidateQuestion],
     config: QuestionQualityConfig,
 ) -> tuple[SingleQuestionQualityResult, bool]:
-    """按四类一票否决固定顺序调度单题质检流水线。
+    """按四类质检固定顺序调度单题预检流水线并输出三态严重度。
 
     执行流水线：NO_SOURCE -> DUPLICATE -> ANSWER_CONFLICT -> AMBIGUITY。
-    首个不通过项立即短路否决，并产出诊断明细。
+    遇到 HARD_DEFECT 立即短路否决；遇到 SOFT_FLAG 继续完成后续检查以确保
+    结构性 HARD_DEFECT 不会被软标记掩盖。
 
     Args:
         candidate: 候选题目。
@@ -692,13 +905,18 @@ def evaluate_single_question(
         candidate.source_snippet_ids,
         config,
     )
+    source_severity = _source_grounding_severity(
+        candidate.source_snippet_ids, candidate.source_text, is_source_valid
+    )
     item_source = QuestionQualityCheckItem(
         check_type=QualityCheckType.NO_SOURCE,
         is_passed=is_source_valid,
         reason=source_reason,
         similarity_score=source_ratio,
+        metadata={"severity": source_severity.value},
+        severity=source_severity,
     )
-    if not is_source_valid:
+    if source_severity == QualitySeverity.HARD_DEFECT:
         return (
             SingleQuestionQualityResult(
                 question_id=candidate.question_id,
@@ -707,21 +925,24 @@ def evaluate_single_question(
                 unqualified_reason=source_reason,
                 similarity_score=None,
                 check_items=(item_source,),
+                severity=QualitySeverity.HARD_DEFECT,
             ),
             False,
         )
 
     # 2. 重复题检查 (DUPLICATE)
-    is_dup_valid, dup_reason, dup_similarity, dup_degraded = check_duplication(
-        candidate, existing, prior_candidates, config
+    is_dup_valid, dup_reason, dup_similarity, dup_degraded, dup_severity, dup_meta = (
+        _evaluate_duplication(candidate, existing, prior_candidates, config)
     )
     item_dup = QuestionQualityCheckItem(
         check_type=QualityCheckType.DUPLICATE,
         is_passed=is_dup_valid,
         reason=dup_reason,
         similarity_score=dup_similarity,
+        metadata={**dup_meta, "severity": dup_severity.value},
+        severity=dup_severity,
     )
-    if not is_dup_valid:
+    if dup_severity == QualitySeverity.HARD_DEFECT:
         return (
             SingleQuestionQualityResult(
                 question_id=candidate.question_id,
@@ -730,22 +951,30 @@ def evaluate_single_question(
                 unqualified_reason=dup_reason,
                 similarity_score=dup_similarity,
                 check_items=(item_source, item_dup),
+                severity=QualitySeverity.HARD_DEFECT,
             ),
             dup_degraded,
         )
 
     # 3. 答案冲突检查 (ANSWER_CONFLICT)
-    is_conflict_valid, conflict_reason, conflict_similarity, conflict_degraded = (
-        check_answer_conflict(candidate, existing, config)
-    )
+    (
+        is_conflict_valid,
+        conflict_reason,
+        conflict_similarity,
+        conflict_degraded,
+        conflict_severity,
+        conflict_meta,
+    ) = _evaluate_answer_conflict(candidate, existing, config)
     overall_degraded = dup_degraded or conflict_degraded
     item_conflict = QuestionQualityCheckItem(
         check_type=QualityCheckType.ANSWER_CONFLICT,
         is_passed=is_conflict_valid,
         reason=conflict_reason,
         similarity_score=conflict_similarity,
+        metadata={**conflict_meta, "severity": conflict_severity.value},
+        severity=conflict_severity,
     )
-    if not is_conflict_valid:
+    if conflict_severity == QualitySeverity.HARD_DEFECT:
         return (
             SingleQuestionQualityResult(
                 question_id=candidate.question_id,
@@ -754,19 +983,24 @@ def evaluate_single_question(
                 unqualified_reason=conflict_reason,
                 similarity_score=conflict_similarity,
                 check_items=(item_source, item_dup, item_conflict),
+                severity=QualitySeverity.HARD_DEFECT,
             ),
             overall_degraded,
         )
 
     # 4. 明显歧义检查 (AMBIGUITY)
     is_ambiguity_valid, ambiguity_reason = check_ambiguity(candidate, config)
+    ambiguity_severity = QualitySeverity.PASS if is_ambiguity_valid else QualitySeverity.HARD_DEFECT
     item_ambiguity = QuestionQualityCheckItem(
         check_type=QualityCheckType.AMBIGUITY,
         is_passed=is_ambiguity_valid,
         reason=ambiguity_reason,
         similarity_score=None,
+        metadata={"severity": ambiguity_severity.value},
+        severity=ambiguity_severity,
     )
-    if not is_ambiguity_valid:
+    all_items = (item_source, item_dup, item_conflict, item_ambiguity)
+    if ambiguity_severity == QualitySeverity.HARD_DEFECT:
         return (
             SingleQuestionQualityResult(
                 question_id=candidate.question_id,
@@ -774,7 +1008,25 @@ def evaluate_single_question(
                 unqualified_type=QualityCheckType.AMBIGUITY,
                 unqualified_reason=ambiguity_reason,
                 similarity_score=None,
-                check_items=(item_source, item_dup, item_conflict, item_ambiguity),
+                check_items=all_items,
+                severity=QualitySeverity.HARD_DEFECT,
+            ),
+            overall_degraded,
+        )
+
+    soft_item = next(
+        (item for item in all_items if item.severity == QualitySeverity.SOFT_FLAG), None
+    )
+    if soft_item is not None:
+        return (
+            SingleQuestionQualityResult(
+                question_id=candidate.question_id,
+                is_qualified=False,
+                unqualified_type=soft_item.check_type,
+                unqualified_reason=soft_item.reason,
+                similarity_score=soft_item.similarity_score,
+                check_items=all_items,
+                severity=QualitySeverity.SOFT_FLAG,
             ),
             overall_degraded,
         )
@@ -787,7 +1039,8 @@ def evaluate_single_question(
             unqualified_type=None,
             unqualified_reason=None,
             similarity_score=None,
-            check_items=(item_source, item_dup, item_conflict, item_ambiguity),
+            check_items=all_items,
+            severity=QualitySeverity.PASS,
         ),
         overall_degraded,
     )
