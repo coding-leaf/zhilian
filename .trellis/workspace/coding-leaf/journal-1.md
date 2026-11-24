@@ -657,3 +657,27 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: 修复RAG原文提取展示与题目问答多轮上下文
+<!-- trellis-session: v=2 fp=b80624cbf7be3dd6 -->
+
+**Date**: 2026-11-24
+**Task**: 修复RAG原文提取展示与题目问答多轮上下文
+**Branch**: `fix/rag-extraction-and-coach-context`
+
+### Summary
+
+修复PDF乱码与图文页VLM路由、硬折行重连、标题短噪过滤及前端兜底；为题目问答接入12轮记忆、原生多轮消息、教材依据注入与未作答防剧透并同步前端持久化与规范契约
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8561de6` | fix(rag): improve PDF dirty/visual page VLM routing, line unwrapping, and snippet filtering |
+| `6eb87da` | fix(coach): add multi-turn memory, textbook context, and spoiler guard to question coach |
+| `8d8e4d7` | docs(trellis): document question coach multi-turn and spoiler-guard contract |
+
+### Status
+
+[OK] **Completed**
