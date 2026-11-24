@@ -359,3 +359,53 @@ export interface AskCoachParams {
 ### 7. Wrong vs Correct
 - **Wrong**：无条件把 `question.answer` 拼入 `ask_coach` 上下文（做题未作答前直接剧透答案）。
 - **Correct**：仅在 `user_answer` 非空（已作答/复盘态）才附带 `【标准答案】` 与 `【解析】`。
+
+
+---
+
+## Scenario: 异步出题自动建卷与「只提醒不强跳」契约（`POST /api/v1/questions/jobs`，2026-11-24）
+
+### 1. Scope / Trigger
+改动 `QuestionGenerationJob` 模型/迁移（`0012`）、`POST /questions/jobs`、`BackgroundTaskBar`、初次生题页（`questions/index.vue`）或错题再生入口时。
+
+### 2. Signatures
+```python
+# backend/app/schemas/question.py::QuestionGenerationJobCreateRequest
+count: int = Field(default=5, ge=1, le=50)  # 异步作业支持至 MAX_PRACTICE_QUESTIONS=50；同步 POST /questions/generate 已 deprecated 且维持 <=20
+auto_create_practice: bool = False
+practice_title: str | None = None
+source_type: Literal["initial_compose", "wrong_record", "weakness"] | None = None
+source_practice_id: uuid.UUID | None = None
+# 可选请求头：Idempotency-Key
+
+# QuestionGenerationJobResponse 新增字段
+result_practice_id: uuid.UUID | None = None
+source_type: str | None = None
+source_practice_id: uuid.UUID | None = None
+practice_title: str | None = None
+```
+
+### 3. Contracts
+- **前端清零同步出题**：所有初次生题与错题再生入口（报告页、学情错题本、薄弱点强化）必须统一调用 `backgroundTaskStore.startQuestionJob({ ..., auto_create_practice: true, source_type })`，严禁调用已废弃的同步 `apiGenerateQuestions` 或 `withBlockingLoading('生成中...')`。
+- **Worker 原子建卷与幂等**：`create_generation_job` 按 `Idempotency-Key` 或同作用域活跃任务（`queued`/`running`）去重复用；`run_generation_job` 完成后若 `auto_create_practice=True` 且存在可用题，原子创建 `Practice`（`question_count=len(available_ids)`，不触发默认 10 题截断）并将 `practice.id` 落入 `result_practice_id`。
+- **只提醒、不强制跳转（核心 UX 契约）**：无论初次生题还是错题再生，作业完成后**严禁自动 `redirectTo`/`navigateTo` 抢夺页面焦点**。出题页切至极简 `QuestionReadyCard`（禁止铺开带答案/切片的杂乱题库列表），其余页面（含报告页 `report/pages/detail/index.vue`）通过 `<BackgroundTaskBar />` 展示就绪提醒，用户点击「立即作答」直达 `/subpackages/practice/pages/session/index?practice_id=${resultPracticeId}`。
+
+### 4. Validation & Error Matrix
+| 条件 | 结果 |
+| --- | --- |
+| 重复双击同一错题/作用域出题 | 复用活跃 Job 返回 202，不重复入队 LLM |
+| 本批可用题为 0（全部 `pending_review`） | `status=completed`，`result_practice_id=None`，提示调整配置重试 |
+| Worker 遇可重试网络/LLM 5xx | 回滚并 re-raise 交 RQ 重试，不提前标 `failed`；重试耗尽由 `handle_job_terminal_failure` 落终态 |
+| 轮询遇 404/403 | `backgroundTaskStore` 立即移除追踪项，停止无效轮询 |
+
+### 5. Good/Base/Bad Cases
+- **Good**：报告页点「针对错题出题」→ 202 立即返回，顶部 `BackgroundTaskBar` 显示进度；完成后出现「错题巩固卷已就绪 · 立即作答」，点击直达答题页。
+- **Bad**：在点击错题再生后锁死屏幕等 90s 同步接口，或在生题完成后强制跳转或弹出带参考答案的杂乱题库预览页。
+
+### 6. Tests Required
+- `backend/tests/unit/services/test_async_question_job_auto_practice.py`：验证自动建卷、`result_practice_id` 落盘、活跃任务幂等去重、可重试异常不提前写死 `failed`。
+- `miniprogram/tests/asyncWrongRegenerate.spec.ts` & `studyAndComposeFlow.spec.ts`：验证零同步出题调用、无强跳提醒卡与 `BackgroundTaskBar` 直达 `session/index`。
+
+### 7. Wrong vs Correct
+- **Wrong**：`watch(job.status === 'completed')` 里自动调用 `uni.redirectTo('/subpackages/practice/pages/session/index')` 或展开 `QuestionPreviewPanel`。
+- **Correct**：出题页仅切至 `mode = 'ready'` 渲染极简 `QuestionReadyCard`，其他页由 `<BackgroundTaskBar />` 提醒，由用户主动点击进入练习。

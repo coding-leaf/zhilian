@@ -16,7 +16,7 @@
 | Guide | 覆盖范围 | 事实源 | 最后核对 |
 | --- | --- | --- | --- |
 | [Directory Structure](./directory-structure.md) | 模块组织与文件布局、6 条 import-linter 分层边界 | `backend/app/**`、`backend/pyproject.toml` | 2026-11-17 |
-| [Database Guidelines](./database-guidelines.md) | ORM 模式、查询、DML 影响行数、迁移、迁移一致性闸门 | `backend/app/models/**`、`backend/app/repositories/**`、`backend/migrations/versions/**`、`backend/alembic.ini`、`backend/tests/unit/models/**` | 2026-11-17 |
+| [Database Guidelines](./database-guidelines.md) | ORM 模式、查询、DML 影响行数、短事务/Commit-First 边界、迁移一致性闸门 | `backend/app/models/**`、`backend/app/repositories/**`、`backend/app/container.py`、`backend/migrations/versions/**`、`backend/alembic.ini`、`backend/tests/unit/models/**` | 2026-11-24 |
 | [个人页统计契约](./material-statistics.md) | 用户级就绪资料/考点计数、归档与未分类口径、页面加载和刷新 | `backend/app/repositories/material.py`、`backend/app/api/v1/materials.py`、`miniprogram/src/pages/profile/` | 2026-11-17 |
 | [Error Handling](./error-handling.md) | 异常类型与处理策略 | `backend/app/core/errors.py`、`backend/app/api/**`、`backend/app/cli/errors.py` | 2026-11-17 |
 | [Quality Guidelines](./quality-guidelines.md) | 代码标准（`max-complexity = 15`）、禁止模式、质量门禁 | `backend/app/**`、`backend/tests/**`、`backend/migrations/**`、`backend/pyproject.toml` | 2026-11-17 |
