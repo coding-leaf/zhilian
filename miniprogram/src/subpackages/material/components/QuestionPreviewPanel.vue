@@ -12,7 +12,12 @@
       <text class="gap-text">
         仍有 {{ missingCount }} 个已选考点没有合格题目覆盖，请补齐或调整考点后再开始作答。
       </text>
-      <button class="gap-btn" :loading="isGenerating || isJobInFlight" @tap="emit('fill-gap')">
+      <button
+        class="gap-btn"
+        :loading="isGenerating || isJobInFlight"
+        :disabled="isGenerating || isJobInFlight"
+        @tap="emit('fill-gap')"
+      >
         补齐缺失考点
       </button>
     </view>
@@ -35,9 +40,9 @@
     <view class="bottom-action-bar">
       <button class="reconfig-btn" @tap="emit('reconfig')">重新调整</button>
       <button
-        class="paper-btn-primary start-btn"
+        :class="['paper-btn-primary', 'start-btn', { 'is-disabled': !canStart || isStarting }]"
         :loading="isStarting"
-        :disabled="!canStart"
+        :disabled="!canStart || isStarting"
         @tap="emit('start')"
       >
         开始作答 ({{ questions.length }} 题)

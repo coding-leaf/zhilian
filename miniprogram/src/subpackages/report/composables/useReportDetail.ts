@@ -6,6 +6,7 @@ import { needsGradingRetry, summarizeProgress } from '@/api/adapters/practice'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { createPoller } from '@/utils/poller'
 import { startWrongRegenerateJob } from '@/utils/questionGeneration'
+import { RequestError } from '@/utils/requestError'
 import type { AttemptResult, DiagnosisReport } from '@/types'
 import {
   buildWeakPointViews,
@@ -13,6 +14,19 @@ import {
   resolveSessionScope,
   type GradingMode,
 } from '../utils/reportView'
+
+const formatErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof RequestError) return error.userMessage
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    return (error as { message: string }).message || fallback
+  }
+  return fallback
+}
 
 /** 报告详情页编排：作答加载、可取消判题轮询、复查/自评提交与错题再生题。 */
 export function useReportDetail() {
@@ -84,8 +98,8 @@ export function useReportDetail() {
         await practiceStore.refreshSession(practiceId.value)
         await loadReportIfGraded()
       })
-    } catch (error: any) {
-      loadError.value = error?.message || '加载失败，请稍后重试'
+    } catch (error: unknown) {
+      loadError.value = formatErrorMessage(error, '加载失败，请稍后重试')
     }
   }
 
@@ -119,8 +133,8 @@ export function useReportDetail() {
       if (!fullyGraded.value && !needsRetry.value && !gradingPoller.isDisposed) {
         safeShowToast('判题仍在进行，可稍后从学情页查看')
       }
-    } catch (error: any) {
-      safeShowToast(error?.message || '重试失败，请稍后再试')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '重试失败，请稍后再试'))
     } finally {
       isRetryingGrading.value = false
     }
@@ -139,15 +153,15 @@ export function useReportDetail() {
     try {
       if (modalMode.value === 'regrade') {
         const res = await practiceStore.requestRegrade(result.attemptItemId, payload.reason)
-        safeShowToast(res.message || '复查已完成', 'success')
+        safeShowToast(res.message || '复查已完成')
       } else {
         await practiceStore.selfEvaluate(result.attemptItemId, payload.score, payload.reason)
         safeShowToast('自评已生效', 'success')
       }
       showModal.value = false
       await loadReportIfGraded()
-    } catch (error: any) {
-      safeShowToast(error?.message || '提交失败，请重试')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '提交失败，请重试'))
     } finally {
       isSubmittingGrading.value = false
     }
@@ -169,8 +183,8 @@ export function useReportDetail() {
         practiceTitle: '错题巩固练习',
       })
       safeShowToast('已在后台生成错题巩固卷，完成后顶部提醒')
-    } catch (error: any) {
-      safeShowToast(error?.message || '生成失败')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '生成失败'))
     } finally {
       isDispatchingRegenerate.value = false
     }

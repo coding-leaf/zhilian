@@ -30,6 +30,7 @@
     <button
       class="paper-btn-primary retry-grading-btn"
       :loading="retryingGrading"
+      :disabled="retryingGrading"
       @tap="emit('retry-grading')"
     >
       重试判题
@@ -38,7 +39,12 @@
 
   <view v-else-if="!fullyGraded" class="paper-card refresh-card">
     <text class="adaptive-desc">判题进度：已判 {{ gradedCount }}/{{ totalCount }} 题。</text>
-    <button class="refresh-btn" :loading="polling" @tap="emit('poll-grading')">
+    <button
+      class="refresh-btn"
+      :loading="polling"
+      :disabled="polling"
+      @tap="emit('poll-grading')"
+    >
       刷新判题进度
     </button>
   </view>
@@ -78,12 +84,25 @@ const emit = defineEmits<{
   background: var(--color-blue-bg);
   color: var(--color-academic-blue);
   border-radius: 8rpx;
-  margin-top: 16rpx;
+  margin: 16rpx 0 0;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &::after {
+    border: none;
+  }
 }
 
 .retry-grading-btn {
   height: 76rpx;
   font-size: 27rpx;
-  margin-top: 16rpx;
+  margin: 16rpx 0 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 </style>

@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
+  extractUserErrorMessage,
   isBlockingLoadingActive,
   resetLoadingGuardForTest,
   safeShowToast,
   withBlockingLoading,
 } from '@/utils/loadingGuard'
 import { request, uploadFile } from '@/utils/request'
+import { RequestError } from '@/utils/requestError'
 
 const uniGlobal = globalThis as any
 
@@ -63,6 +65,51 @@ describe('loadingGuard ref-counted blocking loading', () => {
     expect(isBlockingLoadingActive()).toBe(false)
     safeShowToast('提交失败')
     expect(events).toEqual(['showLoading', 'hideLoading', 'showToast:提交失败'])
+  })
+
+  it('auto-downgrades icon to none when toast title exceeds 7 characters and preserves icon otherwise', () => {
+    const toastSpy = vi.spyOn(uniGlobal.uni, 'showToast')
+
+    safeShowToast('上传成功，已开始后台解析', 'success')
+    expect(toastSpy).toHaveBeenLastCalledWith({
+      title: '上传成功，已开始后台解析',
+      icon: 'none',
+    })
+
+    safeShowToast({ title: '头像已更新', icon: 'success', duration: 2000, mask: true })
+    expect(toastSpy).toHaveBeenLastCalledWith({
+      title: '头像已更新',
+      icon: 'success',
+      duration: 2000,
+      mask: true,
+    })
+
+    safeShowToast({ title: '试卷已就绪（10 题）', icon: 'success' })
+    expect(toastSpy).toHaveBeenLastCalledWith({
+      title: '试卷已就绪（10 题）',
+      icon: 'none',
+    })
+  })
+
+  it('extractUserErrorMessage prefers RequestError.userMessage and strips leaked URLs', () => {
+    const reqErr = new RequestError(
+      'http',
+      'http://127.0.0.1:8000/api/v1/folders/1',
+      'PUT',
+      '课程名称已存在',
+      { statusCode: 409 },
+    )
+    expect(reqErr.message).toContain('http://127.0.0.1:8000')
+    expect(extractUserErrorMessage(reqErr, '保存失败')).toBe('课程名称已存在')
+
+    expect(
+      extractUserErrorMessage(
+        new Error('网络错误 [POST http://127.0.0.1:8000/api/v1/users/me]'),
+        '保存失败',
+      ),
+    ).toBe('网络错误')
+    expect(extractUserErrorMessage(new Error('http://127.0.0.1:8000/x'), '保存失败')).toBe('保存失败')
+    expect(extractUserErrorMessage(null, '兜底提示')).toBe('兜底提示')
   })
 })
 

@@ -90,15 +90,19 @@ const emit = defineEmits<{
   (e: 'retry', msg: CoachMessage): void
 }>()
 
-const bottomAnchorId = 'coach-bottom-anchor'
+let anchorSeq = 0
+const bottomAnchorId = ref('coach-bottom-anchor-0')
 const scrollTargetId = ref('')
 
 watch(
   () => [props.messages.length, props.isThinking],
   async () => {
+    anchorSeq += 1
+    const nextAnchorId = `coach-bottom-anchor-${anchorSeq}`
+    bottomAnchorId.value = nextAnchorId
     scrollTargetId.value = ''
     await nextTick()
-    scrollTargetId.value = bottomAnchorId
+    scrollTargetId.value = nextAnchorId
   },
   { immediate: true },
 )
@@ -107,7 +111,6 @@ const copyContent = (content: string) => {
   if (!content) return
   uni.setClipboardData({
     data: content,
-    success: () => uni.showToast({ title: '已复制解析', icon: 'success' }),
     fail: () => uni.showToast({ title: '复制失败', icon: 'none' }),
   })
 }

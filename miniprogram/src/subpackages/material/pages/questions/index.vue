@@ -94,6 +94,7 @@ import { useQuestionCompose } from '../../composables/useQuestionCompose'
 const taskStore = useBackgroundTaskStore()
 const compose = useQuestionCompose()
 const showKpDrawer = ref(false)
+let isInitialLoading = false
 
 const pageTitle = computed(() => {
   if (compose.viewMode.value === 'generating') return '正在后台智能出题'
@@ -114,7 +115,7 @@ watch(
     if (!job) return
     if (status === 'completed') {
       const count = await compose.applyCompletedJob(job)
-      if (count > 0) safeShowToast(`试卷已就绪（${count} 题）`, 'success')
+      if (count > 0) safeShowToast(`试卷已就绪（${count} 题）`)
     } else if (status === 'failed') {
       safeShowToast(job.error_message || '后台出题失败，请重试')
       compose.clearActiveJob()
@@ -124,33 +125,39 @@ watch(
 )
 
 onLoad(async (options) => {
-  const scopeOptions = { folderId: options?.folder_id, materialId: options?.material_id }
-  if (scopeOptions.folderId) compose.setScope({ folderId: scopeOptions.folderId })
-  else if (scopeOptions.materialId) compose.setScope({ materialId: scopeOptions.materialId })
+  isInitialLoading = true
+  try {
+    const scopeOptions = { folderId: options?.folder_id, materialId: options?.material_id }
+    if (scopeOptions.folderId) compose.setScope({ folderId: scopeOptions.folderId })
+    else if (scopeOptions.materialId) compose.setScope({ materialId: scopeOptions.materialId })
 
-  if (options?.view === 'generated') {
-    compose.viewMode.value = 'ready'
-    compose.isLoadingReady.value = true
-  } else if (compose.hasScopeActiveJob(scopeOptions)) {
-    await compose.attachActiveJobForScope()
-  }
-
-  await compose.loadScopeKnowledgePoints({ ...scopeOptions, preselectedKpId: options?.kp_id })
-
-  if (options?.view === 'generated') {
-    try {
-      if (options?.batch_id) await loadGeneratedBatch(options.batch_id)
-      else if (options?.material_id) await loadGeneratedQuestions(options.material_id)
-    } finally {
-      compose.isLoadingReady.value = false
+    if (options?.view === 'generated') {
+      compose.viewMode.value = 'ready'
+      compose.isLoadingReady.value = true
+    } else if (compose.hasScopeActiveJob(scopeOptions)) {
+      await compose.attachActiveJobForScope()
     }
-  } else {
-    await taskStore.refreshActiveTasks()
-    await compose.attachActiveJobForScope()
+
+    await compose.loadScopeKnowledgePoints({ ...scopeOptions, preselectedKpId: options?.kp_id })
+
+    if (options?.view === 'generated') {
+      try {
+        if (options?.batch_id) await loadGeneratedBatch(options.batch_id)
+        else if (options?.material_id) await loadGeneratedQuestions(options.material_id)
+      } finally {
+        compose.isLoadingReady.value = false
+      }
+    } else {
+      await taskStore.refreshActiveTasks()
+      await compose.attachActiveJobForScope()
+    }
+  } finally {
+    isInitialLoading = false
   }
 })
 
 onShow(async () => {
+  if (isInitialLoading || compose.viewMode.value === 'ready') return
   await compose.attachActiveJobForScope()
 })
 
@@ -210,7 +217,7 @@ const handleOpenBackgroundTask = async (task: BackgroundTaskItem) => {
 
 const handleGenerate = async () => {
   const generatedCount = await compose.generate()
-  if (generatedCount > 0) safeShowToast(`试卷已就绪（${generatedCount} 题）`, 'success')
+  if (generatedCount > 0) safeShowToast(`试卷已就绪（${generatedCount} 题）`)
 }
 
 const goBrowseMaterial = () => {

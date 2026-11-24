@@ -29,6 +29,12 @@
   background: var(--color-wrong);
   padding: 8rpx 20rpx;
   border-radius: 8rpx;
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .progress-bar-row {
@@ -320,6 +326,28 @@
   margin-top: 8rpx;
 }
 
+.input-overlay-preview {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.essay-overlay-preview {
+  overflow-y: auto;
+}
+
+.overlay-preview-text {
+  font-size: 28rpx;
+  line-height: 1.5;
+  color: var(--color-ink-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.overlay-preview-text.placeholder {
+  color: var(--color-ink-muted);
+}
+
 .bottom-bar {
   position: fixed;
   bottom: 0;
@@ -338,6 +366,12 @@
   flex: 1;
   height: 88rpx;
   font-size: 28rpx;
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .prev-btn {
@@ -353,4 +387,10 @@
   flex: 1;
   height: 88rpx;
   background: var(--color-success);
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }

@@ -24,7 +24,7 @@ import type {
 } from '@/types'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { startWrongRegenerateJob } from '@/utils/questionGeneration'
-import { describeFailure } from '@/utils/requestError'
+import { describeFailure, RequestError } from '@/utils/requestError'
 import {
   groupKnowledgePointIds,
   hasScope,
@@ -33,6 +33,19 @@ import {
   recordRegenerateScope,
   type ReviewSegment,
 } from '../reviewView'
+
+const formatErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof RequestError) return error.userMessage
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    return (error as { message: string }).message || fallback
+  }
+  return fallback
+}
 
 const PAGE_SIZE = 50
 const MAX_PAGES = 6
@@ -190,9 +203,9 @@ export function useReviewCenter() {
 
   const switchTab = async (tab: ReviewSegment, refreshBank?: () => Promise<void>) => {
     activeTab.value = tab
-    if (tab === 'bank' && bankDirty.value && refreshBank) {
+    if (tab === 'bank' && bankDirty.value) {
       bankDirty.value = false
-      await refreshBank()
+      if (refreshBank) await refreshBank()
     }
   }
 
@@ -264,8 +277,8 @@ export function useReviewCenter() {
         }),
       )
       navigateToSession(session.id)
-    } catch (error: any) {
-      safeShowToast(error?.message || '暂未找到所属讲义，请从资料详情页发起出题')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '暂未找到所属讲义，请从资料详情页发起出题'))
     }
   }
 
@@ -303,12 +316,12 @@ export function useReviewCenter() {
           })
           safeShowToast('已在后台生成强化巩固卷，完成后顶部提醒')
           return
-        } catch (jobErr: any) {
-          safeShowToast(jobErr?.message || err?.message || '发起薄弱强化失败')
+        } catch (jobErr: unknown) {
+          safeShowToast(formatErrorMessage(jobErr, formatErrorMessage(err, '发起薄弱强化失败')))
           return
         }
       }
-      safeShowToast(err?.message || '发起薄弱强化失败')
+      safeShowToast(formatErrorMessage(err, '发起薄弱强化失败'))
     }
   }
 
@@ -322,8 +335,8 @@ export function useReviewCenter() {
         practiceTitle: '错题巩固练习',
       })
       safeShowToast('已在后台生成错题巩固卷，完成后顶部提醒')
-    } catch (error: any) {
-      safeShowToast(error?.message || '生成失败')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '生成失败'))
     } finally {
       isDispatchingRegenerate.value = false
     }
@@ -367,8 +380,8 @@ export function useReviewCenter() {
       await apiMarkWrongRecordMastered(record.id, true)
       safeShowToast('已标为已掌握', 'success')
       await Promise.all([loadWrongs(), loadMastery()])
-    } catch (error: any) {
-      safeShowToast(error?.message || '操作失败，请重试')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '操作失败，请重试'))
     } finally {
       markingWrongIds.value = markingWrongIds.value.filter((id) => id !== record.id)
     }
@@ -399,8 +412,8 @@ export function useReviewCenter() {
         )
         navigateToSession(session.id)
         return
-      } catch (error: any) {
-        safeShowToast(error?.message || '创建重练失败，请重试')
+      } catch (error: unknown) {
+        safeShowToast(formatErrorMessage(error, '创建重练失败，请重试'))
         return
       }
     }

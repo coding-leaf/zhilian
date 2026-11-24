@@ -131,7 +131,8 @@ function applyAccent(cmd: string, inner: RichTextNode[]): RichTextNode[] {
     return [wrapStyled('rt-math-overline', STYLES.mathOverline, inner)]
   }
   const mark = ACCENT_MARKS[cmd]
-  return mapTextNodes(inner, (text) => text.replace(/[^\s\p{M}]/gu, (ch) => `${ch}${mark}`))
+  // 使用显式组合音标范围替代 ES2018 `\p{M}`，避免旧版 iOS JSCore 正则解析崩溃
+  return mapTextNodes(inner, (text) => text.replace(/[^\s\u0300-\u036f]/gu, (ch) => `${ch}${mark}`))
 }
 
 /** 按顶层 `\\`（行）或 `&`（列）切分环境主体；忽略花括号与嵌套环境内部的分隔符。 */

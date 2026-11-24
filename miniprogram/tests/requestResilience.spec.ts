@@ -43,24 +43,32 @@ describe('network resilience: config, silentToast, concurrency, dedup, retry & 4
     vi.restoreAllMocks()
   })
 
-  it('defaults API_BASE_URL to 127.0.0.1 and configures mp-weixin networkTimeout in manifest.json', () => {
+  it('defaults API_BASE_URL to 127.0.0.1 and configures mp-weixin privacy, lazy loading, and 60s networkTimeout in manifest.json', () => {
     expect(API_BASE_URL).toBe('http://127.0.0.1:8000/api/v1')
-    expect((manifest as any)['mp-weixin']?.networkTimeout).toEqual({
-      request: 90000,
-      uploadFile: 120000,
+    const mpWeixin = (manifest as any)['mp-weixin']
+    expect(mpWeixin?.__usePrivacyCheck__).toBe(true)
+    expect(mpWeixin?.lazyCodeLoading).toBe('requiredComponents')
+    expect(mpWeixin?.setting?.enhance).toBe(true)
+    expect(mpWeixin?.networkTimeout).toEqual({
+      request: 60000,
+      uploadFile: 60000,
     })
   })
 
-  it('classifies uploadFile timeout using actual 120s upload timeout budget', async () => {
+  it('classifies uploadFile timeout using actual 60s upload timeout budget and omits undefined formData', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    uniGlobal.uni.uploadFile = (options: any) =>
+    const capturedOptions: any[] = []
+    uniGlobal.uni.uploadFile = (options: any) => {
+      capturedOptions.push(options)
       options.fail({ errMsg: 'uploadFile:fail timeout' })
+    }
 
     const rejection = await uploadFile('/tmp/big.pdf').catch((err) => err)
 
     expect(rejection).toBeInstanceOf(RequestError)
     expect(rejection.kind).toBe('timeout')
-    expect(rejection.userMessage).toContain('120秒')
+    expect(rejection.userMessage).toContain('60秒')
+    expect('formData' in capturedOptions[0]).toBe(false)
   })
 
   it('never shows toast or dismisses active foreground loading when silentToast=true fails', async () => {
@@ -261,7 +269,13 @@ describe('network resilience: config, silentToast, concurrency, dedup, retry & 4
     expect(settled.every((item) => item.status === 'rejected')).toBe(true)
     expect(refreshCalls).toBe(1)
     expect(reLaunchSpy).toHaveBeenCalledTimes(1)
+    // Toast is scheduled after reLaunch so WeChat page teardown does not flash-dismiss it
+    expect(toastSpy).toHaveBeenCalledTimes(0)
+    await new Promise((resolve) => setTimeout(resolve, 180))
     expect(toastSpy).toHaveBeenCalledTimes(1)
+    expect(toastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '登录已过期，请重新登录', icon: 'none' }),
+    )
     expect(uni.getStorageSync(ACCESS_TOKEN_KEY)).toBe('')
     expect(uni.getStorageSync(REFRESH_TOKEN_KEY)).toBe('')
   })

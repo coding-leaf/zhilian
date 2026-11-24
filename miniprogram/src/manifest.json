@@ -10,15 +10,18 @@
   },
   "mp-weixin": {
     "appid": "touristappid",
+    "__usePrivacyCheck__": true,
+    "lazyCodeLoading": "requiredComponents",
     "setting": {
       "urlCheck": false,
       "es6": true,
+      "enhance": true,
       "postcss": true,
       "minified": true
     },
     "networkTimeout": {
-      "request": 90000,
-      "uploadFile": 120000
+      "request": 60000,
+      "uploadFile": 60000
     },
     "usingComponents": true
   }

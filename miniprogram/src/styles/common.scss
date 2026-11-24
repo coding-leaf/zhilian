@@ -122,8 +122,26 @@
   display: block;
 }
 
+.paper-btn-primary {
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
+}
+
 .quick-gen-btn {
   height: 72rpx;
   font-size: 26rpx;
   padding: 0 24rpx;
+  margin: 0;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &::after {
+    border: none;
+  }
 }

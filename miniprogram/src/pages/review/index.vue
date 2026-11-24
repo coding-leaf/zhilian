@@ -40,7 +40,7 @@
       @reinforce-weak="review.handleReinforceWeak"
     />
 
-    <view class="segment-bar sticky-surface">
+    <view :class="['segment-bar', { 'sticky-surface': taskStore.visibleTasks.length === 0 }]">
       <view
         v-for="tab in segmentTabs"
         :key="tab.key"
@@ -110,7 +110,7 @@
       </template>
     </view>
 
-    <view v-show="review.activeTab.value === 'bank'">
+    <view v-if="hasVisitedBank" v-show="review.activeTab.value === 'bank'">
       <QuestionBankSection
         ref="bankSection"
         :wrong-records="review.wrongRecords.value"
@@ -124,6 +124,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useFolderStore } from '@/stores/folder'
 import MasteryOverviewCard from './components/MasteryOverviewCard.vue'
 import MasteryPointList from './components/MasteryPointList.vue'
@@ -134,8 +135,11 @@ import { useReviewCenter } from './composables/useReviewCenter'
 import type { ReviewSegment } from './reviewView'
 
 const folderStore = useFolderStore()
+const taskStore = useBackgroundTaskStore()
 const review = useReviewCenter()
 const bankSection = ref<InstanceType<typeof QuestionBankSection> | null>(null)
+const hasVisitedBank = ref(false)
+let hasCompletedInitialLoad = false
 
 const segmentTabs = computed<Array<{ key: ReviewSegment; label: string; count: number }>>(() => [
   { key: 'mastery', label: '考点掌握', count: review.masteryOverview.value?.total_knowledge_points ?? 0 },
@@ -149,16 +153,23 @@ const refreshBank = async () => {
 }
 
 const handleRefreshAll = () => review.refreshAll({ refreshBank })
-const handleSwitchTab = (tab: ReviewSegment) => review.switchTab(tab, refreshBank)
+const handleSwitchTab = async (tab: ReviewSegment) => {
+  const firstVisit = tab === 'bank' && !hasVisitedBank.value
+  if (tab === 'bank') hasVisitedBank.value = true
+  await review.switchTab(tab, firstVisit ? undefined : refreshBank)
+}
 const handleWrongChanged = async () => {
   await Promise.all([review.loadWrongs(), review.loadMastery()])
 }
 
 onMounted(async () => {
   await review.refreshAll({ refreshBank })
+  hasCompletedInitialLoad = true
 })
 
 onShow(async () => {
+  // 微信冷启时 onShow 先于 onMounted 触发，跳过首帧重复拉取
+  if (!hasCompletedInitialLoad) return
   await review.refreshAll({ fromShow: true, refreshBank })
 })
 

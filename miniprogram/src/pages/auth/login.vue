@@ -3,7 +3,7 @@
     <view class="paper-card login-card">
       <text class="title">登录智练</text>
       <text class="desc">一键同步你的个人讲义、作答进度与精准学情诊断报告。</text>
-      <button class="paper-btn-primary login-btn" :loading="isLoading" @tap="handleLogin">
+      <button class="paper-btn-primary login-btn" :loading="isLoading" :disabled="isLoading" @tap="handleLogin">
         微信一键快速登录
       </button>
     </view>
@@ -70,5 +70,10 @@ const handleLogin = async () => {
 .login-btn {
   height: 88rpx;
   font-size: 30rpx;
+  margin: 0;
+  line-height: 1.4;
+}
+.login-btn::after {
+  border: none;
 }
 </style>

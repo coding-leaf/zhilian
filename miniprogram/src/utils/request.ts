@@ -1,10 +1,11 @@
+import { getActivePinia } from 'pinia'
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   UPLOAD_REQUEST_TIMEOUT_MS,
   RequestError,
   classifyTransportFailure,
 } from './requestError'
-import { dismissBlockingLoading } from './loadingGuard'
+import { dismissBlockingLoading, safeShowToast } from './loadingGuard'
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from './storageKeys'
 
 export const API_BASE_URL =
@@ -120,13 +121,39 @@ function isRetryableGetError(error: RequestError): boolean {
   return false
 }
 
+let unauthorizedToastTimer: ReturnType<typeof setTimeout> | null = null
+
 function clearUnauthorizedGuard(): void {
   if (unauthorizedGuardTimer !== null) {
     clearTimeout(unauthorizedGuardTimer)
     unauthorizedGuardTimer = null
   }
+  if (unauthorizedToastTimer !== null) {
+    clearTimeout(unauthorizedToastTimer)
+    unauthorizedToastTimer = null
+  }
   isHandlingUnauthorized = false
   lastUnauthorizedToken = null
+}
+
+function getActiveAuthStore(): {
+  clearAuth?: () => void
+  setAuth?: (token: string, refreshToken?: string | null) => void
+} | null {
+  try {
+    // 微信小程序 CJS 产物不支持动态 import()，通过 Pinia 活跃注册表同步访问避免循环依赖与编译断裂
+    const pinia = getActivePinia() as { _s?: Map<string, unknown> } | undefined
+    const store = pinia?._s?.get('auth')
+    if (store && typeof store === 'object') {
+      return store as {
+        clearAuth?: () => void
+        setAuth?: (token: string, refreshToken?: string | null) => void
+      }
+    }
+  } catch {
+    // Pinia may be inactive in isolated utility tests
+  }
+  return null
 }
 
 function handleUnauthorized(failedToken?: string): void {
@@ -148,19 +175,30 @@ function handleUnauthorized(failedToken?: string): void {
   dismissBlockingLoading()
   uni.removeStorageSync(ACCESS_TOKEN_KEY)
   uni.removeStorageSync(REFRESH_TOKEN_KEY)
-  void import('@/stores/auth').then(({ useAuthStore }) => {
-    try {
-      const auth = useAuthStore()
-      auth.clearAuth()
-    } catch {
-      // Pinia may be inactive in isolated utility tests
-    }
-  })
-  uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+  try {
+    getActiveAuthStore()?.clearAuth?.()
+  } catch {
+    // Never let store reset error block login redirect
+  }
+  if (unauthorizedToastTimer !== null) {
+    clearTimeout(unauthorizedToastTimer)
+    unauthorizedToastTimer = null
+  }
   uni.reLaunch({
     url: '/pages/auth/login',
-    fail: () => uni.showToast({ title: '请手动打开登录页', icon: 'none' }),
+    fail: () => {
+      if (unauthorizedToastTimer !== null) {
+        clearTimeout(unauthorizedToastTimer)
+        unauthorizedToastTimer = null
+      }
+      safeShowToast('请手动打开登录页')
+    },
   })
+  // 微信页面跳转销毁会冲掉同步 Toast，延迟 150ms 在目标页稳定后提示
+  unauthorizedToastTimer = setTimeout(() => {
+    unauthorizedToastTimer = null
+    safeShowToast('登录已过期，请重新登录')
+  }, 150)
 }
 
 function refreshAccessTokenSingleFlight(refreshToken: string): Promise<string | null> {
@@ -188,13 +226,11 @@ function refreshAccessTokenSingleFlight(refreshToken: string): Promise<string | 
               uni.setStorageSync(REFRESH_TOKEN_KEY, nextRefreshToken)
             }
             clearUnauthorizedGuard()
-            void import('@/stores/auth').then(({ useAuthStore }) => {
-              try {
-                useAuthStore().setAuth(nextAccessToken, nextRefreshToken)
-              } catch {
-                // Pinia may be inactive in isolated utility tests
-              }
-            })
+            try {
+              getActiveAuthStore()?.setAuth?.(nextAccessToken, nextRefreshToken)
+            } catch {
+              // Pinia may be inactive in isolated utility tests
+            }
             resolve(nextAccessToken)
             return
           }
@@ -214,7 +250,7 @@ function refreshAccessTokenSingleFlight(refreshToken: string): Promise<string | 
 
 export interface RequestOptions {
   url: string
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   data?: any
   header?: Record<string, string>
   /** 覆盖默认超时（毫秒）。同步调用大模型的接口应传 `LONG_REQUEST_TIMEOUT_MS`。 */
@@ -252,7 +288,7 @@ function dispatchSingleTransport<T>(
       new Promise((resolve) => {
         uni.request({
           url: fullUrl,
-          method: method as any,
+          method,
           data,
           header,
           timeout,
@@ -434,12 +470,18 @@ export function uploadFile<T = any>(
     }
 
     return new Promise<T>((resolve, reject) => {
-      uni.uploadFile({
+      const sanitizedFormData =
+        formData && typeof formData === 'object'
+          ? Object.fromEntries(Object.entries(formData).filter(([, value]) => value !== undefined))
+          : undefined
+      const uploadOptions: UniApp.UploadFileOption = {
         url: fullUrl,
         filePath,
         name,
-        formData,
         header,
+        ...(sanitizedFormData && Object.keys(sanitizedFormData).length > 0
+          ? { formData: sanitizedFormData }
+          : {}),
         success: async (res) => {
           if (res.statusCode >= 200 && res.statusCode < 300) {
             clearUnauthorizedGuard()
@@ -499,7 +541,8 @@ export function uploadFile<T = any>(
           reportFailure(error, userMessage, Boolean(options?.silentToast))
           reject(error)
         },
-      })
+      }
+      uni.uploadFile(uploadOptions)
     })
   }
 

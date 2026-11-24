@@ -116,36 +116,40 @@ const statusText = computed(() => materialStatusText(props.material))
 .status-box { padding: 22rpx; border-radius: 12rpx; font-size: 25rpx; }
 .waiting-box { background: var(--color-surface-subtle); border: 1px dashed var(--color-border-strong); }
 .status-tips { display: block; font-size: 24rpx; color: var(--color-ink-subtle); margin-bottom: 16rpx; }
-.parse-btn { height: 72rpx; font-size: 26rpx; }
+.parse-btn { height: 72rpx; font-size: 26rpx; margin: 0; line-height: 1.4; &::after { border: none; } }
 .loading-box { background: var(--color-surface-warm); color: var(--color-warm-amber); display: flex; flex-direction: column; gap: 10rpx; }
 .loading-row { display: flex; align-items: center; gap: 12rpx; }
 .loading-spinner { width: 16rpx; height: 16rpx; border-radius: 8rpx; background: var(--color-warm-amber); flex-shrink: 0; }
 .loading-tips { flex: 1; min-width: 0; font-size: 24rpx; line-height: 1.5; }
 .loading-subtips { font-size: 22rpx; color: var(--color-ink-subtle); line-height: 1.45; }
 .refresh-progress-btn {
-  flex-shrink: 0; height: 54rpx; padding: 0 18rpx; margin: 0;
+  flex-shrink: 0; height: 54rpx; padding: 0 18rpx; margin: 0; line-height: 1.4;
   font-size: 22rpx; font-weight: 600; color: var(--color-academic-blue);
   background: var(--color-bg-card); border: 1px solid var(--color-blue-border);
   border-radius: 999rpx; display: flex; align-items: center; justify-content: center;
+  &::after { border: none; }
 }
 .ready-box { background: var(--color-success-bg-soft); color: var(--color-success-strong); }
 .ready-tips { display: block; font-size: 24rpx; line-height: 1.5; }
 .review-existing-btn {
-  margin-top: 18rpx; height: 72rpx; background: var(--color-paper-card);
+  margin: 18rpx 0 0; height: 72rpx; line-height: 1.4; background: var(--color-paper-card);
   color: var(--color-success-strong); font-size: 26rpx; font-weight: 600;
   border: 1px solid var(--color-success-border); border-radius: 10rpx;
   display: flex; align-items: center; justify-content: center;
+  &::after { border: none; }
 }
 .error-box { background: var(--color-danger-bg); color: var(--color-danger-strong); }
 .error-tips { display: block; font-size: 24rpx; line-height: 1.5; }
 .retry-btn {
-  margin-top: 16rpx; height: 68rpx; background: var(--color-danger); color: var(--color-ink-on-primary);
+  margin: 16rpx 0 0; height: 68rpx; line-height: 1.4; background: var(--color-danger); color: var(--color-ink-on-primary);
   font-size: 25rpx; border-radius: 8rpx; display: flex; align-items: center; justify-content: center;
+  &::after { border: none; }
 }
 .retake-box { background: var(--color-orange-bg); border: 1px solid var(--color-orange-border); color: var(--color-orange-deep); }
 .retake-tips { display: block; font-size: 24rpx; line-height: 1.5; }
 .retake-reparse-btn {
-  margin-top: 16rpx; height: 68rpx; background: var(--color-orange-strong); color: var(--color-ink-on-primary);
+  margin: 16rpx 0 0; height: 68rpx; line-height: 1.4; background: var(--color-orange-strong); color: var(--color-ink-on-primary);
   font-size: 25rpx; border-radius: 8rpx; display: flex; align-items: center; justify-content: center;
+  &::after { border: none; }
 }
 </style>

@@ -27,6 +27,7 @@
       :question="currentQuestion"
       :user-answer="currentUserAnswer"
       :save-status-text="saveStatusText"
+      :overlay-open="showCardDrawer || showCoachDrawer"
       @select-single="selectSingleOption"
       @toggle-multiple="toggleMultipleOption"
       @input-answer="handleTextInput"
@@ -74,6 +75,7 @@
         v-else
         class="paper-btn-primary submit-btn"
         :loading="practiceStore.isSubmitting"
+        :disabled="practiceStore.isSubmitting"
         @tap="confirmSubmit"
       >
         交卷

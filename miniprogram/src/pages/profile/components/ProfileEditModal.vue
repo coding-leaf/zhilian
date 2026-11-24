@@ -14,6 +14,7 @@
             v-model="draftNickname"
             class="form-input"
             :maxlength="20"
+            :cursor-spacing="24"
             placeholder="请输入新昵称"
           />
         </view>
@@ -22,6 +23,7 @@
           <button
             class="avatar-select-btn"
             :loading="uploadingAvatar"
+            :disabled="uploadingAvatar"
             @tap="emit('choose-avatar')"
           >
             选择图片
@@ -33,6 +35,7 @@
         <button
           class="paper-btn-primary modal-confirm-btn"
           :loading="saving"
+          :disabled="saving"
           @tap="handleSave"
         >
           保存修改
@@ -98,11 +101,26 @@ const handleSave = () => {
 
 .avatar-select-btn {
   height: 68rpx;
+  line-height: 68rpx;
   margin: 0;
   padding: 0 20rpx;
   font-size: 24rpx;
   color: var(--color-teal-dark);
   background: var(--color-teal-bg);
   border-radius: 8rpx;
+
+  &::after {
+    border: none;
+  }
+}
+
+.modal-cancel-btn,
+.modal-confirm-btn {
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 </style>

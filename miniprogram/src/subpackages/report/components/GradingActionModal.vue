@@ -24,6 +24,8 @@
             v-model="reason"
             class="form-textarea"
             placeholder="例如：我在第二句中提到了关键概念，但判题时被归为遗漏"
+            :fixed="true"
+            :cursor-spacing="24"
             :maxlength="300"
           />
         </template>
@@ -36,6 +38,7 @@
             v-model="scoreInput"
             class="form-input"
             type="digit"
+            :cursor-spacing="24"
             :placeholder="`0 - ${result?.maxScore ?? 0}`"
           />
           <text class="form-tips">可补充自评说明（可选）：</text>
@@ -43,6 +46,8 @@
             v-model="reason"
             class="form-textarea"
             placeholder="说明你自评的依据"
+            :fixed="true"
+            :cursor-spacing="24"
             :maxlength="300"
           />
         </template>
@@ -50,7 +55,12 @@
 
       <view class="modal-footer">
         <button class="modal-cancel-btn" @tap="close">取消</button>
-        <button class="paper-btn-primary modal-confirm-btn" :loading="submitting" @tap="handleSubmit">
+        <button
+          class="paper-btn-primary modal-confirm-btn"
+          :loading="submitting"
+          :disabled="submitting"
+          @tap="handleSubmit"
+        >
           {{ isRegrade ? '提交复核' : '提交自评' }}
         </button>
       </view>

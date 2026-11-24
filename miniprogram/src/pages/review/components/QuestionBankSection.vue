@@ -52,7 +52,12 @@
       />
 
       <view v-if="hasMore" class="bank-more">
-        <button class="bank-more-btn" :loading="isLoadingMore" @tap="loadMoreBatches">
+        <button
+          class="bank-more-btn"
+          :loading="isLoadingMore"
+          :disabled="isLoadingMore"
+          @tap="loadMoreBatches"
+        >
           加载更多批次
         </button>
       </view>
@@ -65,7 +70,7 @@
         <button
           class="paper-btn-primary quick-gen-btn"
           :loading="isStarting"
-          :disabled="selectedCount === 0"
+          :disabled="selectedCount === 0 || isStarting"
           @tap="startPractice"
         >
           立即开练
@@ -146,4 +151,14 @@ const actionHint = computed(() => {
 
 <style lang="scss" scoped>
 @import '../questionBank.scss';
+
+.bank-retry-btn,
+.bank-more-btn {
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
+}
 </style>

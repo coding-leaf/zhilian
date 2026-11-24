@@ -25,6 +25,8 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
+import { safeShowToast } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
 
 defineOptions({ options: { virtualHost: true } })
 
@@ -52,23 +54,22 @@ onMounted(() => {
 
 const navigateToTask = (task: BackgroundTaskItem) => {
   if (task.kind === 'material_parse' && task.materialId) {
-    uni.navigateTo({
-      url: `/subpackages/material/pages/course/index?id=${task.materialId}`,
-      fail: () => uni.showToast({ title: '打开讲义详情失败', icon: 'none' }),
+    safeNavigateTo(`/subpackages/material/pages/course/index?id=${task.materialId}`, {
+      failMessage: '打开讲义详情失败',
     })
     return
   }
   if (task.kind !== 'question_job') return
   if (task.resultPracticeId) {
-    uni.navigateTo({
-      url: `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
-      fail: () => uni.showToast({ title: '打开练习失败', icon: 'none' }),
-    })
+    safeNavigateTo(
+      `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
+      { failMessage: '打开练习失败' },
+    )
     return
   }
   uni.switchTab({
     url: '/pages/review/index',
-    fail: () => uni.showToast({ title: '跳转学情页失败', icon: 'none' }),
+    fail: () => safeShowToast('跳转学情页失败'),
   })
 }
 
@@ -94,7 +95,7 @@ const handleDismiss = (task: BackgroundTaskItem) => {
 
 <style lang="scss" scoped>
 .task-bar-container {
-  position: sticky; top: 0; z-index: var(--z-sticky);
+  position: sticky; top: 0; z-index: calc(var(--z-sticky) + 5);
   display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 16rpx;
 }
 .task-strip {

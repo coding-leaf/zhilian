@@ -119,6 +119,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  let inFlightLoginPromise: Promise<LoginOutcome> | null = null
+
   const clearAuth = () => {
     token.value = ''
     refreshToken.value = ''
@@ -128,8 +130,12 @@ export const useAuthStore = defineStore('auth', () => {
     resetRegisteredDomainStores()
   }
 
-  const loginWithWechat = async (): Promise<LoginOutcome> => {
-    return new Promise((resolve) => {
+  const loginWithWechat = (): Promise<LoginOutcome> => {
+    if (inFlightLoginPromise) {
+      return inFlightLoginPromise
+    }
+
+    inFlightLoginPromise = new Promise<LoginOutcome>((resolve) => {
       // #ifdef MP-WEIXIN
       uni.login({
         provider: 'weixin',
@@ -160,7 +166,11 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = { id: 'dev_user_1', nickname: '学术探索者' }
       resolve({ ok: true })
       // #endif
+    }).finally(() => {
+      inFlightLoginPromise = null
     })
+
+    return inFlightLoginPromise
   }
 
   const fetchProfile = async () => {

@@ -89,24 +89,40 @@
         <text class="input-hint">
           检测到 {{ blankCount }} 个空格，请按顺序作答（系统将自动用分号分隔保存）：
         </text>
-        <view v-for="(val, idx) in blankValues" :key="idx" class="fill-blank-row">
+        <view v-for="(val, idx) in localBlankDrafts" :key="idx" class="fill-blank-row">
           <text class="fill-blank-index">第 {{ idx + 1 }} 空</text>
           <input
+            v-if="!overlayOpen"
             class="fill-blank-input"
             :placeholder="`请输入第 ${idx + 1} 空答案...`"
             :value="val"
+            :cursor-spacing="24"
+            :show-confirm-bar="false"
             @input="handleMultiBlankInput(idx, $event)"
           />
+          <view v-else class="fill-blank-input input-overlay-preview">
+            <text :class="['overlay-preview-text', { placeholder: !val }]">
+              {{ val || `请输入第 ${idx + 1} 空答案...` }}
+            </text>
+          </view>
         </view>
       </template>
       <template v-else>
         <text class="input-hint">请在下方输入作答内容（若含多个空格请用分号 ; 分隔）：</text>
         <input
+          v-if="!overlayOpen"
           class="fill-blank-input"
           placeholder="请输入你的填空答案..."
-          :value="answerText"
+          :value="localSingleDraft"
+          :cursor-spacing="24"
+          :show-confirm-bar="false"
           @input="handleSingleTextInput"
         />
+        <view v-else class="fill-blank-input input-overlay-preview">
+          <text :class="['overlay-preview-text', { placeholder: !localSingleDraft }]">
+            {{ localSingleDraft || '请输入你的填空答案...' }}
+          </text>
+        </view>
       </template>
     </view>
 
@@ -116,19 +132,27 @@
         <text v-if="question.max_score" class="score-hint-pill">满分 {{ question.max_score }} 分</text>
       </view>
       <textarea
+        v-if="!overlayOpen"
         class="essay-input"
         placeholder="结合考点，详细阐述你的解答步骤、核心定义或案例见解..."
-        :value="answerText"
+        :value="localSingleDraft"
         :maxlength="1000"
+        :cursor-spacing="24"
+        :show-confirm-bar="false"
         @input="handleSingleTextInput"
       />
-      <text class="essay-count">{{ answerText.length }}/1000</text>
+      <view v-else class="essay-input essay-overlay-preview">
+        <text :class="['overlay-preview-text', { placeholder: !localSingleDraft }]">
+          {{ localSingleDraft || '结合考点，详细阐述你的解答步骤、核心定义或案例见解...' }}
+        </text>
+      </view>
+      <text class="essay-count">{{ localSingleDraft.length }}/1000</text>
     </view>
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import RichContent from '@/components/RichContent.vue'
 import { optionDisplayText, optionKey, questionTypeLabel } from '@/api'
 import type { QuestionItem, QuestionOption } from '@/types'
@@ -146,6 +170,7 @@ const props = defineProps<{
   question: QuestionItem
   userAnswer: unknown
   saveStatusText: string
+  overlayOpen?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -170,18 +195,48 @@ const isOptionSelected = (value: string) =>
 const selectedList = computed(() => normalizeMultipleSelection(props.userAnswer))
 const isMultiOptionSelected = (value: string) => selectedList.value.includes(value)
 
-const answerText = computed(() => (typeof props.userAnswer === 'string' ? props.userAnswer : ''))
 const blankCount = computed(() => resolveFillBlankCount(props.question.stem, props.question.answer))
-const blankValues = computed(() => splitFillBlankAnswers(props.userAnswer, blankCount.value))
+const localBlankDrafts = ref<string[]>([])
+const localSingleDraft = ref('')
+let lastEmittedAnswer: string | undefined
+
+const syncDraftsFromProps = () => {
+  localSingleDraft.value = typeof props.userAnswer === 'string' ? props.userAnswer : ''
+  localBlankDrafts.value = splitFillBlankAnswers(props.userAnswer, blankCount.value)
+}
+
+watch(
+  () => [props.question.id, blankCount.value] as const,
+  () => {
+    lastEmittedAnswer = undefined
+    syncDraftsFromProps()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.userAnswer,
+  (nextVal) => {
+    if (nextVal === lastEmittedAnswer) return
+    syncDraftsFromProps()
+  },
+)
 
 const handleMultiBlankInput = (index: number, event: { detail: { value: string } }) => {
-  const nextParts = [...blankValues.value]
+  const nextParts = [...localBlankDrafts.value]
+  while (nextParts.length < blankCount.value) nextParts.push('')
   nextParts[index] = event.detail.value
-  emit('input-answer', joinFillBlankAnswers(nextParts))
+  localBlankDrafts.value = nextParts
+  const joined = joinFillBlankAnswers(nextParts)
+  lastEmittedAnswer = joined
+  emit('input-answer', joined)
 }
 
 const handleSingleTextInput = (event: { detail: { value: string } }) => {
-  emit('input-answer', event.detail.value)
+  const val = event.detail.value
+  localSingleDraft.value = val
+  lastEmittedAnswer = val
+  emit('input-answer', val)
 }
 </script>
 

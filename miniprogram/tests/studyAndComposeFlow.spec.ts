@@ -60,7 +60,7 @@ describe('Home Workbench upload ActionSheet, auto-parse & background task bar', 
     wrapper?.unmount()
     wrapper = undefined
     delete uniGlobal.uni.showActionSheet
-    delete uniGlobal.uni.chooseImage
+    delete uniGlobal.uni.chooseMedia
     delete uniGlobal.wx
     vi.restoreAllMocks()
   })
@@ -85,8 +85,8 @@ describe('Home Workbench upload ActionSheet, auto-parse & background task bar', 
       success({ tempFiles: [{ path: '/tmp/bayes.pdf', name: '贝叶斯分类器.pdf' }] })
     })
     uniGlobal.wx = { chooseMessageFile }
-    uniGlobal.uni.chooseImage = vi.fn(({ success }: any) => {
-      success({ tempFilePaths: ['/tmp/camera-note.jpg'] })
+    uniGlobal.uni.chooseMedia = vi.fn(({ success }: any) => {
+      success({ tempFiles: [{ tempFilePath: '/tmp/camera-note.jpg' }] })
     })
 
     const { chooseFile } = useMaterialUpload({
@@ -122,15 +122,18 @@ describe('Home Workbench upload ActionSheet, auto-parse & background task bar', 
     )
     expect(uploadMaterial).toHaveBeenCalledWith('/tmp/bayes.pdf', '贝叶斯分类器.pdf', 'f-1')
     expect(parseCalls[0]).toEqual({ id: 'm-1', title: '贝叶斯分类器.pdf' })
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    expect(uploadedIds).toEqual(['m-1'])
 
     // 2. 拍照/相册图片通道 (tapIndex === 1)
     chooseFile()
     await actionHandler!({ tapIndex: 1 })
     await flushPromises()
 
-    expect(uniGlobal.uni.chooseImage).toHaveBeenCalledWith(
+    expect(uniGlobal.uni.chooseMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         count: 1,
+        mediaType: ['image'],
         sizeType: ['compressed', 'original'],
         sourceType: ['album', 'camera'],
       }),
@@ -139,6 +142,7 @@ describe('Home Workbench upload ActionSheet, auto-parse & background task bar', 
     expect(uploadMaterial.mock.calls[1][0]).toBe('/tmp/camera-note.jpg')
     expect(imageTitle).toMatch(/^讲义图片_\d+\.jpg$/)
     expect(parseCalls[1]).toEqual({ id: 'm-2', title: imageTitle })
+    await new Promise((resolve) => setTimeout(resolve, 350))
     expect(uploadedIds).toEqual(['m-1', 'm-2'])
     expect(refreshed).toBe(2)
   })

@@ -100,6 +100,27 @@ describe('auth store: login failures reach the caller', () => {
     expect(outcome).toEqual({ ok: true })
   })
 
+  it('shares a single in-flight login across concurrent loginWithWechat callers and clears lock after settle', async () => {
+    const loginSpy = vi.fn((options: any) => {
+      setTimeout(() => options.success({ code: 'single_flight_code' }), 20)
+    })
+    ;(globalThis as any).uni.login = loginSpy
+
+    const store = useAuthStore()
+    const first = store.loginWithWechat()
+    const second = store.loginWithWechat()
+
+    const [r1, r2] = await Promise.all([first, second])
+    expect(r1).toEqual({ ok: true })
+    expect(r2).toEqual({ ok: true })
+    expect(loginSpy).toHaveBeenCalledTimes(1)
+
+    // Once settled, a subsequent call starts a fresh login flight
+    const third = await store.loginWithWechat()
+    expect(third).toEqual({ ok: true })
+    expect(loginSpy).toHaveBeenCalledTimes(2)
+  })
+
   it('records a failed profile fetch instead of swallowing it', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const store = useAuthStore()

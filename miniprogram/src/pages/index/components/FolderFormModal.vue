@@ -12,6 +12,7 @@
           v-model="draftName"
           class="form-input"
           :maxlength="30"
+          :cursor-spacing="24"
           :placeholder="renaming?.name || '例如：概率论与数理统计、操作系统'"
         />
       </view>
@@ -20,6 +21,7 @@
         <button
           class="paper-btn-primary modal-confirm-btn"
           :loading="submitting"
+          :disabled="submitting"
           @tap="emit('submit', draftName)"
         >
           {{ renaming ? '保存' : '创建' }}
@@ -60,4 +62,14 @@ const close = () => {
 
 <style lang="scss" scoped>
 @import '../../../styles/modal.scss';
+
+.modal-cancel-btn,
+.modal-confirm-btn {
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
+}
 </style>
