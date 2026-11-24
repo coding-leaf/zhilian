@@ -121,20 +121,16 @@ const handleOpenTask = (task: BackgroundTaskItem) => {
     return
   }
   if (task.kind !== 'question_job') return
-  const query: string[] = ['view=generated']
-  if (task.materialId) query.unshift(`material_id=${encodeURIComponent(task.materialId)}`)
-  else if (task.folderId) query.unshift(`folder_id=${encodeURIComponent(task.folderId)}`)
-  else {
-    uni.switchTab({
-      url: '/pages/review/index',
-      fail: () => safeShowToast('跳转学情页失败'),
+  if (task.resultPracticeId) {
+    uni.navigateTo({
+      url: `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
+      fail: () => safeShowToast('打开练习失败，请重试'),
     })
     return
   }
-  if (task.batchId) query.push(`batch_id=${encodeURIComponent(task.batchId)}`)
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?${query.join('&')}`,
-    fail: () => safeShowToast('打开出题结果失败'),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('跳转我的题库失败'),
   })
 }
 
@@ -180,10 +176,9 @@ const goToQuestionConfig = () => {
 }
 
 const goToGeneratedQuestions = () => {
-  if (!course.materialId.value) return
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?material_id=${course.materialId.value}&view=generated`,
-    fail: () => safeShowToast('打开已生成题目失败，请重试'),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('打开我的题库失败，请重试'),
   })
 }
 </script>

@@ -4,6 +4,7 @@ import type {
   MaterialListQuery,
   MaterialListResult,
   MaterialStatistics,
+  PollingRequestOptions,
 } from '@/types'
 import { adaptMaterial } from '../adapters'
 
@@ -25,10 +26,14 @@ export function apiUploadMaterial(
   return uploadFile<MaterialItem>(filePath, 'file', formData).then(adaptMaterial)
 }
 
-export function apiGetMaterialDetail(id: string): Promise<MaterialItem> {
+export function apiGetMaterialDetail(
+  id: string,
+  requestOptions?: PollingRequestOptions,
+): Promise<MaterialItem> {
   return request<MaterialItem>({
     url: `/materials/${id}`,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then(adaptMaterial)
 }
 
@@ -45,7 +50,10 @@ export function apiDeleteMaterial(id: string): Promise<{ material_id: string; is
   }).then((res) => ({ material_id: res.material_id, is_deleted: res.is_deleted }))
 }
 
-export function apiGetMaterialList(params?: MaterialListQuery): Promise<MaterialItem[]> {
+export function apiGetMaterialList(
+  params?: MaterialListQuery,
+  requestOptions?: PollingRequestOptions,
+): Promise<MaterialItem[]> {
   let url = '/materials'
   const queryParts: string[] = []
   if (params?.folder_id) queryParts.push(`folder_id=${encodeURIComponent(params.folder_id)}`)
@@ -55,6 +63,7 @@ export function apiGetMaterialList(params?: MaterialListQuery): Promise<Material
   return request<MaterialListResult | MaterialItem[]>({
     url,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then((res) => {
     if (res && 'items' in res) {
       return res.items.map(adaptMaterial)

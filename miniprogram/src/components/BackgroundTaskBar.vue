@@ -31,6 +31,7 @@ defineOptions({ options: { virtualHost: true } })
 const props = defineProps<{
   disableAutoNavigate?: boolean
   autoRefresh?: boolean
+  excludeJobId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -39,7 +40,11 @@ const emit = defineEmits<{
 }>()
 
 const taskStore = useBackgroundTaskStore()
-const tasks = computed(() => taskStore.visibleTasks)
+const tasks = computed(() =>
+  taskStore.visibleTasks.filter(
+    (task) => !(props.excludeJobId && task.kind === 'question_job' && task.targetId === props.excludeJobId),
+  ),
+)
 
 onMounted(() => {
   if (props.autoRefresh) void taskStore.refreshActiveTasks()
@@ -54,29 +59,29 @@ const navigateToTask = (task: BackgroundTaskItem) => {
     return
   }
   if (task.kind !== 'question_job') return
-  const query: string[] = ['view=generated']
-  if (task.materialId) query.unshift(`material_id=${encodeURIComponent(task.materialId)}`)
-  else if (task.folderId) query.unshift(`folder_id=${encodeURIComponent(task.folderId)}`)
-  else {
-    uni.switchTab({
-      url: '/pages/review/index',
-      fail: () => uni.showToast({ title: '跳转学情页失败', icon: 'none' }),
+  if (task.resultPracticeId) {
+    uni.navigateTo({
+      url: `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
+      fail: () => uni.showToast({ title: '打开练习失败', icon: 'none' }),
     })
     return
   }
-  if (task.batchId) query.push(`batch_id=${encodeURIComponent(task.batchId)}`)
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?${query.join('&')}`,
-    fail: () => uni.showToast({ title: '打开出题结果失败', icon: 'none' }),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => uni.showToast({ title: '跳转学情页失败', icon: 'none' }),
   })
 }
 
 const handleOpenTask = (task: BackgroundTaskItem) => {
-  emit('open-task', task)
   if (task.timedOut && task.kind === 'material_parse' && task.materialId) {
     void taskStore.refreshMaterialTask(task.materialId)
     return
   }
+  if (task.timedOut && task.kind === 'question_job') {
+    void taskStore.refreshQuestionJob(task.targetId)
+    return
+  }
+  emit('open-task', task)
   if (!props.disableAutoNavigate) navigateToTask(task)
   if (task.dismissible) taskStore.dismissTask(task.key)
 }

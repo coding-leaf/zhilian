@@ -13,7 +13,7 @@ import {
   resolveRegenerateScope,
   type WrongGroupOption,
 } from '@/api/adapters/wrong'
-import { useBackgroundTaskStore } from '@/stores/backgroundTask'
+import { isQuestionJobActive, useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useFolderStore } from '@/stores/folder'
 import { usePracticeStore } from '@/stores/practice'
 import type {
@@ -23,6 +23,7 @@ import type {
   WrongRecordItem,
 } from '@/types'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
+import { startWrongRegenerateJob } from '@/utils/questionGeneration'
 import { describeFailure } from '@/utils/requestError'
 import {
   groupKnowledgePointIds,
@@ -60,7 +61,14 @@ export function useReviewCenter() {
   const isLoadingPractices = ref(false)
   const practiceError = ref('')
 
-  const isGenerating = ref(false)
+  const isDispatchingRegenerate = ref(false)
+  const isGenerating = computed(
+    () =>
+      isDispatchingRegenerate.value ||
+      Array.from(backgroundTaskStore.questionJobs.values()).some(
+        (job) => isQuestionJobActive(job) && job.source_type === 'wrong_record',
+      ),
+  )
   const bankDirty = ref(false)
 
   let inFlightRefresh: Promise<void> | null = null
@@ -289,8 +297,11 @@ export function useReviewCenter() {
             material_id: scope.folderId ? undefined : scope.materialId,
             knowledge_point_ids: jobKpIds,
             count: Math.min(10, Math.max(3, jobKpIds.length)),
+            auto_create_practice: true,
+            practice_title: '薄弱考点强化练习',
+            source_type: 'weakness',
           })
-          safeShowToast('题库题量不足，已在后台自动生成薄弱点练习题', 'success')
+          safeShowToast('已在后台生成强化巩固卷，完成后顶部提醒')
           return
         } catch (jobErr: any) {
           safeShowToast(jobErr?.message || err?.message || '发起薄弱强化失败')
@@ -302,19 +313,19 @@ export function useReviewCenter() {
   }
 
   const runRegenerate = async (kpIds: string[], scope: { folderId?: string; materialId?: string }) => {
-    isGenerating.value = true
+    if (isGenerating.value) return
+    isDispatchingRegenerate.value = true
     try {
-      const { session, coverage } = await withBlockingLoading('生成中...', () =>
-        practiceStore.regenerateFromWrongPoints(kpIds, scope),
-      )
-      if (coverage.missing.length > 0) {
-        safeShowToast(`仍有 ${coverage.missing.length} 个考点未覆盖`)
-      }
-      navigateToSession(session.id)
+      await startWrongRegenerateJob({
+        knowledgePointIds: kpIds,
+        scope,
+        practiceTitle: '错题巩固练习',
+      })
+      safeShowToast('已在后台生成错题巩固卷，完成后顶部提醒')
     } catch (error: any) {
       safeShowToast(error?.message || '生成失败')
     } finally {
-      isGenerating.value = false
+      isDispatchingRegenerate.value = false
     }
   }
 

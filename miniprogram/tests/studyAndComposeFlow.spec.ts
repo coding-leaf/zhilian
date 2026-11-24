@@ -402,8 +402,12 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
     vi.restoreAllMocks()
   })
 
-  it('deduplicates KP chips, preselects kp_id, runs async job banner, and switches to RichContent preview', async () => {
+  it('deduplicates KP chips, preselects kp_id, hides config while generating, and shows minimal ready card without auto-jump or spoilers', async () => {
     let pollCount = 0
+    const navSpy = vi.spyOn(uni, 'navigateTo')
+    const redirectSpy = vi.spyOn(uni, 'redirectTo')
+    const switchTabSpy = vi.spyOn(uni, 'switchTab')
+
     mocks.request.mockImplementation(async ({ url, method }: { url: string; method?: string }) => {
       if (url === '/materials/m-1/knowledge-tree') {
         return {
@@ -427,6 +431,8 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
           total_kps: 1,
           completed_kps: 0,
           generated_count: 0,
+          source_type: 'initial_compose',
+          practice_title: '讲义专题测验',
           question_ids: [],
           created_at: '',
           updated_at: '',
@@ -442,6 +448,9 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
           completed_kps: 1,
           generated_count: 1,
           batch_id: 'b-q1',
+          result_practice_id: 'p-ready-q1',
+          source_type: 'initial_compose',
+          practice_title: '讲义专题测验',
           question_ids: ['q-100'],
           created_at: '',
           updated_at: '',
@@ -456,6 +465,7 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
               knowledge_point_id: 'kp-3',
               knowledge_point_name: '拉普拉斯平滑',
               batch_id: 'b-q1',
+              status: 'available',
               stem: '计算平滑后概率 $$P(x_j|c_k)$$',
               options: [
                 { key: 'A.', content: 'A. 分子加 1，分母加类别数' },
@@ -489,7 +499,10 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
       global: {
         plugins: [pinia],
         stubs: {
-          BackgroundTaskBar: true,
+          BackgroundTaskBar: {
+            props: { excludeJobId: String, disableAutoNavigate: Boolean },
+            template: '<div class="bar-stub" :data-exclude="excludeJobId || \'\'" />',
+          },
           RichContent: { props: ['content'], template: '<div class="stub-rich">{{ content }}</div>' },
         },
       },
@@ -513,9 +526,12 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
     await wrapper.find('.full-btn').trigger('tap')
     await flushPromises()
 
-    // 非阻塞进度条与自由返回按钮可见
+    // generating 态：收起配置表单，只展示单一进度卡片，并向 BackgroundTaskBar 传 excludeJobId 去重
+    expect(wrapper.find('.config-section').exists()).toBe(false)
     expect(wrapper.find('.job-progress-banner').exists()).toBe(true)
+    expect(wrapper.find('.bar-stub').attributes('data-exclude')).toBe('job-q1')
     expect(wrapper.text()).toContain('正在后台生成题目 (0 / 1 考点)')
+    expect(wrapper.text()).toContain('可随时离开，完成后顶部提醒')
     expect(wrapper.text()).toContain('先去浏览讲义')
     expect(wrapper.text()).toContain('返回工作台')
 
@@ -523,19 +539,37 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
     await flushPromises()
 
     expect(pollCount).toBe(1)
-    // 完成后自动切入核对视图，渲染知识点徽标、去重前缀选项及可折叠答案/解析/采分点
-    expect(wrapper.find('.q-kp-tag').text()).toBe('拉普拉斯平滑')
-    expect(wrapper.find('.option-item').text()).toContain('A.')
-    expect(wrapper.find('.option-item').text()).not.toContain('A. A.')
-    expect(wrapper.find('.answer-panel').exists()).toBe(false)
+    // ready 态：绝不强跳，绝不展示带答案/解析/切片的杂乱题库预览，仅展示极简就绪提醒卡
+    expect(navSpy).not.toHaveBeenCalled()
+    expect(redirectSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('.answer-toggle-bar').exists()).toBe(false)
+    expect(wrapper.find('.source-box').exists()).toBe(false)
+    expect(wrapper.find('.ready-card').exists()).toBe(true)
+    expect(wrapper.text()).toContain('试卷已就绪')
+    expect(wrapper.text()).toContain('已为你准备好 1 道题目 · 覆盖 1 个考点')
 
-    await wrapper.find('.answer-toggle-bar').trigger('tap')
-    await flushPromises()
-    expect(wrapper.find('.answer-panel').exists()).toBe(true)
-    expect(wrapper.find('.answer-panel').text()).toContain('分子加 1')
+    // 点击「立即开始作答」直达练习页（复用 result_practice_id）
+    await wrapper.find('.ready-start-btn').trigger('tap')
+    expect(navSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/subpackages/practice/pages/session/index?practice_id=p-ready-q1',
+      }),
+    )
+
+    // 点击「前往我的题库」走 switchTab 到学情题库
+    const bankBtn = wrapper.findAll('.ready-secondary-btn').find((b) => b.text().includes('前往我的题库'))
+    await bankBtn!.trigger('tap')
+    expect(switchTabSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: '/pages/review/index' }),
+    )
   })
 
-  it('opens generated batch directly when navigated from BackgroundTaskBar with folder_id & batch_id', async () => {
+  it('prevents config-mode flash on view=generated and attaches completed job onShow', async () => {
+    let resolveBatch!: (val: any) => void
+    const batchPromise = new Promise((resolve) => {
+      resolveBatch = resolve
+    })
+
     mocks.request.mockImplementation(async ({ url }: { url: string }) => {
       if (url === '/folders/f-1/knowledge-points') {
         return {
@@ -551,16 +585,7 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
         }
       }
       if (url.startsWith('/questions?batch_id=b-folder')) {
-        return {
-          items: [
-            generatedQuestionFixture({
-              id: 'q-folder-1',
-              knowledge_point_id: 'kp-1',
-              knowledge_point_name: '交叉验证',
-              batch_id: 'b-folder',
-            }),
-          ],
-        }
+        return batchPromise
       }
       if (url.startsWith('/questions/batches')) return { items: [], total: 0 }
       throw new Error(`unexpected: ${url}`)
@@ -578,14 +603,133 @@ describe('Non-blocking Question Compose Page, dedup, kp_id preselect & preview c
       },
     })
 
-    await mocks.loadCallbacks[0]({
+    const loadDone = mocks.loadCallbacks[0]({
       folder_id: 'f-1',
       view: 'generated',
       batch_id: 'b-folder',
     })
     await flushPromises()
+    // 在批次请求尚未返回前，绝不闪现配置表单
+    expect(wrapper.find('.config-section').exists()).toBe(false)
+    expect(wrapper.find('.ready-card').exists()).toBe(true)
 
-    expect(wrapper.find('.q-kp-tag').text()).toBe('交叉验证')
-    expect(wrapper.find('.start-btn').attributes('disabled')).toBeUndefined()
+    resolveBatch({
+      items: [
+        generatedQuestionFixture({
+          id: 'q-folder-1',
+          knowledge_point_id: 'kp-1',
+          knowledge_point_name: '交叉验证',
+          batch_id: 'b-folder',
+          status: 'available',
+        }),
+      ],
+    })
+    await loadDone
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已为你准备好 1 道题目 · 覆盖 1 个考点')
+    expect(wrapper.find('.ready-start-btn').attributes('disabled')).toBeUndefined()
+
+    // 验证离开期间已完成任务在 onShow 时自动衔接为 ready 卡
+    wrapper.unmount()
+    mocks.loadCallbacks.length = 0
+    mocks.showCallbacks.length = 0
+    mocks.request.mockImplementation(async ({ url }: { url: string }) => {
+      if (url === '/materials/m-away/knowledge-tree') {
+        return {
+          material_id: 'm-away',
+          version_id: 'v-1',
+          nodes: [{ id: 'kp-a', name: '正则化', level: 1, sort_order: 1, children: [] }],
+        }
+      }
+      if (url === '/questions/jobs?active_only=true' || url === '/materials') {
+        return { items: [], total: 0 }
+      }
+      if (url.startsWith('/questions?batch_id=b-away')) {
+        return {
+          items: [generatedQuestionFixture({ id: 'q-away-1', knowledge_point_id: 'kp-a', batch_id: 'b-away' })],
+        }
+      }
+      if (url.startsWith('/questions/batches')) return { items: [], total: 0 }
+      throw new Error(`unexpected: ${url}`)
+    })
+
+    const pinia2 = createPinia()
+    setActivePinia(pinia2)
+    const taskStore2 = useBackgroundTaskStore()
+    wrapper = mount(QuestionsPage, {
+      global: {
+        plugins: [pinia2],
+        stubs: { BackgroundTaskBar: true },
+      },
+    })
+    await mocks.loadCallbacks[0]({ material_id: 'm-away' })
+    await flushPromises()
+    expect(wrapper.find('.config-section').exists()).toBe(true)
+
+    // 模拟在途任务在离开期间完成，随后切回页面触发 onShow
+    taskStore2.trackQuestionJob({
+      id: 'job-away-done',
+      status: 'completed',
+      material_id: 'm-away',
+      total_kps: 1,
+      completed_kps: 1,
+      generated_count: 1,
+      batch_id: 'b-away',
+      result_practice_id: 'p-away-1',
+      source_type: 'initial_compose',
+      question_ids: ['q-away-1'],
+      created_at: '',
+      updated_at: '2026-11-24T12:00:00',
+      completed_at: '2026-11-24T12:00:00',
+    })
+    await mocks.showCallbacks[0]()
+    await flushPromises()
+
+    expect(wrapper.find('.ready-card').exists()).toBe(true)
+    expect(wrapper.text()).toContain('试卷已就绪')
+  })
+
+  it('routes course generated questions button cleanly to review question bank instead of unfiltered dump', async () => {
+    const switchTabSpy = vi.spyOn(uni, 'switchTab')
+    const navSpy = vi.spyOn(uni, 'navigateTo')
+    mocks.request.mockImplementation(async ({ url }: { url: string }) => {
+      if (url === '/materials/m-c1') {
+        return { id: 'm-c1', title: '高数讲义.pdf', status: 'ready', created_at: '' }
+      }
+      if (url === '/materials/m-c1/knowledge-tree') {
+        return { material_id: 'm-c1', version_id: 'v-1', nodes: [] }
+      }
+      if (url === '/questions?material_id=m-c1') {
+        return { items: [{ id: 'q-1', question_type: 'single_choice', stem: '测试', options: [] }] }
+      }
+      if (url.startsWith('/mastery')) return { total_points: 0, points: [] }
+      throw new Error(`unexpected: ${url}`)
+    })
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    wrapper = mount(CoursePage, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BackgroundTaskBar: true,
+          AiCoachDrawer: true,
+          'scroll-view': { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await mocks.loadCallbacks[0]({ id: 'm-c1' })
+    await flushPromises()
+
+    const reviewBtn = wrapper.find('.review-existing-btn')
+    expect(reviewBtn.exists()).toBe(true)
+    expect(reviewBtn.text()).toContain('前往我的题库查看')
+    await reviewBtn.trigger('tap')
+    expect(switchTabSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/pages/review/index' }))
+    expect(navSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.stringContaining('view=generated') }),
+    )
   })
 })

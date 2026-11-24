@@ -196,40 +196,33 @@ describe('question compose async job flow & coverage gating', () => {
     expect(compose.questions.value).toHaveLength(110)
   })
 
-  it('splits >20 KPs into planGenerationBatches in full_coverage mode without count=20 mismatch', async () => {
-    const jobPayloads: Array<{ knowledge_point_ids: string[]; count: number }> = []
-    let batchSeq = 0
+  it('dispatches a single async job up to 50 KPs with auto_create_practice and source_type initial_compose', async () => {
+    const jobPayloads: Array<Record<string, any>> = []
     requestMock.mockImplementation(async (options: any) => {
       if (options.url === '/questions/jobs' && options.method === 'POST') {
-        batchSeq += 1
         const kpIds: string[] = options.data.knowledge_point_ids || []
-        jobPayloads.push({ knowledge_point_ids: kpIds, count: options.data.count })
-        const batchId = `b-split-${batchSeq}`
+        jobPayloads.push(options.data)
         return {
-          id: `job-split-${batchSeq}`,
+          id: 'job-single-25',
           status: 'completed',
           material_id: 'm-1',
           total_kps: kpIds.length,
           completed_kps: kpIds.length,
           generated_count: kpIds.length,
-          batch_id: batchId,
+          batch_id: 'b-single-25',
+          result_practice_id: 'p-single-25',
+          source_type: options.data.source_type,
+          practice_title: options.data.practice_title,
           question_ids: kpIds.map((id) => `q-${id}`),
           created_at: '',
           updated_at: '',
           completed_at: '2026-11-17T10:00:00',
         }
       }
-      if (options.url.startsWith('/questions?batch_id=b-split-1')) {
+      if (options.url.startsWith('/questions?batch_id=b-single-25')) {
         return {
-          items: jobPayloads[0].knowledge_point_ids.map((kpId) =>
-            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, batch_id: 'b-split-1' }),
-          ),
-        }
-      }
-      if (options.url.startsWith('/questions?batch_id=b-split-2')) {
-        return {
-          items: jobPayloads[1].knowledge_point_ids.map((kpId) =>
-            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, batch_id: 'b-split-2' }),
+          items: jobPayloads[0].knowledge_point_ids.map((kpId: string) =>
+            generatedQuestionFixture({ id: `q-${kpId}`, knowledge_point_id: kpId, batch_id: 'b-single-25' }),
           ),
         }
       }
@@ -245,52 +238,46 @@ describe('question compose async job flow & coverage gating', () => {
     compose.setComposeMode('full_coverage')
 
     await expect(compose.generate()).resolves.toBe(25)
-    expect(jobPayloads).toHaveLength(2)
-    expect(jobPayloads[0].knowledge_point_ids).toHaveLength(20)
-    expect(jobPayloads[0].count).toBe(20)
-    expect(jobPayloads[1].knowledge_point_ids).toHaveLength(5)
-    expect(jobPayloads[1].count).toBe(5)
+    expect(jobPayloads).toHaveLength(1)
+    expect(jobPayloads[0].knowledge_point_ids).toHaveLength(25)
+    expect(jobPayloads[0].count).toBe(25)
+    expect(jobPayloads[0]).toMatchObject({
+      auto_create_practice: true,
+      source_type: 'initial_compose',
+    })
+    expect(compose.readyPracticeId.value).toBe('p-single-25')
+    expect(compose.viewMode.value).toBe('ready')
     expect(compose.canStart.value).toBe(true)
   })
 
-  it('submits async job, blocks starting on removal gap, and fills missing KPs asynchronously', async () => {
-    let jobCounter = 0
-    const batchItemsByBatch: Record<string, any[]> = {}
-
+  it('never blocks starting practice when partial items are pending_review or missing KP coverage', async () => {
     requestMock.mockImplementation(async (options: any) => {
       if (options.url === '/questions/jobs' && options.method === 'POST') {
-        jobCounter += 1
-        const kpIds: string[] = options.data.knowledge_point_ids || []
-        const batchId = `b-${jobCounter}`
-        batchItemsByBatch[batchId] = kpIds.map((kpId, index) =>
-          generatedQuestionFixture({
-            id: `q-${jobCounter}-${kpId}`,
-            knowledge_point_id: kpId,
-            batch_id: batchId,
-            stem: `题干-${index}`,
-          }),
-        )
         return {
-          id: `job-${jobCounter}`,
+          id: 'job-partial',
           status: 'completed',
-          material_id: options.data.material_id ?? null,
-          folder_id: options.data.folder_id ?? null,
-          total_kps: kpIds.length,
-          completed_kps: kpIds.length,
-          generated_count: kpIds.length,
-          batch_id: batchId,
-          question_ids: batchItemsByBatch[batchId].map((q) => q.id),
-          created_at: '2026-11-17T10:00:00',
-          updated_at: '2026-11-17T10:00:01',
+          material_id: 'm-1',
+          total_kps: 2,
+          completed_kps: 2,
+          generated_count: 1,
+          batch_id: 'b-partial',
+          result_practice_id: 'p-partial',
+          source_type: 'initial_compose',
+          question_ids: ['q-1'],
+          created_at: '',
+          updated_at: '',
           completed_at: '2026-11-17T10:00:01',
         }
       }
-      if (options.url.startsWith('/questions?batch_id=')) {
-        const match = /batch_id=([^&]+)/.exec(options.url)
-        const batchId = match ? decodeURIComponent(match[1]) : ''
-        return { items: batchItemsByBatch[batchId] || [] }
+      if (options.url.startsWith('/questions?batch_id=b-partial')) {
+        return {
+          items: [
+            generatedQuestionFixture({ id: 'q-1', knowledge_point_id: 'k-1', batch_id: 'b-partial', status: 'available' }),
+            generatedQuestionFixture({ id: 'q-2', knowledge_point_id: 'k-2', batch_id: 'b-partial', status: 'pending_review' }),
+          ],
+        }
       }
-      if (options.url.startsWith('/questions/batches')) return batchSummaryResponse('b-1')
+      if (options.url.startsWith('/questions/batches')) return batchSummaryResponse('b-partial')
       throw new Error(`unexpected: ${options.url}`)
     })
 
@@ -302,22 +289,15 @@ describe('question compose async job flow & coverage gating', () => {
     ])
     compose.selectedTypes.value = ['single_choice']
 
-    await expect(compose.generate()).resolves.toBe(2)
+    await expect(compose.generate()).resolves.toBe(1)
 
-    expect(compose.questions.value).toHaveLength(2)
-    expect(compose.questions.value[0].knowledge_point_name).toBe('考点一')
+    expect(compose.questions.value).toHaveLength(1)
+    expect(compose.readyAvailableCount.value).toBe(1)
+    expect(compose.readyPendingCount.value).toBe(1)
+    expect(compose.coverage.value.missing).toEqual(['k-2'])
     expect(compose.canStart.value).toBe(true)
-    expect(compose.coverage.value.missing).toEqual([])
+    expect(compose.viewMode.value).toBe('ready')
     expect(requestMock.mock.calls.some(([o]: any[]) => o.url === '/questions/generate')).toBe(false)
-
-    compose.removeQuestion(compose.questions.value[0])
-    expect(compose.coverage.value.missing).toEqual(['k-1'])
-    expect(compose.canStart.value).toBe(false)
-    expect(compose.generationNotice.value).toContain('未覆盖')
-
-    await compose.fillCoverageGap()
-    expect(compose.coverage.value.missing).toEqual([])
-    expect(compose.canStart.value).toBe(true)
   })
 
   it('handles queued->running->completed async jobs non-blockingly and loads batch summary', async () => {

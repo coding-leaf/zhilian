@@ -16,6 +16,10 @@
       "postcss": true,
       "minified": true
     },
+    "networkTimeout": {
+      "request": 90000,
+      "uploadFile": 120000
+    },
     "usingComponents": true
   }
 }

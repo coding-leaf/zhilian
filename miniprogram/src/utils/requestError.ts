@@ -28,6 +28,9 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 15000
  */
 export const LONG_REQUEST_TIMEOUT_MS = 90000
 
+/** 文件上传默认超时（毫秒），与 `manifest.json` 中 `networkTimeout.uploadFile` 对齐。 */
+export const UPLOAD_REQUEST_TIMEOUT_MS = 120000
+
 /** 小程序平台在拿不到 errno 时回填的占位串，不该混进日志。 */
 const ERRNO_PLACEHOLDER = '<Undefined>'
 

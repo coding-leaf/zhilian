@@ -211,6 +211,10 @@ export interface WireQuestionGenerationJob {
   generated_count?: number | null
   batch_id?: string | null
   question_ids?: unknown[] | null
+  result_practice_id?: string | null
+  source_type?: string | null
+  source_practice_id?: string | null
+  practice_title?: string | null
   error_message?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -237,6 +241,10 @@ export function adaptQuestionGenerationJob(job: WireQuestionGenerationJob): Ques
     generated_count: Math.max(0, job.generated_count ?? 0),
     batch_id: job.batch_id ?? null,
     question_ids: questionIds,
+    result_practice_id: job.result_practice_id ?? null,
+    source_type: job.source_type ?? null,
+    source_practice_id: job.source_practice_id ?? null,
+    practice_title: job.practice_title ?? null,
     error_message: job.error_message ?? null,
     created_at: job.created_at ?? '',
     updated_at: job.updated_at ?? '',

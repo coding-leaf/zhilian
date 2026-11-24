@@ -53,8 +53,13 @@
           汇总「{{ activeGroup.label }}」下 {{ activeKpIds.length }} 个薄弱考点，可一键再生题目巩固。
         </text>
       </view>
-      <button class="paper-btn-primary quick-gen-btn" :loading="isGenerating" @tap="emit('batch-regenerate')">
-        立即巩固
+      <button
+        class="paper-btn-primary quick-gen-btn"
+        :loading="isGenerating"
+        :disabled="isGenerating"
+        @tap="emit('batch-regenerate')"
+      >
+        {{ isGenerating ? '后台生题中...' : '立即巩固' }}
       </button>
     </view>
 

@@ -42,10 +42,12 @@ export function apiSavePracticeDraft(
   questionId: string,
   userAnswer: unknown,
   timeSpentSeconds = 0,
+  options?: { silentToast?: boolean },
 ): Promise<{ success: boolean }> {
   return request({
     url: `/practices/${practiceId}/answers`,
     method: 'PUT',
+    silentToast: options?.silentToast ?? true,
     data: {
       question_id: questionId,
       user_answer: userAnswer,

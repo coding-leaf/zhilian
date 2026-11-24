@@ -7,9 +7,10 @@
     <button
       class="paper-btn-primary adaptive-btn"
       :loading="regenerating"
+      :disabled="regenerating"
       @tap="emit('start')"
     >
-      错题针对性生题
+      {{ regenerating ? '后台生题中...' : '错题针对性生题' }}
     </button>
   </view>
 

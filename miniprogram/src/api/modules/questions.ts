@@ -5,6 +5,7 @@ import type {
   AskCoachParams,
   AskCoachResponse,
   GenerateQuestionsParams,
+  PollingRequestOptions,
   QuestionBankListResult,
   QuestionBankQuery,
   QuestionBatchListResult,
@@ -41,6 +42,7 @@ export type {
   ScopedCoachParams,
 }
 
+/** @deprecated 请改用 `apiCreateQuestionJob` 异步出题任务。 */
 export function apiGenerateQuestions(params: GenerateQuestionsParams): Promise<QuestionGenerateResult> {
   return request<Omit<QuestionGenerateResult, 'qualified_questions' | 'pending_questions'> & {
     qualified_questions: WireQuestion[]
@@ -80,6 +82,7 @@ export function apiCreateQuestionJob(
 
 export function apiListQuestionJobs(
   query: QuestionGenerationJobQuery = {},
+  requestOptions?: PollingRequestOptions,
 ): Promise<QuestionGenerationJobListResult> {
   const queryParts: string[] = []
   if (query.active_only !== undefined) queryParts.push(`active_only=${query.active_only}`)
@@ -89,13 +92,18 @@ export function apiListQuestionJobs(
   return request<{ items?: WireQuestionGenerationJob[] | null; total?: number | null } | WireQuestionGenerationJob[]>({
     url: `/questions/jobs${qs}`,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then(adaptQuestionGenerationJobList)
 }
 
-export function apiGetQuestionJob(jobId: string): Promise<QuestionGenerationJob> {
+export function apiGetQuestionJob(
+  jobId: string,
+  requestOptions?: PollingRequestOptions,
+): Promise<QuestionGenerationJob> {
   return request<WireQuestionGenerationJob>({
     url: `/questions/jobs/${jobId}`,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then(adaptQuestionGenerationJob)
 }
 

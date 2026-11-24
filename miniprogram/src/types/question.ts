@@ -33,6 +33,7 @@ export interface QuestionItem {
   version_id?: string
   knowledge_point_id?: string
   batch_id?: string | null
+  status?: string | null
   type: QuestionType
   stem: string
   options?: QuestionOption[]
@@ -51,6 +52,12 @@ export interface QuestionItem {
   max_score?: number
 }
 
+export type QuestionJobSourceType = 'initial_compose' | 'wrong_record' | 'weakness'
+
+export interface PollingRequestOptions {
+  silentToast?: boolean
+}
+
 export interface GenerateQuestionsParams {
   material_id?: string
   folder_id?: string
@@ -60,6 +67,10 @@ export interface GenerateQuestionsParams {
   difficulty?: number
   question_types?: QuestionType[]
   max_retries?: number
+  auto_create_practice?: boolean
+  practice_title?: string
+  source_type?: QuestionJobSourceType
+  source_practice_id?: string
 }
 
 export interface QuestionGenerateResult {
@@ -163,10 +174,15 @@ export interface QuestionGenerationJob {
   generated_count: number
   batch_id?: string | null
   question_ids: string[]
+  result_practice_id?: string | null
+  source_type?: string | null
+  source_practice_id?: string | null
+  practice_title?: string | null
   error_message?: string | null
   created_at: string
   updated_at: string
   completed_at?: string | null
+  timedOut?: boolean
 }
 
 export interface QuestionGenerationJobQuery {

@@ -67,7 +67,7 @@
         class="review-existing-btn"
         @tap="emit('review-generated')"
       >
-        继续核对已生成题目（{{ generatedQuestionCount }} 道）
+        前往我的题库查看（已生成 {{ generatedQuestionCount }} 题）
       </button>
     </view>
   </view>

@@ -1,5 +1,7 @@
 <template>
   <view class="report-container">
+    <BackgroundTaskBar auto-refresh />
+
     <view v-if="detail.loadError.value" class="paper-card error-card">
       <text class="error-text">{{ detail.loadError.value }}</text>
       <button class="paper-btn-primary retry-btn" @tap="detail.bootstrap">重新加载</button>
@@ -52,9 +54,10 @@
         v-if="detail.wrongKnowledgePointIds.value.length > 0 && detail.canRegenerate.value"
         class="reinforce-bar-btn"
         :loading="detail.isRegenerating.value"
+        :disabled="detail.isRegenerating.value"
         @tap="detail.startAdaptivePractice"
       >
-        错题靶向强化
+        {{ detail.isRegenerating.value ? '后台生题中...' : '错题靶向强化' }}
       </button>
       <button class="paper-btn-primary primary-bar-btn" @tap="handleGoReview">
         查看学情总览
@@ -86,6 +89,7 @@ import { ref } from 'vue'
 import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app'
 import type { AttemptResult } from '@/types'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
+import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
 import { safeShowToast } from '@/utils/loadingGuard'
 import ReportSummaryCard from '../../components/ReportSummaryCard.vue'
 import AttemptResultCard from '../../components/AttemptResultCard.vue'

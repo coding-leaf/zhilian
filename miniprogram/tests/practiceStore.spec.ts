@@ -10,7 +10,7 @@ vi.mock('@/utils/request', () => ({
 
 import { usePracticeStore } from '@/stores/practice'
 import { useAuthStore } from '@/stores/auth'
-import { generatedQuestionFixture, practiceDetailFixture } from './fixtures/backendResponses'
+import { practiceDetailFixture } from './fixtures/backendResponses'
 
 const inProgressSession = {
   id: 'p-1',
@@ -107,7 +107,7 @@ describe('practice store submit reliability', () => {
   })
 })
 
-describe('practice store draft isolation and regenerate scope', () => {
+describe('practice store draft isolation and epoch safety', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     uni.clearStorageSync()
@@ -115,19 +115,6 @@ describe('practice store draft isolation and regenerate scope', () => {
     requestMock.mockImplementation(async (options: any) => {
       if (options.url === '/practices/p-1') return practiceDetailFixture
       if (options.url.endsWith('/answers')) return { success: true }
-      if (options.url === '/questions/generate') {
-        return {
-          batch_id: 'b-1',
-          total_generated: 1,
-          qualified_count: 1,
-          pending_count: 0,
-          qualified_questions: [generatedQuestionFixture({ knowledge_point_id: 'k-1' })],
-          pending_questions: [],
-        }
-      }
-      if (options.url === '/practices') {
-        return { ...practiceDetailFixture, id: 'p-new', practice_id: 'p-new' }
-      }
       throw new Error(`unexpected request: ${options.url}`)
     })
   })
@@ -152,65 +139,61 @@ describe('practice store draft isolation and regenerate scope', () => {
     expect(second.userAnswers['q-2']).not.toBe('u1-answer')
   })
 
-  it('requires exactly one course or material scope before regenerating', async () => {
-    const store = usePracticeStore()
-
-    await expect(store.regenerateFromWrongPoints(['k-1'], {})).rejects.toThrow('缺少课程或资料范围')
-    await expect(
-      store.regenerateFromWrongPoints(['k-1'], { folderId: 'f-1', materialId: 'm-1' }),
-    ).rejects.toThrow('只能指定一个')
-  })
-
-  it('regenerates within a single scope and reports coverage', async () => {
-    const store = usePracticeStore()
-
-    const result = await store.regenerateFromWrongPoints(['k-1'], { folderId: 'f-1' })
-
-    expect(result.session.id).toBe('p-new')
-    expect(result.coverage).toMatchObject({ covered: ['k-1'], missing: [] })
-
-    const generateCall = requestMock.mock.calls.find(([options]: any[]) => options.url === '/questions/generate')
-    expect(generateCall?.[0].data).toMatchObject({ folder_id: 'f-1', material_id: undefined })
-
-    const practiceCalls = requestMock.mock.calls.filter(([options]: any[]) => options.url.startsWith('/practices'))
-    expect(practiceCalls).toHaveLength(1)
-    expect(practiceCalls[0][0]).toMatchObject({
-      url: '/practices',
-      method: 'POST',
-      data: {
-        title: '错题巩固练习',
-        question_ids: ['q-new-1'],
-        question_count: 1,
-      },
-    })
-  })
-
-  it('clamps regenerated question_ids and explicit question_count to 50', async () => {
+  it('sends silentToast=true on draft saves and cleans anonymous draft fallback on submit', async () => {
+    const auth = useAuthStore()
     const store = usePracticeStore()
     requestMock.mockImplementation(async (options: any) => {
-      if (options.url === '/questions/generate') {
-        return {
-          batch_id: 'b-over',
-          total_generated: 55,
-          qualified_count: 55,
-          pending_count: 0,
-          qualified_questions: Array.from({ length: 55 }, (_, i) =>
-            generatedQuestionFixture({ id: `q-over-${i}`, knowledge_point_id: 'k-1' }),
-          ),
-          pending_questions: [],
-        }
-      }
-      if (options.url === '/practices') {
-        return { ...practiceDetailFixture, id: 'p-50', practice_id: 'p-50' }
-      }
+      if (options.url.endsWith('/answers')) return { success: true }
+      if (options.url.endsWith('/submit')) return { practice_id: 'p-1', status: 'submitted' }
+      if (options.url === '/practices/p-1') return practiceDetailFixture
       throw new Error(`unexpected request: ${options.url}`)
     })
 
-    await store.regenerateFromWrongPoints(['k-1'], { folderId: 'f-1' })
+    store.currentSession = inProgressSession as any
+    // 资料尚未拉取完成时写到 anonymous 键
+    store.recordAnswer('q-1', 'A')
+    expect(uni.getStorageSync('practice_draft_anonymous_p-1')).toMatchObject({ 'q-1': 'A' })
 
-    const createCall = requestMock.mock.calls.find(([options]: any[]) => options.url === '/practices')
-    expect(createCall?.[0].data.question_ids).toHaveLength(50)
-    expect(createCall?.[0].data.question_count).toBe(50)
+    // 随后用户资料就绪，交卷时应同时清理当前用户键与 anonymous 兜底键
+    auth.user = { id: 'u1', nickname: '用户一' } as any
+    await store.submit()
+
+    const draftCall = answerCalls()[0]?.[0]
+    expect(draftCall?.silentToast).toBe(true)
+    expect(uni.getStorageSync('practice_draft_anonymous_p-1')).toBe('')
+    expect(uni.getStorageSync('practice_draft_u1_p-1')).toBe('')
+  })
+
+  it('isolates in-flight draft failures across practice switch so new practice can still submit (P0-5)', async () => {
+    let rejectPracticeADraft!: (err: Error) => void
+    const store = usePracticeStore()
+    requestMock.mockImplementation(async (options: any) => {
+      if (options.url === '/practices/p-A/answers') {
+        return new Promise((_resolve, reject) => {
+          rejectPracticeADraft = reject
+        })
+      }
+      if (options.url === '/practices/p-B') {
+        return { ...practiceDetailFixture, id: 'p-B', practice_id: 'p-B' }
+      }
+      if (options.url === '/practices/p-B/answers') return { success: true }
+      if (options.url === '/practices/p-B/submit') return { practice_id: 'p-B', status: 'submitted' }
+      throw new Error(`unexpected request: ${options.url}`)
+    })
+
+    store.currentSession = { ...inProgressSession, id: 'p-A' } as any
+    store.recordAnswer('q-old', 'A')
+
+    // 立即切换到练习 B，在途练习 A 的草稿随后失败
+    await store.initPractice('p-B')
+    rejectPracticeADraft(new Error('old practice network timeout'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(store.draftFailures).toEqual([])
+    store.recordAnswer('q-new', 'B')
+    const submitted = await store.submit()
+    expect(submitted.id).toBe('p-B')
+    expect(submitCalls()).toHaveLength(1)
   })
 })
 

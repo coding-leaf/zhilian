@@ -8,6 +8,10 @@ export interface PollerRunOptions<T> {
   intervalMs: number | ((attempt: number) => number)
   isDone: (value: T) => boolean
   onAttempt?: (value: T) => void
+  /** 连续瞬时异常容忍上限（默认 3）；达到上限后才向外抛出终止轮询。 */
+  maxConsecutiveErrors?: number
+  /** 单次 tick 捕获瞬时异常时的可选回调。 */
+  onError?: (error: unknown, consecutiveErrors: number) => void
 }
 
 export interface PollerHandle {
@@ -21,11 +25,15 @@ interface RunToken {
   cancelled: boolean
 }
 
+const DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
+
 /**
- * 创建可显式取消与销毁的固定间隔轮询器。
+ * 创建可显式取消与销毁的轮询器。
  *
- * `stop()` 会立即清除等待定时器并唤醒挂起中的 sleep，避免页面卸载后留下悬空 Promise；
- * `dispose()` 在 `stop()` 基础上永久阻止后续 `run()` 再发起轮询。
+ * - `stop()` 会立即清除等待定时器并唤醒挂起中的 sleep，避免页面卸载后留下悬空 Promise；
+ * - `dispose()` 在 `stop()` 基础上永久阻止后续 `run()` 再发起轮询；
+ * - 对单次 tick 的瞬时网络异常具备容错能力：在 `maxConsecutiveErrors`（默认 3）以内自动按计划重试，
+ *   任意一次成功 tick 均重置连续失败计数，避免一次网络抖动永久杀死判题/任务轮询。
  */
 export function createPoller(): PollerHandle {
   let disposed = false
@@ -77,11 +85,41 @@ export function createPoller(): PollerHandle {
     const token: RunToken = { cancelled: false }
     activeRun = token
     let lastValue: T | undefined
+    const maxConsecutiveErrors = Math.max(
+      1,
+      options.maxConsecutiveErrors ?? DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    )
+    let consecutiveErrors = 0
 
     try {
       for (let attempt = 0; attempt < options.maxAttempts; attempt += 1) {
         if (disposed || token.cancelled) return { status: 'stopped', lastValue }
-        const value = await fetcher()
+        let value: T
+        try {
+          value = await fetcher()
+          consecutiveErrors = 0
+        } catch (error) {
+          if (disposed || token.cancelled) return { status: 'stopped', lastValue }
+          consecutiveErrors += 1
+          options.onError?.(error, consecutiveErrors)
+          console.error(
+            `[poller] tick failed (${consecutiveErrors}/${maxConsecutiveErrors}):`,
+            error,
+          )
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            throw error
+          }
+          if (attempt < options.maxAttempts - 1) {
+            const delayMs =
+              typeof options.intervalMs === 'function'
+                ? options.intervalMs(attempt)
+                : options.intervalMs
+            await waitInterval(delayMs, token)
+            if (disposed || token.cancelled) return { status: 'stopped', lastValue }
+          }
+          continue
+        }
+
         lastValue = value
         if (disposed || token.cancelled) return { status: 'stopped', lastValue }
         if (options.isDone(value)) return { status: 'completed', value }

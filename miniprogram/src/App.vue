@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app'
+import { useAuthStore } from '@/stores/auth'
+import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 
 onLaunch(() => {
   console.log('App Launch: 智练温润学术版')
@@ -7,10 +9,23 @@ onLaunch(() => {
 
 onShow(() => {
   console.log('App Show')
+  try {
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn()) {
+      void useBackgroundTaskStore().refreshActiveTasks()
+    }
+  } catch (err) {
+    console.error('[App] onShow 恢复后台轮询失败:', err)
+  }
 })
 
 onHide(() => {
   console.log('App Hide')
+  try {
+    useBackgroundTaskStore().stopPolling()
+  } catch (err) {
+    console.error('[App] onHide 暂停后台轮询失败:', err)
+  }
 })
 </script>
 
