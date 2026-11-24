@@ -681,3 +681,28 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复
+<!-- trellis-session: v=2 fp=21ade5f4fc0d2b46 -->
+
+**Date**: 2026-11-24
+**Task**: 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+4路Swarm调研与并行实施：(1)迁移0012+POST /questions/jobs自动建卷与幂等、前端清零同步错题生成；(2)初次生题与错题均改为只提醒不强跳、去双进度条与杂乱题库预览；(3)Redis/LLM/DB短事务/Worker单例与前端并发限流/401单飞刷新/silentToast加固；(4)修复生产登录鉴权后门、Commit-First竞态、退步知识点永空、自评重判诊断陈旧与draftQueue切题死锁；双端门禁全绿并沉淀规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3e93a6` | feat(backend): 异步出题自动建卷、Commit-First 判题与诊断流水线修复 |
+| `1cc915e` | fix(backend): 连接稳定性加固与生产登录鉴权安全修复 |
+| `2462d59` | feat(miniprogram): 错题异步化、初次生题极简提醒流与网络韧性加固 |
+| `c70e145` | docs(spec): 更新数据库短事务/Commit-First 与前端网络/异步出题契约规范 |
+
+### Status
+
+[OK] **Completed**
