@@ -89,6 +89,7 @@ describe('Home Workbench upload ActionSheet, auto-parse & background task bar', 
       success({ tempFiles: [{ tempFilePath: '/tmp/camera-note.jpg' }] })
     })
 
+    useAuthStore().setAuth('test-token')
     const { chooseFile } = useMaterialUpload({
       getCurrentFolderId: () => 'f-1',
       uploadMaterial,

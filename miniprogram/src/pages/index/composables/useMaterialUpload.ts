@@ -1,6 +1,8 @@
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import type { MaterialItem } from '@/types'
 import { extractUserErrorMessage, safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
 import { RequestError } from '@/utils/requestError'
 
 declare const wx:
@@ -78,11 +80,20 @@ export function useMaterialUpload(deps: MaterialUploadDeps) {
     }
   }
 
+  const requireLogin = (): boolean => {
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn()) return true
+    safeNavigateTo('/pages/auth/login', { failMessage: '打开登录页失败' })
+    safeShowToast('请先登录后再上传资料')
+    return false
+  }
+
   const uploadSelectedFile = async (
     filePath: string,
     title: string | undefined,
     targetFolderId: string | undefined,
   ) => {
+    if (!requireLogin()) return
     try {
       let parseStarted = false
       const item = await withBlockingLoading('正在上传讲义...', async () => {
@@ -151,6 +162,7 @@ export function useMaterialUpload(deps: MaterialUploadDeps) {
   }
 
   const chooseFile = () => {
+    if (!requireLogin()) return
     const currentFolderId = deps.getCurrentFolderId()
     const targetFolderId =
       currentFolderId === 'all' || currentFolderId === '__none__' ? undefined : currentFolderId

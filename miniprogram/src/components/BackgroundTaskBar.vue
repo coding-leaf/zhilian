@@ -24,6 +24,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
 import { safeShowToast } from '@/utils/loadingGuard'
 import { safeNavigateTo } from '@/utils/navigation'
@@ -41,6 +42,7 @@ const emit = defineEmits<{
   (e: 'dismiss', task: BackgroundTaskItem): void
 }>()
 
+const authStore = useAuthStore()
 const taskStore = useBackgroundTaskStore()
 const tasks = computed(() =>
   taskStore.visibleTasks.filter(
@@ -49,7 +51,7 @@ const tasks = computed(() =>
 )
 
 onMounted(() => {
-  if (props.autoRefresh) void taskStore.refreshActiveTasks()
+  if (props.autoRefresh && authStore.isLoggedIn()) void taskStore.refreshActiveTasks()
 })
 
 const navigateToTask = (task: BackgroundTaskItem) => {

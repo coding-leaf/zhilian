@@ -71,7 +71,6 @@ export function useQuestionCompose() {
   const isLoadingKp = ref(false)
   const isLoadingReady = ref(false)
   const activeJobId = ref<string | null>(null)
-  const pendingReviewNoticeCount = ref(0)
 
   const readyPracticeId = ref<string | null>(null)
   const readyPracticeTitle = ref('')
@@ -118,7 +117,7 @@ export function useQuestionCompose() {
     computeKnowledgeCoverage(remainingQuestions.value, targetKpIdsForCoverage.value),
   )
 
-  // 只要存在至少 1 道可用题或已生成练习，绝不因部分考点待审核或覆盖缺口锁死开练
+  // 只要存在至少 1 道可用题或已生成练习，绝不因考点覆盖缺口锁死开练
   const canStart = computed(
     () =>
       readyAvailableCount.value > 0
@@ -141,9 +140,6 @@ export function useQuestionCompose() {
         `为覆盖全部 ${targetKpIdsForCoverage.value.length} 个考点，本次按 ${plannedCount.value} 题目标生成`,
       )
     }
-    if (pendingReviewNoticeCount.value > 0) {
-      parts.push(`另有 ${pendingReviewNoticeCount.value} 道题待审核，不影响本次作答`)
-    }
     return parts.join('；')
   })
 
@@ -163,7 +159,7 @@ export function useQuestionCompose() {
 
   const fetchBatchQuestions = async (
     batchId: string,
-  ): Promise<{ available: QuestionItem[]; pendingCount: number }> => {
+  ): Promise<QuestionItem[]> => {
     const pageSize = 100
     const allRaw: WireQuestion[] = []
     let page = 1
@@ -178,9 +174,8 @@ export function useQuestionCompose() {
       if (pageItems.length < pageSize || allRaw.length >= total) break
       page += 1
     }
-    const pendingCount = allRaw.filter((item) => item.status === 'pending_review').length
     const usable = allRaw.filter((item) => !item.status || item.status === 'available')
-    return { available: enrichKpNames(usable.map(adaptQuestion)), pendingCount }
+    return enrichKpNames(usable.map(adaptQuestion))
   }
 
   const loadGeneratedBatches = async (batchIds: string[]) => {
@@ -233,7 +228,7 @@ export function useQuestionCompose() {
 
   const loadJobResultItems = async (
     job: QuestionGenerationJob,
-  ): Promise<{ available: QuestionItem[]; pendingCount: number }> => {
+  ): Promise<QuestionItem[]> => {
     if (job.batch_id) {
       return fetchBatchQuestions(job.batch_id)
     }
@@ -242,9 +237,9 @@ export function useQuestionCompose() {
       const usable = list.filter((item) => item.status !== 'pending_review')
       const idSet = new Set(job.question_ids)
       const matched = idSet.size > 0 ? usable.filter((item) => idSet.has(item.id)) : usable
-      return { available: enrichKpNames(matched), pendingCount: 0 }
+      return enrichKpNames(matched)
     }
-    return { available: [], pendingCount: 0 }
+    return []
   }
 
   const applyCompletedJob = async (job: QuestionGenerationJob): Promise<number> => {
@@ -253,11 +248,8 @@ export function useQuestionCompose() {
     consumedJobIds.add(job.id)
     try {
       let available: QuestionItem[] = []
-      let pendingCount = 0
       try {
-        const loaded = await loadJobResultItems(job)
-        available = dedupeQuestions(loaded.available)
-        pendingCount = loaded.pendingCount
+        available = dedupeQuestions(await loadJobResultItems(job))
       } catch (err) {
         // 若后端已建好 result_practice_id，拉取批次明细失败不应阻断就绪提醒卡展示
         if (!job.result_practice_id) throw err
@@ -280,12 +272,11 @@ export function useQuestionCompose() {
       questions.value = available
       removedIds.value = []
       hasGenerated.value = true
-      pendingReviewNoticeCount.value = pendingCount
       readyPracticeId.value = job.result_practice_id ?? null
       readyPracticeTitle.value = job.practice_title || fallbackTitle
       readyAvailableCount.value = resolvedCount
       readyCoveredKpCount.value = resolvedKpCount
-      readyPendingCount.value = pendingCount
+      readyPendingCount.value = 0
 
       clearActiveJob()
       viewMode.value = 'ready'
@@ -409,7 +400,7 @@ export function useQuestionCompose() {
   }
 
   const loadBatchQuestions = async (batchId: string): Promise<number> => {
-    const { available, pendingCount } = await fetchBatchQuestions(batchId)
+    const available = await fetchBatchQuestions(batchId)
     if (available.length === 0) return 0
     const loadedKpIds = Array.from(
       new Set(
@@ -423,21 +414,19 @@ export function useQuestionCompose() {
     questions.value = available
     removedIds.value = []
     hasGenerated.value = true
-    pendingReviewNoticeCount.value = pendingCount
     readyPracticeId.value = null
     readyPracticeTitle.value = scope.value.folderId ? '课程针对性测验' : '讲义专题测验'
     readyAvailableCount.value = available.length
     readyCoveredKpCount.value = loadedKpIds.length
-    readyPendingCount.value = pendingCount
+    readyPendingCount.value = 0
     viewMode.value = 'ready'
     await loadGeneratedBatches([batchId])
     return available.length
   }
 
-  /** 载入该资料已持久化的可用题目（过滤待审核项）。 */
+  /** 载入该资料已持久化的可用题目。 */
   const loadExistingQuestions = async (materialId: string): Promise<number> => {
     const allLoaded = enrichKpNames(await apiGetQuestionsByMaterial(materialId))
-    const pendingCount = allLoaded.filter((item) => item.status === 'pending_review').length
     const loaded = allLoaded.filter((item) => item.status !== 'pending_review')
     if (loaded.length === 0) return 0
     const loadedKpIds = Array.from(
@@ -452,12 +441,11 @@ export function useQuestionCompose() {
     questions.value = loaded
     removedIds.value = []
     hasGenerated.value = true
-    pendingReviewNoticeCount.value = pendingCount
     readyPracticeId.value = null
     readyPracticeTitle.value = '讲义专题测验'
     readyAvailableCount.value = loaded.length
     readyCoveredKpCount.value = loadedKpIds.length
-    readyPendingCount.value = pendingCount
+    readyPendingCount.value = 0
     viewMode.value = 'ready'
     return loaded.length
   }

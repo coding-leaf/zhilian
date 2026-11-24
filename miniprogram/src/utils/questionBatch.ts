@@ -64,7 +64,7 @@ function countSelectedInBatch(
 /**
  * 已选题数。
  *
- * 与「实际进入练习的题数」恒等：可选题目只有 `available`（待审核题目可见但不可选），
+ * 与「实际进入练习的题数」恒等：可选题目均为 `available`，
  * 所以整批选中按 `availableCount` 计数，逐题勾选按实际勾中的题数计数。
  */
 export function countSelectedQuestions(
@@ -77,8 +77,7 @@ export function countSelectedQuestions(
 /**
  * 涉及选择**且至少贡献 1 题**的批次数（用于构造「跨批次练习」标题）。
  *
- * 不含只贡献 0 题的批次：全勾一个整批待审核的批次同样只贡献 0 题——
- * 它不该出现在标题里，否则「练习标题」宣称的批次数与实际进练习的题目对不上。
+ * 不含只贡献 0 题的批次，避免「练习标题」宣称的批次数与实际进练习的题目对不上。
  */
 export function countSelectedBatches(
   batches: QuestionBatchSummary[],
@@ -135,8 +134,7 @@ export function toggleQuestionSelection(
 /**
  * 解析整批选中时真正要练的题目 ID。
  *
- * 只认 `selectable`（即 available）的题目——待审核题目进入练习会被后端静默丢弃，
- * 界面上的题数会与练习里的题数对不上，而没有任何错误信号可供归因。
+ * 只认 `selectable`（即 available）的题目，避免界面题数与实际进练习题数不一致。
  */
 export function resolveWholeBatchQuestionIds(
   questions: QuestionBankItem[],
@@ -224,10 +222,7 @@ export function describeBatchLabel(
   batch: QuestionBatchSummary,
   now: Date = new Date(),
 ): string {
-  const countText =
-    batch.pendingReviewCount > 0
-      ? `${batch.availableCount} 题 · ${batch.pendingReviewCount} 题待审核`
-      : `${batch.availableCount} 题`
+  const countText = `${batch.availableCount} 题`
   if (batch.batchId === null) {
     return `未分批题目 · ${countText}`
   }

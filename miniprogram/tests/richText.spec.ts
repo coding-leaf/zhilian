@@ -83,27 +83,31 @@ describe('richText AST parser', () => {
     const expr = String.raw`$$P(Y=c_k | X=x_j) \propto P(Y=c_k) \prod_{j=1}^{n} \frac{\alpha + x_j^2}{\Sigma}$$`
     const nodes = parseRichContent(expr)
     expect(nodes[0]).toMatchObject({ name: 'div', attrs: { class: 'rt-math-block' } })
-    const tags = collectTagNames(nodes)
-    expect(tags).toContain('sub')
-    expect(tags).toContain('sup')
+    const classes = findAll(nodes, 'span')
+      .flatMap((n) => (n.attrs?.class ? n.attrs.class.split(/\s+/) : []))
+    expect(classes).toContain('katex')
+    expect(classes).toContain('mfrac')
+    expect(classes).toContain('msupsub')
 
     const text = flattenText(nodes)
     expect(text).toContain('∝')
     expect(text).toContain('∏')
-    expect(text).toContain('(α + xj2)/(Σ)')
+    expect(text).toContain('α')
+    expect(text).toContain('Σ')
+    expect(text).not.toContain('\\frac')
 
-    const unfenced = parseRichContent('计算 P(Y=c_k | X=x_j) 且 x_{i}^{2}，\\sum \\le \\ge \\ne \\approx \\in \\times \\cdot')
-    expect(collectTagNames(unfenced)).toContain('sub')
-    expect(collectTagNames(unfenced)).toContain('sup')
-    const unfencedText = flattenText(unfenced)
-    expect(unfencedText).toContain('∑')
-    expect(unfencedText).toContain('≤')
-    expect(unfencedText).toContain('≥')
-    expect(unfencedText).toContain('≠')
-    expect(unfencedText).toContain('≈')
-    expect(unfencedText).toContain('∈')
-    expect(unfencedText).toContain('×')
-    expect(unfencedText).toContain('·')
+    const inlineFormula = parseRichContent(
+      String.raw`计算 $P(Y=c_k | X=x_j)$ 且 $x_{i}^{2}，\sum \le \ge \ne \approx \in \times \cdot$`,
+    )
+    const inlineText = flattenText(inlineFormula)
+    expect(inlineText).toContain('∑')
+    expect(inlineText).toContain('≤')
+    expect(inlineText).toContain('≥')
+    expect(inlineText).toContain('=')
+    expect(inlineText).toContain('≈')
+    expect(inlineText).toContain('∈')
+    expect(inlineText).toContain('×')
+    expect(inlineText).toContain('⋅')
   })
 
   it('escapes HTML entities safely and converts sqrt', () => {
@@ -114,8 +118,8 @@ describe('richText AST parser', () => {
     expect(escapeHtml("a'b")).toBe('a&#39;b')
 
     const mathNodes = parseMathToNodes(String.raw`\sqrt{a^2 + b^2}`)
-    expect(flattenText(mathNodes)).toContain('√(a2 + b2)')
-    expect(collectTagNames(mathNodes)).toContain('sup')
+    expect(findAll(mathNodes, 'img').some((img) => img.attrs?.class === 'katex-svg')).toBe(true)
+    expect(flattenText(mathNodes)).toContain('a2+b2')
   })
 
   it('detects legacy SymbolMT garbled snippet soup without false positives on normal math', () => {
@@ -272,10 +276,10 @@ describe('richText GFM pipe tables', () => {
     const nodes = parseRichContent(TABLE_MD)
     const tags = collectTagNames(nodes)
     expect(tags).toContain('strong')
-    expect(tags).toContain('sup')
+    expect(findAll(nodes, 'span').some((n) => n.attrs?.class?.includes('katex'))).toBe(true)
     const bodyRows = findAll(findAll(nodes, 'tbody'), 'tr')
     expect(cellTexts(bodyRows)[0]).toContain('快排')
-    expect(cellTexts(bodyRows)[0]).toContain('O(nlog n)')
+    expect(cellTexts(bodyRows)[0]).toContain('log')
   })
 
   it('keeps pipes inside math/code/escapes and converts <br> in cells', () => {
@@ -290,7 +294,7 @@ describe('richText GFM pipe tables', () => {
     const rows = findAll(findAll(nodes, 'tbody'), 'tr')
     expect(rows).toHaveLength(3)
     for (const row of rows) expect(row.children).toHaveLength(2)
-    expect(cellTexts(rows)[0]).toContain('|x| ≥ 0')
+    expect(cellTexts(rows)[0]).toContain('≥0')
     expect(cellTexts(rows)[1]).toContain('a | b')
     expect(cellTexts(rows)[2]).toContain('a | b')
     expect(collectTagNames(rows[2].children ?? [])).toContain('br')
@@ -325,69 +329,69 @@ describe('richText GFM pipe tables', () => {
   })
 })
 
-describe('richText LaTeX environments', () => {
+describe('richText LaTeX environments via KaTeX', () => {
+  const collectClasses = (nodes: RichTextNode[]): string[] =>
+    findAll(nodes, 'span')
+      .flatMap((n) => (n.attrs?.class ? n.attrs.class.split(/\s+/) : []))
+      .filter(Boolean)
+
   const assertNoLeak = (nodes: RichTextNode[]): void => {
     const text = flattenText(nodes)
-    expect(text).not.toContain('begin')
-    expect(text).not.toContain('end{')
-    expect(text).not.toContain('\\')
+    expect(text).not.toContain('\\begin')
+    expect(text).not.toContain('\\end{')
     expect(text).not.toContain('&amp;')
   }
 
-  it('renders pmatrix as a 2x2 grid with paren delimiters', () => {
+  it('renders pmatrix as a KaTeX mtable with paren delimiters', () => {
     const nodes = parseRichContent(String.raw`$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$`)
     expect(nodes[0]).toMatchObject({ attrs: { class: 'rt-math-block' } })
-    expect(findAll(nodes, 'table')).toHaveLength(1)
-    expect(findAll(nodes, 'tr')).toHaveLength(2)
-    expect(findAll(nodes, 'td')).toHaveLength(4)
-    expect(flattenText(findAll(nodes, 'td'))).toBe('abcd')
-    expect(findAll(nodes, 'span').find((n) => n.attrs?.class?.includes('rt-math-matrix'))?.attrs?.style)
-      .toContain('border-radius')
+    const classes = collectClasses(nodes)
+    expect(classes).toContain('mtable')
+    expect(classes).toContain('mopen')
+    expect(classes).toContain('mclose')
+    expect(flattenText(nodes)).toContain('a')
+    expect(flattenText(nodes)).toContain('d')
     assertNoLeak(nodes)
   })
 
-  it('distinguishes bmatrix / vmatrix delimiters and plain matrix', () => {
-    const style = (env: string): string => {
+  it('distinguishes bmatrix / vmatrix / Vmatrix delimiters and plain matrix', () => {
+    const delimText = (env: string): string => {
       const nodes = parseRichContent(String.raw`$$\begin{${env}} 1 & 0 \\ 0 & 1 \end{${env}}$$`)
-      return findAll(nodes, 'span').find((n) => n.attrs?.class?.includes('rt-math-env'))?.attrs?.style ?? ''
+      const delims = findAll(nodes, 'span').filter(
+        (n) => n.attrs?.class?.includes('mopen') || n.attrs?.class?.includes('mclose'),
+      )
+      return flattenText(delims).replace(/\u200b/g, '')
     }
-    expect(style('bmatrix')).toContain('border-left:2px solid')
-    expect(style('vmatrix')).toContain('border-left:1px solid')
-    expect(style('matrix')).not.toContain('border-left')
-    expect(style('bmatrix')).not.toBe(style('vmatrix'))
-    expect(style('Vmatrix')).toContain('double')
+    expect(delimText('bmatrix')).toContain('[')
+    expect(
+      findAll(parseRichContent(String.raw`$$\begin{vmatrix} 1 & 0 \\ 0 & 1 \end{vmatrix}$$`), 'img').length,
+    ).toBeGreaterThanOrEqual(2)
+    expect(
+      findAll(parseRichContent(String.raw`$$\begin{Vmatrix} 1 & 0 \\ 0 & 1 \end{Vmatrix}$$`), 'img').length,
+    ).toBeGreaterThanOrEqual(2)
+    expect(delimText('matrix')).toBe('')
   })
 
-  it('renders cases with a left brace and left-aligned cells', () => {
+  it('renders cases with left brace and cells', () => {
     const nodes = parseRichContent(
       String.raw`$$f(x)=\begin{cases} x^2 & x>0 \\ 0 & \text{otherwise} \end{cases}$$`,
     )
-    expect(findAll(nodes, 'tr')).toHaveLength(2)
-    expect(findAll(nodes, 'td')).toHaveLength(4)
-    const wrapper = findAll(nodes, 'span').find((n) => n.attrs?.class?.includes('rt-math-cases'))
-    expect(wrapper?.attrs?.style).toContain('border-left:2px solid')
-    expect(wrapper?.attrs?.style).not.toContain('border-right')
-    expect(findAll(nodes, 'td')[0].attrs?.style).toContain('text-align:left')
+    expect(collectClasses(nodes)).toContain('mtable')
     const text = flattenText(nodes)
     expect(text).toContain('f(x)=')
     expect(text).toContain('x&gt;0')
     expect(text).toContain('otherwise')
-    expect(collectTagNames(nodes)).toContain('sup')
     assertNoLeak(nodes)
   })
 
-  it('aligns aligned rows on & with right/left alternating columns', () => {
+  it('renders aligned environments cleanly without leaking commands', () => {
     const nodes = parseRichContent(
       String.raw`$$\begin{aligned} a &= b + c \\ &= d \end{aligned}$$`,
     )
-    const rows = findAll(nodes, 'tr')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].children).toHaveLength(2)
-    expect(rows[1].children).toHaveLength(2)
-    const cells = findAll(nodes, 'td')
-    expect(cells[0].attrs?.style).toContain('text-align:right')
-    expect(cells[1].attrs?.style).toContain('text-align:left')
-    expect(flattenText([rows[1]])).toBe('= d')
+    expect(collectClasses(nodes)).toContain('mtable')
+    const text = flattenText(nodes).replace(/\u200b/g, '')
+    expect(text).toContain('a=b+c')
+    expect(text).toContain('=d')
     assertNoLeak(nodes)
   })
 
@@ -401,8 +405,9 @@ describe('richText LaTeX environments', () => {
       '$$',
     ].join('\n')
     const nodes = parseRichContent(md)
-    expect(findAll(nodes, 'tr')).toHaveLength(2)
-    expect(flattenText(findAll(nodes, 'td'))).toBe('1234')
+    expect(collectClasses(nodes)).toContain('mtable')
+    expect(flattenText(nodes)).toContain('1')
+    expect(flattenText(nodes)).toContain('4')
     assertNoLeak(nodes)
   })
 
@@ -421,13 +426,13 @@ describe('richText LaTeX environments', () => {
       'rt-math-block',
       'rt-p',
     ])
-    expect(findAll(nodes, 'tr')).toHaveLength(2)
+    expect(collectClasses([nodes[1]])).toContain('mtable')
     assertNoLeak(nodes)
   })
 
   it('renders inline $...$ environments and nested environments', () => {
     const inline = parseRichContent(String.raw`矩阵 $A=\begin{pmatrix}1\\2\end{pmatrix}$ 的列向量`)
-    expect(findAll(inline, 'td')).toHaveLength(2)
+    expect(collectClasses(inline)).toContain('mtable')
     expect(flattenText(inline)).toContain('A=')
     expect(flattenText(inline)).toContain('的列向量')
     assertNoLeak(inline)
@@ -435,96 +440,98 @@ describe('richText LaTeX environments', () => {
     const nested = parseMathToNodes(
       String.raw`\begin{pmatrix} \begin{pmatrix}1&2\\3&4\end{pmatrix} & 0 \\ 0 & 1 \end{pmatrix}`,
     )
-    expect(findAll(nested, 'table')).toHaveLength(2)
-    expect(findAll(nested, 'tr')).toHaveLength(4)
+    expect(collectClasses(nested).filter((c) => c === 'mtable').length).toBeGreaterThanOrEqual(2)
     assertNoLeak(nested)
   })
 
   it('reads array column alignment and tolerates unknown or unterminated environments', () => {
     const arr = parseMathToNodes(String.raw`\begin{array}{lr} 1 & 2 \\ 30 & 40 \end{array}`)
-    const cells = findAll(arr, 'td')
-    expect(cells[0].attrs?.style).toContain('text-align:left')
-    expect(cells[1].attrs?.style).toContain('text-align:right')
-    expect(flattenText(arr)).toBe('1230' + '40')
+    expect(collectClasses(arr)).toContain('mtable')
+    expect(flattenText(arr)).toContain('30')
+    expect(flattenText(arr)).toContain('40')
 
     const unknown = parseMathToNodes(String.raw`\begin{foo} x + y \end{foo}`)
-    expect(flattenText(unknown)).toBe(' x + y ')
+    expect(collectClasses(unknown)).toContain('katex-error')
 
     const truncated = parseMathToNodes(String.raw`\begin{pmatrix} 1 & 2 \\ 3 & 4`)
-    expect(findAll(truncated, 'td')).toHaveLength(4)
-    assertNoLeak(truncated)
+    expect(collectClasses(truncated)).toContain('katex-error')
   })
 
-  it('turns a stray \\\\ outside environments into a line break', () => {
-    const nodes = parseMathToNodes(String.raw`a = 1 \\ b = 2`)
-    expect(collectTagNames(nodes)).toContain('br')
-    expect(flattenText(nodes)).toBe('a = 1  b = 2')
+  it('supports \\\\ line breaks inside KaTeX display math', () => {
+    const nodes = parseMathToNodes(String.raw`a = 1 \\ b = 2`, true)
+    expect(collectClasses(nodes)).toContain('katex-display')
+    expect(flattenText(nodes)).toContain('a=1')
+    expect(flattenText(nodes)).toContain('b=2')
   })
 })
 
 const TABLE_FOR_STYLE = ['| a | b |', '| --- | --- |', '| 1 | 2 |'].join('\n')
 
-describe('richText extended LaTeX commands', () => {
+describe('richText extended LaTeX commands via KaTeX', () => {
   const text = (expr: string): string => flattenText(parseMathToNodes(expr))
+  const classes = (expr: string): string[] =>
+    findAll(parseMathToNodes(expr), 'span')
+      .flatMap((n) => (n.attrs?.class ? n.attrs.class.split(/\s+/) : []))
+      .filter(Boolean)
 
-  it('applies accents with combining marks or overline spans', () => {
-    expect(text(String.raw`\hat{x}`)).toBe('x\u0302')
-    expect(text(String.raw`\hat{\theta}`)).toBe('θ\u0302')
-    expect(text(String.raw`\bar{x}`)).toBe('x\u0304')
-    expect(text(String.raw`\vec{v}`)).toBe('v\u20D7')
-    expect(text(String.raw`\tilde y`)).toBe('y\u0303')
-    const multi = parseMathToNodes(String.raw`\overline{AB}`)
-    expect(findAll(multi, 'span')[0].attrs?.style).toContain('text-decoration:overline')
-    expect(flattenText(multi)).toBe('AB')
+  it('renders accents and overline with KaTeX accent/overline classes', () => {
+    expect(classes(String.raw`\hat{x}`)).toContain('accent')
+    expect(classes(String.raw`\hat{\theta}`)).toContain('accent')
+    expect(classes(String.raw`\bar{x}`)).toContain('accent')
+    expect(classes(String.raw`\vec{v}`)).toContain('accent')
+    expect(classes(String.raw`\tilde y`)).toContain('accent')
+    expect(classes(String.raw`\overline{AB}`)).toContain('overline')
+    expect(text(String.raw`\overline{AB}`)).toContain('AB')
   })
 
   it('renders operator names upright with scripts attached', () => {
-    expect(text(String.raw`\det(A)`)).toBe('det(A)')
-    expect(text(String.raw`\sin\theta + \cos 2x`)).toBe('sin θ + cos 2x')
-    expect(text(String.raw`\log_2 n`)).toBe('log2 n')
-    expect(text(String.raw`\ln x = \exp(y)`)).toBe('ln x = exp(y)')
-    expect(text(String.raw`\tan x`)).toBe('tan x')
-    expect(text(String.raw`\arg\max_{\theta} \min_x`)).toBe('arg maxθ minx')
-    expect(collectTagNames(parseMathToNodes(String.raw`\lim_{x \to 0}`))).toContain('sub')
-    expect(text(String.raw`\lim_{x \to 0} \frac{\sin x}{x}`)).toBe('limx → 0 (sin x)/(x)')
+    expect(text(String.raw`\det(A)`)).toContain('det(A)')
+    expect(text(String.raw`\sin\theta + \cos 2x`)).toContain('sinθ+cos2x')
+    expect(text(String.raw`\log_2 n`)).toContain('log2​n')
+    expect(text(String.raw`\ln x = \exp(y)`)).toContain('lnx=exp(y)')
+    expect(classes(String.raw`\arg\max_{\theta} \min_x`)).toContain('mop')
+    expect(classes(String.raw`\lim_{x \to 0} \frac{\sin x}{x}`)).toContain('mfrac')
   })
 
-  it('renders binom as a stacked paren grid', () => {
+  it('renders binom via KaTeX mfrac', () => {
     const nodes = parseMathToNodes(String.raw`\binom{n}{k}`)
-    expect(findAll(nodes, 'tr')).toHaveLength(2)
-    expect(flattenText(nodes)).toBe('nk')
-    expect(findAll(nodes, 'span')[0].attrs?.style).toContain('border-radius')
+    expect(findAll(nodes, 'span').some((n) => n.attrs?.class?.includes('mfrac'))).toBe(true)
+    expect(flattenText(nodes)).toContain('n')
+    expect(flattenText(nodes)).toContain('k')
   })
 
-  it('maps mathbb to double-struck glyphs', () => {
-    expect(text(String.raw`\mathbb{R}^n`)).toBe('ℝn')
-    expect(collectTagNames(parseMathToNodes(String.raw`\mathbb{R}^n`))).toContain('sup')
-    expect(text(String.raw`\mathbb{N}, \mathbb Z, \mathbb{Q}`)).toBe('ℕ, ℤ, ℚ')
-    expect(text(String.raw`\mathbb{E}`)).toBe(String.fromCodePoint(0x1d53c))
+  it('renders mathbb with KaTeX mathbb class', () => {
+    expect(classes(String.raw`\mathbb{R}^n`)).toContain('mathbb')
+    expect(text(String.raw`\mathbb{R}^n`)).toContain('Rn')
+    expect(text(String.raw`\mathbb{N}, \mathbb Z, \mathbb{Q}`)).toContain('N,Z,Q')
   })
 
-  it('supports sqrt with optional index and unbraced operands', () => {
+  it('supports sqrt with optional index and unbraced operands as SVG img', () => {
     const cube = parseMathToNodes(String.raw`\sqrt[3]{x}`)
-    expect(flattenText(cube)).toBe('3√(x)')
-    expect(findAll(cube, 'sup')).toHaveLength(1)
-    expect(text(String.raw`\sqrt[n]{x+1}`)).toBe('n√(x+1)')
-    expect(text(String.raw`\sqrt{a^2 + b^2}`)).toBe('√(a2 + b2)')
-    expect(text(String.raw`\sqrt2`)).toBe('√2')
+    expect(findAll(cube, 'img').some((img) => img.attrs?.class === 'katex-svg')).toBe(true)
+    expect(flattenText(cube)).toContain('3')
+    expect(flattenText(cube)).toContain('x')
+    expect(findAll(parseMathToNodes(String.raw`\sqrt2`), 'img').length).toBeGreaterThan(0)
   })
 
-  it('recognises extended commands inline in prose and ignores \\left./\\right.', () => {
-    const nodes = parseRichContent(String.raw`令 $\hat{y}=\arg\max_k p_k$，且 \mathbb{R}`)
+  it('recognises extended commands inline in prose and handles \\left./\\right.', () => {
+    const nodes = parseRichContent(String.raw`令 $\hat{y}=\arg\max_k p_k$，且 $\mathbb{R}$`)
     const out = flattenText(nodes)
-    expect(out).toContain('y\u0302=arg maxk')
-    expect(out).toContain('ℝ')
-    expect(text(String.raw`\left. x \right|_{0}`)).toBe(' x |0')
+    expect(out).toContain('令 ')
+    expect(out).toContain('argmax')
+    expect(out).toContain('R')
+    expect(text(String.raw`\left. x \right|_{0}`)).toContain('x∣0')
   })
 
-  it('stays backward compatible for existing symbols, fractions, and plain pipes', () => {
-    expect(text(String.raw`\alpha + \beta \le \gamma`)).toBe('α + β ≤ γ')
-    expect(text(String.raw`\frac{a}{b}`)).toBe('(a)/(b)')
-    expect(text(String.raw`\text{if } x \in A`)).toBe('if  x ∈ A')
-    expect(text(String.raw`\unknowncmd`)).toBe('unknowncmd')
+  it('renders symbols, fractions, and plain pipes safely', () => {
+    expect(text(String.raw`\alpha + \beta \le \gamma`)).toBe('α+β≤γ')
+    expect(classes(String.raw`\frac{a}{b}`)).toContain('mfrac')
+    expect(text(String.raw`\text{if } x \in A`).replace(/\u00a0/g, ' ')).toContain('if x∈A')
+    expect(
+      findAll(parseMathToNodes(String.raw`\unknowncmd`), 'span').some((n) =>
+        n.attrs?.style?.includes('color:rgb(185,28,28)'),
+      ),
+    ).toBe(true)
     expect(flattenText(parseRichContent('普通段落 a | b | c'))).toBe('普通段落 a | b | c')
   })
 
@@ -533,6 +540,7 @@ describe('richText extended LaTeX commands', () => {
       [
         TABLE_FOR_STYLE,
         String.raw`$$\begin{cases} 1 & x>0 \\ 0 & \text{else} \end{cases}$$`,
+        String.raw`$$\unknowncmd$$`,
       ].join('\n\n'),
     )
     const styles: string[] = []

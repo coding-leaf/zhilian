@@ -34,7 +34,7 @@ function confirmPracticeCountMismatch(params: {
     if (params.resolved > params.planned) {
       reason = `单次练习最多 ${MAX_PRACTICE_QUESTIONS} 题，超出的题目本次不会进入练习。`
     } else if (params.planned < params.displayed) {
-      reason = '其中部分题目可能已被删除或转为待审核。'
+      reason = '其中部分题目可能已被删除。'
     }
     uni.showModal({
       title: '可练题目有变化',

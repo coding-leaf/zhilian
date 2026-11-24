@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { apiAskQuestionCoach, apiAskScopedCoach } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import type { AskCoachHistoryItem, CoachSource } from '@/types'
+import { RequestError } from '@/utils/requestError'
 
 export interface CoachMessage {
   id: string
@@ -103,6 +104,22 @@ function removeFromLruIndex(userId: string, sessionKey: string): void {
   writeLruIndex(userId, entries)
 }
 
+function stripOrphanUserTurns(messages: CoachMessage[]): CoachMessage[] {
+  const paired: CoachMessage[] = []
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const current = messages[idx]
+    if (current.error || !current.content.trim()) continue
+    if (current.role === 'user') {
+      const next = messages[idx + 1]
+      if (!next || next.error || next.role !== 'assistant' || !next.content.trim()) {
+        continue
+      }
+    }
+    paired.push(current)
+  }
+  return paired
+}
+
 function sanitizeStoredMessages(raw: unknown): CoachMessage[] {
   let parsed: unknown = raw
   if (typeof raw === 'string') {
@@ -133,16 +150,20 @@ function sanitizeStoredMessages(raw: unknown): CoachMessage[] {
       sources: Array.isArray(item.sources) ? (item.sources as CoachSource[]) : undefined,
     })
   }
-  return cleaned.slice(-MAX_PERSISTED_MESSAGES)
+  return stripOrphanUserTurns(cleaned).slice(-MAX_PERSISTED_MESSAGES)
 }
 
-function readPersistedHistory(userId: string, sessionKey: string): CoachMessage[] {
+function readPersistedHistory(
+  userId: string,
+  sessionKey: string,
+  touchLru: boolean = true,
+): CoachMessage[] {
   try {
     if (typeof uni === 'undefined' || typeof uni.getStorageSync !== 'function') return []
     const raw = uni.getStorageSync(buildCoachStorageKey(userId, sessionKey))
     if (!raw) return []
     const messages = sanitizeStoredMessages(raw)
-    if (messages.length > 0) {
+    if (messages.length > 0 && touchLru) {
       touchLruSession(userId, sessionKey)
     }
     return messages
@@ -158,9 +179,7 @@ function writePersistedHistory(
 ): void {
   try {
     if (typeof uni === 'undefined' || typeof uni.setStorageSync !== 'function') return
-    const valid = messages
-      .filter((msg) => !msg.error && msg.content.trim().length > 0)
-      .slice(-MAX_PERSISTED_MESSAGES)
+    const valid = stripOrphanUserTurns(messages).slice(-MAX_PERSISTED_MESSAGES)
     if (valid.length === 0) {
       if (typeof uni.removeStorageSync === 'function') {
         uni.removeStorageSync(buildCoachStorageKey(userId, sessionKey))
@@ -272,7 +291,7 @@ export function useCoachChat(getContext: () => CoachContextParams) {
   const messageList = computed<CoachMessage[]>(
     () =>
       sessionHistories.value.get(activeScopedKey.value) ??
-      readPersistedHistory(activeUserId.value, sessionKey.value),
+      readPersistedHistory(activeUserId.value, sessionKey.value, false),
   )
 
   const isThinking = computed(() => thinkingKeys.value.has(activeScopedKey.value))
@@ -331,6 +350,21 @@ export function useCoachChat(getContext: () => CoachContextParams) {
     removePersistedHistory(userId, key)
   }
 
+  const resolveCoachErrorContent = (err: unknown): string => {
+    if (err instanceof RequestError) {
+      if (err.kind === 'timeout') {
+        return '助教响应超时，请稍后点击重试。'
+      }
+      if (err.kind === 'http' && (err.statusCode ?? 0) >= 500) {
+        return err.userMessage || '助教服务暂时开小差了，请稍后点击重试。'
+      }
+      if (err.kind === 'http' && err.userMessage) {
+        return err.userMessage
+      }
+    }
+    return '助教响应失败，请检查网络后重试。'
+  }
+
   const sendMessage = async (
     overrideQuery?: unknown,
     options?: { skipUserBubble?: boolean },
@@ -340,7 +374,7 @@ export function useCoachChat(getContext: () => CoachContextParams) {
     const targetUserId = activeUserId.value
     const targetKey = sessionKey.value
     const targetScopedKey = buildScopedMapKey(targetUserId, targetKey)
-    if (!query || thinkingKeys.value.has(targetScopedKey)) return
+    if (!query || isThinking.value || thinkingKeys.value.has(targetScopedKey)) return
 
     const ctx = { ...getContext() }
     const priorMessages = ensureSessionHydrated(targetUserId, targetKey)
@@ -405,11 +439,11 @@ export function useCoachChat(getContext: () => CoachContextParams) {
         suggestions: response.suggestions,
         sources: response.sources,
       })
-    } catch {
+    } catch (err) {
       appendMessage(targetUserId, targetKey, {
         id: nextId(),
         role: 'assistant',
-        content: '助教响应失败，请检查网络后重试。',
+        content: resolveCoachErrorContent(err),
         error: true,
         retryQuery: query,
       })
@@ -419,7 +453,7 @@ export function useCoachChat(getContext: () => CoachContextParams) {
   }
 
   const retryMessage = async (failedMsg: CoachMessage): Promise<void> => {
-    if (!failedMsg.retryQuery) return
+    if (!failedMsg.retryQuery || isThinking.value) return
     removeMessage(activeUserId.value, sessionKey.value, failedMsg.id)
     await sendMessage(failedMsg.retryQuery, { skipUserBubble: true })
   }

@@ -25,6 +25,7 @@ vi.mock('@dcloudio/uni-app', () => ({
 
 import CoachMessageList from '@/components/CoachMessageList.vue'
 import ReviewPage from '@/pages/review/index.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import QuestionsPage from '@/subpackages/material/pages/questions/index.vue'
 import PracticeQuestionBody from '@/subpackages/practice/components/PracticeQuestionBody.vue'
@@ -261,6 +262,7 @@ describe('M2 mp-weixin Vue/WXML/WXSS compatibility fixes', () => {
 
     const pinia = createPinia()
     setActivePinia(pinia)
+    useAuthStore().setToken('tok-compat')
     wrapper = mount(ReviewPage, {
       global: {
         plugins: [pinia],

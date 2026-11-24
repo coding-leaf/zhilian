@@ -213,22 +213,6 @@
   color: var(--color-correct);
 }
 
-.bank-pending-badge {
-  width: 72rpx;
-  height: 40rpx;
-  border-radius: 8rpx;
-  background: var(--color-warning-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.bank-pending-text {
-  font-size: 20rpx;
-  color: var(--color-warm-amber);
-}
-
 .bank-question-body {
   flex: 1;
   min-width: 0;
@@ -295,13 +279,6 @@
 
 .bank-detail-pt {
   margin-top: 2rpx;
-}
-
-.bank-pending-hint {
-  display: block;
-  font-size: 22rpx;
-  color: var(--color-ink-muted);
-  padding: 16rpx 0 4rpx;
 }
 
 .bank-action-card {

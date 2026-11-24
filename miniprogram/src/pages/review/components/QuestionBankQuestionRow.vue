@@ -2,11 +2,8 @@
   <view class="bank-question-wrap">
     <view class="bank-question-row">
       <view class="bank-question-main" @tap="emit('toggle')">
-        <view v-if="question.selectable" :class="['bank-checkbox', selected ? 'checked' : '']">
+        <view :class="['bank-checkbox', selected ? 'checked' : '']">
           <view v-if="selected" class="bank-check-mark" />
-        </view>
-        <view v-else class="bank-pending-badge">
-          <text class="bank-pending-text">待审核</text>
         </view>
 
         <view class="bank-question-body">

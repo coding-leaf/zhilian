@@ -124,6 +124,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useFolderStore } from '@/stores/folder'
 import MasteryOverviewCard from './components/MasteryOverviewCard.vue'
@@ -134,6 +135,7 @@ import WrongBookSection from './components/WrongBookSection.vue'
 import { useReviewCenter } from './composables/useReviewCenter'
 import type { ReviewSegment } from './reviewView'
 
+const authStore = useAuthStore()
 const folderStore = useFolderStore()
 const taskStore = useBackgroundTaskStore()
 const review = useReviewCenter()
@@ -163,17 +165,22 @@ const handleWrongChanged = async () => {
 }
 
 onMounted(async () => {
+  if (!authStore.isLoggedIn()) return
   await review.refreshAll({ refreshBank })
   hasCompletedInitialLoad = true
 })
 
 onShow(async () => {
   // 微信冷启时 onShow 先于 onMounted 触发，跳过首帧重复拉取
-  if (!hasCompletedInitialLoad) return
+  if (!hasCompletedInitialLoad || !authStore.isLoggedIn()) return
   await review.refreshAll({ fromShow: true, refreshBank })
 })
 
 onPullDownRefresh(async () => {
+  if (!authStore.isLoggedIn()) {
+    uni.stopPullDownRefresh()
+    return
+  }
   await review.refreshAll({ refreshBank })
   uni.stopPullDownRefresh()
 })

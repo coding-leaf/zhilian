@@ -10,6 +10,7 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useMaterialStore } from '@/stores/material'
 
@@ -472,5 +473,20 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('skips autoRefresh in BackgroundTaskBar when user is not logged in', async () => {
+    const wrapper = mount(BackgroundTaskBar, { props: { autoRefresh: true } })
+    await Promise.resolve()
+    expect(requestMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+
+    const authStore = useAuthStore()
+    authStore.setToken('tok-bg')
+    requestMock.mockResolvedValue({ items: [], total: 0 })
+    const loggedInWrapper = mount(BackgroundTaskBar, { props: { autoRefresh: true } })
+    await Promise.resolve()
+    expect(requestMock).toHaveBeenCalled()
+    loggedInWrapper.unmount()
   })
 })

@@ -304,10 +304,22 @@ function dispatchSingleTransport<T>(
               resolve({ ok: false, error, isUnauthorized: true })
             } else {
               const errData = res.data as any
-              const errMsg = errData?.detail || errData?.message || `请求失败 (${res.statusCode})`
+              const rawDetail =
+                typeof errData?.detail === 'string'
+                  ? errData.detail
+                  : typeof errData?.message === 'string'
+                    ? errData.message
+                    : ''
+              const isRawHtmlOrTrace =
+                res.statusCode >= 500 &&
+                /<!doctype|<html|traceback|exception/i.test(rawDetail)
+              const sanitizedDetail = isRawHtmlOrTrace
+                ? '服务暂时开小差了，请稍后重试'
+                : rawDetail
+              const errMsg = sanitizedDetail || `请求失败 (${res.statusCode})`
               const error = new RequestError('http', fullUrl, method, errMsg, {
                 statusCode: res.statusCode,
-                detail: errData?.detail || errData?.message,
+                detail: sanitizedDetail || undefined,
               })
               resolve({ ok: false, error })
             }
@@ -368,18 +380,25 @@ function executeRequest<T>(
       }
 
       if (result.isUnauthorized) {
+        const currentToken = String(uni.getStorageSync(ACCESS_TOKEN_KEY) || '')
         if (!isAuthEndpoint(fullUrl) && !hasRetriedAfterRefresh) {
-          const storedRefresh = String(uni.getStorageSync(REFRESH_TOKEN_KEY) || '')
-          if (storedRefresh) {
-            const nextToken = await refreshAccessTokenSingleFlight(storedRefresh)
-            if (nextToken) {
-              hasRetriedAfterRefresh = true
-              return attemptOnce(0, nextToken)
+          if (currentToken && currentToken !== token) {
+            hasRetriedAfterRefresh = true
+            return attemptOnce(0, currentToken)
+          }
+          if (token) {
+            const storedRefresh = String(uni.getStorageSync(REFRESH_TOKEN_KEY) || '')
+            if (storedRefresh) {
+              const nextToken = await refreshAccessTokenSingleFlight(storedRefresh)
+              if (nextToken) {
+                hasRetriedAfterRefresh = true
+                return attemptOnce(0, nextToken)
+              }
             }
           }
         }
         console.error(`[request] ${result.error.describe()}`)
-        if (!isAuthEndpoint(fullUrl)) {
+        if (!isAuthEndpoint(fullUrl) && (!currentToken || currentToken === token)) {
           handleUnauthorized(token)
         }
         throw result.error
@@ -448,7 +467,7 @@ export function request<T = any>(options: RequestOptions): Promise<T> {
  * 上传文件。
  *
  * 平台限制：`uni.uploadFile` 没有 `timeout` 参数（超时由 `manifest.json` 的 `networkTimeout.uploadFile` 决定），
- * 失败分类显式传入 `UPLOAD_REQUEST_TIMEOUT_MS`（120s），与平台配置保持一致。
+ * 失败分类显式传入 `UPLOAD_REQUEST_TIMEOUT_MS`（60s），与平台配置保持一致。
  */
 export function uploadFile<T = any>(
   filePath: string,
@@ -496,14 +515,22 @@ export function uploadFile<T = any>(
               resolve(res.data as any)
             }
           } else if (res.statusCode === 401) {
+            const currentToken = String(uni.getStorageSync(ACCESS_TOKEN_KEY) || '')
             if (!hasRetriedAfterRefresh) {
-              const storedRefresh = String(uni.getStorageSync(REFRESH_TOKEN_KEY) || '')
-              if (storedRefresh) {
-                const nextToken = await refreshAccessTokenSingleFlight(storedRefresh)
-                if (nextToken) {
-                  hasRetriedAfterRefresh = true
-                  dispatchUpload(nextToken).then(resolve, reject)
-                  return
+              if (currentToken && currentToken !== token) {
+                hasRetriedAfterRefresh = true
+                dispatchUpload(currentToken).then(resolve, reject)
+                return
+              }
+              if (token) {
+                const storedRefresh = String(uni.getStorageSync(REFRESH_TOKEN_KEY) || '')
+                if (storedRefresh) {
+                  const nextToken = await refreshAccessTokenSingleFlight(storedRefresh)
+                  if (nextToken) {
+                    hasRetriedAfterRefresh = true
+                    dispatchUpload(nextToken).then(resolve, reject)
+                    return
+                  }
                 }
               }
             }
@@ -511,7 +538,9 @@ export function uploadFile<T = any>(
               statusCode: 401,
             })
             console.error(`[request] ${error.describe()}`)
-            handleUnauthorized(token)
+            if (!currentToken || currentToken === token) {
+              handleUnauthorized(token)
+            }
             reject(error)
           } else {
             let detail: string | undefined

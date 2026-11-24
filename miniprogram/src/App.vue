@@ -2,9 +2,11 @@
 import { onLaunch, onShow, onHide } from '@dcloudio/uni-app'
 import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
+import { initKatexFonts } from '@/utils/katexFonts'
 
 onLaunch(() => {
   console.log('App Launch: 智练温润学术版')
+  initKatexFonts()
 })
 
 onShow(() => {
@@ -29,7 +31,9 @@ onHide(() => {
 })
 </script>
 
-<style>
+<style lang="scss">
+@import '@/styles/katex-mp.scss';
+
 /* 温润学术 Design Tokens 全局基础变量与样式 */
 page {
   --color-paper-bg: #F7F5F0;

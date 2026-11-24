@@ -8,7 +8,7 @@
 
       <view class="bank-batch-info" @tap="emit('toggle')">
         <text class="bank-batch-label">{{ label }}</text>
-        <text class="bank-batch-meta">共 {{ batch.questionCount }} 题</text>
+        <text class="bank-batch-meta">共 {{ batch.availableCount }} 题</text>
       </view>
 
       <text class="bank-expand-btn" @tap="emit('toggle-expand')">
@@ -60,9 +60,6 @@
             </view>
           </template>
         </QuestionBankQuestionRow>
-        <text v-if="batch.pendingReviewCount > 0" class="bank-pending-hint">
-          待审核题目需先通过质检才能加入练习。
-        </text>
       </template>
     </view>
   </view>

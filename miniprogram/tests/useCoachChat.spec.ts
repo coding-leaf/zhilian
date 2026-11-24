@@ -345,4 +345,65 @@ describe('useCoachChat session isolation & error retry', () => {
     expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-0'))).toBeTruthy()
     expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-31'))).toBeTruthy()
   })
+
+  it('prevents concurrent double-sends while isThinking is true', async () => {
+    let resolveFirst!: (val: any) => void
+    requestMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve
+        }),
+    )
+
+    const coach = useCoachChat(() => ({ materialId: 'm-double' }))
+    const firstPromise = coach.sendMessage('第一条消息')
+    expect(coach.isThinking.value).toBe(true)
+
+    await coach.sendMessage('重复双击消息')
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(coach.messageList.value).toHaveLength(1)
+
+    resolveFirst({ reply: '正常回复', suggestions: [], sources: [] })
+    await firstPromise
+    expect(coach.isThinking.value).toBe(false)
+    expect(coach.messageList.value).toHaveLength(2)
+  })
+
+  it('reproduces Image 5: avoids persisting orphan user bubble on 502 failure and strips legacy trailing user turns on reload', async () => {
+    setActivePinia(createPinia())
+    requestMock.mockRejectedValueOnce(new Error('502 Bad Gateway'))
+
+    const ctx = reactive<CoachContextParams>({ materialId: 'm-img5' })
+    const coach = useCoachChat(() => ctx)
+
+    await coach.sendMessage('总结这部分内容的关键适用条件')
+    // Live session shows both user bubble and retryable assistant error bubble
+    expect(coach.messageList.value).toHaveLength(2)
+    expect(coach.messageList.value[0]).toMatchObject({
+      role: 'user',
+      content: '总结这部分内容的关键适用条件',
+    })
+    expect(coach.messageList.value[1]).toMatchObject({
+      role: 'assistant',
+      error: true,
+      retryQuery: '总结这部分内容的关键适用条件',
+    })
+
+    // Re-mounting / re-entering the same material must NOT leave an orphan user bubble
+    const reloaded = useCoachChat(() => ({ materialId: 'm-img5' }))
+    expect(reloaded.messageList.value).toEqual([])
+
+    // Legacy corrupted storage with a trailing unanswered user turn is also sanitized on reload
+    const legacyKey = buildCoachStorageKey('anonymous', 'mat:m-legacy')
+    uni.setStorageSync(
+      legacyKey,
+      JSON.stringify([
+        { id: 'u1', role: 'user', content: '有效提问' },
+        { id: 'a1', role: 'assistant', content: '有效回复' },
+        { id: 'u2', role: 'user', content: '孤儿提问' },
+      ]),
+    )
+    const legacyCoach = useCoachChat(() => ({ materialId: 'm-legacy' }))
+    expect(legacyCoach.messageList.value.map((m) => m.content)).toEqual(['有效提问', '有效回复'])
+  })
 })

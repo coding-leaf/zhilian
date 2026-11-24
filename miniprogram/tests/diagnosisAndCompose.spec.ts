@@ -293,7 +293,8 @@ describe('question compose async job flow & coverage gating', () => {
 
     expect(compose.questions.value).toHaveLength(1)
     expect(compose.readyAvailableCount.value).toBe(1)
-    expect(compose.readyPendingCount.value).toBe(1)
+    expect(compose.readyPendingCount.value).toBe(0)
+    expect(compose.generationNotice.value).not.toContain('待审核')
     expect(compose.coverage.value.missing).toEqual(['k-2'])
     expect(compose.canStart.value).toBe(true)
     expect(compose.viewMode.value).toBe('ready')

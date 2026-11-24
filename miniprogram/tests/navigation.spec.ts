@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { resetLoadingGuardForTest } from '@/utils/loadingGuard'
 import { SAFE_PAGE_STACK_LIMIT, safeNavigateTo } from '@/utils/navigation'
 import { useMaterialUpload } from '@/pages/index/composables/useMaterialUpload'
+import { useAuthStore } from '@/stores/auth'
 
 const uniGlobal = globalThis as any
 
@@ -75,7 +76,25 @@ describe('useMaterialUpload mp-weixin chooseMedia and privacy fail handling', ()
     vi.restoreAllMocks()
   })
 
+  it('redirects to login without opening picker when unauthenticated', () => {
+    const navSpy = vi.spyOn(uniGlobal.uni, 'navigateTo')
+    const toastSpy = vi.spyOn(uniGlobal.uni, 'showToast')
+    uniGlobal.uni.chooseMedia = vi.fn()
+
+    const { chooseFile } = useMaterialUpload({
+      getCurrentFolderId: () => 'all',
+      uploadMaterial: vi.fn(),
+      onUploaded: vi.fn(),
+    })
+
+    chooseFile()
+    expect(uniGlobal.uni.chooseMedia).not.toHaveBeenCalled()
+    expect(navSpy).toHaveBeenCalledWith(expect.objectContaining({ url: '/pages/auth/login' }))
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '请先登录后再上传资料' }))
+  })
+
   it('ignores user cancel errors and surfaces privacy/permission errors via safeShowToast', () => {
+    useAuthStore().setToken('tok-upload')
     const toastSpy = vi.spyOn(uniGlobal.uni, 'showToast')
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     let failCb: ((err: unknown) => void) | null = null

@@ -32,11 +32,7 @@
       <view class="ready-badge ready-badge-empty">暂未生成可用题目</view>
       <text class="ready-title">需要调整出题配置</text>
       <text class="ready-desc">
-        {{
-          pendingReviewCount > 0
-            ? `本批 ${pendingReviewCount} 道题目暂待审核，建议调整考点或难度后重新出题。`
-            : '当前范围暂未生成可用题目，请调整考点或题型后重试。'
-        }}
+        当前范围暂未生成可用题目，请调整考点或题型后重试。
       </text>
       <button class="paper-btn-primary ready-start-btn" @tap="emit('reconfig')">
         重新组卷
@@ -54,7 +50,8 @@ import { computed } from 'vue'
 const props = defineProps<{
   availableCount: number
   coveredKpCount: number
-  pendingReviewCount: number
+  /** @deprecated 已取消学生端待审核展示，保留可选入参以兼容既有页面绑定 */
+  pendingReviewCount?: number
   missingKpCount: number
   practiceTitle?: string
   isLoading?: boolean
@@ -69,9 +66,6 @@ const emit = defineEmits<{
 }>()
 
 const pendingNote = computed(() => {
-  if (props.pendingReviewCount > 0) {
-    return `另有 ${props.pendingReviewCount} 道题目待审核，可随时在「我的题库」查看，不影响当前作答。`
-  }
   if (props.missingKpCount > 0) {
     return `有 ${props.missingKpCount} 个所选考点暂未出题，不影响当前已就绪题目的作答。`
   }

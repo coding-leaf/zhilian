@@ -318,4 +318,49 @@ describe('network resilience: config, silentToast, concurrency, dedup, retry & 4
     expect(diagnosisStore.currentReport).toBeNull()
     expect(diagnosisStore.masteryOverview).toBeNull()
   })
+
+  it('does not trigger /auth/refresh when 401 came from a request without an Authorization token', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    uni.setStorageSync(REFRESH_TOKEN_KEY, 'orphan-refresh')
+
+    let refreshCalls = 0
+    requestMock.mockImplementation((options: any) => {
+      if (options.url.endsWith('/auth/refresh')) {
+        refreshCalls += 1
+      }
+      options.success({ statusCode: 401, data: { detail: 'missing token' } })
+    })
+
+    const rejection = await request({ url: '/folders', method: 'GET' }).catch((e) => e)
+    expect(rejection).toBeInstanceOf(RequestError)
+    expect(rejection.kind).toBe('unauthorized')
+    expect(refreshCalls).toBe(0)
+  })
+
+  it('replays with newer storage token without calling /auth/refresh when login completes mid-flight', async () => {
+    uni.setStorageSync(REFRESH_TOKEN_KEY, 'valid-refresh')
+
+    let refreshCalls = 0
+    let folderCalls = 0
+    requestMock.mockImplementation((options: any) => {
+      if (options.url.endsWith('/auth/refresh')) {
+        refreshCalls += 1
+        return
+      }
+      folderCalls += 1
+      if (folderCalls === 1 && !options.header?.Authorization) {
+        // Simulate concurrent login completing while unauthenticated request was in-flight
+        uni.setStorageSync(ACCESS_TOKEN_KEY, 'fresh-login-token')
+        options.success({ statusCode: 401, data: { detail: 'missing token' } })
+        return
+      }
+      expect(options.header?.Authorization).toBe('Bearer fresh-login-token')
+      options.success({ statusCode: 200, data: { items: [] } })
+    })
+
+    const res = await request({ url: '/folders', method: 'GET' })
+    expect(res).toEqual({ items: [] })
+    expect(refreshCalls).toBe(0)
+    expect(uni.getStorageSync(ACCESS_TOKEN_KEY)).toBe('fresh-login-token')
+  })
 })
