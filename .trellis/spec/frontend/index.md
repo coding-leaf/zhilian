@@ -32,6 +32,7 @@
 | 状态管理 | 5 个域 store 的职责与网络调用边界 | `src/stores/{auth,material,folder,practice,diagnosis}.ts` | 2026-09-29 |
 | 组合式函数 | `useQuestionCompose` 的契约与命名约定 | `src/subpackages/material/composables/useQuestionCompose.ts` | 2026-09-29 |
 | 网络与契约 | `uni.request` 封装、并发限流、GET 去重重试、401 单飞刷新、`silentToast`、127.0.0.1 与 `fail` 兜底 | `src/utils/request.ts`、`src/utils/requestError.ts`、`src/utils/poller.ts`、`src/utils/draftQueue.ts`、[network-contract.md](./network-contract.md) | 2026-11-24 |
+| 微信兼容红线 | 零动态 `import()`、禁 `PATCH`、`chooseMedia`、es2018 编译、`safeNavigateTo`、原生输入防穿透、WXSS 选择器与自动门禁 | `src/manifest.json`、`vite.config.ts`、`tests/mpWeixinCompatGuard.spec.ts`、[mp-weixin-compatibility.md](./mp-weixin-compatibility.md) | 2026-11-24 |
 | 请求体语义 | 写入类接口的字段语义陷阱（`POST /practices`、`POST /questions/jobs` 自动建卷与只提醒不强跳契约） | `backend/app/schemas/{practice,question}.py`、`backend/app/services/{practice,question}.py`、[api-payload-contracts.md](./api-payload-contracts.md) | 2026-11-24 |
 | 个人页统计 | 用户级资料总量、未分类/归档口径、加载失败与页面刷新 | `src/pages/profile/`、`src/api/index.ts`、[个人页统计契约](../backend/material-statistics.md) | 2026-10-04 |
 | 质量门禁 | ESLint（`any` 已关闭）+ vue-tsc + Vitest | `package.json`、`.eslintrc.cjs`、`vitest.config.ts`、`tests/*.spec.ts` | 2026-09-29 |
