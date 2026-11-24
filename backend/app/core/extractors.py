@@ -11,6 +11,8 @@ from xml.etree import ElementTree
 import pymupdf
 import pypdf
 
+from app.core.algorithms.document_denoising import PageTextBlock
+from app.core.algorithms.material_chunking import ParagraphInput
 from app.core.algorithms.ocr_quality import detect_broken_math_layout, detect_symbol_garble
 from app.core.errors import MaterialInvalidError
 
@@ -95,10 +97,35 @@ _SYMBOL_FONT_MARKERS: tuple[str, ...] = (
     "eusm",
     "euex",
     "wasy",
+    "euclid",
+    "txsy",
+    "pxsy",
+    "txex",
+    "pxex",
+    "esint",
+    "mtsymbol",
+    "mt-symbol",
+    "fences",
+    "marvosym",
+    "cmti",
+    "cmbx",
+    "cmsl",
+    "bbm",
+    "lasy",
+    "advp",
+    "mathpi",
+    "mathematica",
+    "asana",
+    "xits",
+    "stixtwo",
+    "newtx",
+    "newpx",
 )
 
 _VISUAL_OCR_MAX_VALID_CHARS: int = 60
 _VISUAL_OCR_MIN_DRAWINGS: int = 8
+_FORMULA_VISUAL_RISK_MIN_DRAWINGS: int = 20
+_FORMULA_RISK_OPERATORS: frozenset[str] = frozenset("=≤≥∈∑∫≈≠")
 
 
 @dataclass(frozen=True)
@@ -113,6 +140,8 @@ class PdfPageExtraction:
     embedded_images: tuple[bytes, ...] = ()
     has_broken_math_layout: bool = False
     needs_visual_ocr: bool = False
+    blocks: tuple[PageTextBlock, ...] = ()
+    has_formula_visual_risk: bool = False
 
     @property
     def needs_repair(self) -> bool:
@@ -184,13 +213,17 @@ def _build_page_extraction(
     lacks_tounicode: bool,
     image_loader: Callable[[], tuple[bytes, ...]],
     has_visual_content: bool = False,
+    blocks: tuple[PageTextBlock, ...] = (),
+    has_formula_visual_risk: bool = False,
 ) -> PdfPageExtraction:
     """基于单页文本与字体诊断构造 PdfPageExtraction（pypdf / PyMuPDF 共用）。"""
     has_garble, _ratio, frags = detect_symbol_garble(raw_text)
     broken_math = detect_broken_math_layout(raw_text)
     non_ws_count = sum(1 for ch in raw_text if not ch.isspace())
     needs_visual_ocr = has_visual_content and non_ws_count < _VISUAL_OCR_MAX_VALID_CHARS
-    dirty = lacks_tounicode or has_garble or broken_math or needs_visual_ocr
+    dirty = (
+        lacks_tounicode or has_garble or broken_math or needs_visual_ocr or has_formula_visual_risk
+    )
     embedded_images = image_loader() if (dirty or not raw_text) else ()
     return PdfPageExtraction(
         page_number=page_number,
@@ -201,6 +234,8 @@ def _build_page_extraction(
         embedded_images=embedded_images,
         has_broken_math_layout=broken_math,
         needs_visual_ocr=needs_visual_ocr,
+        blocks=blocks,
+        has_formula_visual_risk=has_formula_visual_risk,
     )
 
 
@@ -252,14 +287,39 @@ def _order_blocks_reading_order(blocks: Sequence[Any], page_width: float) -> lis
     return ordered
 
 
+def _pymupdf_page_text_and_blocks(page: Any) -> tuple[str, tuple[PageTextBlock, ...]]:
+    """用 PyMuPDF 块级坐标抽取单页文本与保留位置元数据的块元组。"""
+    raw_blocks = page.get_text("blocks")
+    page_width = float(getattr(page.rect, "width", 0.0) or 0.0)
+    page_height = float(getattr(page.rect, "height", 0.0) or 0.0)
+    ordered = _order_blocks_reading_order(
+        [b for b in raw_blocks if len(b) < 7 or int(b[6]) == 0], page_width
+    )
+    parts: list[str] = []
+    page_blocks: list[PageTextBlock] = []
+    for b in ordered:
+        text = str(b[4]).strip()
+        if not text:
+            continue
+        parts.append(text)
+        page_blocks.append(
+            PageTextBlock(
+                text=text,
+                x0=float(b[0]),
+                y0=float(b[1]),
+                x1=float(b[2]),
+                y1=float(b[3]),
+                page_width=page_width,
+                page_height=page_height,
+            )
+        )
+    return "\n\n".join(parts).strip(), tuple(page_blocks)
+
+
 def _pymupdf_page_text(page: Any) -> str:
     """用 PyMuPDF 块级坐标抽取单页文本，按阅读顺序以空行分隔段落块。"""
-    blocks = page.get_text("blocks")
-    ordered = _order_blocks_reading_order(
-        [b for b in blocks if len(b) < 7 or int(b[6]) == 0], float(page.rect.width)
-    )
-    parts = [str(b[4]).strip() for b in ordered]
-    return "\n\n".join(part for part in parts if part).strip()
+    text, _blocks = _pymupdf_page_text_and_blocks(page)
+    return text
 
 
 def _pymupdf_page_lacks_tounicode(doc: Any, page: Any) -> bool:
@@ -318,6 +378,19 @@ def _pymupdf_page_has_visual_content(page: Any) -> bool:
     return False
 
 
+def _pymupdf_page_has_formula_visual_risk(page: Any, raw_text: str) -> bool:
+    """判断页面是否包含高密度矢量公式绘图（>=20 条路径）且含数学运算符。"""
+    if not any(ch in _FORMULA_RISK_OPERATORS for ch in raw_text):
+        return False
+    try:
+        get_drawings = getattr(page, "get_drawings", None)
+        if callable(get_drawings):
+            return len(get_drawings()) >= _FORMULA_VISUAL_RISK_MIN_DRAWINGS
+    except Exception:
+        return False
+    return False
+
+
 def _pypdf_page_has_visual_content(page: Any) -> bool:
     """判断 pypdf 单页是否包含内嵌图片对象。"""
     try:
@@ -339,7 +412,7 @@ def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | Non
         pages_out: list[PdfPageExtraction] = []
         for idx in range(doc.page_count):
             page = doc.load_page(idx)
-            raw_text = _pymupdf_page_text(page)
+            raw_text, page_blocks = _pymupdf_page_text_and_blocks(page)
             pages_out.append(
                 _build_page_extraction(
                     page_number=idx + 1,
@@ -347,6 +420,8 @@ def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | Non
                     lacks_tounicode=_pymupdf_page_lacks_tounicode(doc, page),
                     image_loader=partial(_pymupdf_page_images, doc, page),
                     has_visual_content=_pymupdf_page_has_visual_content(page),
+                    blocks=page_blocks,
+                    has_formula_visual_risk=_pymupdf_page_has_formula_visual_risk(page, raw_text),
                 )
             )
     except Exception:
@@ -557,6 +632,114 @@ def _extract_paragraphs_from_pptx(content: bytes) -> list[str]:
     return fragments
 
 
+_PPTX_TITLE_PLACEHOLDER_TYPES: frozenset[str] = frozenset({"title", "ctrTitle"})
+
+
+def _extract_pptx_paragraph_text(p_node: ElementTree.Element) -> str:
+    """拼接单个 OOXML `<a:p>` 段落节点内全部 `<a:t>` 文本 run。"""
+    return "".join(
+        child.text or "" for child in p_node.iter() if _local_name(child.tag) == "t"
+    ).strip()
+
+
+def _is_pptx_title_shape(sp_node: ElementTree.Element) -> bool:
+    """判断 `<p:sp>` 形状占位符是否属于幻灯片主标题/居中标题。"""
+    for node in sp_node.iter():
+        if _local_name(node.tag) == "ph":
+            return node.attrib.get("type", "") in _PPTX_TITLE_PLACEHOLDER_TYPES
+    return False
+
+
+def _extract_pptx_table_text(tbl_node: ElementTree.Element) -> str:
+    """将 OOXML `<a:tbl>` 表格提取为 Markdown 管道表格或换行文本。"""
+    rows: list[list[str]] = []
+    for tr in tbl_node:
+        if _local_name(tr.tag) != "tr":
+            continue
+        cells: list[str] = []
+        for tc in tr:
+            if _local_name(tc.tag) != "tc":
+                continue
+            cell_parts = [
+                _extract_pptx_paragraph_text(p) for p in tc.iter() if _local_name(p.tag) == "p"
+            ]
+            cells.append(" ".join(part for part in cell_parts if part).strip())
+        if any(cells):
+            rows.append(cells)
+    if not rows:
+        return ""
+    lines = ["| " + " | ".join(row) + " |" for row in rows]
+    if len(rows) >= 2:
+        sep = "| " + " | ".join("---" for _ in rows[0]) + " |"
+        lines.insert(1, sep)
+    return "\n".join(lines)
+
+
+def _walk_pptx_container(
+    container: ElementTree.Element,
+    slide_idx: int,
+    out: list[ParagraphInput],
+) -> None:
+    """递归遍历 `<p:spTree>` / `<p:grpSp>`，按幻灯片页码与标题占位符抽取段落。"""
+    source_ref = f"第 {slide_idx} 页"
+    for child in container:
+        tag = _local_name(child.tag)
+        if tag == "sp":
+            is_title = _is_pptx_title_shape(child)
+            for node in child.iter():
+                if _local_name(node.tag) != "p":
+                    continue
+                para_text = _extract_pptx_paragraph_text(node)
+                if para_text:
+                    out.append(
+                        ParagraphInput(
+                            text=para_text,
+                            source_ref=source_ref,
+                            doc_type="pptx",
+                            is_title=is_title,
+                            title_level=1 if is_title else 0,
+                            page_number=slide_idx,
+                        )
+                    )
+        elif tag == "tbl":
+            table_text = _extract_pptx_table_text(child)
+            if table_text:
+                out.append(
+                    ParagraphInput(
+                        text=table_text,
+                        source_ref=source_ref,
+                        doc_type="pptx",
+                        is_title=False,
+                        title_level=0,
+                        page_number=slide_idx,
+                    )
+                )
+        elif tag in ("grpSp", "graphicFrame", "graphic", "graphicData", "cSld", "spTree"):
+            _walk_pptx_container(child, slide_idx, out)
+
+
+def extract_pptx_slides(content: bytes) -> list[ParagraphInput]:
+    """按幻灯片抽取 PPTX，保留 1-based 页码、标题占位符标记与 `<a:p>` 段落边界。"""
+    slide_payloads = _read_pptx_slides(content)
+    paragraphs: list[ParagraphInput] = []
+    for slide_idx, (name, payload) in enumerate(slide_payloads, start=1):
+        try:
+            slide_root = ElementTree.fromstring(payload)  # noqa: S314 - 标准库解析受控 OOXML
+        except ElementTree.ParseError as exc:
+            raise MaterialInvalidError(
+                f"PPTX 幻灯片 XML 损坏: {name}",
+                details={"error": str(exc)},
+            ) from exc
+        _walk_pptx_container(slide_root, slide_idx, paragraphs)
+
+    if not paragraphs:
+        raise MaterialInvalidError(
+            "PPTX 文档未包含可提取的正文文本",
+            details={"slide_count": len(slide_payloads)},
+        )
+    return paragraphs
+
+
 def extract_text_from_raw_content(content: bytes, file_format: str) -> list[str]:
     """从原始文件二进制中提取段落文本序列。
 
@@ -593,6 +776,7 @@ __all__ = [
     "_extract_text_from_pdf",
     "detect_image_type",
     "extract_pdf_pages_with_diagnostics",
+    "extract_pptx_slides",
     "extract_text_from_raw_content",
     "render_pdf_page_png",
     "validate_file_magic",

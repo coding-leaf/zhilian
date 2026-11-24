@@ -60,6 +60,7 @@ from app.core.extractors import (
 )
 from app.core.extractors import (
     extract_pdf_pages_with_diagnostics,
+    extract_pptx_slides,
 )
 from app.core.extractors import (
     extract_text_from_raw_content as extract_text_from_raw_content,
@@ -91,6 +92,7 @@ from app.services._material_pipeline import (
     MaterialDetailView,
     chunk_embed_and_replace_snippets,
     clear_cached_parse_progress,
+    denoise_pptx_slides,
     get_cached_parse_progress,
     get_cached_parse_progress_batch,
     mark_pipeline_failed,
@@ -448,6 +450,11 @@ class MaterialService:
                 vlm_max_concurrency=self.vlm_max_concurrency,
                 vlm_timeout=self.vlm_timeout,
             )
+            return paragraphs, extracted_text, None
+
+        if clean_format == "pptx":
+            raw_slides = extract_pptx_slides(file_bytes)
+            paragraphs, extracted_text = denoise_pptx_slides(raw_slides)
             return paragraphs, extracted_text, None
 
         paragraphs = extract_text_from_raw_content(file_bytes, clean_format)

@@ -16,6 +16,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.algorithms.document_denoising import (
+    filter_and_rank_evidence_snippets,
+    strip_display_watermark_lines,
+)
 from app.core.algorithms.knowledge_quality import (
     CandidateKnowledgePoint,
     ExtractionContext,
@@ -28,6 +32,10 @@ from app.core.algorithms.knowledge_tree import (
     KnowledgeExtractionOutput as KnowledgeExtractionOutput,
 )
 from app.core.algorithms.knowledge_tree import (
+    build_structured_content,
+    resolve_knowledge_hierarchy,
+)
+from app.core.algorithms.knowledge_tree import (
     compute_chapter_stats as compute_chapter_stats,
 )
 from app.core.algorithms.knowledge_tree import (
@@ -35,9 +43,6 @@ from app.core.algorithms.knowledge_tree import (
 )
 from app.core.algorithms.knowledge_tree import (
     normalize_extracted_temp_ids as normalize_extracted_temp_ids,
-)
-from app.core.algorithms.knowledge_tree import (
-    resolve_knowledge_hierarchy,
 )
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
@@ -60,21 +65,59 @@ from app.repositories.material import MaterialRepository
 logger = logging.getLogger(__name__)
 
 
-def _is_legacy_noise_title_snippet(snippet: MaterialSnippet) -> bool:
-    """识别历史未重解析入库的孤立纯标题/单字母噪声切片，供查询期兜底过滤。"""
-    stripped = (snippet.content or "").strip()
-    if not stripped:
-        return True
-    chapter = (snippet.chapter_title or "").strip()
-    if chapter and stripped == chapter and len(stripped) <= 30:
-        return True
-    if len(stripped) >= 15:
-        return False
-    if any(ch in "。！？!?." for ch in stripped):
-        return False
-    if any(ch.isdigit() for ch in stripped):
-        return False
-    return "$" not in stripped and "=" not in stripped
+_DEFAULT_MAX_BATCH_SNIPPETS: int = 12
+_RETRY_MAX_BATCH_SNIPPETS: int = 8
+_DEFAULT_MAX_BATCH_CHARS: int = 6000
+
+
+def _has_structured_fields(item: ExtractedKnowledgeItem) -> bool:
+    """判断抽取条目是否提供了任何结构化复习卡片字段（兼容旧无结构化桩数据）。"""
+    return bool(
+        (item.core_summary or "").strip()
+        or item.key_takeaways
+        or item.key_formulas
+        or item.boundary_notes
+        or item.derivation_steps
+        or item.common_mistakes
+    )
+
+
+def _build_snippet_batches(
+    snippets: Sequence[MaterialSnippet],
+    max_batch_snippets: int,
+    max_batch_chars: int = _DEFAULT_MAX_BATCH_CHARS,
+) -> list[list[MaterialSnippet]]:
+    """按切片条数与字符预算双限分批，并尽量贴合章节边界切分，避免单次输入过满。"""
+    if not snippets:
+        return []
+    snippet_cap = max(1, max_batch_snippets)
+    char_cap = max(1, max_batch_chars)
+    soft_count_floor = max(1, snippet_cap // 2)
+    soft_char_floor = int(char_cap * 0.6)
+
+    batches: list[list[MaterialSnippet]] = []
+    current: list[MaterialSnippet] = []
+    current_chars = 0
+
+    for snip in snippets:
+        snip_len = max(snip.char_length or 0, len(snip.content or ""))
+        if current:
+            exceeds_count = len(current) >= snippet_cap
+            exceeds_chars = current_chars + snip_len > char_cap
+            chapter_changed = (snip.chapter_title or "").strip() != (
+                current[-1].chapter_title or ""
+            ).strip()
+            near_budget = len(current) >= soft_count_floor or current_chars >= soft_char_floor
+            if exceeds_count or exceeds_chars or (chapter_changed and near_budget):
+                batches.append(current)
+                current = []
+                current_chars = 0
+        current.append(snip)
+        current_chars += snip_len
+
+    if current:
+        batches.append(current)
+    return batches
 
 
 def build_knowledge_hierarchy(
@@ -169,18 +212,30 @@ class KnowledgeService:
             list[LLMMessage]: 大模型上下文消息列表。
         """
         system_content = (
-            "你是一个专业的考纲分析与知识图谱构建专家。请从所提供的切片内容中抽取关键知识点及其父子层级关系。\n"
+            "你是一个专业的考纲分析与知识图谱构建专家。"
+            "请从所提供的切片内容中抽取关键知识点及其父子层级关系，"
+            "生成可直接用于考前复习的结构化知识卡片。\n"
             "【抽取规范】\n"
             "1. 每个知识点必须有 2~30 字符规范名称，严禁数字编号前缀与占位词；\n"
-            "2. 正确标注父节点 temp_id，无父节点设为 null，层级深度 1~5 级；\n"
-            "3. 记录来源片段序号 (source_snippet_indices)；\n"
-            "4. 必须 strictly 基于原文切片填写真实结构化内容：\n"
-            "   - core_summary：<=60 字符的一句话核心摘要（不扩写、不重复标题）；\n"
-            "   - key_takeaways：关键要点短句列表（必须直接源自原文切片，无则 []）；\n"
-            "   - key_formulas：核心公式或符号定义列表（无则 []）；\n"
-            "   - boundary_notes：适用条件与易错边界提示列表（无则 []）；\n"
+            "2. **严禁**从目录页、章末小结页、课程介绍、教学目标、参考文献、致谢页抽取元结构知识点"
+            "（如「本章知识小结梳理」「知识梳理」「重点回顾」「目录结构」）；"
+            "若切片仅罗列章节标题或名词而无具体原理/定义/公式/步骤，必须忽略该切片；\n"
+            "3. 正确标注父节点 temp_id，无父节点设为 null，层级深度 1~5 级；\n"
+            "4. 记录来源片段序号 (source_snippet_indices)；\n"
+            "5. 必须基于原文切片中的定义、推导与前后文，用清晰的教学复习语言填写结构化内容：\n"
+            "   - core_summary：60~180 字符核心定义与直觉"
+            "（讲清是什么+解决什么问题+核心意义，严禁重复标题或写「未展开」等废话）；\n"
+            "   - key_takeaways：2~5 条完整复习陈述句"
+            "（每条 15~80 字，包含主语与核心结论，可直接背诵，严禁只列 2~5 字裸名词）；\n"
+            "   - key_formulas：关键公式（标准 `$...$` 或 `$$...$$` LaTeX）并说明关键符号含义"
+            "（如 `$\\min \\frac{1}{2}\\|w\\|^2 + C\\sum \\xi_i$，$w$ 为法向量`，"
+            "纯概念类可为 []）；\n"
+            "   - derivation_steps：0~5 步推导或解题步骤"
+            "（如「1. 构造拉格朗日函数 → 2. 求偏导置零」，纯概念类可为 []）；\n"
+            "   - boundary_notes：前提假设、适用场景与相邻易混概念对比（无则 []）；\n"
+            "   - common_mistakes：0~3 条高频易错点与纠偏（如「误区：…；正解：…」，无则 []）；\n"
             "   - **严禁捏造任何考试频次、重要度星级或'高频必考'等原文不存在的标签**；\n"
-            "5. 输出严格符合 JSON Schema 规范。"
+            "6. 输出严格符合 JSON Schema 规范。"
         )
         if feedback:
             system_content += f"\n\n【上一轮质检未通过反馈与整改要求】\n{feedback}"
@@ -222,7 +277,7 @@ class KnowledgeService:
             list[ExtractedKnowledgeItem]: 抽取的知识点项。
         """
         messages = self._build_batch_prompt(snippets, feedback, existing_outline=existing_outline)
-        options = LLMOptions(temperature=0.3, timeout=60.0)
+        options = LLMOptions(temperature=0.3, max_tokens=4096, timeout=90.0)
 
         output, _ = self.llm.generate_structured(
             messages=messages,
@@ -285,6 +340,7 @@ class KnowledgeService:
                     snippet.chapter_title,
                     snippet.content,
                     snippet.char_length,
+                    snippet.source_info,
                 )
                 if snippet in self.session:
                     self.session.expunge(snippet)
@@ -312,10 +368,11 @@ class KnowledgeService:
         deduped_items: list[ExtractedKnowledgeItem] = []
 
         while re_extract_count <= 2:
-            batches = [
-                snippets[i : i + current_batch_size]
-                for i in range(0, len(snippets), current_batch_size)
-            ]
+            batches = _build_snippet_batches(
+                snippets,
+                max_batch_snippets=current_batch_size,
+                max_batch_chars=_DEFAULT_MAX_BATCH_CHARS,
+            )
             raw_extracted: list[ExtractedKnowledgeItem] = []
             outline_skeleton: list[dict[str, Any]] = []
             total_batches = len(batches)
@@ -345,7 +402,7 @@ class KnowledgeService:
                 if re_extract_count >= 2:
                     break
                 re_extract_count += 1
-                current_batch_size = 20
+                current_batch_size = min(current_batch_size, _RETRY_MAX_BATCH_SNIPPETS)
                 prompt_feedback = "上一轮未抽取到任何有效知识点，请降低粒度并认真分析片段正文内容。"
                 continue
 
@@ -359,6 +416,7 @@ class KnowledgeService:
             )
             deduped_items = normalize_extracted_temp_ids(deduped_items)
 
+            parent_temp_ids = {it.parent_temp_id for it in deduped_items if it.parent_temp_id}
             candidate_points = [
                 CandidateKnowledgePoint(
                     name=it.name,
@@ -366,6 +424,10 @@ class KnowledgeService:
                     chapter_title=it.chapter_title,
                     snippet_ids=tuple(str(idx) for idx in it.source_snippet_indices),
                     description=it.description,
+                    structured_content=(
+                        build_structured_content(it) if _has_structured_fields(it) else None
+                    ),
+                    is_leaf=(it.temp_id not in parent_temp_ids),
                 )
                 for it in deduped_items
             ]
@@ -382,7 +444,7 @@ class KnowledgeService:
                 break
             if re_extract_count < 2:
                 re_extract_count += 1
-                current_batch_size = 20  # 依据 FR-17 缩小批次以提高抽取准确度
+                current_batch_size = min(current_batch_size, _RETRY_MAX_BATCH_SNIPPETS)
                 prompt_feedback = report.prompt_feedback
             else:
                 is_low_confidence = True
@@ -396,7 +458,7 @@ class KnowledgeService:
         material_id: uuid.UUID,
         version_id: uuid.UUID,
         user_id: uuid.UUID,
-        batch_size: int = 40,
+        batch_size: int = _DEFAULT_MAX_BATCH_SNIPPETS,
         snippets: Sequence[MaterialSnippet] | None = None,
         replace_snippets: bool = False,
         defer_commit: bool = False,
@@ -460,17 +522,27 @@ class KnowledgeService:
             is_low_confidence=is_low_confidence,
         )
 
-        # 7. 数据库事务落库与关联建立
-        snippet_index_map = {s.snippet_index: s.id for s in resolved_snippets}
+        # 7. 数据库事务落库与关联建立（写入期过滤噪声切片并按相关性保留 Top 5）
+        snippet_by_index = {s.snippet_index: s for s in resolved_snippets}
         relations_to_save: list[KnowledgePointSnippet] = []
         seen_relations: set[tuple[uuid.UUID, uuid.UUID]] = set()
         for it in deduped_items:
             kp_uuid = temp_to_uuid[it.temp_id]
+            candidate_snips: list[MaterialSnippet] = []
+            seen_cand_ids: set[uuid.UUID] = set()
             for s_idx in it.source_snippet_indices:
-                snippet_id = snippet_index_map.get(s_idx)
-                if snippet_id is None:
-                    continue
-                relation_key = (kp_uuid, snippet_id)
+                snip = snippet_by_index.get(s_idx)
+                if snip is not None and snip.id not in seen_cand_ids:
+                    seen_cand_ids.add(snip.id)
+                    candidate_snips.append(snip)
+            selected_snips = filter_and_rank_evidence_snippets(
+                candidate_snips,
+                kp_name=it.name,
+                kp_summary=it.core_summary or it.description,
+                max_items=5,
+            )
+            for snip in selected_snips:
+                relation_key = (kp_uuid, snip.id)
                 if relation_key in seen_relations:
                     continue
                 seen_relations.add(relation_key)
@@ -478,7 +550,7 @@ class KnowledgeService:
                     KnowledgePointSnippet(
                         user_id=user_id,
                         knowledge_point_id=kp_uuid,
-                        snippet_id=snippet_id,
+                        snippet_id=snip.id,
                     )
                 )
 
@@ -676,12 +748,35 @@ class KnowledgeService:
         Raises:
             KnowledgeNotFoundError: 知识点不存在或所属租户不匹配。
         """
-        self.get_knowledge_point_detail(knowledge_point_id, user_id)
+        point = self.get_knowledge_point_detail(knowledge_point_id, user_id)
         snippets = self.knowledge_repo.get_snippets_for_point(knowledge_point_id, user_id)
-        if len(snippets) <= 1:
-            return snippets
-        filtered = [s for s in snippets if not _is_legacy_noise_title_snippet(s)]
-        return filtered if filtered else snippets
+        if not snippets:
+            return []
+        structured = point.structured_content if isinstance(point.structured_content, dict) else {}
+        kp_summary = str(structured.get("core_summary") or point.description or "").strip()
+        ranked = filter_and_rank_evidence_snippets(
+            snippets,
+            kp_name=point.name,
+            kp_summary=kp_summary,
+            max_items=5,
+        )
+        for snip in ranked:
+            cleaned = strip_display_watermark_lines(snip.content or "")
+            if cleaned != (snip.content or ""):
+                _ = (
+                    snip.id,
+                    snip.material_id,
+                    snip.version_id,
+                    snip.snippet_index,
+                    snip.chapter_title,
+                    snip.source_info,
+                    snip.char_length,
+                )
+                if snip in self.session:
+                    self.session.expunge(snip)
+                snip.content = cleaned
+                snip.char_length = len(cleaned)
+        return ranked
 
     def get_points_for_snippet(
         self,

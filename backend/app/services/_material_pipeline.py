@@ -13,6 +13,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.algorithms.document_denoising import (
+    PageRole,
+    PageTextInput,
+    classify_pages_with_fallback,
+    is_non_substantive_chapter,
+    strip_repeated_headers_footers,
+)
 from app.core.algorithms.markdown_blocks import (
     split_markdown_blocks,
     unwrap_pdf_visual_line_breaks,
@@ -329,6 +336,15 @@ def _try_ocr_pdf_page(
                 return full_text.strip()
         except Exception as exc:
             _pipeline_logger.warning("pdf page OCR degraded: %s", exc)
+
+    if pdf_bytes and (page.needs_repair or page.needs_visual_ocr or not page.text.strip()):
+        try:
+            png_bytes = render_pdf_page_png(pdf_bytes, page.page_number, dpi=150)
+            res = ocr.recognize_image(png_bytes)
+            if res.full_text and res.full_text.strip():
+                return res.full_text.strip()
+        except Exception as exc:
+            _pipeline_logger.warning("pdf rendered-page image OCR degraded: %s", exc)
     return ""
 
 
@@ -436,8 +452,13 @@ def _transcribe_page_with_vlm(
 
 
 def _page_needs_vlm(page: PdfPageExtraction) -> bool:
-    """仅公式乱码 / 缺字库 / 图文少字页 / 无文字（扫描图）的脏页才送 VLM；干净页零成本。"""
-    return page.needs_repair or page.needs_visual_ocr or not page.text.strip()
+    """仅公式乱码 / 缺字库 / 图文少字页 / 高密度公式风险 / 无文字的脏页才送 VLM；干净页零成本。"""
+    return (
+        page.needs_repair
+        or page.needs_visual_ocr
+        or page.has_formula_visual_risk
+        or not page.text.strip()
+    )
 
 
 def transcribe_dirty_pages_with_vlm(
@@ -539,6 +560,93 @@ def is_heading_block(block: str) -> bool:
     return not stripped.endswith(_PLAIN_HEADING_TRAILING_STOP)
 
 
+def _build_pdf_paragraphs_from_classified(
+    non_empty_pages: Sequence[tuple[int, str]],
+    roles: Sequence[PageRole],
+) -> tuple[list[ParagraphInput], str]:
+    """根据页面角色分类结果，把去噪后的 PDF 页面转为带章节标记的段落序列。"""
+    content_entries: list[tuple[int, str, list[str]]] = []
+    section_dividers: dict[int, str] = {}
+    for (pn, txt), role in zip(non_empty_pages, roles, strict=True):
+        if role in {
+            PageRole.COVER,
+            PageRole.TOC,
+            PageRole.THANK_YOU,
+            PageRole.REFERENCES,
+            PageRole.CHAPTER_SUMMARY,
+            PageRole.LOW_INFO,
+        }:
+            continue
+        if role == PageRole.SECTION_DIVIDER:
+            section_dividers[pn] = " ".join(ln.strip() for ln in txt.splitlines() if ln.strip())
+            continue
+        content_entries.append((pn, txt, split_markdown_blocks(txt)))
+
+    has_substantive_body = any(
+        not is_heading_block(blk) for _pn, _txt, blks in content_entries for blk in blks
+    )
+    paragraphs: list[ParagraphInput] = []
+    page_texts: list[str] = []
+    content_by_page = {pn: (txt, blks) for pn, txt, blks in content_entries}
+    for pn, _txt in non_empty_pages:
+        if pn in section_dividers:
+            divider_title = section_dividers[pn]
+            page_texts.append(divider_title)
+            paragraphs.append(
+                ParagraphInput(
+                    text=divider_title,
+                    source_ref=f"第 {pn} 页",
+                    doc_type="pdf",
+                    is_title=True,
+                    title_level=1,
+                    page_number=pn,
+                )
+            )
+            continue
+        if pn not in content_by_page:
+            continue
+        repaired_text, blocks = content_by_page[pn]
+        page_texts.append(repaired_text)
+        page_has_body = any(not is_heading_block(blk) for blk in blocks)
+        for block in blocks:
+            paragraphs.append(
+                _build_pdf_block_paragraph(
+                    block,
+                    pn,
+                    has_body_context=page_has_body or has_substantive_body,
+                )
+            )
+    return paragraphs, "\n\n".join(page_texts)
+
+
+def _build_pdf_block_paragraph(
+    block: str,
+    page_number: int,
+    *,
+    has_body_context: bool,
+) -> ParagraphInput:
+    """构造单块 PDF ParagraphInput（非实质章节标题如「小结」不覆盖当前章节状态）。"""
+    md_match = _MD_HEADING_BLOCK_RE.match(block.strip())
+    if md_match:
+        heading_text = _MD_HEADING_BLOCK_RE.sub("", block.strip()).lstrip("#").strip()
+        is_title = not is_non_substantive_chapter(heading_text)
+        title_level = len(md_match.group(1)) if is_title else 0
+    elif is_heading_block(block) and has_body_context and not is_non_substantive_chapter(block):
+        is_title = True
+        title_level = 1
+    else:
+        is_title = False
+        title_level = 0
+    return ParagraphInput(
+        text=block,
+        source_ref=f"第 {page_number} 页",
+        doc_type="pdf",
+        is_title=is_title,
+        title_level=title_level,
+        page_number=page_number,
+    )
+
+
 def repair_garbled_pdf_pages(
     pages: Sequence[PdfPageExtraction],
     pdf_bytes: bytes,
@@ -550,12 +658,7 @@ def repair_garbled_pdf_pages(
     vlm_max_concurrency: int = 3,
     vlm_timeout: float = 45.0,
 ) -> tuple[list[ParagraphInput], str]:
-    """逐页检测修复 PDF 乱码，产出保留页码溯源的段落列表与合并全文。
-
-    混合路由：干净页直接使用 PyMuPDF 文本（零成本）；脏页（公式乱码/缺字库/图文少字页/扫描图）
-    在配置了 VLM 时并发渲染 150 DPI PNG 送 VLM 转录为 Markdown+LaTeX，单页失败回退到
-    OCR+LLM 文本修复 / 清洗后的 PyMuPDF 文本，不阻断整份文档。
-    """
+    """逐页检测修复 PDF 乱码，执行跨页去噪与模板页过滤，产出保留页码溯源的段落列表与全文。"""
     vlm_transcripts: dict[int, str] = {}
     if vlm is not None:
         vlm_transcripts = transcribe_dirty_pages_with_vlm(
@@ -567,48 +670,128 @@ def repair_garbled_pdf_pages(
             timeout=vlm_timeout,
         )
 
-    page_entries: list[tuple[int, str, list[str]]] = []
+    repaired_pages: list[tuple[int, str, PdfPageExtraction, bool]] = []
     for page in pages:
         vlm_text = vlm_transcripts.get(page.page_number)
         if vlm_text is not None:
             repaired_text = vlm_text.strip()
+            used_vlm = True
         else:
-            raw_repaired = _repair_pdf_page_text(page, pdf_bytes, ocr, llm).strip()
-            repaired_text = unwrap_pdf_visual_line_breaks(raw_repaired) if raw_repaired else ""
+            repaired_text = _repair_pdf_page_text(page, pdf_bytes, ocr, llm).strip()
+            used_vlm = False
         if not repaired_text:
             continue
-        page_entries.append((page.page_number, repaired_text, split_markdown_blocks(repaired_text)))
+        repaired_pages.append((page.page_number, repaired_text, page, used_vlm))
 
-    has_substantive_body = any(
-        not is_heading_block(blk) for _pn, _txt, blks in page_entries for blk in blks
+    if not repaired_pages:
+        return [], ""
+
+    denoised_texts = strip_repeated_headers_footers(
+        [
+            PageTextInput(
+                page_number=pn,
+                text=txt,
+                blocks=() if used_vlm else pg.blocks,
+            )
+            for pn, txt, pg, used_vlm in repaired_pages
+        ]
     )
+    non_empty_pages: list[tuple[int, str]] = []
+    for (pn, _raw, _pg, used_vlm), txt in zip(repaired_pages, denoised_texts, strict=True):
+        stripped = txt.strip()
+        if not stripped:
+            continue
+        final_txt = stripped if used_vlm else unwrap_pdf_visual_line_breaks(stripped)
+        if final_txt.strip():
+            non_empty_pages.append((pn, final_txt.strip()))
+    if not non_empty_pages:
+        return [], ""
+
+    roles = classify_pages_with_fallback(non_empty_pages, is_slide_like=True)
+    return _build_pdf_paragraphs_from_classified(non_empty_pages, roles)
+
+
+def denoise_pptx_slides(
+    raw_paragraphs: Sequence[ParagraphInput],
+) -> tuple[list[ParagraphInput], str]:
+    """对按页抽取的 PPTX 幻灯片段落执行 Stage 2 跨页去噪与 Stage 4 模板页过滤。"""
+    if not raw_paragraphs:
+        return [], ""
+
+    slides_order: list[int] = []
+    grouped: dict[int, list[ParagraphInput]] = {}
+    for idx, para in enumerate(raw_paragraphs, start=1):
+        pn = para.page_number if para.page_number is not None else idx
+        if pn not in grouped:
+            slides_order.append(pn)
+            grouped[pn] = []
+        grouped[pn].append(para)
+
+    page_inputs = [
+        PageTextInput(
+            page_number=pn,
+            text="\n".join(p.text for p in grouped[pn]),
+        )
+        for pn in slides_order
+    ]
+    denoised_slide_texts = strip_repeated_headers_footers(page_inputs)
+    non_empty_slides = [
+        (pn, txt.strip())
+        for pn, txt in zip(slides_order, denoised_slide_texts, strict=True)
+        if txt.strip()
+    ]
+    if not non_empty_slides:
+        return [], ""
+
+    roles = classify_pages_with_fallback(non_empty_slides, is_slide_like=True)
     paragraphs: list[ParagraphInput] = []
-    page_texts: list[str] = []
-    for page_number, repaired_text, blocks in page_entries:
-        page_texts.append(repaired_text)
-        page_has_body = any(not is_heading_block(blk) for blk in blocks)
-        for block in blocks:
-            md_match = _MD_HEADING_BLOCK_RE.match(block.strip())
-            if md_match:
-                is_title = True
-                title_level = len(md_match.group(1))
-            elif is_heading_block(block) and (page_has_body or has_substantive_body):
-                is_title = True
-                title_level = 1
-            else:
-                is_title = False
-                title_level = 0
+    slide_texts: list[str] = []
+
+    for (pn, denoised_txt), role in zip(non_empty_slides, roles, strict=True):
+        if role in {
+            PageRole.COVER,
+            PageRole.TOC,
+            PageRole.THANK_YOU,
+            PageRole.REFERENCES,
+            PageRole.CHAPTER_SUMMARY,
+            PageRole.LOW_INFO,
+        }:
+            continue
+        slide_texts.append(denoised_txt)
+        if role == PageRole.SECTION_DIVIDER:
+            divider = " ".join(ln.strip() for ln in denoised_txt.splitlines() if ln.strip())
             paragraphs.append(
                 ParagraphInput(
-                    text=block,
-                    source_ref=f"第 {page_number} 页",
-                    doc_type="pdf",
-                    is_title=is_title,
-                    title_level=title_level,
-                    page_number=page_number,
+                    text=divider,
+                    source_ref=f"第 {pn} 页",
+                    doc_type="pptx",
+                    is_title=True,
+                    title_level=1,
+                    page_number=pn,
                 )
             )
-    return paragraphs, "\n\n".join(page_texts)
+            continue
+
+        allowed_lines = {ln.strip() for ln in denoised_txt.splitlines() if ln.strip()}
+        for para in grouped[pn]:
+            kept_lines = [
+                ln.strip() for ln in para.text.splitlines() if ln.strip() in allowed_lines
+            ]
+            if not kept_lines:
+                continue
+            merged_para = "\n".join(kept_lines)
+            is_title = para.is_title and not is_non_substantive_chapter(merged_para)
+            paragraphs.append(
+                ParagraphInput(
+                    text=merged_para,
+                    source_ref=para.source_ref,
+                    doc_type="pptx",
+                    is_title=is_title,
+                    title_level=para.title_level if is_title else 0,
+                    page_number=pn,
+                )
+            )
+    return paragraphs, "\n\n".join(slide_texts)
 
 
 _GENERIC_SOURCE_REF: str = "段落"
@@ -634,7 +817,7 @@ def prepare_material_snippets(
     require_non_empty: bool = True,
 ) -> list[MaterialSnippet]:
     """纯内存切分段落并批量向量化，返回带预分配主键的切片实体列表（不写库）。"""
-    chunk_result = split_material_into_snippets(paragraphs)
+    chunk_result = split_material_into_snippets(paragraphs, allow_cross_page_merge=True)
     if require_non_empty and not chunk_result.snippets:
         raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
 
@@ -652,6 +835,8 @@ def prepare_material_snippets(
         info: dict[str, Any] = {"source_ref": snip.source_ref}
         if snip.page_number is not None:
             info["page_number"] = snip.page_number
+        if snip.page_end is not None:
+            info["page_end"] = snip.page_end
         snippets_to_save.append(
             MaterialSnippet(
                 id=uuid.uuid4(),
@@ -733,6 +918,7 @@ __all__ = [
     "build_contextual_snippet_text",
     "chunk_embed_and_replace_snippets",
     "clear_cached_parse_progress",
+    "denoise_pptx_slides",
     "get_cached_parse_progress",
     "get_cached_parse_progress_batch",
     "is_heading_block",

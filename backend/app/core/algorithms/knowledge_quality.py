@@ -12,6 +12,8 @@ from collections.abc import Sequence, Set
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.algorithms.document_denoising import is_non_substantive_chapter
+
 # ==============================================================================
 # 知识点质检门禁核心常量与决策基准
 # 严格遵循《概要设计说明书》第 3.4/6.3 节与《软件需求规格说明书》FR-16~18、NFR-22
@@ -77,14 +79,36 @@ DEFAULT_PLACEHOLDER_WORDS: frozenset[str] = frozenset(
 # 包含中文/英文省略号结尾（...、…）或未闭合的前括号结尾（(、[、【、(）
 TRUNCATION_PATTERN: re.Pattern[str] = re.compile(r"(\.{3,}|…+|[（(\[【]\s*$)")
 
+# 元结构考点名称黑名单正则：拦截「本章知识小结梳理」「目录」「重点回顾」等无实质学习价值节点
+META_KP_NAME_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:(?:本章|本节|课程|章节)?(?:知识)?(?:小结|总结|梳理|概述|回顾|概览)|"
+    r"^(?:小结|目录|提纲|大纲|学习目标|教学目标|参考文献|参考资料|参考书目|"
+    r"致谢|感谢|作业布置|课后习题|课程介绍|重点回顾|内容概览)$|"
+    r"知识小结梳理)",
+    re.IGNORECASE,
+)
+
+# 免责废话拦截正则：禁止在复习摘要/要点中输出“未展开具体推导”等空洞敷衍文本
+_META_DISCLAIMER_RE: re.Pattern[str] = re.compile(
+    r"(?:未展开|仅给出条目|未提及具体|略去推导|详见教材|仅列举名称|文中未说明|未详细说明|仅作列举)"
+)
+_SUBSTANTIVE_TAKEAWAY_CUE_RE: re.Pattern[str] = re.compile(
+    r"(?:是|为|指|由|通过|用于|等于|满足|等价|包括|分为|导致|需要|要求|表示|定义|具有|存在|可以|决定|影响|证明|求解)"
+)
+_KP_NORM_RE: re.Pattern[str] = re.compile(r"[\s\-_（）()【】\[\]：:·.,，、。！？!?]+")
+_MIN_LEAF_SUMMARY_CHARS: int = 12
+_BARE_TAKEAWAY_MAX_CHARS: int = 8
+_MAX_BARE_TAKEAWAY_RATIO: float = 0.5
+
 
 class CheckItemCode(enum.StrEnum):
-    """四项质检门禁检查项枚举。"""
+    """五项质检门禁检查项枚举。"""
 
     QUANTITY_RANGE = "quantity_range"  # 知识点数量区间
     HIERARCHY_DEPTH = "hierarchy_depth"  # 层级深度与结构
     NAMING_READABILITY = "naming_readability"  # 命名可读性与占位词
     CHAPTER_COVERAGE = "chapter_coverage"  # 关键章节覆盖率
+    CONTENT_DEPTH = "content_depth"  # 考前复习实质内容深度
 
 
 @dataclass(frozen=True)
@@ -96,6 +120,8 @@ class CandidateKnowledgePoint:
     chapter_title: str = ""  # 归属章节标题（若有）
     snippet_ids: tuple[str, ...] = ()  # 关联来源片段唯一标识元组
     description: str = ""  # 知识点简述（可选）
+    structured_content: dict[str, Any] | None = None  # 复习卡片结构化内容（可选，向后兼容）
+    is_leaf: bool = True  # 是否为最细粒度叶子考点
 
 
 @dataclass(frozen=True)
@@ -412,6 +438,8 @@ def _inspect_name_issues(name: str, config: KnowledgeQualityConfig) -> list[str]
         )
     if any(placeholder in stripped for placeholder in config.placeholder_words):
         issues.append("包含占位词黑名单")
+    if META_KP_NAME_PATTERN.search(stripped):
+        issues.append("包含元结构或非实质考点名称")
     if TRUNCATION_PATTERN.search(stripped):
         issues.append("包含省略号或未闭合括号截断")
     return issues
@@ -500,6 +528,7 @@ def check_chapter_coverage(
         stat.chapter_title.strip()
         for stat in chapter_stats
         if stat.snippet_ratio >= config.critical_chapter_snippet_ratio
+        and not is_non_substantive_chapter(stat.chapter_title)
     ]
 
     if not critical_chapters:
@@ -541,6 +570,127 @@ def check_chapter_coverage(
             "covered_critical": covered_critical,
             "coverage_ratio": coverage_ratio,
         },
+    )
+
+
+def _is_bare_noun_takeaway(text: str) -> bool:
+    """判断单条要点是否退化为无复习价值的裸名词词条（如「核技巧」）。"""
+    stripped = text.strip()
+    if len(stripped) >= _BARE_TAKEAWAY_MAX_CHARS:
+        return False
+    if "$" in stripped or "=" in stripped or any(ch.isdigit() for ch in stripped):
+        return False
+    return _SUBSTANTIVE_TAKEAWAY_CUE_RE.search(stripped) is None
+
+
+def _collect_text_fields_for_disclaimer(point: CandidateKnowledgePoint) -> list[str]:
+    """收集节点文本字段以检测免责空话。"""
+    texts: list[str] = []
+    if point.description:
+        texts.append(point.description)
+    sc = point.structured_content
+    if not isinstance(sc, dict):
+        return texts
+    summary = sc.get("core_summary")
+    if isinstance(summary, str) and summary:
+        texts.append(summary)
+    for key in (
+        "key_takeaways",
+        "key_formulas",
+        "derivation_steps",
+        "boundary_notes",
+        "common_mistakes",
+    ):
+        raw_list = sc.get(key)
+        if isinstance(raw_list, (list, tuple)):
+            texts.extend(str(item) for item in raw_list if item)
+    return texts
+
+
+def _inspect_leaf_depth_issues(point: CandidateKnowledgePoint) -> list[str]:
+    """校验单个叶子知识点的 structured_content 是否具备考前复习深度。"""
+    sc = point.structured_content
+    if not isinstance(sc, dict):
+        return []
+    issues: list[str] = []
+    summary = str(sc.get("core_summary") or "").strip()
+    norm_name = _KP_NORM_RE.sub("", point.name).lower()
+    norm_summary = _KP_NORM_RE.sub("", summary).lower()
+    if (
+        not summary
+        or len(summary) < _MIN_LEAF_SUMMARY_CHARS
+        or (norm_name and norm_summary == norm_name)
+    ):
+        issues.append("核心定义过短或复读标题")
+
+    raw_takeaways = sc.get("key_takeaways")
+    takeaways = (
+        [str(item).strip() for item in raw_takeaways if str(item).strip()]
+        if isinstance(raw_takeaways, (list, tuple))
+        else []
+    )
+    if not takeaways:
+        issues.append("缺少核心结论要点")
+    else:
+        bare_count = sum(1 for item in takeaways if _is_bare_noun_takeaway(item))
+        if bare_count / len(takeaways) > _MAX_BARE_TAKEAWAY_RATIO:
+            issues.append("核心要点退化为裸词条清单")
+    return issues
+
+
+def check_content_depth(
+    knowledge_points: Sequence[CandidateKnowledgePoint],
+    config: KnowledgeQualityConfig | None = None,
+) -> CheckResult:
+    """校验叶子知识点复习卡片内容深度，拦截裸词条与免责废话（兼容旧单测）。"""
+    _ = config
+    if not knowledge_points:
+        return CheckResult(
+            item_code=CheckItemCode.CONTENT_DEPTH,
+            is_passed=True,
+            score=1.0,
+            details={"checked_leaves": 0},
+        )
+
+    disclaimer_hits: list[str] = []
+    for pt in knowledge_points:
+        for text in _collect_text_fields_for_disclaimer(pt):
+            if _META_DISCLAIMER_RE.search(text):
+                disclaimer_hits.append(f"「{pt.name}」(包含免责空话)")
+                break
+
+    leaf_structured = [
+        pt for pt in knowledge_points if pt.is_leaf and isinstance(pt.structured_content, dict)
+    ]
+    if not disclaimer_hits and not leaf_structured:
+        return CheckResult(
+            item_code=CheckItemCode.CONTENT_DEPTH,
+            is_passed=True,
+            score=1.0,
+            details={"skipped_legacy": True},
+        )
+
+    violations = list(disclaimer_hits)
+    for pt in leaf_structured:
+        issues = _inspect_leaf_depth_issues(pt)
+        if issues:
+            violations.append(f"「{pt.name}」({', '.join(issues)})")
+
+    if violations:
+        return CheckResult(
+            item_code=CheckItemCode.CONTENT_DEPTH,
+            is_passed=False,
+            score=0.0,
+            reason=f"发现 {len(violations)} 处知识点内容单薄或无效: {'; '.join(violations[:3])}",
+            suggestion="每个叶子考点须包含完整定义摘要与实质复习陈述句，严禁裸词条或“未展开”等空话",
+            details={"violations_count": len(violations), "samples": violations[:5]},
+        )
+
+    return CheckResult(
+        item_code=CheckItemCode.CONTENT_DEPTH,
+        is_passed=True,
+        score=1.0,
+        details={"checked_leaves": len(leaf_structured)},
     )
 
 
@@ -629,7 +779,8 @@ def verify_knowledge_points(
     r2 = check_hierarchy_depth(levels, active_config)
     r3 = check_naming_readability(names, active_config)
     r4 = check_chapter_coverage(covered_chapters, context.chapter_stats, active_config)
-    results = (r1, r2, r3, r4)
+    r5 = check_content_depth(knowledge_points, active_config)
+    results = (r1, r2, r3, r4, r5)
 
     unpassed = [r for r in results if not r.is_passed]
     is_qualified = len(unpassed) == 0

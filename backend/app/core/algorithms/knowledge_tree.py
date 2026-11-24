@@ -11,10 +11,14 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from app.core.algorithms.document_denoising import is_non_substantive_chapter
 from app.core.algorithms.knowledge_quality import ChapterSnippetStat
 from app.core.algorithms.search import cosine_similarity
+from app.core.algorithms.text_excerpt import trim_excerpt_cleanly
 
 _KP_NAME_NORMALIZE_RE: re.Pattern[str] = re.compile(r"[\s\-_（）()【】\[\]：:·.,，、/]+")
+_MAX_CORE_SUMMARY_CHARS: int = 200
+_BARE_SUBSUMED_MAX_CHARS: int = 8
 
 
 def normalize_kp_name(name: str) -> str:
@@ -41,19 +45,27 @@ class ExtractedKnowledgeItem(BaseModel):
     description: str = Field(default="", description="知识点概念简述与核心考点")
     core_summary: str = Field(
         default="",
-        description="严格基于原文提炼的一句话核心摘要（<=60字符），严禁杜撰考频标签",
+        description="严格基于原文提炼的考前复习核心定义与直觉（60~180字符），讲清是什么、解决什么问题与核心意义，严禁杜撰考频标签",
     )
     key_takeaways: list[str] = Field(
         default_factory=list,
-        description="基于资料原文的核心要点短句列表",
+        description="2~5条完整复习陈述句（每条15~80字，禁止裸名词词条）",
     )
     key_formulas: list[str] = Field(
         default_factory=list,
-        description="基于资料原文的关键公式或核心符号定义列表",
+        description="关键公式（标准 $...$ 或 $$...$$ LaTeX）及其关键符号含义说明，纯概念类可为 []",
+    )
+    derivation_steps: list[str] = Field(
+        default_factory=list,
+        description="推导思路或解题步骤列表（0~5步，纯概念类可为 []）",
     )
     boundary_notes: list[str] = Field(
         default_factory=list,
-        description="基于资料原文的易错边界与适用条件说明列表",
+        description="前提假设、适用场景与相邻易混概念对比列表（无则 []）",
+    )
+    common_mistakes: list[str] = Field(
+        default_factory=list,
+        description="高频易错点与纠偏辨析列表（0~3条，无则 []）",
     )
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
     chapter_title: str = Field(default="", description="归属章节名称")
@@ -84,15 +96,24 @@ class ResolvedKnowledgeNode:
 
 
 def build_structured_content(item: ExtractedKnowledgeItem) -> dict[str, Any]:
-    """将抽取的知识点条目规范化为严格受控的四字段结构化内容字典。"""
+    """将抽取的知识点条目规范化为考前复习级结构化内容字典（向后兼容旧四键）。"""
     raw_summary = (item.core_summary or item.description or "").strip()
-    core_summary = raw_summary[:60]
-    return {
+    core_summary = (
+        trim_excerpt_cleanly(raw_summary, max_chars=_MAX_CORE_SUMMARY_CHARS) if raw_summary else ""
+    )
+    structured: dict[str, Any] = {
         "core_summary": core_summary,
         "key_takeaways": _dedup_clean_strings(item.key_takeaways),
         "key_formulas": _dedup_clean_strings(item.key_formulas),
         "boundary_notes": _dedup_clean_strings(item.boundary_notes),
     }
+    derivation_steps = _dedup_clean_strings(item.derivation_steps)
+    if derivation_steps:
+        structured["derivation_steps"] = derivation_steps
+    common_mistakes = _dedup_clean_strings(item.common_mistakes)
+    if common_mistakes:
+        structured["common_mistakes"] = common_mistakes
+    return structured
 
 
 def _dedup_clean_strings(values: Sequence[str]) -> list[str]:
@@ -107,22 +128,42 @@ def _dedup_clean_strings(values: Sequence[str]) -> list[str]:
     return cleaned
 
 
+def _drop_subsumed_bare_items(values: Sequence[str]) -> list[str]:
+    """去重并清理被同组更长陈述句完整包含的裸名词短词条。"""
+    cleaned = _dedup_clean_strings(values)
+    if len(cleaned) <= 1:
+        return cleaned
+    kept: list[str] = []
+    for idx, item in enumerate(cleaned):
+        is_bare = (
+            len(item) < _BARE_SUBSUMED_MAX_CHARS
+            and "$" not in item
+            and "=" not in item
+            and not any(ch in "。！？!?.;；" for ch in item)
+        )
+        if is_bare and any(
+            other_idx != idx and len(other) > len(item) and item in other
+            for other_idx, other in enumerate(cleaned)
+        ):
+            continue
+        kept.append(item)
+    return kept or cleaned
+
+
 def compute_chapter_stats(snippets: Sequence[_HasChapterTitle]) -> list[ChapterSnippetStat]:
-    """统计章节切片分布情况。
-
-    Args:
-        snippets: 含 ``chapter_title`` 属性的切片序列。
-
-    Returns:
-        list[ChapterSnippetStat]: 各章节统计信息。
-    """
-    total = len(snippets)
-    if total == 0:
+    """统计实质章节切片分布情况（自动跳过小结/目录/致谢等非实质章节）。"""
+    if not snippets:
         return []
     counts: dict[str, int] = {}
     for s in snippets:
-        title = s.chapter_title.strip() if s.chapter_title else "默认章节"
+        raw_title = s.chapter_title.strip() if s.chapter_title else ""
+        if raw_title and is_non_substantive_chapter(raw_title):
+            continue
+        title = raw_title or "默认章节"
         counts[title] = counts.get(title, 0) + 1
+    total = sum(counts.values())
+    if total == 0:
+        return []
     return [
         ChapterSnippetStat(
             chapter_title=title,
@@ -142,7 +183,9 @@ def _merge_item_cluster(
     all_indices = set(primary.source_snippet_indices)
     takeaways = list(primary.key_takeaways)
     formulas = list(primary.key_formulas)
+    derivations = list(primary.derivation_steps)
     boundaries = list(primary.boundary_notes)
+    mistakes = list(primary.common_mistakes)
     best_summary = (primary.core_summary or "").strip()
     best_desc = (primary.description or "").strip()
 
@@ -150,7 +193,9 @@ def _merge_item_cluster(
         all_indices.update(dup.source_snippet_indices)
         takeaways.extend(dup.key_takeaways)
         formulas.extend(dup.key_formulas)
+        derivations.extend(dup.derivation_steps)
         boundaries.extend(dup.boundary_notes)
+        mistakes.extend(dup.common_mistakes)
         dup_summary = (dup.core_summary or "").strip()
         if len(dup_summary) > len(best_summary):
             best_summary = dup_summary
@@ -169,7 +214,11 @@ def _merge_item_cluster(
     if p_ref == primary.temp_id:
         p_ref = None
 
-    effective_summary = (best_summary or best_desc)[:60]
+    effective_summary = (
+        trim_excerpt_cleanly(best_summary, max_chars=_MAX_CORE_SUMMARY_CHARS)
+        if best_summary
+        else ""
+    )
     effective_desc = best_desc or effective_summary
 
     return ExtractedKnowledgeItem(
@@ -178,9 +227,11 @@ def _merge_item_cluster(
         name=primary.name,
         description=effective_desc,
         core_summary=effective_summary,
-        key_takeaways=_dedup_clean_strings(takeaways),
+        key_takeaways=_drop_subsumed_bare_items(takeaways),
         key_formulas=_dedup_clean_strings(formulas),
-        boundary_notes=_dedup_clean_strings(boundaries),
+        derivation_steps=_dedup_clean_strings(derivations),
+        boundary_notes=_drop_subsumed_bare_items(boundaries),
+        common_mistakes=_drop_subsumed_bare_items(mistakes),
         level=primary.level,
         chapter_title=primary.chapter_title,
         source_snippet_indices=sorted(all_indices),

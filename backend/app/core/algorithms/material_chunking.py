@@ -18,6 +18,12 @@ from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.core.algorithms.document_denoising import (
+    PageRole,
+    classify_slide_or_page,
+    strip_display_watermark_lines,
+)
+
 # 决策基线条目与依据常量注释：
 # 依据：概要设计说明书第 3.2 节知识片段切分标准，单个检索单元适配嵌入向量模型最佳窗口
 DEFAULT_MAX_CHARS: int = 800
@@ -81,6 +87,14 @@ PSEUDO_BULLET_LINE_PATTERN: re.Pattern[str] = re.compile(
 )
 _MD_HEADING_PREFIX_RE: re.Pattern[str] = re.compile(r"^#{1,6}\s+")
 _ULTRA_SHORT_NOISE_MAX_CHARS: int = 15
+_CROSS_PAGE_SHORT_SLIDE_MAX_CHARS: int = 260
+_NUMBERED_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*[.、)．]?|\(\d+\)|[一二三四五六七八九十]+[、.．]|[-*•▪●○])\s*"
+)
+_PUNCT_SPACE_RE: re.Pattern[str] = re.compile(
+    r"[\s。！？!?.,，、；;：:~～·…—\-_()（）\[\]【】\"'“”‘’]+"
+)
+_SUBSTANTIVE_SHORT_TERM_RE: re.Pattern[str] = re.compile(r"(?:定义|定理|公式|条件|步骤)")
 
 
 @dataclass(frozen=True)
@@ -93,6 +107,7 @@ class ParagraphInput:
     is_title: bool = False
     title_level: int = 0
     page_number: int | None = None
+    page_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +123,7 @@ class Snippet:
     source_ref: str
     doc_type: str
     page_number: int | None = None
+    page_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -375,24 +391,46 @@ def split_paragraph_into_ranges(
 # ---------------------------------------------------------------------------
 
 
-def _same_segment(left: Snippet, right: Snippet) -> bool:
-    """两个片段是否属于同页、同章（及同来源/类型）——合并的硬边界。"""
-    return (
-        left.page_number == right.page_number
-        and left.chapter_title == right.chapter_title
-        and left.source_ref == right.source_ref
-        and left.doc_type == right.doc_type
-    )
+def _same_segment(
+    left: Snippet,
+    right: Snippet,
+    *,
+    allow_cross_page_merge: bool = False,
+) -> bool:
+    """判断两个片段是否满足合并边界：绝不跨章，仅在开启时允许同章相邻短页柔合并。"""
+    if left.chapter_title != right.chapter_title or left.doc_type != right.doc_type:
+        return False
+    if left.page_number == right.page_number and left.source_ref == right.source_ref:
+        return True
+    if not allow_cross_page_merge:
+        return False
+    if left.page_number is None or right.page_number is None:
+        return False
+    if not left.chapter_title.strip() and left.doc_type != "pptx":
+        return False
+    left_end = left.page_end if left.page_end is not None else left.page_number
+    return 0 <= right.page_number - left_end <= 1
 
 
 def _join_snippets(left: Snippet, right: Snippet) -> Snippet:
-    """拼接相邻片段；同段相邻窗口的重叠部分（按偏移判定）自动去重，否则以换行连接。"""
+    """拼接相邻片段；同段相邻窗口的重叠部分（按偏移判定）自动去重，跨页时保留 page_end。"""
     overlap = left.end_offset - right.start_offset
     head = right.content[:overlap] if overlap > 0 else ""
     if overlap > 0 and left.content.endswith(head):
         content = left.content + right.content[overlap:]
     else:
         content = left.content + "\n" + right.content
+
+    left_page = left.page_number
+    left_end = left.page_end if left.page_end is not None else left.page_number
+    right_end = right.page_end if right.page_end is not None else right.page_number
+    if left_page is not None and right_end is not None and right_end > left_page:
+        merged_page_end: int | None = max(left_end or left_page, right_end)
+        source_ref = f"第 {left_page}-{merged_page_end} 页"
+    else:
+        merged_page_end = left.page_end
+        source_ref = left.source_ref
+
     return Snippet(
         index=left.index,
         content=content,
@@ -400,37 +438,69 @@ def _join_snippets(left: Snippet, right: Snippet) -> Snippet:
         start_offset=left.start_offset,
         end_offset=max(left.end_offset, right.end_offset),
         chapter_title=left.chapter_title,
-        source_ref=left.source_ref,
+        source_ref=source_ref,
         doc_type=left.doc_type,
         page_number=left.page_number,
+        page_end=merged_page_end,
     )
 
 
 def _try_forward_merge(
-    current: Snippet, nxt: Snippet, min_chars: int, target_chars: int, max_chars: int
+    current: Snippet,
+    nxt: Snippet,
+    min_chars: int,
+    target_chars: int,
+    max_chars: int,
+    *,
+    allow_cross_page_merge: bool = False,
 ) -> Snippet | None:
-    """尝试把 ``nxt`` 并入 ``current``：
-
-    - 跨页/跨章（或不同来源）绝不合并；
-    - ``current`` 仍短于 ``min_chars`` 时持续累积，直至 >= min_chars（上限 max_chars）；
-    - ``current`` 已够长时，仅当 ``nxt`` 自身不是短片段（短片段留给下一组做开头）
-      且合并后不超过 ``target_chars`` 才继续聚合。
-    """
-    if not _same_segment(current, nxt):
+    """尝试把 ``nxt`` 并入 ``current``（支持同章相邻短页柔合并，绝不跨章）。"""
+    if not _same_segment(current, nxt, allow_cross_page_merge=allow_cross_page_merge):
         return None
+    same_page = current.page_number == nxt.page_number and current.source_ref == nxt.source_ref
     current_short = current.char_count < min_chars
-    if not current_short and nxt.char_count < min_chars:
-        return None
     joined = _join_snippets(current, nxt)
-    limit = max_chars if current_short else target_chars
-    return joined if joined.char_count <= limit else None
+
+    if same_page:
+        if not current_short and nxt.char_count < min_chars:
+            return None
+        limit = max_chars if current_short else target_chars
+        return joined if joined.char_count <= limit else None
+
+    if _is_ultra_short_noise_snippet(current) or _is_ultra_short_noise_snippet(nxt):
+        return None
+    if current_short and joined.char_count <= max_chars:
+        return joined
+    if (
+        nxt.char_count < _CROSS_PAGE_SHORT_SLIDE_MAX_CHARS
+        and current.char_count < target_chars
+        and joined.char_count <= target_chars
+        and joined.char_count <= max_chars
+    ):
+        return joined
+    return None
 
 
 def _append_with_backfill(
-    output: list[Snippet], item: Snippet, min_chars: int, max_chars: int
+    output: list[Snippet],
+    item: Snippet,
+    min_chars: int,
+    max_chars: int,
+    *,
+    allow_cross_page_merge: bool = False,
 ) -> None:
-    """追加成品片段；若其仍是短片段且无法向后合并，则尽量并回前一同段片段。"""
-    if item.char_count < min_chars and output and _same_segment(output[-1], item):
+    """追加成品片段；若其仍是短片段且无法向后合并，则尽量并回前一同段/同章邻页片段。"""
+    if (
+        item.char_count < min_chars
+        and output
+        and _same_segment(output[-1], item, allow_cross_page_merge=allow_cross_page_merge)
+    ):
+        same_page = (
+            output[-1].page_number == item.page_number and output[-1].source_ref == item.source_ref
+        )
+        if not same_page and _is_ultra_short_noise_snippet(item):
+            output.append(item)
+            return
         joined = _join_snippets(output[-1], item)
         if joined.char_count <= max_chars:
             output[-1] = joined
@@ -443,28 +513,10 @@ def merge_isolated_short_snippets(
     min_chars: int,
     max_chars: int = DEFAULT_MAX_CHARS,
     target_chars: int = DEFAULT_TARGET_CHARS,
+    *,
+    allow_cross_page_merge: bool = True,
 ) -> list[Snippet]:
-    """循环累积合并短片段，并把同页同章的连续片段聚合到目标块大小。
-
-    算法（单趟贪心，连续多个短片段会持续累积直到 >= ``min_chars``，而非两两合并一次即停）：
-
-    1. 严格以 ``page_number`` / ``chapter_title``（及 source_ref/doc_type）为边界，绝不跨界合并；
-    2. 累积中的片段 < ``min_chars`` 时继续吸收后续同段片段（总长 <= ``max_chars``）；
-    3. 已 >= ``min_chars`` 时，只在合并后 <= ``target_chars`` 且后者不是短片段时继续聚合
-       （短片段作为下一组的开头，常为标题/题注）；
-    4. 无法向后合并的残留短片段尽量并回前一同段片段（<= ``max_chars``），否则保持独立。
-
-    ``min_chars <= 0`` 时关闭合并，原样返回。同段相邻窗口间的滑动重叠按偏移自动去重。
-
-    Args:
-        snippets: 初步生成的切片列表。
-        min_chars: 短片段判断阈值。
-        max_chars: 单片段字符上限约束（硬限制）。
-        target_chars: 聚合目标块大小（自动夹在 [min_chars, max_chars] 之间）。
-
-    Returns:
-        list[Snippet]: 合并优化并重排 index 后的切片列表。
-    """
+    """循环累积合并短片段，并把同页/同章邻页的连续短片段聚合到目标块大小。"""
     if min_chars <= 0 or not snippets:
         return snippets
 
@@ -476,15 +528,34 @@ def merge_isolated_short_snippets(
         if current is None:
             current = snippet
             continue
-        combined = _try_forward_merge(current, snippet, min_chars, target, max_chars)
+        combined = _try_forward_merge(
+            current,
+            snippet,
+            min_chars,
+            target,
+            max_chars,
+            allow_cross_page_merge=allow_cross_page_merge,
+        )
         if combined is not None:
             current = combined
             continue
-        _append_with_backfill(merged, current, min_chars, max_chars)
+        _append_with_backfill(
+            merged,
+            current,
+            min_chars,
+            max_chars,
+            allow_cross_page_merge=allow_cross_page_merge,
+        )
         current = snippet
 
     if current is not None:
-        _append_with_backfill(merged, current, min_chars, max_chars)
+        _append_with_backfill(
+            merged,
+            current,
+            min_chars,
+            max_chars,
+            allow_cross_page_merge=allow_cross_page_merge,
+        )
 
     return [
         Snippet(
@@ -497,21 +568,35 @@ def merge_isolated_short_snippets(
             source_ref=item.source_ref,
             doc_type=item.doc_type,
             page_number=item.page_number,
+            page_end=item.page_end,
         )
         for idx, item in enumerate(merged)
     ]
 
 
 def _is_ultra_short_noise_snippet(snippet: Snippet) -> bool:
-    """判定合并后仍残留的孤立无信息短片（如孤立标题或单字母碎片，不含句末标点/数字/公式）。"""
+    """判定合并后仍残留的致谢、目录碎片、纯页码/水印或极短无信息残片。"""
     stripped = snippet.content.strip()
+    if not stripped:
+        return True
+    if len(stripped) >= 120:
+        return False
+    chapter = snippet.chapter_title.strip()
+    if chapter and stripped == chapter and len(stripped) <= 30:
+        return True
+    if not strip_display_watermark_lines(stripped):
+        return True
+    role = classify_slide_or_page(stripped, 1, 1, is_slide_like=True)
+    if role in {PageRole.THANK_YOU, PageRole.TOC, PageRole.REFERENCES, PageRole.LOW_INFO}:
+        return True
     if len(stripped) >= _ULTRA_SHORT_NOISE_MAX_CHARS:
         return False
-    if any(ch in "。！？!?." for ch in stripped):
+    if "$" in stripped or "=" in stripped or _SUBSTANTIVE_SHORT_TERM_RE.search(stripped):
         return False
-    if any(ch.isdigit() for ch in stripped):
-        return False
-    return "$" not in stripped and "=" not in stripped
+    core = _PUNCT_SPACE_RE.sub("", _NUMBERED_PREFIX_RE.sub("", stripped))
+    if len(core) < 12:
+        return not (any(ch in "。！？" for ch in stripped) and len(core) >= 3)
+    return False
 
 
 def _filter_ultra_short_noise_snippets(snippets: list[Snippet]) -> list[Snippet]:
@@ -532,6 +617,7 @@ def _filter_ultra_short_noise_snippets(snippets: list[Snippet]) -> list[Snippet]
             source_ref=item.source_ref,
             doc_type=item.doc_type,
             page_number=item.page_number,
+            page_end=item.page_end,
         )
         for idx, item in enumerate(kept)
     ]
@@ -548,6 +634,7 @@ def split_material_into_snippets(
     target_chars: int = DEFAULT_TARGET_CHARS,
     *,
     filter_short_noise: bool | None = None,
+    allow_cross_page_merge: bool = True,
 ) -> ChunkingResult:
     """把解析后的段落序列切分为可检索的知识片段。
 
@@ -588,6 +675,7 @@ def split_material_into_snippets(
         )
 
     # 阶段 1: 文本预清洗与段落标准化
+    should_filter = (min_chars >= 40) if filter_short_noise is None else filter_short_noise
     total_cleaned_chars = 0
     current_chapter_title = ""
     raw_snippets: list[Snippet] = []
@@ -600,12 +688,14 @@ def split_material_into_snippets(
             doc_type = item.doc_type
             is_title = item.is_title
             page_number = item.page_number
+            page_end = item.page_end
         else:
             raw_text = item
             source_ref = default_source_ref
             doc_type = default_doc_type
             is_title = False
             page_number = None
+            page_end = None
 
         cleaned_text, removed_count = clean_text_and_count_removals(raw_text)
         cleaned_text = clean_pseudo_bullet_glyphs(cleaned_text)
@@ -616,6 +706,14 @@ def split_material_into_snippets(
 
         if is_title:
             current_chapter_title = _MD_HEADING_PREFIX_RE.sub("", cleaned_text.strip()).strip()
+            continue
+
+        if (
+            should_filter
+            and current_chapter_title
+            and cleaned_text.strip() == current_chapter_title
+            and len(cleaned_text.strip()) <= 30
+        ):
             continue
 
         para_start_offset = global_char_offset
@@ -634,18 +732,22 @@ def split_material_into_snippets(
                     source_ref=source_ref,
                     doc_type=doc_type,
                     page_number=page_number,
+                    page_end=page_end,
                 )
             )
 
         global_char_offset += len(cleaned_text)
 
-    # 阶段 2: 短段循环累积合并 + 同页同章目标块聚合
+    # 阶段 2: 短段循环累积合并 + 同页/同章邻页目标块聚合
     optimized_snippets = merge_isolated_short_snippets(
-        raw_snippets, min_chars, max_chars, target_chars
+        raw_snippets,
+        min_chars,
+        max_chars,
+        target_chars,
+        allow_cross_page_merge=allow_cross_page_merge,
     )
 
     # 阶段 2.5: 过滤合并后仍残留的孤立无信息极短残片（默认仅在正常合并阈值 >= 40 时启用）
-    should_filter = (min_chars >= 40) if filter_short_noise is None else filter_short_noise
     if should_filter:
         optimized_snippets = _filter_ultra_short_noise_snippets(optimized_snippets)
 

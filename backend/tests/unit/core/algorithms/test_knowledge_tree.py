@@ -103,3 +103,56 @@ def test_resolve_knowledge_hierarchy_heals_cycles_orphans_and_depth() -> None:
     assert by_temp["r2"].parent_id == temp_to_uuid["r1"]
     assert by_temp["r5"].level == 5
     assert by_temp["r6"].level == 5
+
+
+def test_review_card_fields_safe_200_trim_and_non_substantive_chapter_skip() -> None:
+    """Verify 200-char safe summary trim, optional fields, and non-substantive chapter skip."""
+    from app.core.algorithms.knowledge_tree import build_structured_content
+
+    stats = compute_chapter_stats(
+        [
+            _SnippetStub("第一章 支持向量机"),
+            _SnippetStub("第一章 支持向量机"),
+            _SnippetStub("小结"),
+            _SnippetStub("目录"),
+        ]
+    )
+    assert [s.chapter_title for s in stats] == ["第一章 支持向量机"]
+    assert stats[0].snippet_ratio == 1.0
+
+    long_summary = (
+        "支持向量机（SVM）旨在寻找最大几何间隔超平面以提升泛化能力。"
+        "其核心目标函数为 $\\min_{w,b}\\frac{1}{2}\\|w\\|^2 + C\\sum_{i=1}^n \\xi_i$，"
+        "其中法向量 $w$ 决定超平面方向，$C>0$ 控制对误分类松弛变量 $\\xi_i$ 的惩罚权重，"
+        "同时通过拉格朗日对偶将问题转化为只依赖样本内积的凸二次规划。"
+        "进一步引入核函数即可处理非线性分类边界。"
+    )
+    item = ExtractedKnowledgeItem(
+        temp_id="kp_svm",
+        name="软间隔支持向量机",
+        core_summary=long_summary,
+        key_takeaways=["引入松弛变量允许少量样本落入间隔带内。"],
+        key_formulas=["$\\min \\frac{1}{2}\\|w\\|^2 + C\\sum \\xi_i$（$C$ 为惩罚系数）"],
+        derivation_steps=["1. 构造拉格朗日函数", "2. 求偏导得对偶问题"],
+        common_mistakes=["误区：增大 C 必然提高泛化能力；正解：C 过大易过拟合"],
+    )
+    sc = build_structured_content(item)
+    assert 60 < len(sc["core_summary"]) <= 200
+    assert sc["core_summary"].count("$") % 2 == 0
+    assert sc["derivation_steps"] == ["1. 构造拉格朗日函数", "2. 求偏导得对偶问题"]
+    assert sc["common_mistakes"] == ["误区：增大 C 必然提高泛化能力；正解：C 过大易过拟合"]
+
+    # Deduplication drops bare nouns subsumed by longer takeaway sentences and merges new fields
+    dup = ExtractedKnowledgeItem(
+        temp_id="kp_svm_dup",
+        name="软间隔支持向量机",
+        key_takeaways=["松弛变量", "引入松弛变量允许少量样本落入间隔带内。"],
+        derivation_steps=["3. KKT 条件判定支持向量"],
+        common_mistakes=["误区：松弛变量可为负；正解：必须满足 ξ_i >= 0"],
+        source_snippet_indices=[2],
+    )
+    merged = deduplicate_candidate_points([item, dup], [[1.0, 0.0], [1.0, 0.0]])
+    assert len(merged) == 1
+    assert merged[0].key_takeaways == ["引入松弛变量允许少量样本落入间隔带内。"]
+    assert len(merged[0].derivation_steps) == 3
+    assert len(merged[0].common_mistakes) == 2

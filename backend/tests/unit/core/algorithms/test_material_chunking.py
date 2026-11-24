@@ -324,3 +324,63 @@ def test_split_paragraph_overlap_no_punctuation() -> None:
     assert len(result.snippets) >= 3
     for s in result.snippets:
         assert s.char_count <= 100
+
+
+def test_cross_page_merge_same_chapter_and_thank_you_noise_filtered() -> None:
+    """Adjacent short slides in the same chapter merge with page_end; thank-you & TOC drop."""
+    paragraphs = [
+        ParagraphInput(
+            text="第五章 支持向量机",
+            source_ref="第 11 页",
+            doc_type="pptx",
+            is_title=True,
+            page_number=11,
+        ),
+        ParagraphInput(
+            text="软间隔允许少量样本不满足函数间隔大于等于一的约束条件，通过引入松弛变量衡量违背程度。",
+            source_ref="第 12 页",
+            doc_type="pptx",
+            page_number=12,
+        ),
+        ParagraphInput(
+            text=(
+                "目标函数在原几何间隔最小化项后增加惩罚项 $C\\sum_{i=1}^n \\xi_i$，平衡间隔与容错。"
+            ),
+            source_ref="第 13 页",
+            doc_type="pptx",
+            page_number=13,
+        ),
+        ParagraphInput(
+            text="第六章 核方法",
+            source_ref="第 14 页",
+            doc_type="pptx",
+            is_title=True,
+            page_number=14,
+        ),
+        ParagraphInput(
+            text="核技巧通过核函数直接计算高维特征空间内积。",
+            source_ref="第 14 页",
+            doc_type="pptx",
+            page_number=14,
+        ),
+        ParagraphInput(
+            text="谢谢！",
+            source_ref="第 15 页",
+            doc_type="pptx",
+            page_number=15,
+        ),
+    ]
+    result = split_material_into_snippets(paragraphs, allow_cross_page_merge=True)
+    assert len(result.snippets) == 2
+    assert result.snippets[0].chapter_title == "第五章 支持向量机"
+    assert result.snippets[0].page_number == 12
+    assert result.snippets[0].page_end == 13
+    assert result.snippets[0].source_ref == "第 12-13 页"
+    assert result.snippets[1].chapter_title == "第六章 核方法"
+    assert result.snippets[1].page_number == 14
+    assert all("谢谢" not in s.content for s in result.snippets)
+
+    # Explicit disable keeps pages 12 and 13 separate
+    no_cross = split_material_into_snippets(paragraphs, allow_cross_page_merge=False)
+    assert [s.page_number for s in no_cross.snippets] == [12, 13, 14]
+    assert all(s.page_end is None for s in no_cross.snippets)

@@ -168,3 +168,100 @@ def test_extract_text_from_raw_content_text_and_fallback() -> None:
     ]
     assert extract_text_from_raw_content(b"Line 1\nLine 2", ".MD") == ["Line 1", "Line 2"]
     assert extract_text_from_raw_content(b"data", "png") == []
+
+
+def test_extract_pptx_slides_preserves_page_number_title_and_paragraphs() -> None:
+    """extract_pptx_slides preserves 1-based slide numbers, title placeholders, and <a:p> blocks."""
+    from app.core.extractors import _SYMBOL_FONT_MARKERS, extract_pptx_slides
+
+    ns = (
+        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    )
+    slide1 = (
+        f"<p:sld {ns}><p:cSld><p:spTree>"
+        '<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
+        "<p:txBody><a:p><a:r><a:t>第五章</a:t><a:t> 支持向量机</a:t></a:r></a:p></p:txBody></p:sp>"
+        "<p:sp><p:txBody>"
+        "<a:p><a:r><a:t>硬间隔最大化</a:t><a:t>目标函数推导。</a:t></a:r></a:p>"
+        "</p:txBody></p:sp>"
+        "</p:spTree></p:cSld></p:sld>"
+    ).encode()
+    slide2 = (
+        f"<p:sld {ns}><p:cSld><p:spTree>"
+        "<p:sp><p:txBody><a:p><a:r><a:t>谢谢！</a:t></a:r></a:p></p:txBody></p:sp>"
+        "</p:spTree></p:cSld></p:sld>"
+    ).encode()
+    pptx_bytes = _build_zip({"ppt/slides/slide2.xml": slide2, "ppt/slides/slide1.xml": slide1})
+    slides = extract_pptx_slides(pptx_bytes)
+    assert len(slides) == 3
+    assert slides[0].page_number == 1
+    assert slides[0].source_ref == "第 1 页"
+    assert slides[0].doc_type == "pptx"
+    assert slides[0].is_title is True
+    assert slides[0].text == "第五章 支持向量机"
+    assert slides[1].is_title is False
+    assert slides[1].text == "硬间隔最大化目标函数推导。"
+    assert slides[2].page_number == 2
+    assert slides[2].text == "谢谢！"
+
+    for marker in ("euclid", "txsy", "esint", "mtsymbol", "marvosym"):
+        assert marker in _SYMBOL_FONT_MARKERS
+
+
+def test_extract_pdf_preserves_block_coordinates_and_detects_tofu_garble() -> None:
+    """PyMuPDF extraction populates PageTextBlock coordinates and flags ☒ math garble."""
+    import pymupdf
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    from app.core.extractors import extract_pdf_pages_with_diagnostics
+
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=800, height=600)
+        page.insert_text((50, 40), "Header Line", fontsize=12)
+        page.insert_text((50, 200), "Body Line min 1/2 ||w||^2", fontsize=12)
+        pdf_bytes: bytes = doc.tobytes()
+    finally:
+        doc.close()
+
+    pages = extract_pdf_pages_with_diagnostics(pdf_bytes)
+    assert len(pages) == 1
+    assert len(pages[0].blocks) >= 2
+    assert pages[0].blocks[0].page_height == 600.0
+    assert pages[0].blocks[0].y0 < pages[0].blocks[1].y0
+
+    # Simulate broken /ToUnicode CMap mapping glyph 0x01 to U+2612 (☒)
+    writer = PdfWriter()
+    p2 = writer.add_blank_page(width=400, height=300)
+    cmap = DecodedStreamObject()
+    cmap.set_data(
+        b"/CIDInit /ProcSet findresource begin\n"
+        b"12 dict begin begincmap\n"
+        b"1 begincodespacerange <00> <FF> endcodespacerange\n"
+        b"1 beginbfchar <01> <2612> endbfchar\n"
+        b"endcmap CMapName currentdict /CMap defineresource pop end end\n"
+    )
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+            NameObject("/ToUnicode"): writer._add_object(cmap),
+        }
+    )
+    p2[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})}
+    )
+    stream = DecodedStreamObject()
+    stream.set_data(b"BT /F1 12 Tf 20 150 Td (Objective min + C \\001 xi) Tj ET")
+    p2[NameObject("/Contents")] = writer._add_object(stream)
+    buf = io.BytesIO()
+    writer.write(buf)
+
+    garbled_pages = extract_pdf_pages_with_diagnostics(buf.getvalue())
+    assert len(garbled_pages) == 1
+    assert "\u2612" in garbled_pages[0].text
+    assert garbled_pages[0].has_symbol_garble is True
+    assert garbled_pages[0].needs_repair is True
