@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 23
+- **Total Sessions**: 24
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~786 | Active |
+| `journal-1.md` | ~816 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 24 | 2026-11-25 | 主界面全局助教、视觉语义切片与两阶段考前精讲页落地 | `814fd89`, `81a61aa`, `baeb9e8`, `fd5b306`, `1b9a4a3` | `feat/coach-scope-and-deep-study` |
 | 23 | 2026-11-25 | M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地 | `5a22902`, `4fd53e0`, `c57c143`, `e3df28e` | `docs/readme-local-setup` |
 | 22 | 2026-11-24 | M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治 | `351e88c`, `0c303d1`, `05b1657`, `f4ee05f` | `docs/readme-local-setup` |
 | 21 | 2026-11-24 | 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀 | `c57b789`, `94f7a35`, `e995b4b` | `docs/readme-local-setup` |
