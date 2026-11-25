@@ -8,7 +8,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,6 +34,7 @@ class KnowledgeTreeNodeResponse(BaseModel):
     sort_order: int = Field(default=0, description="资料内顺序序号")
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
     is_low_confidence: bool = Field(default=False, description="是否标记为低置信度")
+    has_study_guide: bool = Field(default=False, description="是否已生成考前精讲笔记缓存")
     children: list["KnowledgeTreeNodeResponse"] = Field(
         default_factory=list,
         description="递归子知识点列表",
@@ -201,6 +202,148 @@ class ExtractKnowledgeResponse(BaseModel):
     status: str = Field(default="ready", description="解析处理状态")
 
 
+# ==============================================================================
+# Stage 2: 考前精讲笔记强类型 Schema 与预热状态契约
+# ==============================================================================
+
+
+class StudyGuideSymbol(BaseModel):
+    """考前精讲符号速查条目。"""
+
+    symbol: str = Field(..., description="LaTeX 符号，如 $w$")
+    meaning: str = Field(..., description="物理或数学含义")
+    note: str = Field(default="", description="维度、取值范围或易错提示")
+
+
+class StudyGuideDerivationStep(BaseModel):
+    """考前精讲逐步推导步骤。"""
+
+    step_title: str = Field(..., description="步骤标题")
+    formula: str = Field(default="", description="对应展示公式 $$...$$")
+    explanation: str = Field(..., description="讲清成立依据与关键变换")
+
+
+class StudyGuideWorkedExample(BaseModel):
+    """考前精讲典型例题与分步解答。"""
+
+    title: str = Field(..., description="例题标题")
+    question_type: str = Field(default="综合应用", description="题型标签")
+    problem: str = Field(..., description="完整题干")
+    solution_idea: str = Field(..., description="解题切入点与标准套路")
+    solution_steps: list[str] = Field(default_factory=list, description="分步标准解答")
+    final_answer: str = Field(..., description="明确结论/最终答案")
+
+
+class StudyGuideComparison(BaseModel):
+    """相邻易混概念对比条目。"""
+
+    target_concept: str = Field(..., description="相邻易混概念名称")
+    similarities: str = Field(..., description="共同点")
+    differences: str = Field(..., description="本质区别")
+    exam_distinction: str = Field(..., description="考场快速区分口诀或判别依据")
+
+
+class StudyGuidePitfall(BaseModel):
+    """考场高频避坑条目。"""
+
+    mistake: str = Field(..., description="考场常见错误做法/误解")
+    why_wrong: str = Field(..., description="错因剖析")
+    correction: str = Field(..., description="正确做法与记忆锚点")
+
+
+class StudyGuideContent(BaseModel):
+    """考前精讲笔记 9 要素结构化输出契约。"""
+
+    schema_version: int = Field(default=1, description="精讲笔记 Schema 版本号")
+    exam_positioning: str = Field(..., description="1. 直观定位与考法")
+    core_definition: str = Field(..., description="2. 完整严谨定义与通俗直觉类比")
+    symbol_table: list[StudyGuideSymbol] = Field(
+        default_factory=list, description="3. 核心符号速查表"
+    )
+    key_formulas: list[str] = Field(default_factory=list, description="4. 核心结论公式组")
+    derivation_steps: list[StudyGuideDerivationStep] = Field(
+        default_factory=list, description="5. 逐步推导/算法流程链"
+    )
+    worked_examples: list[StudyGuideWorkedExample] = Field(
+        default_factory=list, description="6. 1~2 道典型例题"
+    )
+    comparisons: list[StudyGuideComparison] = Field(
+        default_factory=list, description="7. 相邻易混概念对比"
+    )
+    pitfalls: list[StudyGuidePitfall] = Field(default_factory=list, description="8. 高频避坑")
+    memory_anchors: list[str] = Field(default_factory=list, description="9. 考前 30 秒速记锚点")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_null_lists(cls, data: Any) -> Any:
+        """兼容大模型偶发将可选列表字段输出为 null 的情况。"""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for field_name in (
+            "symbol_table",
+            "key_formulas",
+            "derivation_steps",
+            "worked_examples",
+            "comparisons",
+            "pitfalls",
+            "memory_anchors",
+        ):
+            if normalized.get(field_name) is None:
+                normalized[field_name] = []
+        if normalized.get("schema_version") is None:
+            normalized["schema_version"] = 1
+        return normalized
+
+
+class StudyGuideGenerateRequest(BaseModel):
+    """触发单考点考前精讲生成请求模型。"""
+
+    force: bool = Field(default=False, description="是否忽略永久缓存强制重新生成")
+
+
+class StudyGuideResponse(BaseModel):
+    """单考点考前精讲查询与生成响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    knowledge_point_id: uuid.UUID = Field(..., description="知识点主键")
+    status: Literal["empty", "generating", "ready"] = Field(..., description="精讲状态")
+    study_guide: StudyGuideContent | None = Field(default=None, description="精讲笔记内容")
+    generated_at: datetime | None = Field(default=None, description="生成时间 (UTC)")
+
+
+class StudyGuidePrewarmRequest(BaseModel):
+    """一键预生成整章考前精讲请求模型。"""
+
+    version_id: uuid.UUID | None = Field(default=None, description="可选指定资料版本标识")
+    force: bool = Field(default=False, description="是否强制重新生成已有精讲")
+
+
+class StudyGuidePrewarmResponse(BaseModel):
+    """一键预生成整章考前精讲入队响应模型。"""
+
+    material_id: uuid.UUID = Field(..., description="学习资料主键")
+    version_id: uuid.UUID = Field(..., description="资料版本标识")
+    status: Literal["queued", "running", "completed"] = Field(..., description="预热状态")
+    total_kps: int = Field(..., ge=0, description="目标叶子核心考点总数")
+    ready_kps: int = Field(..., ge=0, description="当前已就绪精讲考点数")
+
+
+class StudyGuidePrewarmStatusResponse(BaseModel):
+    """整章考前精讲预热进度查询响应模型。"""
+
+    material_id: uuid.UUID = Field(..., description="学习资料主键")
+    version_id: uuid.UUID = Field(..., description="资料版本标识")
+    status: Literal["idle", "queued", "running", "completed", "partial_failed"] = Field(
+        ..., description="预热任务状态"
+    )
+    total_kps: int = Field(..., ge=0, description="目标叶子核心考点总数")
+    ready_kps: int = Field(..., ge=0, description="当前已就绪精讲考点数")
+    failed_kps: int = Field(..., ge=0, description="本轮预热失败考点数")
+    current_kp_name: str | None = Field(default=None, description="当前正在生成的考点名称")
+
+
 # 别名兼容导出 (与 spec.md / plan.md 命名对齐)
 KnowledgeTreeNode = KnowledgeTreeNodeResponse
 KnowledgeSnippetsResponse = PointSourceListResponse
@@ -220,4 +363,15 @@ __all__ = [
     "PointSourceListResponse",
     "SnippetKnowledgePointsResponse",
     "SnippetSourceResponse",
+    "StudyGuideComparison",
+    "StudyGuideContent",
+    "StudyGuideDerivationStep",
+    "StudyGuideGenerateRequest",
+    "StudyGuidePitfall",
+    "StudyGuidePrewarmRequest",
+    "StudyGuidePrewarmResponse",
+    "StudyGuidePrewarmStatusResponse",
+    "StudyGuideResponse",
+    "StudyGuideSymbol",
+    "StudyGuideWorkedExample",
 ]

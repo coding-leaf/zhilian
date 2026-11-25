@@ -706,8 +706,8 @@ def test_tc_kp_23_decision_table_16_combinations(
 
 def test_constants_and_defaults_integrity() -> None:
     """验证算法常量定义与规范完全对齐。"""
-    assert MIN_EFFECTIVE_CHARS_PER_KP == 625
-    assert MAX_EFFECTIVE_CHARS_PER_KP == 5000
+    assert MIN_EFFECTIVE_CHARS_PER_KP == 1000
+    assert MAX_EFFECTIVE_CHARS_PER_KP == 4500
     assert MIN_KP_COUNT_SMALL_DOC == 3
     assert MAX_KP_COUNT_ABSOLUTE == 200
     assert MIN_HIERARCHY_DEPTH == 2
@@ -721,6 +721,64 @@ def test_constants_and_defaults_integrity() -> None:
     assert "知识点" in DEFAULT_PLACEHOLDER_WORDS
     assert "测试" in DEFAULT_PLACEHOLDER_WORDS
     assert TRUNCATION_PATTERN is not None
+
+
+def test_convergent_two_layer_tree_exemption_and_density_bounds() -> None:
+    """验证 2 层收敛树豁免 MAX_LEVEL_2_RATIO、单模块子节点上限与 1000~4500 密度。"""
+    config = KnowledgeQualityConfig()
+
+    # 3 个一级模块 + 10 个二级考点 (level_2_ratio = 76.9% > 0.60) -> 干净 2 层树应通过
+    clean_levels = [1, 1, 1] + [2] * 10
+    clean_res = check_hierarchy_depth(clean_levels, config)
+    assert clean_res.is_passed is True
+    assert clean_res.details["convergent_2_layer"] is True
+
+    # 仅 1 个一级模块 -> 失败
+    one_mod = check_hierarchy_depth([1] + [2] * 6, config)
+    assert one_mod.is_passed is False
+    assert one_mod.details["issue"] == "too_few_modules"
+
+    # 单模块子节点超过 8 个（via verify_knowledge_points parent_id 统计）-> 失败
+    overloaded_points = [
+        CandidateKnowledgePoint(name="模块甲", level=1, chapter_title="第一章"),
+        CandidateKnowledgePoint(name="模块乙", level=1, chapter_title="第一章"),
+        *[
+            CandidateKnowledgePoint(
+                name=f"核心考点{i}",
+                level=2,
+                chapter_title="第一章",
+                parent_id="mod_a",
+            )
+            for i in range(9)
+        ],
+        CandidateKnowledgePoint(
+            name="核心考点乙一",
+            level=2,
+            chapter_title="第一章",
+            parent_id="mod_b",
+        ),
+    ]
+    ctx = ExtractionContext(
+        total_snippets=20,
+        effective_chars=24000,
+        chapter_stats=(ChapterSnippetStat("第一章", 20, 1.0),),
+    )
+    report = verify_knowledge_points(overloaded_points, ctx, config)
+    assert report.is_qualified is False
+    depth_res = next(
+        r for r in report.check_results if r.item_code == CheckItemCode.HIERARCHY_DEPTH
+    )
+    assert depth_res.is_passed is False
+    assert depth_res.details["issue"] == "module_overloaded"
+
+    # 总节点 > 25 的 2 层树仍受 MAX_LEVEL_2_RATIO 限制
+    big_two_layer = check_hierarchy_depth([1, 1] + [2] * 24, config)
+    assert big_two_layer.is_passed is False
+
+    # 密度边界：950 < 1000 过度拆分；4600 > 4500 过度粗略；1500 在 1000~4500 内通过
+    assert check_quantity_range(20, 19000, 25, config).is_passed is False
+    assert check_quantity_range(5, 23000, 25, config).is_passed is False
+    assert check_quantity_range(12, 18000, 25, config).is_passed is True
 
 
 def test_naming_empty_names() -> None:

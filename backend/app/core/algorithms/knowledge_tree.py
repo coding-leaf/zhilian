@@ -308,7 +308,7 @@ def _find_merge_targets(
 def deduplicate_candidate_points(
     items: Sequence[ExtractedKnowledgeItem],
     embeddings: Sequence[Sequence[float]],
-    similarity_threshold: float = 0.92,
+    similarity_threshold: float = 0.86,
 ) -> list[ExtractedKnowledgeItem]:
     """对候选知识点依次执行确定性同名合并与向量余弦相似度去重，聚合溯源与结构化字段。"""
     n = len(items)

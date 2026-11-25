@@ -26,7 +26,9 @@ from fastapi import (
 )
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.container import get_container
 from app.api.deps.folder import get_folder_service
+from app.api.deps.knowledge import get_knowledge_service
 from app.api.deps.material import get_material_service
 from app.api.deps.pagination import PaginationParams, get_pagination_params
 from app.api.v1._filters import parse_folder_filter
@@ -35,6 +37,11 @@ from app.core.errors import MaterialInvalidError
 from app.core.security import generate_user_ref
 from app.models.material import MaterialStatus
 from app.models.user import User
+from app.schemas.knowledge import (
+    StudyGuidePrewarmRequest,
+    StudyGuidePrewarmResponse,
+    StudyGuidePrewarmStatusResponse,
+)
 from app.schemas.material import (
     MaterialDeleteResponse,
     MaterialDetailResponse,
@@ -51,7 +58,12 @@ from app.schemas.material import (
     MaterialVersionItem,
     MaterialVersionListResponse,
 )
+from app.services._study_guide import (
+    resolve_study_guide_queue,
+    resolve_study_guide_redis_client,
+)
 from app.services.folder import FolderService
+from app.services.knowledge import KnowledgeService
 from app.services.material import MAX_FILE_SIZES, MaterialService
 
 logger = logging.getLogger(__name__)
@@ -796,13 +808,69 @@ def soft_delete_material(
     )
 
 
+@router.post(
+    "/{material_id}/study-guides/prewarm",
+    response_model=StudyGuidePrewarmResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="一键后台预热整章考前精讲笔记",
+)
+def prewarm_material_study_guides(
+    material_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    request_data: Annotated[
+        StudyGuidePrewarmRequest | None,
+        Body(description="可选预热配置参数"),
+    ] = None,
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
+) -> StudyGuidePrewarmResponse:
+    """一键提交整章全部叶子核心考点的考前精讲后台预热任务。"""
+    result = knowledge_service.prewarm_study_guides(
+        material_id=material_id,
+        user_id=user.id,
+        version_id=request_data.version_id if request_data else None,
+        force=request_data.force if request_data else False,
+        queue=resolve_study_guide_queue(container),
+        redis_client=resolve_study_guide_redis_client(container),
+    )
+    return StudyGuidePrewarmResponse.model_validate(result)
+
+
+@router.get(
+    "/{material_id}/study-guides/status",
+    response_model=StudyGuidePrewarmStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="查询整章考前精讲后台预热进度",
+)
+def get_material_study_guides_status(
+    material_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    version_id: Annotated[
+        uuid.UUID | None,
+        Query(description="可选指定资料版本标识"),
+    ] = None,
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
+) -> StudyGuidePrewarmStatusResponse:
+    """查询指定学习资料或版本的整章考前精讲预热进度。"""
+    result = knowledge_service.get_study_guide_prewarm_status(
+        material_id=material_id,
+        user_id=user.id,
+        version_id=version_id,
+        redis_client=resolve_study_guide_redis_client(container),
+    )
+    return StudyGuidePrewarmStatusResponse.model_validate(result)
+
+
 __all__ = [
     "get_material_detail",
+    "get_material_study_guides_status",
     "hard_delete_material",
     "list_material_ocr_pages",
     "list_material_versions",
     "list_materials",
     "move_material_folder",
+    "prewarm_material_study_guides",
     "reshoot_material_page",
     "retry_material_pipeline",
     "router",

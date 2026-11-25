@@ -1154,3 +1154,262 @@ class TestKnowledgeServiceWorkflow:
         assert overview is not None
         assert "步骤：1. 构造拉格朗日函数 → 2. KKT 求解" in overview
         assert "易错：C 过大易过拟合" in overview
+
+    def test_one_shot_convergent_tree_and_dedup_threshold_086(self, session: Session) -> None:
+        """总字符 <= 28,000 时走 One-Shot 全局单次建树，干净 2 层树通过质检且向量阈值 0.86 生效。"""
+        user_id = uuid.uuid4()
+        material_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        mat = Material(
+            id=material_id,
+            user_id=user_id,
+            title="支持向量机专题.pdf",
+            file_format="pdf",
+            file_size=4096,
+        )
+        ver = MaterialVersion(
+            id=version_id,
+            user_id=user_id,
+            material_id=material_id,
+            version_number=1,
+            storage_key="test/svm.pdf",
+            content_hash="svm_hash",
+            parse_status=ParseStatus.EXTRACTING_KNOWLEDGE.value,
+        )
+        snips = [
+            MaterialSnippet(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version_id,
+                snippet_index=i,
+                content=f"第五章 支持向量机 片段 {i}：间隔最大化与拉格朗日对偶推导内容。" * 18,
+                char_length=650,
+                start_offset=i * 650,
+                end_offset=(i + 1) * 650,
+                chapter_title="第五章 支持向量机",
+                source_info={"page_number": i + 1},
+            )
+            for i in range(22)
+        ]
+        session.add_all([mat, ver, *snips])
+        session.commit()
+
+        # 2 个一级模块 + 10 个二级考点 = 12 个节点 (总字符 ~14,300 <= 28,000, 1191 字/考点)
+        canned = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id="m1",
+                    parent_temp_id=None,
+                    name="线性可分与间隔最大化",
+                    core_summary="从线性可分超平面出发建立最大几何间隔优化模型。",
+                    level=1,
+                    chapter_title="第五章 支持向量机",
+                    source_snippet_indices=[0, 1],
+                ),
+                ExtractedKnowledgeItem(
+                    temp_id="m2",
+                    parent_temp_id=None,
+                    name="对偶问题与核技巧",
+                    core_summary="通过拉格朗日对偶与核函数实现非线性高维特征映射。",
+                    level=1,
+                    chapter_title="第五章 支持向量机",
+                    source_snippet_indices=[10, 11],
+                ),
+                *[
+                    ExtractedKnowledgeItem(
+                        temp_id=f"kp_{i}",
+                        parent_temp_id="m1" if i < 5 else "m2",
+                        name=f"支持向量机核心考点{i}",
+                        core_summary=f"支持向量机第{i}项核心原理与考前推导要点解析说明。",
+                        key_takeaways=[f"考点{i}的完整陈述句结论，直接用于考前背诵与辨析。"],
+                        level=2,
+                        chapter_title="第五章 支持向量机",
+                        source_snippet_indices=[i * 2],
+                    )
+                    for i in range(10)
+                ],
+            ]
+        )
+        llm = StubLLM([canned])
+        service = KnowledgeService(session, llm, StubEmbedding())
+        points = service.extract_and_build_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+
+        # 22 个切片 (>12) 但总字数 <= 28,000 -> One-Shot 仅调 1 次 LLM 且通过 2 层收敛树质检
+        assert llm.call_count == 1
+        assert len(points) == 12
+        assert all(not p.is_low_confidence for p in points)
+
+        # 默认去重阈值 0.86：cos=0.88 > 0.86 触发合并
+        item_a = ExtractedKnowledgeItem(
+            temp_id="a", name="硬间隔最大化", source_snippet_indices=[0]
+        )
+        item_b = ExtractedKnowledgeItem(
+            temp_id="b", name="最大几何间隔模型", source_snippet_indices=[1]
+        )
+        merged = deduplicate_candidate_points(
+            [item_a, item_b],
+            [[1.0, 0.0], [0.88, 0.4749736834815167]],
+        )
+        assert len(merged) == 1
+        assert merged[0].source_snippet_indices == [0, 1]
+
+    def test_long_doc_over_28k_uses_chapter_batching_and_consolidation(
+        self, session: Session
+    ) -> None:
+        """总字符 > 28,000 时按大章分批并执行全局轻量归并 Pass。"""
+        user_id = uuid.uuid4()
+        material_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        mat = Material(
+            id=material_id,
+            user_id=user_id,
+            title="机器学习全书.pdf",
+            file_format="pdf",
+            file_size=8192,
+        )
+        ver = MaterialVersion(
+            id=version_id,
+            user_id=user_id,
+            material_id=material_id,
+            version_number=1,
+            storage_key="test/ml.pdf",
+            content_hash="ml_hash",
+            parse_status=ParseStatus.EXTRACTING_KNOWLEDGE.value,
+        )
+        snips = [
+            MaterialSnippet(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version_id,
+                snippet_index=i,
+                content=f"章节{i // 10} 深度教材长文本阐述核心定理与推导过程。" * 60,
+                char_length=1500,
+                start_offset=i * 1500,
+                end_offset=(i + 1) * 1500,
+                chapter_title=f"第{(i // 10) + 1}章",
+            )
+            for i in range(20)
+        ]
+        session.add_all([mat, ver, *snips])
+        session.commit()
+
+        batch1 = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id=f"b1_{i}",
+                    parent_temp_id=None if i == 0 else "b1_0",
+                    name=f"第一章概念{i}",
+                    level=1 if i == 0 else 2,
+                    chapter_title="第1章",
+                    source_snippet_indices=[i],
+                )
+                for i in range(8)
+            ]
+        )
+        batch2 = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id=f"b2_{i}",
+                    parent_temp_id=None if i == 0 else "b2_0",
+                    name=f"第二章概念{i}",
+                    level=1 if i == 0 else 2,
+                    chapter_title="第2章",
+                    source_snippet_indices=[10 + i],
+                )
+                for i in range(8)
+            ]
+        )
+        consolidated = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id="c1",
+                    parent_temp_id=None,
+                    name="第一章核心模块",
+                    level=1,
+                    chapter_title="第1章",
+                    source_snippet_indices=[0],
+                ),
+                ExtractedKnowledgeItem(
+                    temp_id="c2",
+                    parent_temp_id=None,
+                    name="第二章核心模块",
+                    level=1,
+                    chapter_title="第2章",
+                    source_snippet_indices=[10],
+                ),
+                *[
+                    ExtractedKnowledgeItem(
+                        temp_id=f"ck_{i}",
+                        parent_temp_id="c1" if i < 5 else "c2",
+                        name=f"归并核心考点{i}",
+                        core_summary=f"归并后的考试级核心考点{i}完整定义描述。",
+                        key_takeaways=[f"归并考点{i}包含完整主谓宾结论表述。"],
+                        level=2,
+                        chapter_title="第1章" if i < 5 else "第2章",
+                        source_snippet_indices=[i * 2],
+                    )
+                    for i in range(10)
+                ],
+            ]
+        )
+
+        llm = StubLLM([batch1, batch2, consolidated])
+        service = KnowledgeService(session, llm, StubEmbedding())
+        points = service.extract_and_build_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+
+        # 2 章分批 + 1 次全局归并 Pass = 3 次 LLM 调用
+        assert llm.call_count == 3
+        assert len(points) == 12
+        assert all(not p.is_low_confidence for p in points)
+
+    def test_get_knowledge_tree_exposes_has_study_guide_without_payload(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """树查询投影 has_study_guide 布尔值，绝不返回大 JSON study_guide。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        kp_ready = KnowledgePoint(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="已精讲考点",
+            description="desc",
+            level=1,
+            batch_id="b1",
+            study_guide={"schema_version": 1, "exam_positioning": "pos", "core_definition": "def"},
+            study_guide_version=1,
+        )
+        kp_empty = KnowledgePoint(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="未精讲考点",
+            description="desc",
+            level=1,
+            batch_id="b1",
+        )
+        session.add_all([kp_ready, kp_empty])
+        session.commit()
+
+        service = KnowledgeService(session, StubLLM(), StubEmbedding())
+        tree = service.get_knowledge_tree(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+        )
+        by_name = {node["name"]: node for node in tree}
+        assert by_name["已精讲考点"]["has_study_guide"] is True
+        assert by_name["未精讲考点"]["has_study_guide"] is False
+        assert "study_guide" not in by_name["已精讲考点"]

@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import CursorResult, delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import Material, MaterialFolder, MaterialSnippet
@@ -199,7 +199,7 @@ class KnowledgeRepository:
         version_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> list[KnowledgePoint]:
-        """按资料版本与租户用户获取全部知识点列表，按拓扑层级正序排序。
+        """按资料版本与租户用户获取全部知识点列表，按拓扑层级正序排序（延迟加载大 JSON 精讲）。
 
         Args:
             material_id: 资料标识。
@@ -211,6 +211,7 @@ class KnowledgeRepository:
         """
         stmt = (
             select(KnowledgePoint)
+            .options(defer(KnowledgePoint.study_guide))
             .where(
                 KnowledgePoint.material_id == material_id,
                 KnowledgePoint.version_id == version_id,
@@ -223,6 +224,100 @@ class KnowledgeRepository:
             )
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    def list_tree_nodes_with_guide_flag(
+        self,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[tuple[KnowledgePoint, bool]]:
+        """按资料版本查询知识树节点及 ``has_study_guide`` 布尔投影，绝不传输大 JSON。"""
+        stmt = (
+            select(
+                KnowledgePoint,
+                KnowledgePoint.study_guide.is_not(None).label("has_study_guide"),
+            )
+            .options(defer(KnowledgePoint.study_guide))
+            .where(
+                KnowledgePoint.material_id == material_id,
+                KnowledgePoint.version_id == version_id,
+                KnowledgePoint.user_id == user_id,
+            )
+            .order_by(
+                KnowledgePoint.level.asc(),
+                KnowledgePoint.sort_order.asc(),
+                KnowledgePoint.created_at.asc(),
+            )
+        )
+        rows = self.session.execute(stmt).all()
+        return [(row[0], bool(row[1])) for row in rows]
+
+    def list_sibling_kp_names(
+        self,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+        *,
+        exclude_kp_id: uuid.UUID,
+        parent_id: uuid.UUID | None = None,
+        limit: int = 12,
+    ) -> list[str]:
+        """查询同版本/同模块兄弟考点名称列表（用于考前精讲易混概念对比）。"""
+        stmt = (
+            select(KnowledgePoint.id, KnowledgePoint.parent_id, KnowledgePoint.name)
+            .where(
+                KnowledgePoint.material_id == material_id,
+                KnowledgePoint.version_id == version_id,
+                KnowledgePoint.user_id == user_id,
+                KnowledgePoint.id != exclude_kp_id,
+            )
+            .order_by(KnowledgePoint.sort_order.asc(), KnowledgePoint.created_at.asc())
+        )
+        rows = self.session.execute(stmt).all()
+        same_parent = [
+            str(row[2])
+            for row in rows
+            if parent_id is not None and row[1] == parent_id and str(row[2]).strip()
+        ]
+        others = [
+            str(row[2])
+            for row in rows
+            if (parent_id is None or row[1] != parent_id) and str(row[2]).strip()
+        ]
+        combined: list[str] = []
+        seen: set[str] = set()
+        for name in [*same_parent, *others]:
+            if name not in seen:
+                seen.add(name)
+                combined.append(name)
+            if len(combined) >= limit:
+                break
+        return combined
+
+    def list_leaf_study_guide_statuses(
+        self,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[tuple[uuid.UUID, str, bool]]:
+        """查询指定版本所有叶子核心考点的 ``(kp_id, name, has_study_guide)`` 元组列表。"""
+        stmt = (
+            select(
+                KnowledgePoint.id,
+                KnowledgePoint.parent_id,
+                KnowledgePoint.name,
+                KnowledgePoint.study_guide.is_not(None).label("has_study_guide"),
+            )
+            .where(
+                KnowledgePoint.material_id == material_id,
+                KnowledgePoint.version_id == version_id,
+                KnowledgePoint.user_id == user_id,
+            )
+            .order_by(KnowledgePoint.sort_order.asc(), KnowledgePoint.created_at.asc())
+        )
+        rows = self.session.execute(stmt).all()
+        parent_ids = {row[1] for row in rows if row[1] is not None}
+        return [(row[0], str(row[2]), bool(row[3])) for row in rows if row[0] not in parent_ids]
 
     def delete_knowledge_points_by_version(
         self,
