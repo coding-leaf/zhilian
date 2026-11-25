@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from sqlalchemy import inspect as sa_inspect
@@ -23,10 +23,13 @@ from sqlalchemy.orm import Session
 if TYPE_CHECKING:
     from app.services.knowledge import KnowledgeService
 
+from app.core.algorithms.material_chunking import ChunkingResult, ParagraphInput
 from app.core.algorithms.ocr_quality import (
     OCRPageInput,
     verify_ocr_quality,
 )
+from app.core.algorithms.semantic_chunking import SemanticPageInput
+from app.core.config import get_settings
 from app.core.errors import (
     EmbeddingAuthError,
     EmbeddingError,
@@ -99,9 +102,11 @@ from app.services._material_pipeline import (
     prepare_material_snippets,
     process_initial_ocr_page,
     repair_garbled_pdf_pages,
+    repair_garbled_pdf_pages_with_pages,
     resolve_progress_redis_client,
     set_cached_parse_progress,
 )
+from app.services._semantic_chunker import chunk_pages_semantically
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +177,13 @@ class MaterialService:
         vlm_dpi: int = 150,
         vlm_max_concurrency: int = 3,
         vlm_timeout: float = 45.0,
+        vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] | None = None,
+        vlm_image_format: Literal["jpeg", "png"] | None = None,
+        vlm_jpeg_quality: int | None = None,
+        vlm_max_image_edge: int | None = None,
+        vlm_max_pages_per_doc: int | None = None,
+        vlm_page_timeout: float | None = None,
+        semantic_chunking_enabled: bool | None = None,
     ) -> None:
         self.session = session
         self.storage = storage_adapter
@@ -185,9 +197,36 @@ class MaterialService:
         self.knowledge_service = knowledge_service
         self.llm = llm_adapter
         self.vlm = vlm_adapter
+        settings = get_settings()
         self.vlm_dpi = vlm_dpi
         self.vlm_max_concurrency = vlm_max_concurrency
-        self.vlm_timeout = vlm_timeout
+        self.vlm_timeout = (
+            vlm_page_timeout
+            if vlm_page_timeout is not None
+            else (vlm_timeout if vlm_timeout != 45.0 else settings.vlm.page_timeout)
+        )
+        self.vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = (
+            vlm_prompt_style or settings.vlm.prompt_style
+        )
+        self.vlm_image_format: Literal["jpeg", "png"] = (
+            vlm_image_format or settings.vlm.image_format
+        )
+        self.vlm_jpeg_quality = (
+            vlm_jpeg_quality if vlm_jpeg_quality is not None else settings.vlm.jpeg_quality
+        )
+        self.vlm_max_image_edge = (
+            vlm_max_image_edge if vlm_max_image_edge is not None else settings.vlm.max_image_edge
+        )
+        self.vlm_max_pages_per_doc = (
+            vlm_max_pages_per_doc
+            if vlm_max_pages_per_doc is not None
+            else settings.vlm.max_pages_per_doc
+        )
+        self.semantic_chunking_enabled = (
+            semantic_chunking_enabled
+            if semantic_chunking_enabled is not None
+            else settings.llm.semantic_chunking_enabled
+        )
         self.bucket = bucket
         self._progress_redis = resolve_progress_redis_client(queue_adapter, idempotency_adapter)
 
@@ -449,6 +488,11 @@ class MaterialService:
                 vlm_dpi=self.vlm_dpi,
                 vlm_max_concurrency=self.vlm_max_concurrency,
                 vlm_timeout=self.vlm_timeout,
+                vlm_prompt_style=self.vlm_prompt_style,
+                vlm_image_format=self.vlm_image_format,
+                vlm_jpeg_quality=self.vlm_jpeg_quality,
+                vlm_max_image_edge=self.vlm_max_image_edge,
+                vlm_max_pages_per_doc=self.vlm_max_pages_per_doc,
             )
             return paragraphs, extracted_text, None
 
@@ -459,6 +503,121 @@ class MaterialService:
 
         paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
         return paragraphs, "\n\n".join(paragraphs), None
+
+    def _build_range_progress_callback(
+        self,
+        version_id: uuid.UUID,
+        *,
+        start_pct: int,
+        end_pct: int,
+    ) -> Callable[[int, int], None]:
+        """构建线性单调不回退的阶段进度回调。"""
+        highest = start_pct
+
+        def _on_progress(completed: int, total: int) -> None:
+            nonlocal highest
+            safe_total = max(total, 1)
+            ratio = max(0.0, min(1.0, completed / safe_total))
+            computed = start_pct + round((end_pct - start_pct) * ratio)
+            if computed > highest:
+                highest = computed
+            set_cached_parse_progress(version_id, highest, redis_client=self._progress_redis)
+
+        return _on_progress
+
+    def _group_pptx_paragraphs_as_pages(
+        self, paragraphs: Sequence[ParagraphInput]
+    ) -> list[SemanticPageInput]:
+        """把去噪后的 PPTX 段落按幻灯片页码聚合为 SemanticPageInput 序列。"""
+        by_page: dict[int, list[str]] = {}
+        for idx, para in enumerate(paragraphs, start=1):
+            pn = para.page_number if para.page_number is not None else idx
+            by_page.setdefault(pn, []).append(para.text)
+        return [
+            SemanticPageInput(page_number=pn, text="\n\n".join(parts), used_vlm=False)
+            for pn, parts in sorted(by_page.items())
+            if any(p.strip() for p in parts)
+        ]
+
+    def _extract_source_content_with_semantic(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version: MaterialVersion,
+        user_id: uuid.UUID,
+        clean_format: str,
+        file_bytes: bytes,
+    ) -> tuple[Any, str, ChunkingResult | None, MaterialVersion | None]:
+        """抽取文档正文并在满足条件时执行滑窗语义打标与局部公式重构。"""
+        if clean_format == "pdf":
+            pdf_pages = extract_pdf_pages_with_diagnostics(file_bytes)
+            paragraphs, extracted_text, semantic_pages = repair_garbled_pdf_pages_with_pages(
+                pdf_pages,
+                file_bytes,
+                ocr=self.ocr,
+                llm=self.llm,
+                vlm=self.vlm,
+                vlm_dpi=self.vlm_dpi,
+                vlm_max_concurrency=self.vlm_max_concurrency,
+                vlm_timeout=self.vlm_timeout,
+                vlm_prompt_style=self.vlm_prompt_style,
+                vlm_image_format=self.vlm_image_format,
+                vlm_jpeg_quality=self.vlm_jpeg_quality,
+                vlm_max_image_edge=self.vlm_max_image_edge,
+                vlm_max_pages_per_doc=self.vlm_max_pages_per_doc,
+                vlm_on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=30, end_pct=40
+                ),
+            )
+            outcome = chunk_pages_semantically(
+                pages=semantic_pages,
+                fallback_paragraphs=paragraphs,
+                llm=self.llm,
+                enabled=self.semantic_chunking_enabled,
+                doc_type="pdf",
+                on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=40, end_pct=45
+                ),
+            )
+            if outcome is not None:
+                if outcome.repaired_page_texts:
+                    rebuilt_pages = [
+                        outcome.repaired_page_texts.get(sp.page_number, sp.text)
+                        for sp in semantic_pages
+                    ]
+                    extracted_text = "\n\n".join(p for p in rebuilt_pages if p.strip())
+                return paragraphs, extracted_text, outcome.chunk_result, None
+            return paragraphs, extracted_text, None, None
+
+        if clean_format == "pptx":
+            raw_slides = extract_pptx_slides(file_bytes)
+            paragraphs, extracted_text = denoise_pptx_slides(raw_slides)
+            semantic_pages = self._group_pptx_paragraphs_as_pages(paragraphs)
+            outcome = chunk_pages_semantically(
+                pages=semantic_pages,
+                fallback_paragraphs=paragraphs,
+                llm=self.llm,
+                enabled=self.semantic_chunking_enabled,
+                doc_type="pptx",
+                on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=40, end_pct=45
+                ),
+            )
+            return (
+                paragraphs,
+                extracted_text,
+                outcome.chunk_result if outcome is not None else None,
+                None,
+            )
+
+        paragraphs, extracted_text, early_version = self._extract_source_content(
+            material_id=material_id,
+            version=version,
+            user_id=user_id,
+            clean_format=clean_format,
+            file_bytes=file_bytes,
+        )
+        return paragraphs, extracted_text, None, early_version
 
     def _build_extraction_progress_callback(
         self, version_id: uuid.UUID
@@ -567,13 +726,15 @@ class MaterialService:
 
             file_bytes = self.storage.get_object(self.bucket, version.storage_key)
 
-            # 阶段 A: 提取文本与 OCR 质量门禁
-            paragraphs, extracted_text, early_version = self._extract_source_content(
-                material_id=material_id,
-                version=version,
-                user_id=user_id,
-                clean_format=clean_format,
-                file_bytes=file_bytes,
+            # 阶段 A: 提取文本、VLM 视觉重建、语义打标与 OCR 质量门禁
+            paragraphs, extracted_text, prechunked_result, early_version = (
+                self._extract_source_content_with_semantic(
+                    material_id=material_id,
+                    version=version,
+                    user_id=user_id,
+                    clean_format=clean_format,
+                    file_bytes=file_bytes,
+                )
             )
             if early_version is not None:
                 return early_version
@@ -601,6 +762,7 @@ class MaterialService:
                 user_id=user_id,
                 paragraphs=paragraphs,
                 require_non_empty=True,
+                prechunked_result=prechunked_result,
             )
 
             # 阶段 C: 自动串联知识树抽取（抽取与质检全通过后同事务原子替换旧知识点与切片）

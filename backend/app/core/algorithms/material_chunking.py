@@ -95,6 +95,20 @@ _PUNCT_SPACE_RE: re.Pattern[str] = re.compile(
     r"[\s。！？!?.,，、；;：:~～·…—\-_()（）\[\]【】\"'“”‘’]+"
 )
 _SUBSTANTIVE_SHORT_TERM_RE: re.Pattern[str] = re.compile(r"(?:定义|定理|公式|条件|步骤)")
+_TITLE_FORBIDDEN_MATH_CHARS: frozenset[str] = frozenset("+-*/^_=<>≤≥≠≈∈∉⊂⊃∪∩∑∫∏√∞±×÷·‖|${}[]`\\−")
+_TITLE_GREEK_RE: re.Pattern[str] = re.compile(r"[\u0370-\u03ff\U0001d400-\U0001d7ff]")
+
+
+def is_valid_chapter_title(title: str) -> bool:
+    """防御性校验章节标题：拒绝数学公式表达式与运算符碎片覆盖章节状态。"""
+    stripped = _MD_HEADING_PREFIX_RE.sub("", title.strip()).strip()
+    if not stripped or "\n" in stripped or len(stripped) > 80:
+        return False
+    if _TITLE_GREEK_RE.search(stripped):
+        return False
+    if any(ch in _TITLE_FORBIDDEN_MATH_CHARS for ch in stripped):
+        return False
+    return not stripped.startswith(("(", "（", "-", "+", "="))
 
 
 @dataclass(frozen=True)
@@ -623,6 +637,23 @@ def _filter_ultra_short_noise_snippets(snippets: list[Snippet]) -> list[Snippet]
     ]
 
 
+def _unpack_paragraph_item(
+    item: str | ParagraphInput,
+    default_source_ref: str,
+    default_doc_type: str,
+) -> tuple[str, str, str, bool, int | None, int | None]:
+    if isinstance(item, ParagraphInput):
+        return (
+            item.text,
+            item.source_ref,
+            item.doc_type,
+            item.is_title,
+            item.page_number,
+            item.page_end,
+        )
+    return item, default_source_ref, default_doc_type, False, None, None
+
+
 def split_material_into_snippets(
     paragraphs: Sequence[str | ParagraphInput],
     max_chars: int = DEFAULT_MAX_CHARS,
@@ -682,20 +713,9 @@ def split_material_into_snippets(
     global_char_offset = 0
 
     for item in paragraphs:
-        if isinstance(item, ParagraphInput):
-            raw_text = item.text
-            source_ref = item.source_ref
-            doc_type = item.doc_type
-            is_title = item.is_title
-            page_number = item.page_number
-            page_end = item.page_end
-        else:
-            raw_text = item
-            source_ref = default_source_ref
-            doc_type = default_doc_type
-            is_title = False
-            page_number = None
-            page_end = None
+        raw_text, source_ref, doc_type, is_title, page_number, page_end = _unpack_paragraph_item(
+            item, default_source_ref, default_doc_type
+        )
 
         cleaned_text, removed_count = clean_text_and_count_removals(raw_text)
         cleaned_text = clean_pseudo_bullet_glyphs(cleaned_text)
@@ -705,8 +725,10 @@ def split_material_into_snippets(
             continue
 
         if is_title:
-            current_chapter_title = _MD_HEADING_PREFIX_RE.sub("", cleaned_text.strip()).strip()
-            continue
+            candidate_title = _MD_HEADING_PREFIX_RE.sub("", cleaned_text.strip()).strip()
+            if is_valid_chapter_title(candidate_title):
+                current_chapter_title = candidate_title
+                continue
 
         if (
             should_filter

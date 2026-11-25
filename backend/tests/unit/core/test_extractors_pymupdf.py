@@ -553,3 +553,31 @@ class TestNeedsVisualOcrGate:
         extracted = extract_pdf_pages_with_diagnostics(pdf_bytes)
         assert len(extracted) == 1
         assert extracted[0].needs_visual_ocr is False
+
+
+class TestRenderPdfPageImageJpegAndBatch:
+    def test_render_pdf_page_image_jpeg_and_max_edge_scaling(self) -> None:
+        from app.core.extractors import render_pdf_page_image, render_pdf_pages_batch
+
+        doc = pymupdf.open()
+        p1 = doc.new_page(width=1600, height=900)
+        p1.insert_text((80, 80), "Wide Slide Page One", fontsize=18)
+        p2 = doc.new_page(width=1600, height=900)
+        p2.insert_text((80, 80), "Wide Slide Page Two", fontsize=18)
+        pdf_bytes: bytes = doc.tobytes()
+        doc.close()
+
+        jpeg_bytes, mime = render_pdf_page_image(
+            pdf_bytes, 1, dpi=200, image_format="jpeg", jpeg_quality=85, max_image_edge=1440
+        )
+        assert mime == "image/jpeg"
+        assert jpeg_bytes.startswith(b"\xff\xd8\xff")
+        pix = pymupdf.Pixmap(jpeg_bytes)
+        assert max(pix.width, pix.height) <= 1440
+
+        batch, batch_mime = render_pdf_pages_batch(
+            pdf_bytes, [1, 2, 99], dpi=150, image_format="jpeg", max_image_edge=1440
+        )
+        assert batch_mime == "image/jpeg"
+        assert set(batch.keys()) == {1, 2}
+        assert all(val.startswith(b"\xff\xd8\xff") for val in batch.values())

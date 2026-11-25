@@ -294,6 +294,10 @@ class LLMSettings(BaseSettings):
         default=3,
         description="失败最大重试次数",
     )
+    semantic_chunking_enabled: bool = Field(
+        default=True,
+        description="是否启用基于 LLM 滑窗的跨页语义打标与逻辑单元切片",
+    )
 
 
 class OCRSettings(BaseSettings):
@@ -389,6 +393,12 @@ class VLMSettings(BaseSettings):
         max_retries: 失败最大重试次数。
         dpi: 页面渲染分辨率。
         max_concurrency: 脏页并发转录上限。
+        prompt_style: VLM 提示词与消息序列化风格。
+        image_format: VLM 页面截图编码格式。
+        jpeg_quality: JPEG 编码质量（20-100）。
+        max_image_edge: 页面渲染最长边像素上限。
+        max_pages_per_doc: 单份文档最多送入 VLM 的页数上限。
+        page_timeout: 单页 VLM 请求超时上限（秒）。
     """
 
     enabled: bool = Field(default=False, description="是否启用 VLM 脏页转录")
@@ -403,6 +413,37 @@ class VLMSettings(BaseSettings):
     max_retries: int = Field(default=2, description="失败最大重试次数")
     dpi: int = Field(default=150, ge=72, le=300, description="页面渲染 DPI")
     max_concurrency: int = Field(default=3, ge=1, le=16, description="脏页并发转录上限")
+    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = Field(
+        default="auto",
+        description="VLM 提示词与消息序列化风格",
+    )
+    image_format: Literal["jpeg", "png"] = Field(
+        default="jpeg",
+        description="VLM 页面截图编码格式",
+    )
+    jpeg_quality: int = Field(
+        default=85,
+        ge=20,
+        le=100,
+        description="JPEG 编码质量",
+    )
+    max_image_edge: int = Field(
+        default=1440,
+        ge=512,
+        le=4096,
+        description="页面渲染最长边像素上限",
+    )
+    max_pages_per_doc: int = Field(
+        default=40,
+        ge=1,
+        le=500,
+        description="单份文档最多送入 VLM 的页数上限",
+    )
+    page_timeout: float = Field(
+        default=45.0,
+        gt=0.0,
+        description="单页 VLM 请求超时上限（秒）",
+    )
 
 
 class RerankSettings(BaseSettings):
