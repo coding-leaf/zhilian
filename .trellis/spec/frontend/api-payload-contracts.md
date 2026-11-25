@@ -437,3 +437,17 @@ practice_title: str | None = None
 - **考前复习级知识卡与 PDF/PPT 去噪（零 DB 迁移）**：
   - `KnowledgePoint.structured_content`（JSONB）向后兼容新增可选 `derivation_steps: string[]` 与 `common_mistakes: string[]`，`core_summary` 改用 `trim_excerpt_cleanly(..., max_chars=200)` 保护公式；`SnippetSourceResponse` 新增可选 `page_end: int | None`（持久化于 `MaterialSnippet.source_info["page_end"]`）。
   - `document_denoising.py` 负责跨页页眉/页脚/校名水印剔除、`PageRole` 模板页过滤（致谢/目录/空小结）及写入/读取双层原文依据过滤排序（老资料过滤后为空返回 `[]` 而非回吐「谢谢！」）；`ocr_quality.py` 与前端 `richText.ts::isGarbledSnippetText` 同步识别 `☒`（`\u2612`）/ `\ufffd` / `▯`。
+
+## Scenario: 主界面全局助教、视觉语义切片与两阶段考前精讲笔记（2026-11-25）
+
+- **主界面全局助教与安全 1 次检索（`POST /api/v1/coach/ask`）**：
+  - `ScopedCoachRequest` 支持 `scope: "global" | "folder" | "material" | "knowledge_point"` 与 `history` 冷启动补种；三 ID 全空且 `scope=None` 自动归一化为 `"global"`，显式 `scope` 缺对应 ID 返回 HTTP 422（严禁静默回退首课）。
+  - `SearchOptions.allowed_version_ids` 将跨资料/全库检索收敛为 1 次 Embedding + 1 次 SQL 检索（`MaterialSnippet.version_id.in_`），排除软删/归档/旧版切片；全局模式未命中高置信切片时走 `generate_general`（`cited=[]`，禁编页码）。
+  - 前端 `useHomeCoach.ts` 独立维护 `coachFocusedFolderId`（默认全局），与 `folderStore.currentFolderId` 解耦，经 `CoachScopeSelector.vue` 胶囊切换并区分全局/课程/讲义三套快捷提问。
+- **视觉高召回 + 标题禁公式 + 8 页滑窗语义切片**：
+  - `VLMSettings` 支持 `prompt_style="auto|general_markdown|paddleocr_vl"`（`paddleocr_vl` 无 `system`、`[image_url, text("OCR:")]`）、滚动批 JPEG 渲染（`<=1440px` 防 1.7 GiB OOM）与连续 3 次失败熔断；`is_heading_block` 与 `material_chunking.py::is_valid_chapter_title` 全面拉黑数学算符与希腊字母。
+  - `services/_semantic_chunker.py` + `core/algorithms/semantic_chunking.py` 按 8 页滑窗 Zero-Rewrite 轻量打标并跨页合并逻辑单元（上限 1400 字），未走/失败于 VLM 的散架公式页自动局部修复。
+- **两阶段收敛考点树 + 懒生成永久缓存考前精讲笔记（迁移 `0015_kp_study_guide`）**：
+  - Stage 1 常规单章（`<=28,000` 字）One-Shot 全局建 2 层收敛树（8~15 核心考点，`knowledge_quality.py` 对 `<=25` 节点的 2 层树豁免 `MAX_LEVEL_2_RATIO=0.60`，去重阈值 `0.86`）。
+  - Stage 2 在 `knowledge_points` 新增 `study_guide`（JSONB）/ `study_guide_generated_at` / `study_guide_version`（列表查询 `defer` + 仅传 `has_study_guide: bool`）；`GET /knowledge/{kp_id}/study-guide`、`POST /knowledge/{kp_id}/study-guide/generate`（单飞锁 `zhilian:study_guide:lock:{kp_id}` + 短事务 + `max_tokens=6144` + `tool_choice="auto"`，并发超时返 `202`）、`POST /materials/{material_id}/study-guides/prewarm` & `GET .../status`（RQ `zhilian` 队列 `prewarm_study_guides`）。
+  - 前端独立分包全屏精讲页 `subpackages/material/pages/knowledge/index.vue`（<= 260 行）按 4 段呈现（`精讲笔记 | 典型例题 | 对比与避坑 | 教材原文`），60s 超时懒生成 + 2.5s 短轮询。
