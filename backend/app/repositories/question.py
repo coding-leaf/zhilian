@@ -230,16 +230,15 @@ class QuestionRepository:
         unbatched: bool,
         include_deleted: bool,
     ) -> Any:
-        """为题目列表与计数查询统一附加多条件过滤。"""
+        """为题目列表与计数查询统一附加多条件过滤（始终排除已软删除资料）。"""
         if not include_deleted:
             stmt = stmt.where(Question.is_deleted.is_(False))
-        if folder_id is not None or unclassified:
-            stmt = cls._apply_folder_filter(
-                stmt,
-                folder_id,
-                user_id,
-                unclassified=unclassified,
-            )
+        stmt = cls._apply_active_material_filter(
+            stmt,
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
         equality_filters: tuple[tuple[Any, Any], ...] = (
             (Question.material_id, material_id),
             (Question.version_id, version_id),
@@ -257,31 +256,25 @@ class QuestionRepository:
         return stmt
 
     @staticmethod
-    def _apply_folder_filter(
+    def _apply_active_material_filter(
         stmt: Any,
-        folder_id: uuid.UUID | None,
         user_id: uuid.UUID,
         *,
+        folder_id: uuid.UUID | None = None,
         unclassified: bool = False,
     ) -> Any:
-        """为题目查询追加课程文件夹或未分类资料归属过滤（排除已归档课程资料）。"""
+        """为题目查询统一关联 Material 并过滤已软删除资料；按需叠加课程或未分类过滤。"""
+        stmt = stmt.join(Material, Question.material_id == Material.id).where(
+            Material.user_id == user_id,
+            Material.is_deleted.is_(False),
+        )
         if folder_id is not None:
-            return (
-                stmt.join(Material, Question.material_id == Material.id)
-                .join(MaterialFolder, Material.folder_id == MaterialFolder.id)
-                .where(
-                    Material.user_id == user_id,
-                    Material.is_deleted.is_(False),
-                    Material.folder_id == folder_id,
-                    MaterialFolder.archived_at.is_(None),
-                )
+            return stmt.join(MaterialFolder, Material.folder_id == MaterialFolder.id).where(
+                Material.folder_id == folder_id,
+                MaterialFolder.archived_at.is_(None),
             )
         if unclassified:
-            return stmt.join(Material, Question.material_id == Material.id).where(
-                Material.user_id == user_id,
-                Material.is_deleted.is_(False),
-                Material.folder_id.is_(None),
-            )
+            return stmt.where(Material.folder_id.is_(None))
         return stmt
 
     # ==========================================
@@ -297,7 +290,7 @@ class QuestionRepository:
         limit: int = 20,
         offset: int = 0,
     ) -> list[tuple[str | None, int, int, datetime]]:
-        """按出题批次聚合分页查询批次摘要（支持课程与未分类范围过滤）。"""
+        """按出题批次聚合分页查询批次摘要（支持课程与未分类范围过滤，排除已删资料）。"""
         available_count = func.sum(
             case((Question.status == QuestionStatus.AVAILABLE.value, 1), else_=0)
         ).label("available_count")
@@ -313,13 +306,12 @@ class QuestionRepository:
             Question.is_deleted.is_(False),
             Question.status == QuestionStatus.AVAILABLE.value,
         )
-        if folder_id is not None or unclassified:
-            stmt = self._apply_folder_filter(
-                stmt,
-                folder_id,
-                user_id,
-                unclassified=unclassified,
-            )
+        stmt = self._apply_active_material_filter(
+            stmt,
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
         stmt = (
             stmt.group_by(Question.batch_id)
             .order_by(first_created_at.desc(), Question.batch_id.asc())
@@ -342,13 +334,12 @@ class QuestionRepository:
             Question.is_deleted.is_(False),
             Question.status == QuestionStatus.AVAILABLE.value,
         )
-        if folder_id is not None or unclassified:
-            grouped_stmt = self._apply_folder_filter(
-                grouped_stmt,
-                folder_id,
-                user_id,
-                unclassified=unclassified,
-            )
+        grouped_stmt = self._apply_active_material_filter(
+            grouped_stmt,
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
         grouped = grouped_stmt.group_by(Question.batch_id).subquery()
         total = self.session.execute(select(func.count()).select_from(grouped)).scalar_one()
         return int(total)
@@ -403,6 +394,10 @@ class QuestionRepository:
                 Material.is_deleted.is_(False),
                 Material.folder_id.is_(None),
             )
+        else:
+            stmt = stmt.where(
+                Material.id.is_(None) | Material.is_deleted.is_(False),
+            )
         stmt = stmt.distinct()
         rows = self.session.execute(stmt).all()
         return [(row[0], row[1], row[2], row[3], row[4]) for row in rows]
@@ -414,7 +409,7 @@ class QuestionRepository:
         folder_id: uuid.UUID | None = None,
         unclassified: bool = False,
     ) -> list[tuple[uuid.UUID, uuid.UUID | None, int]]:
-        """单次聚合统计题库按 (讲义, 考点) 分组的可用题目数。"""
+        """单次聚合统计题库按 (讲义, 考点) 分组的可用题目数（排除已删资料）。"""
         stmt = select(
             Question.material_id,
             Question.knowledge_point_id,
@@ -424,13 +419,12 @@ class QuestionRepository:
             Question.is_deleted.is_(False),
             Question.status == QuestionStatus.AVAILABLE.value,
         )
-        if folder_id is not None or unclassified:
-            stmt = self._apply_folder_filter(
-                stmt,
-                folder_id,
-                user_id,
-                unclassified=unclassified,
-            )
+        stmt = self._apply_active_material_filter(
+            stmt,
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
         stmt = stmt.group_by(Question.material_id, Question.knowledge_point_id)
         rows = self.session.execute(stmt).all()
         return [(row[0], row[1], int(row[2])) for row in rows]

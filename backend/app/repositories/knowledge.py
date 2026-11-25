@@ -144,7 +144,7 @@ class KnowledgeRepository:
         material_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> list[KnowledgePoint]:
-        """按资料标识与租户用户查询知识点列表。
+        """按资料标识与租户用户查询知识点列表（排除已软删除资料）。
 
         Args:
             material_id: 资料主键。
@@ -155,9 +155,12 @@ class KnowledgeRepository:
         """
         stmt = (
             select(KnowledgePoint)
+            .join(Material, KnowledgePoint.material_id == Material.id)
             .where(
                 KnowledgePoint.material_id == material_id,
                 KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
             )
             .order_by(
                 KnowledgePoint.level.asc(),
@@ -171,9 +174,9 @@ class KnowledgeRepository:
         self,
         user_id: uuid.UUID,
     ) -> list[KnowledgePoint]:
-        """获取指定租户用户的全部知识点（无分页上限，跨资料聚合）。
+        """获取指定租户用户的全部活跃资料知识点（无分页上限，跨资料聚合，排除已软删除资料）。
 
-        用于用户掌握度宏观全景在缺省资料时聚合该用户所有知识点，
+        用于用户掌握度宏观全景在缺省资料时聚合该用户所有活跃资料知识点，
         与按资料过滤的 list_by_material_id 严格区分（禁止退化为 material_id IS NULL）。
 
         Args:
@@ -184,7 +187,12 @@ class KnowledgeRepository:
         """
         stmt = (
             select(KnowledgePoint)
-            .where(KnowledgePoint.user_id == user_id)
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
             .order_by(
                 KnowledgePoint.level.asc(),
                 KnowledgePoint.sort_order.asc(),
