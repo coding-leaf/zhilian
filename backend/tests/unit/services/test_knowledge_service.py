@@ -1451,7 +1451,7 @@ class TestKnowledgeServiceWorkflow:
             ) -> tuple[T, LLMResponse]:
                 self.calls += 1
                 assert options is not None
-                assert options.max_tokens == 8192
+                assert options.max_tokens == 16384
                 assert options.tool_choice == "auto"
                 if self.calls == 1:
                     raise LLMResponseFormatError("AI 输出格式暂时异常，请稍后重试")

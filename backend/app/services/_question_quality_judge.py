@@ -356,7 +356,7 @@ def judge_and_repair_candidates(
         output, _ = llm.generate_structured(
             messages=messages,
             response_model=LLMQuestionJudgeBatchOutput,
-            options=LLMOptions(temperature=0.1, max_tokens=4096),
+            options=LLMOptions(temperature=0.1, max_tokens=8192),
         )
         if output is not None:
             for item in output.decisions:

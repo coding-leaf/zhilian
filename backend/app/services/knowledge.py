@@ -72,8 +72,8 @@ _RETRY_MAX_BATCH_SNIPPETS: int = 8
 _DEFAULT_MAX_BATCH_CHARS: int = 6000
 _ONE_SHOT_MAX_CHARS: int = 28_000
 _CHAPTER_BATCH_MAX_CHARS: int = 16_000
-_ONE_SHOT_MAX_TOKENS: int = 8192
-_BATCH_MAX_TOKENS: int = 8192
+_ONE_SHOT_MAX_TOKENS: int = 16384
+_BATCH_MAX_TOKENS: int = 16384
 _ONE_SHOT_FALLBACK_BATCH_CHARS: int = 8000
 _SIMILARITY_DEDUP_THRESHOLD: float = 0.86
 _CONSOLIDATION_MIN_CANDIDATES: int = 16
@@ -366,7 +366,7 @@ class KnowledgeService:
         options = LLMOptions(
             temperature=0.25 if one_shot else 0.3,
             max_tokens=_ONE_SHOT_MAX_TOKENS if one_shot else _BATCH_MAX_TOKENS,
-            timeout=90.0,
+            timeout=120.0,
             tool_choice="auto",
         )
 

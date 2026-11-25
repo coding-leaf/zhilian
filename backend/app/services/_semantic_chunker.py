@@ -41,8 +41,8 @@ from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 _logger = logging.getLogger(__name__)
 
 _MIN_PAGES_FOR_SEMANTIC_CHUNKING: int = 3
-_SEMANTIC_CHUNK_MAX_TOKENS: int = 8192
-_SEMANTIC_CHUNK_TIMEOUT: float = 60.0
+_SEMANTIC_CHUNK_MAX_TOKENS: int = 16384
+_SEMANTIC_CHUNK_TIMEOUT: float = 90.0
 _SEMANTIC_DEFAULT_CONCURRENCY: int = 3
 _ANCHOR_TAIL_CHARS: int = 120
 

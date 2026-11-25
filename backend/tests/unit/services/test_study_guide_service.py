@@ -343,7 +343,7 @@ def test_generate_study_guide_releases_transaction_caches_and_supports_thinking_
         assert tx_states_during_llm == [False]
         opts = llm.structured_calls[0]
         assert opts is not None
-        assert opts.max_tokens == 6144
+        assert opts.max_tokens == 16384
         assert opts.temperature == 0.25
         assert opts.timeout == 55.0
         assert opts.tool_choice == "auto"
