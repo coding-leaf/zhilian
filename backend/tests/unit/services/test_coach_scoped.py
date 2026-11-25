@@ -7,16 +7,29 @@ KP 范围前缀不破坏寒暄判定、课程范围标题参与查询改写、�
 import uuid
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.core.errors import SearchError
+from app.api.deps.auth import get_current_user
+from app.api.deps.question import get_question_service
+from app.api.v1.questions import router as questions_router
+from app.core.errors import LLMResponseFormatError, SearchError
 from app.integrations.embedding import FakeEmbeddingAdapter
-from app.integrations.llm.coach_graph import CoachDraft, CoachOverviewDraft, RewrittenQuery
+from app.integrations.llm.coach_graph import (
+    CoachDraft,
+    CoachGeneralDraft,
+    CoachOverviewDraft,
+    RewrittenQuery,
+)
 from app.integrations.llm.coach_memory import CoachSessionMemory
 from app.integrations.llm.protocol import (
     LLMMessage,
@@ -27,11 +40,16 @@ from app.integrations.llm.protocol import (
 )
 from app.integrations.rerank.protocol import RerankItem
 from app.integrations.search.fake import FakeSearchAdapter
+from app.integrations.search.pgvector import PgvectorHybridSearchAdapter
 from app.integrations.search.protocol import SearchOptions, SearchResult, SearchSnippetCandidate
+from app.main import validation_error_handler
 from app.models.base import Base
 from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import Material, MaterialFolder, MaterialSnippet, MaterialVersion
+from app.models.practice import MasteryLevel, MasteryRecord
 from app.models.user import User
+from app.repositories.question import QuestionRepository
+from app.schemas.question import AskCoachHistoryItem, ScopedCoachRequest
 from app.services.question import QuestionService
 
 # ---------------------------------------------------------------------------
@@ -613,9 +631,13 @@ class TestFolderScope:
         assert [s.snippet_id for s in result.sources] == [first.snippet_ids[0]]
         rewrite_prompt = user_text(llm.calls_for(RewrittenQuery)[0])
         assert "学习范围：软件工程课" in rewrite_prompt
-        # 两份资料各检索一次，改写后再各一次
-        assert len(search.queries) == 4
-        assert search.queries[2:] == ["敏捷开发 角色 Scrum"] * 2
+        assert len(search.queries) == 2
+        assert search.queries[1] == "敏捷开发 角色 Scrum"
+        assert search.options[0] is not None
+        assert set(search.options[0].allowed_version_ids or ()) == {
+            first.version_id,
+            second.version_id,
+        }
         assert reranker.calls == 2
         assert second.material_id != first.material_id
 
@@ -656,7 +678,370 @@ class TestScopeEdges:
                 user_id=seed.user_id, material_id=seed.material_id, user_prompt="问题"
             )
 
-    def test_no_scope_raises_value_error(self, session: Session) -> None:
-        service = make_service(session, ScriptedLLM(), RecordingSearch())
-        with pytest.raises(ValueError, match="必须指定答疑范围"):
-            service.ask_scoped_coach(user_id=uuid.uuid4(), user_prompt="问题")
+    def test_no_scope_normalizes_to_global_and_explicit_missing_id_rejected(
+        self, session: Session
+    ) -> None:
+        llm = ScriptedLLM()
+        llm.push(CoachGeneralDraft(reply="以上结合通用学科知识解答：时间复杂度衡量算法增长阶。"))
+        search = RecordingSearch()
+        service = make_service(session, llm, search)
+
+        result = service.ask_scoped_coach(user_id=uuid.uuid4(), user_prompt="什么是时间复杂度？")
+
+        assert result.mode == "general"
+        assert result.sources == []
+        assert "时间复杂度" in result.reply
+        assert search.queries == []
+
+        with pytest.raises(ValueError, match="课程模式必须指定 folder_id"):
+            service.ask_scoped_coach(user_id=uuid.uuid4(), scope="folder", user_prompt="问题")
+        with pytest.raises(ValueError, match="资料模式必须指定 material_id"):
+            service.ask_scoped_coach(user_id=uuid.uuid4(), scope="material", user_prompt="问题")
+        with pytest.raises(ValueError, match="考点模式必须指定 knowledge_point_id"):
+            service.ask_scoped_coach(
+                user_id=uuid.uuid4(), scope="knowledge_point", user_prompt="问题"
+            )
+
+
+class TestScopedCoachContractAndGlobal:
+    def test_request_schema_scope_normalization_and_422_matrix(self) -> None:
+        req_default = ScopedCoachRequest(user_prompt="什么是梯度下降？")
+        assert req_default.scope == "global"
+        assert req_default.history == []
+
+        req_explicit = ScopedCoachRequest(
+            scope="global",
+            user_prompt="今天复习什么？",
+            history=[AskCoachHistoryItem(role="user", content="你好")],
+        )
+        assert req_explicit.scope == "global"
+        assert len(req_explicit.history) == 1
+
+        for bad_kwargs in (
+            {"scope": "folder", "user_prompt": "问题"},
+            {"scope": "material", "user_prompt": "问题"},
+            {"scope": "knowledge_point", "user_prompt": "问题"},
+            {"scope": "global", "folder_id": uuid.uuid4(), "user_prompt": "问题"},
+            {
+                "folder_id": uuid.uuid4(),
+                "material_id": uuid.uuid4(),
+                "user_prompt": "问题",
+            },
+        ):
+            with pytest.raises(ValidationError):
+                ScopedCoachRequest(**bad_kwargs)  # type: ignore[arg-type]
+
+    @pytest.mark.asyncio
+    async def test_coach_ask_endpoint_returns_422_for_explicit_scope_missing_id(
+        self,
+    ) -> None:
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        with sessionmaker(bind=engine)() as thread_session:
+            user_id = seed_user(thread_session)
+            app = FastAPI()
+            app.include_router(questions_router, prefix="/api/v1")
+            app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
+            app.dependency_overrides[get_current_user] = lambda: User(id=user_id, openid="wx-test")
+            service = make_service(thread_session, ScriptedLLM(), RecordingSearch())
+            app.dependency_overrides[get_question_service] = lambda: service
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                bad_resp = await client.post(
+                    "/api/v1/coach/ask",
+                    json={"scope": "folder", "user_prompt": "梳理重点"},
+                )
+                assert bad_resp.status_code == 422
+
+                ok_resp = await client.post(
+                    "/api/v1/coach/ask",
+                    json={"user_prompt": "你好"},
+                )
+                assert ok_resp.status_code == 200
+                assert ok_resp.json()["mode"] == "chitchat"
+        engine.dispose()
+
+    def test_global_search_single_call_and_isolates_deleted_archived_stale(
+        self, session: Session
+    ) -> None:
+        user_id = seed_user(session)
+        active_folder = MaterialFolder(id=uuid.uuid4(), user_id=user_id, name="机器学习")
+        archived_folder = MaterialFolder(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            name="已归档课程",
+            archived_at=datetime.now(UTC),
+        )
+        session.add_all([active_folder, archived_folder])
+        session.commit()
+
+        m1 = seed_material(
+            session,
+            user_id,
+            title="主成分分析.pdf",
+            folder_id=active_folder.id,
+            contents=("PCA 通过正交变换降维。",),
+            points=(("PCA 原理", None),),
+        )
+        m2 = seed_material(
+            session,
+            user_id,
+            title="未分类讲义.pdf",
+            folder_id=None,
+            contents=("奇异值分解可用于矩阵压缩。",),
+            points=(("SVD 分解", None),),
+        )
+        archived_mat = seed_material(
+            session,
+            user_id,
+            title="归档资料.pdf",
+            folder_id=archived_folder.id,
+            contents=("已归档课程机密切片。",),
+        )
+        deleted_mat = seed_material(
+            session,
+            user_id,
+            title="已删除资料.pdf",
+            contents=("已软删资料切片。",),
+        )
+        del_row = session.get(Material, deleted_mat.material_id)
+        assert del_row is not None
+        del_row.is_deleted = True
+        session.commit()
+        parsing_mat = seed_material(
+            session,
+            user_id,
+            title="解析中资料.pdf",
+            status="parsing",
+            contents=("未就绪资料切片。",),
+        )
+
+        # 验证只读聚合仓储仅返回未删/未归档/已就绪的当前版本
+        ready_versions = QuestionRepository(session).list_ready_current_versions_for_user(user_id)
+        assert set(ready_versions.keys()) == {m1.material_id, m2.material_id}
+        assert ready_versions[m1.material_id] == m1.version_id
+        assert ready_versions[m2.material_id] == m2.version_id
+
+        stale_cand = SearchSnippetCandidate(
+            snippet_id=uuid.uuid4(),
+            material_id=m1.material_id,
+            version_id=uuid.uuid4(),
+            content="旧版本过期内容",
+            chapter_title="旧章",
+            source_info={},
+            vector_score=0.95,
+            final_score=0.05,
+        )
+        search = RecordingSearch()
+        search.set_canned_candidates(
+            [
+                stale_cand,
+                cand(archived_mat, 0, "归档课程内容", vector_score=0.94, final_score=0.04),
+                cand(deleted_mat, 0, "软删资料内容", vector_score=0.93, final_score=0.03),
+                cand(parsing_mat, 0, "未就绪资料内容", vector_score=0.92, final_score=0.025),
+                cand(m1, 0, "PCA 通过正交变换降维。", vector_score=0.88, final_score=0.02),
+                cand(m2, 0, "奇异值分解可用于矩阵压缩。", vector_score=0.82, final_score=0.015),
+            ]
+        )
+        llm = ScriptedLLM()
+        llm.push(
+            CoachDraft(
+                reply="PCA 与 SVD 都可用于降维和矩阵压缩。",
+                citation_ids=[m1.snippet_ids[0], m2.snippet_ids[0]],
+            )
+        )
+        service = make_service(session, llm, search)
+
+        result = service.ask_scoped_coach(
+            user_id=user_id,
+            scope="global",
+            user_prompt="PCA 和 SVD 有什么关系？",
+        )
+
+        assert result.mode == "grounded"
+        assert len(search.queries) == 1  # 多资料全局检索严格收敛为 1 次检索/Embedding
+        assert search.options[0] is not None
+        assert set(search.options[0].allowed_version_ids or ()) == {m1.version_id, m2.version_id}
+        returned_ids = {s.snippet_id for s in result.sources}
+        assert returned_ids == {m1.snippet_ids[0], m2.snippet_ids[0]}
+
+    def test_global_general_fallback_on_miss_and_no_fabricated_citations(
+        self, session: Session
+    ) -> None:
+        user_id = seed_user(session)
+        m1 = seed_material(session, user_id, title="高数.pdf")
+        m2 = seed_material(session, user_id, title="线代.pdf")
+        search = RecordingSearch()  # 无命中候选
+        llm = ScriptedLLM()
+        llm.push(
+            RewrittenQuery(query="牛顿莱布尼茨公式 通用概念"),
+            CoachGeneralDraft(
+                reply="以上结合通用学科知识解答：牛顿-莱布尼茨公式建立了定积分与原函数之间的联系。",
+                suggestions=["举个计算例子？"],
+            ),
+        )
+        service = make_service(session, llm, search)
+
+        result = service.ask_scoped_coach(
+            user_id=user_id,
+            scope="global",
+            user_prompt="什么是牛顿-莱布尼茨公式？",
+        )
+
+        assert result.mode == "general"
+        assert result.sources == []
+        assert len(search.queries) == 2  # 首轮 1 次 + 改写 1 次
+        assert set(search.options[0].allowed_version_ids or ()) == {m1.version_id, m2.version_id}
+        system_msg = next(
+            m.content
+            for m in llm.calls_for(CoachGeneralDraft)[0]
+            if m.role == "system" and isinstance(m.content, str)
+        )
+        assert "严禁编造或猜测任何教材页码" in system_msg
+
+    def test_global_study_profile_summarizes_top5_weak_points_and_history_fallback(
+        self, session: Session
+    ) -> None:
+        user_id = seed_user(session)
+        folder = MaterialFolder(id=uuid.uuid4(), user_id=user_id, name="深度学习")
+        session.add(folder)
+        session.commit()
+        points_spec = [(f"考点{i}", None) for i in range(1, 8)]
+        seed = seed_material(
+            session,
+            user_id,
+            title="神经网络.pdf",
+            folder_id=folder.id,
+            points=points_spec,
+        )
+        # 制造 6 个薄弱考点（< 0.6），验证只取掌握度最低 Top 5
+        scores = [0.15, 0.25, 0.35, 0.45, 0.55, 0.58, 0.90]
+        for idx, (kp_id, score) in enumerate(zip(seed.point_ids, scores, strict=True)):
+            session.add(
+                MasteryRecord(
+                    user_id=user_id,
+                    knowledge_point_id=kp_id,
+                    mastery_score=score,
+                    level=MasteryLevel.WEAK.value if score < 0.4 else MasteryLevel.PROFICIENT.value,
+                    practice_count=idx + 1,
+                    correct_count=1,
+                )
+            )
+        session.commit()
+
+        llm = ScriptedLLM()
+        llm.push(
+            CoachGeneralDraft(
+                reply="建议今天优先巩固考点1与考点2。",
+                suggestions=["先练考点1？"],
+            )
+        )
+        search = RecordingSearch()
+        memory = CoachSessionMemory()
+        service = make_service(session, llm, search, memory=memory)
+
+        result = service.ask_scoped_coach(
+            user_id=user_id,
+            scope="global",
+            user_prompt="帮我规划今天复习重点",
+            thread_id="global",
+            history=[
+                AskCoachHistoryItem(role="user", content="我最近做题老错"),
+                AskCoachHistoryItem(role="assistant", content="我们一起看看薄弱考点。"),
+            ],
+        )
+
+        assert result.mode == "study_profile"
+        assert result.sources == []
+        assert search.queries == []
+        prompt = user_text(llm.calls_for(CoachGeneralDraft)[0])
+        assert "未归档课程 1 门，已就绪资料 1 份，核心考点共 7 个" in prompt
+        assert "考点1" in prompt and "考点5" in prompt
+        assert "考点6" not in prompt  # 只取 Top 5
+        assert "我最近做题老错" in prompt
+        assert len(memory.load(f"{user_id}:global:global")) == 2
+
+    def test_pgvector_allowed_version_ids_filters_and_short_circuits(
+        self, session: Session
+    ) -> None:
+        user_id = seed_user(session)
+        s1 = seed_material(session, user_id, title="A.pdf", contents=("向量检索测试内容A",))
+        s2 = seed_material(session, user_id, title="B.pdf", contents=("向量检索测试内容B",))
+
+        class CountingEmbedding(FakeEmbeddingAdapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            def embed_query(self, text: str) -> list[float]:
+                self.calls += 1
+                return super().embed_query(text)
+
+        emb = CountingEmbedding()
+        adapter = PgvectorHybridSearchAdapter(
+            session_factory=lambda: session,
+            embedding_adapter=emb,
+        )
+        # SQLite 内存测试环境下直接传入 session 测试过滤逻辑
+        empty_res = adapter.search(
+            "测试内容",
+            user_id,
+            options=SearchOptions(allowed_version_ids=()),
+        )
+        assert empty_res.items == ()
+        assert emb.calls == 0
+
+        # 非空白名单只召回 s1 版本（注意需用 active session）
+        from app.integrations.search.pgvector import use_active_search_session
+
+        with use_active_search_session(session):
+            filtered = adapter.search(
+                "测试内容",
+                user_id,
+                options=SearchOptions(allowed_version_ids=(s1.version_id,)),
+            )
+        assert emb.calls == 1
+        assert len(filtered.items) == 1
+        assert filtered.items[0].version_id == s1.version_id
+        assert filtered.items[0].version_id != s2.version_id
+
+    def test_pgvector_plain_fallback_keeps_4096_budget_on_format_error(
+        self, session: Session
+    ) -> None:
+        class PlainFallbackLLM(ScriptedLLM):
+            def __init__(self) -> None:
+                super().__init__()
+                self.plain_options: list[LLMOptions | None] = []
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[Any],
+                options: LLMOptions | None = None,
+            ) -> tuple[Any, LLMResponse]:
+                raise LLMResponseFormatError("format error")
+
+            def generate(
+                self, messages: Sequence[LLMMessage], options: LLMOptions | None = None
+            ) -> LLMResponse:
+                self.plain_options.append(options)
+                return LLMResponse(content="通用兜底纯文本回复", usage=LLMUsage(), model="test")
+
+        llm = PlainFallbackLLM()
+        service = make_service(session, llm, RecordingSearch())
+        result = service.ask_scoped_coach(
+            user_id=seed_user(session),
+            scope="global",
+            user_prompt="什么是梯度消失？",
+        )
+        assert result.mode == "general"
+        assert result.reply == "通用兜底纯文本回复"
+        assert result.sources == []
+        assert llm.plain_options[0] is not None
+        assert llm.plain_options[0].max_tokens == 4096

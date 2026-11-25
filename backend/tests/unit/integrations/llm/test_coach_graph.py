@@ -3,11 +3,15 @@
 import uuid
 from unittest.mock import MagicMock
 
+from app.core.errors import LLMResponseFormatError
 from app.integrations.llm.coach_graph import (
     CoachDraft,
+    CoachGeneralDraft,
     RewrittenQuery,
     answer_with_course_evidence,
+    run_coach_graph,
 )
+from app.integrations.llm.protocol import LLMResponse, LLMUsage
 from app.integrations.search.fake import FakeSearchAdapter
 from app.integrations.search.protocol import SearchResult, SearchSnippetCandidate
 
@@ -188,3 +192,82 @@ def test_coach_graph_uses_conversational_prompt_and_bounded_options() -> None:
     assert options.max_tokens == 4096
     reply_desc = CoachDraft.model_fields["reply"].description or ""
     assert "150-260" in reply_desc
+
+
+def test_coach_graph_uses_single_search_with_allowed_version_ids_for_multi_material() -> None:
+    user_id = uuid.uuid4()
+    m1, m2 = uuid.uuid4(), uuid.uuid4()
+    c1, c2 = candidate(m1), candidate(m2)
+    search = MagicMock()
+    search.search.return_value = SearchResult(query="PCA", items=[c1, c2])
+    llm = MagicMock()
+    llm.generate_structured.return_value = (
+        CoachDraft(reply="跨资料回答", citation_ids=[c1.snippet_id, c2.snippet_id]),
+        MagicMock(),
+    )
+
+    result = run_coach_graph(
+        search=search,
+        llm=llm,
+        query="PCA 与 SVD",
+        user_id=user_id,
+        material_ids=(m1, m2),
+        material_versions={m1: c1.version_id, m2: c2.version_id},
+    )
+
+    assert result.mode == "grounded"
+    assert search.search.call_count == 1
+    call_kwargs = search.search.call_args.kwargs
+    assert call_kwargs["material_id"] is None
+    assert call_kwargs["version_id"] is None
+    assert set(call_kwargs["options"].allowed_version_ids) == {c1.version_id, c2.version_id}
+
+
+def test_coach_graph_global_falls_back_to_general_without_citations() -> None:
+    search = FakeSearchAdapter()
+    llm = MagicMock()
+    llm.generate_structured.side_effect = LLMResponseFormatError("format error")
+    llm.generate.return_value = LLMResponse(
+        content="通用学科回答：正则化可缓解过拟合。",
+        usage=LLMUsage(),
+        model="deepseek-flash",
+    )
+
+    result = run_coach_graph(
+        search=search,
+        llm=llm,
+        query="什么是正则化？",
+        user_id=uuid.uuid4(),
+        material_ids=(),
+        allow_general_fallback=True,
+    )
+
+    assert result.mode == "general"
+    assert result.cited == []
+    assert "正则化" in result.reply
+    assert llm.generate_structured.call_args.kwargs["options"].max_tokens == 4096
+    assert llm.generate.call_args.kwargs["options"].max_tokens == 4096
+
+
+def test_coach_graph_global_routes_study_plan_to_study_profile() -> None:
+    search = MagicMock()
+    llm = MagicMock()
+    llm.generate_structured.return_value = (
+        CoachGeneralDraft(reply="今日优先复习梯度下降。", suggestions=["先做两道题？"]),
+        MagicMock(),
+    )
+
+    result = run_coach_graph(
+        search=search,
+        llm=llm,
+        query="帮我规划今天复习重点",
+        user_id=uuid.uuid4(),
+        material_ids=(uuid.uuid4(),),
+        allow_general_fallback=True,
+        study_profile_context="【个人学习概览】已就绪资料 1 份\n薄弱考点：梯度下降（掌握度 20%）",
+    )
+
+    assert result.mode == "study_profile"
+    assert result.cited == []
+    search.search.assert_not_called()
+    assert llm.generate_structured.call_args.kwargs["options"].max_tokens == 4096

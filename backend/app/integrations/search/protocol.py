@@ -48,6 +48,7 @@ class SearchOptions:
     vector_weight: float = 0.7
     keyword_weight: float = 0.3
     allowed_snippet_ids: tuple[uuid.UUID, ...] | None = None
+    allowed_version_ids: tuple[uuid.UUID, ...] | None = None
 
     def __post_init__(self) -> None:
         """防御性参数合法性校验。"""
@@ -57,6 +58,8 @@ class SearchOptions:
             raise ValueError("vector_top_k must be greater than or equal to top_k")
         if self.allowed_snippet_ids is not None and not isinstance(self.allowed_snippet_ids, tuple):
             object.__setattr__(self, "allowed_snippet_ids", tuple(self.allowed_snippet_ids))
+        if self.allowed_version_ids is not None and not isinstance(self.allowed_version_ids, tuple):
+            object.__setattr__(self, "allowed_version_ids", tuple(self.allowed_version_ids))
         if self.fusion_method not in ("rrf", "weighted"):
             raise ValueError("fusion_method must be either 'rrf' or 'weighted'")
 

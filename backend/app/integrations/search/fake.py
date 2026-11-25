@@ -121,7 +121,11 @@ class FakeSearchAdapter(SearchProtocol):
         allowed = opts.allowed_snippet_ids
         if allowed is not None and len(allowed) == 0:
             return SearchResult(query=query, items=(), total_candidates=0, duration_ms=0.0)
+        allowed_versions = opts.allowed_version_ids
+        if allowed_versions is not None and len(allowed_versions) == 0:
+            return SearchResult(query=query, items=(), total_candidates=0, duration_ms=0.0)
         allowed_set = set(allowed) if allowed is not None else None
+        allowed_version_set = set(allowed_versions) if allowed_versions is not None else None
 
         with self._lock:
             if self._latency_seconds > 0.0:
@@ -151,6 +155,8 @@ class FakeSearchAdapter(SearchProtocol):
                 if version_id is not None and c.version_id != version_id:
                     continue
                 if allowed_set is not None and c.snippet_id not in allowed_set:
+                    continue
+                if allowed_version_set is not None and c.version_id not in allowed_version_set:
                     continue
                 filtered_candidates.append(c)
 

@@ -605,6 +605,31 @@ class QuestionRepository:
         )
         return {row[0]: row[1] for row in self.session.execute(statement).all()}
 
+    def list_ready_current_versions_for_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        limit: int = 100,
+    ) -> dict[uuid.UUID, uuid.UUID]:
+        """Resolve ready current versions across unarchived or uncategorized materials."""
+        statement = (
+            select(Material.id, Material.current_version_id)
+            .outerjoin(MaterialFolder, Material.folder_id == MaterialFolder.id)
+            .where(
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+                Material.status == MaterialStatus.READY.value,
+                Material.current_version_id.is_not(None),
+                (Material.folder_id.is_(None))
+                | ((MaterialFolder.user_id == user_id) & MaterialFolder.archived_at.is_(None)),
+            )
+            .order_by(Material.updated_at.desc(), Material.created_at.desc())
+            .limit(limit)
+        )
+        return {
+            row[0]: row[1] for row in self.session.execute(statement).all() if row[1] is not None
+        }
+
     def list_recent_for_deduplication(
         self,
         material_id: uuid.UUID,

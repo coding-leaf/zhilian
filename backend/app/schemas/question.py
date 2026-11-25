@@ -413,9 +413,20 @@ class AskCoachResponse(BaseModel):
     )
 
 
-class ScopedCoachRequest(BaseModel):
-    """Ask about exactly one authorized course, material, or knowledge point."""
+CoachScopeKind = Literal["global", "folder", "material", "knowledge_point"]
+CoachHistoryMessage = AskCoachHistoryItem
+CoachResponseMode = Literal[
+    "grounded", "overview", "study_profile", "general", "chitchat", "fallback"
+]
 
+
+class ScopedCoachRequest(BaseModel):
+    """Ask within global scope or one authorized course, material, or knowledge point."""
+
+    scope: CoachScopeKind | None = Field(
+        default=None,
+        description="显式答疑范围；不传且三类 ID 均为空时自动归一化为 global",
+    )
     folder_id: uuid.UUID | None = None
     material_id: uuid.UUID | None = None
     knowledge_point_id: uuid.UUID | None = None
@@ -426,17 +437,45 @@ class ScopedCoachRequest(BaseModel):
         max_length=128,
         description="可选会话线程标识；同一线程的追问共享最近 6 轮对话记忆（服务端按用户隔离）",
     )
+    history: list[AskCoachHistoryItem] = Field(
+        default_factory=list,
+        max_length=24,
+        description="可选前端兜底历史消息（服务端记忆为空时用于冷启动恢复）",
+    )
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _coerce_history(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        return list(value)
 
     @model_validator(mode="after")
     def validate_scope(self) -> "ScopedCoachRequest":
-        if (
-            sum(
-                value is not None
-                for value in (self.folder_id, self.material_id, self.knowledge_point_id)
-            )
-            != 1
-        ):
-            raise ValueError("必须且只能指定一个答疑范围")
+        id_count = sum(
+            value is not None
+            for value in (self.folder_id, self.material_id, self.knowledge_point_id)
+        )
+        if id_count > 1:
+            raise ValueError("不能同时指定多个答疑范围")
+        if self.scope == "global":
+            if id_count != 0:
+                raise ValueError("全局模式不能携带课程/资料/考点标识")
+            return self
+        if self.scope == "folder":
+            if self.folder_id is None:
+                raise ValueError("课程模式必须指定 folder_id")
+            return self
+        if self.scope == "material":
+            if self.material_id is None:
+                raise ValueError("资料模式必须指定 material_id")
+            return self
+        if self.scope == "knowledge_point":
+            if self.knowledge_point_id is None:
+                raise ValueError("考点模式必须指定 knowledge_point_id")
+            return self
+        if id_count == 0:
+            self.scope = "global"
         return self
 
 
@@ -511,6 +550,7 @@ class QuestionGenerationJobListResponse(BaseModel):
 
 class ScopedCoachResponse(AskCoachResponse):
     sources: list[CoachSourceResponse] = Field(default_factory=list)
+    mode: CoachResponseMode | None = None
 
 
 __all__ = [
@@ -519,6 +559,9 @@ __all__ = [
     "AskCoachHistoryItem",
     "AskCoachRequest",
     "AskCoachResponse",
+    "CoachHistoryMessage",
+    "CoachResponseMode",
+    "CoachScopeKind",
     "CoachSourceResponse",
     "MaterialQualityChecksResponse",
     "QuestionAuditLogsResponse",

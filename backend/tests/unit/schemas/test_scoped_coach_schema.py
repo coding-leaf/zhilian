@@ -1,11 +1,11 @@
-"""ScopedCoachRequest 契约测试：thread_id 校验与单范围约束。"""
+"""ScopedCoachRequest 契约测试：thread_id 校验、global 默认归一化与范围约束。"""
 
 import uuid
 
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.question import ScopedCoachRequest
+from app.schemas.question import AskCoachHistoryItem, ScopedCoachRequest
 
 
 def make(**kwargs: object) -> ScopedCoachRequest:
@@ -34,11 +34,27 @@ class TestThreadIdValidation:
 
 
 class TestOtherConstraints:
-    def test_exactly_one_scope_required(self) -> None:
-        with pytest.raises(ValidationError):
-            ScopedCoachRequest(user_prompt="问题")
-        with pytest.raises(ValidationError):
-            ScopedCoachRequest(folder_id=uuid.uuid4(), material_id=uuid.uuid4(), user_prompt="问题")
+    def test_empty_ids_normalizes_to_global_and_rejects_invalid_combinations(self) -> None:
+        default_req = ScopedCoachRequest(user_prompt="问题")
+        assert default_req.scope == "global"
+        assert default_req.history == []
+
+        with_history = ScopedCoachRequest(
+            user_prompt="追问",
+            history=[AskCoachHistoryItem(role="user", content="你好")],
+        )
+        assert with_history.scope == "global"
+        assert len(with_history.history) == 1
+
+        for bad_kwargs in (
+            {"folder_id": uuid.uuid4(), "material_id": uuid.uuid4(), "user_prompt": "问题"},
+            {"scope": "global", "folder_id": uuid.uuid4(), "user_prompt": "问题"},
+            {"scope": "folder", "user_prompt": "问题"},
+            {"scope": "material", "user_prompt": "问题"},
+            {"scope": "knowledge_point", "user_prompt": "问题"},
+        ):
+            with pytest.raises(ValidationError):
+                ScopedCoachRequest(**bad_kwargs)  # type: ignore[arg-type]
 
     def test_user_prompt_bounds(self) -> None:
         with pytest.raises(ValidationError):

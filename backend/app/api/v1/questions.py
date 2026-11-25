@@ -415,14 +415,19 @@ def ask_coach(
     "/coach/ask",
     response_model=ScopedCoachResponse,
     status_code=status.HTTP_200_OK,
-    summary="根据课程资料来源回答问题",
+    summary="根据课程资料来源或全局学习语境回答问题",
 )
 def ask_scoped_coach(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     payload: ScopedCoachRequest,
 ) -> ScopedCoachResponse:
-    """Answer within one authenticated course, material, or knowledge-point scope."""
+    """Answer within global scope or one authorized course, material, or knowledge point."""
+    extra_kwargs: dict[str, Any] = {}
+    if payload.scope is not None:
+        extra_kwargs["scope"] = payload.scope
+    if payload.history:
+        extra_kwargs["history"] = payload.history
     return question_service.ask_scoped_coach(
         user_id=user.id,
         user_prompt=payload.user_prompt,
@@ -430,6 +435,7 @@ def ask_scoped_coach(
         material_id=payload.material_id,
         knowledge_point_id=payload.knowledge_point_id,
         thread_id=payload.thread_id,
+        **extra_kwargs,
     )
 
 

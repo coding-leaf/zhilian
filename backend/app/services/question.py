@@ -44,7 +44,7 @@ from app.core.idempotency import validate_idempotency_key
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.coach_graph import CoachGraphConfig, run_coach_graph
-from app.integrations.llm.coach_memory import CoachSessionMemory
+from app.integrations.llm.coach_memory import CoachSessionMemory, CoachTurn
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.queue.memory import MemoryQueueAdapter
 from app.integrations.queue.protocol import QueueProtocol
@@ -61,6 +61,7 @@ from app.models.question import (
     QuestionQualityCheck,
     QuestionStatus,
 )
+from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.folder import FolderRepository
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
@@ -70,6 +71,7 @@ from app.schemas.question import (
     MAX_ASYNC_GENERATION_QUESTIONS,
     AskCoachHistoryItem,
     AskCoachResponse,
+    CoachScopeKind,
     CoachSourceResponse,
     QuestionBatchSourceDTO,
     QuestionBatchSummaryResponse,
@@ -81,7 +83,12 @@ from app.schemas.question import (
     QuestionGroupedSummaryResponse,
     ScopedCoachResponse,
 )
-from app.services._coach_context import build_overview_context, pick_suggested_topics
+from app.services._coach_context import (
+    build_global_study_context,
+    build_overview_context,
+    pick_global_suggested_topics,
+    pick_suggested_topics,
+)
 from app.services._question_generation import (
     GenerateQuestionsOptions as GenerateQuestionsOptions,
 )
@@ -280,6 +287,7 @@ class QuestionService:
         self.knowledge_repo = KnowledgeRepository(session)
         self.material_repo = MaterialRepository(session)
         self.folder_repo = FolderRepository(session)
+        self.diagnosis_repo = DiagnosisRepository(session)
 
     def _retrieve_and_gate_snippets(
         self,
@@ -2058,16 +2066,94 @@ class QuestionService:
             self.memory_store.append(memory_key, user_prompt, output.reply)
         return output
 
+    @staticmethod
+    def _normalize_coach_scope(
+        *,
+        scope: CoachScopeKind | None,
+        folder_id: uuid.UUID | None,
+        material_id: uuid.UUID | None,
+        knowledge_point_id: uuid.UUID | None,
+    ) -> CoachScopeKind:
+        id_count = sum(v is not None for v in (folder_id, material_id, knowledge_point_id))
+        if id_count > 1:
+            raise ValueError("不能同时指定多个答疑范围")
+        if scope == "global":
+            if id_count != 0:
+                raise ValueError("全局模式不能携带课程/资料/考点标识")
+            return "global"
+        if scope == "folder":
+            if folder_id is None:
+                raise ValueError("课程模式必须指定 folder_id")
+            return "folder"
+        if scope == "material":
+            if material_id is None:
+                raise ValueError("资料模式必须指定 material_id")
+            return "material"
+        if scope == "knowledge_point":
+            if knowledge_point_id is None:
+                raise ValueError("考点模式必须指定 knowledge_point_id")
+            return "knowledge_point"
+        if folder_id is not None:
+            return "folder"
+        if material_id is not None:
+            return "material"
+        if knowledge_point_id is not None:
+            return "knowledge_point"
+        return "global"
+
+    def _resolve_global_coach_scope(self, user_id: uuid.UUID) -> "_CoachScope":
+        """聚合用户未归档/未分类就绪资料、全库考点与薄弱考点画像。"""
+        material_versions = self.question_repo.list_ready_current_versions_for_user(user_id)
+        current_versions = set(material_versions.values())
+        folders, _ = self.folder_repo.list_by_user(
+            user_id, include_archived=False, limit=100, offset=0
+        )
+        points = (
+            [
+                p
+                for p in self.knowledge_repo.list_all_by_user_id(user_id)
+                if p.version_id in current_versions
+            ]
+            if current_versions
+            else []
+        )
+        mastery_records = self.diagnosis_repo.list_mastery_records_by_user(user_id)
+        study_profile_context = build_global_study_context(
+            folders=folders,
+            ready_materials_count=len(material_versions),
+            points=points,
+            mastery_records=mastery_records,
+        )
+        return _CoachScope(
+            key="global",
+            title="全部资料",
+            material_ids=tuple(material_versions),
+            material_versions=material_versions,
+            points=points,
+            allow_general_fallback=True,
+            study_profile_context=study_profile_context,
+            suggested_topics=pick_global_suggested_topics(points, mastery_records),
+        )
+
     def _resolve_coach_scope(
         self,
         *,
         user_id: uuid.UUID,
+        scope: CoachScopeKind | None = None,
         folder_id: uuid.UUID | None,
         material_id: uuid.UUID | None,
         knowledge_point_id: uuid.UUID | None,
     ) -> "_CoachScope":
-        """解析并鉴权单一答疑范围，同时加载结构化知识点用于概览/兜底话题。"""
-        if folder_id is not None:
+        """解析并鉴权答疑范围（全局 / 课程 / 资料 / 考点），加载结构化知识点。"""
+        resolved = self._normalize_coach_scope(
+            scope=scope,
+            folder_id=folder_id,
+            material_id=material_id,
+            knowledge_point_id=knowledge_point_id,
+        )
+        if resolved == "global":
+            return self._resolve_global_coach_scope(user_id)
+        if resolved == "folder" and folder_id is not None:
             folder = self.folder_repo.get_by_id(folder_id, user_id)
             if folder is None:
                 raise FolderNotFoundError("课程不存在或无权访问")
@@ -2087,7 +2173,7 @@ class QuestionService:
                 material_versions=material_versions,
                 points=points,
             )
-        if material_id is not None:
+        if resolved == "material" and material_id is not None:
             material = self.material_repo.get_material_by_id(
                 material_id, user_id, exclude_archived_folder=True
             )
@@ -2107,82 +2193,121 @@ class QuestionService:
                 version_id=version_id,
                 points=points,
             )
-        if knowledge_point_id is not None:
-            point = self.knowledge_repo.get_by_id(knowledge_point_id, user_id)
-            if point is None:
-                raise KnowledgeNotFoundError("知识点不存在或无权访问")
-            material = self.material_repo.get_material_by_id(
-                point.material_id, user_id, exclude_archived_folder=True
-            )
-            if material is None or material.current_version_id != point.version_id:
-                raise KnowledgeNotFoundError("知识点不存在或无权访问")
-            children = [
-                p
-                for p in self.knowledge_repo.list_by_material_id(material.id, user_id)
-                if p.parent_id == point.id and p.version_id == point.version_id
-            ]
-            return _CoachScope(
-                key=f"kp:{point.id}",
-                title=point.name,
-                material_ids=(material.id,)
-                if material.status == MaterialStatus.READY.value
-                else (),
-                version_id=point.version_id,
-                allowed_snippet_ids=frozenset(
-                    snippet.id
-                    for snippet in self.knowledge_repo.get_snippets_for_point(point.id, user_id)
-                ),
-                points=[point, *children],
-                knowledge_point_name=point.name,
-            )
-        raise ValueError("必须指定答疑范围")
+        if knowledge_point_id is None:
+            raise ValueError("考点模式必须指定 knowledge_point_id")
+        point = self.knowledge_repo.get_by_id(knowledge_point_id, user_id)
+        if point is None:
+            raise KnowledgeNotFoundError("知识点不存在或无权访问")
+        material = self.material_repo.get_material_by_id(
+            point.material_id, user_id, exclude_archived_folder=True
+        )
+        if material is None or material.current_version_id != point.version_id:
+            raise KnowledgeNotFoundError("知识点不存在或无权访问")
+        children = [
+            p
+            for p in self.knowledge_repo.list_by_material_id(material.id, user_id)
+            if p.parent_id == point.id and p.version_id == point.version_id
+        ]
+        return _CoachScope(
+            key=f"kp:{point.id}",
+            title=point.name,
+            material_ids=(material.id,) if material.status == MaterialStatus.READY.value else (),
+            version_id=point.version_id,
+            allowed_snippet_ids=frozenset(
+                snippet.id
+                for snippet in self.knowledge_repo.get_snippets_for_point(point.id, user_id)
+            ),
+            points=[point, *children],
+            knowledge_point_name=point.name,
+        )
+
+    def _resolve_coach_turns(
+        self,
+        *,
+        memory_key: str | None,
+        fallback_history: Sequence[AskCoachHistoryItem] | None,
+    ) -> tuple[list[CoachTurn], bool]:
+        """优先读取服务端记忆；为空时从前端兜底 history 组装问答轮次。"""
+        if memory_key is not None and self.memory_store is not None:
+            turns = self.memory_store.load(memory_key)
+            if turns:
+                return turns, False
+        if not fallback_history:
+            return [], False
+        cleaned = [
+            (item.role, item.content.strip()) for item in fallback_history if item.content.strip()
+        ]
+        turns_from_fallback: list[CoachTurn] = []
+        idx = 0
+        while idx + 1 < len(cleaned):
+            role, content = cleaned[idx]
+            next_role, next_content = cleaned[idx + 1]
+            if role == "user" and next_role == "assistant":
+                turns_from_fallback.append(CoachTurn(user=content, assistant=next_content))
+                idx += 2
+            else:
+                idx += 1
+        return turns_from_fallback, bool(turns_from_fallback)
 
     def ask_scoped_coach(
         self,
         *,
         user_id: uuid.UUID,
         user_prompt: str,
+        scope: CoachScopeKind | None = None,
         folder_id: uuid.UUID | None = None,
         material_id: uuid.UUID | None = None,
         knowledge_point_id: uuid.UUID | None = None,
         thread_id: str | None = None,
+        history: Sequence[AskCoachHistoryItem] | None = None,
     ) -> ScopedCoachResponse:
-        """Answer only from snippets in one authorized learning scope.
+        """Answer within global scope or one authorized learning scope.
 
-        Adaptive + Corrective RAG：寒暄直答 / 结构化知识点概览 / 范围下推检索 + 精排门禁 +
-        至多一次查询改写；传入 ``thread_id`` 时携带并更新最近 6 轮会话记忆
-        （按用户 + 范围 + 线程隔离）。
+        Adaptive + Corrective RAG：寒暄直答 / 学情规划或概览 / 1 次范围下推检索 +
+        精排门禁 + 至多一次查询改写 / 全局通用学科兜底；传入 ``thread_id`` 时携带并更新
+        最近 6 轮会话记忆（按用户 + 范围 + 线程隔离），记忆为空时支持前端 ``history`` 冷启动恢复。
         """
         if self.search_adapter is None:
             raise SearchError("课程助教检索服务暂不可用")
 
-        scope = self._resolve_coach_scope(
+        resolved_scope = self._resolve_coach_scope(
             user_id=user_id,
+            scope=scope,
             folder_id=folder_id,
             material_id=material_id,
             knowledge_point_id=knowledge_point_id,
         )
-        if not scope.material_ids:
-            return ScopedCoachResponse(reply="当前范围没有已解析完成的资料，暂时无法依据资料回答。")
+        if not resolved_scope.material_ids and not resolved_scope.allow_general_fallback:
+            return ScopedCoachResponse(
+                reply="当前范围没有已解析完成的资料，暂时无法依据资料回答。",
+                mode="fallback",
+            )
 
         memory_key = (
-            f"{user_id}:{scope.key}:{thread_id}"
+            f"{user_id}:{resolved_scope.key}:{thread_id}"
             if thread_id and self.memory_store is not None
             else None
         )
-        history = (
-            self.memory_store.load(memory_key)
-            if memory_key is not None and self.memory_store is not None
-            else []
+        turns, from_fallback = self._resolve_coach_turns(
+            memory_key=memory_key,
+            fallback_history=history,
         )
         query = (
-            f"关于知识点「{scope.knowledge_point_name}」：{user_prompt}"
-            if scope.knowledge_point_name
+            f"关于知识点「{resolved_scope.knowledge_point_name}」：{user_prompt}"
+            if resolved_scope.knowledge_point_name
             else user_prompt
         )
         rerank_cfg = self.rerank_settings
-        suggested_topics = pick_suggested_topics(scope.points)
-        overview_context = build_overview_context(scope.points)
+        suggested_topics = (
+            resolved_scope.suggested_topics
+            if resolved_scope.allow_general_fallback
+            else pick_suggested_topics(resolved_scope.points)
+        )
+        overview_context = (
+            None
+            if resolved_scope.allow_general_fallback
+            else build_overview_context(resolved_scope.points)
+        )
         # 在执行外部 Embedding / 检索 / Rerank / 多轮 LLM 前释放只读事务，归还数据库连接。
         if not self.session.new and not self.session.dirty and not self.session.deleted:
             self.session.commit()
@@ -2192,23 +2317,28 @@ class QuestionService:
             query=query,
             intent_text=user_prompt,
             user_id=user_id,
-            material_ids=scope.material_ids,
-            version_id=scope.version_id,
-            material_versions=scope.material_versions,
-            allowed_snippet_ids=scope.allowed_snippet_ids,
+            material_ids=resolved_scope.material_ids,
+            version_id=resolved_scope.version_id,
+            material_versions=resolved_scope.material_versions,
+            allowed_snippet_ids=resolved_scope.allowed_snippet_ids,
             reranker=self.reranker,
             config=CoachGraphConfig(
                 rerank_top_n=rerank_cfg.top_n,
                 min_score=rerank_cfg.min_score,
                 rewrite_threshold=rerank_cfg.rewrite_threshold,
             ),
-            history=history,
-            scope_title=scope.title,
+            history=turns,
+            scope_title=resolved_scope.title,
             suggested_topics=suggested_topics,
             overview_context=overview_context,
-            thread_id=f"{user_id}:{scope.key}:{thread_id}" if thread_id else None,
+            thread_id=f"{user_id}:{resolved_scope.key}:{thread_id}" if thread_id else None,
+            allow_general_fallback=resolved_scope.allow_general_fallback,
+            study_profile_context=resolved_scope.study_profile_context,
         )
         if memory_key is not None and self.memory_store is not None:
+            if from_fallback and turns:
+                for turn in turns:
+                    self.memory_store.append(memory_key, turn.user, turn.assistant)
             self.memory_store.append(memory_key, user_prompt, result.reply)
         return ScopedCoachResponse(
             reply=result.reply,
@@ -2223,6 +2353,7 @@ class QuestionService:
                 )
                 for item in result.cited
             ],
+            mode=result.mode,
         )
 
 
@@ -2241,3 +2372,6 @@ class _CoachScope:
     material_versions: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
     allowed_snippet_ids: frozenset[uuid.UUID] | None = None
     knowledge_point_name: str | None = None
+    allow_general_fallback: bool = False
+    study_profile_context: str | None = None
+    suggested_topics: list[str] = field(default_factory=list)
