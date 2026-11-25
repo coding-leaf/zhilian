@@ -47,6 +47,7 @@ from app.core.algorithms.knowledge_tree import (
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
     KnowledgeNotFoundError,
+    LLMResponseFormatError,
     MaterialInvalidError,
     MaterialNotFoundError,
 )
@@ -71,7 +72,9 @@ _RETRY_MAX_BATCH_SNIPPETS: int = 8
 _DEFAULT_MAX_BATCH_CHARS: int = 6000
 _ONE_SHOT_MAX_CHARS: int = 28_000
 _CHAPTER_BATCH_MAX_CHARS: int = 16_000
-_ONE_SHOT_MAX_TOKENS: int = 6144
+_ONE_SHOT_MAX_TOKENS: int = 8192
+_BATCH_MAX_TOKENS: int = 8192
+_ONE_SHOT_FALLBACK_BATCH_CHARS: int = 8000
 _SIMILARITY_DEDUP_THRESHOLD: float = 0.86
 _CONSOLIDATION_MIN_CANDIDATES: int = 16
 
@@ -362,9 +365,9 @@ class KnowledgeService:
         )
         options = LLMOptions(
             temperature=0.25 if one_shot else 0.3,
-            max_tokens=_ONE_SHOT_MAX_TOKENS if one_shot else 4096,
+            max_tokens=_ONE_SHOT_MAX_TOKENS if one_shot else _BATCH_MAX_TOKENS,
             timeout=90.0,
-            tool_choice="auto" if one_shot else None,
+            tool_choice="auto",
         )
 
         output, _ = self.llm.generate_structured(
@@ -506,6 +509,66 @@ class KnowledgeService:
             return [list(snippets)], True
         return _build_chapter_batches(snippets, max_batch_chars=_CHAPTER_BATCH_MAX_CHARS), False
 
+    def _extract_batches_items(
+        self,
+        batches: list[list[MaterialSnippet]],
+        *,
+        snippets: list[MaterialSnippet],
+        prompt_feedback: str | None,
+        is_one_shot: bool,
+        on_progress: Callable[[int, int, str], None] | None,
+    ) -> tuple[list[ExtractedKnowledgeItem], bool, int]:
+        """执行批次抽取；若 One-Shot 因思考模型输出截断触发格式错误，自动降级小批次抽取。"""
+        if is_one_shot:
+            try:
+                items = self._extract_batch_points(
+                    batches[0],
+                    prompt_feedback,
+                    existing_outline=None,
+                    one_shot=True,
+                )
+                self._emit_progress(on_progress, 1, 1, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+                return items, True, 1
+            except LLMResponseFormatError as exc:
+                logger.warning(
+                    "one-shot knowledge extraction format error, falling back to smaller batches:"
+                    " %s",
+                    str(exc)[:160],
+                )
+                batches = _build_snippet_batches(
+                    snippets,
+                    max_batch_snippets=_RETRY_MAX_BATCH_SNIPPETS,
+                    max_batch_chars=_ONE_SHOT_FALLBACK_BATCH_CHARS,
+                )
+                is_one_shot = False
+
+        raw_extracted: list[ExtractedKnowledgeItem] = []
+        outline_skeleton: list[dict[str, Any]] = []
+        total_batches = len(batches)
+        for batch_idx, batch in enumerate(batches):
+            batch_items = self._extract_batch_points(
+                batch,
+                prompt_feedback,
+                existing_outline=outline_skeleton if batch_idx > 0 else None,
+                one_shot=False,
+            )
+            raw_extracted.extend(batch_items)
+            for kp_item in batch_items:
+                outline_skeleton.append(
+                    {
+                        "temp_id": kp_item.temp_id,
+                        "name": kp_item.name,
+                        "level": kp_item.level,
+                    }
+                )
+            self._emit_progress(
+                on_progress,
+                batch_idx + 1,
+                total_batches,
+                ParseStatus.EXTRACTING_KNOWLEDGE.value,
+            )
+        return raw_extracted, is_one_shot, total_batches
+
     def _run_extraction_with_retries(
         self,
         snippets: list[MaterialSnippet],
@@ -530,31 +593,13 @@ class KnowledgeService:
                 explicit_small_batch=explicit_small_batch,
                 total_effective_chars=total_effective_chars,
             )
-            raw_extracted: list[ExtractedKnowledgeItem] = []
-            outline_skeleton: list[dict[str, Any]] = []
-            total_batches = len(batches)
-            for batch_idx, batch in enumerate(batches):
-                batch_items = self._extract_batch_points(
-                    batch,
-                    prompt_feedback,
-                    existing_outline=outline_skeleton if batch_idx > 0 else None,
-                    one_shot=is_one_shot,
-                )
-                raw_extracted.extend(batch_items)
-                for kp_item in batch_items:
-                    outline_skeleton.append(
-                        {
-                            "temp_id": kp_item.temp_id,
-                            "name": kp_item.name,
-                            "level": kp_item.level,
-                        }
-                    )
-                self._emit_progress(
-                    on_progress,
-                    batch_idx + 1,
-                    total_batches,
-                    ParseStatus.EXTRACTING_KNOWLEDGE.value,
-                )
+            raw_extracted, is_one_shot, total_batches = self._extract_batches_items(
+                batches,
+                snippets=snippets,
+                prompt_feedback=prompt_feedback,
+                is_one_shot=is_one_shot,
+                on_progress=on_progress,
+            )
 
             if (
                 not is_one_shot

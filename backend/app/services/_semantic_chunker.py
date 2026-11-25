@@ -41,8 +41,8 @@ from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 _logger = logging.getLogger(__name__)
 
 _MIN_PAGES_FOR_SEMANTIC_CHUNKING: int = 3
-_SEMANTIC_CHUNK_MAX_TOKENS: int = 4096
-_SEMANTIC_CHUNK_TIMEOUT: float = 35.0
+_SEMANTIC_CHUNK_MAX_TOKENS: int = 8192
+_SEMANTIC_CHUNK_TIMEOUT: float = 60.0
 _SEMANTIC_DEFAULT_CONCURRENCY: int = 3
 _ANCHOR_TAIL_CHARS: int = 120
 
@@ -226,6 +226,7 @@ def _annotate_single_batch(
                 temperature=0.0,
                 max_tokens=_SEMANTIC_CHUNK_MAX_TOKENS,
                 timeout=_SEMANTIC_CHUNK_TIMEOUT,
+                tool_choice="auto",
             ),
         )
         return _to_domain_annotations(batch, parsed)

@@ -1413,3 +1413,56 @@ class TestKnowledgeServiceWorkflow:
         assert by_name["已精讲考点"]["has_study_guide"] is True
         assert by_name["未精讲考点"]["has_study_guide"] is False
         assert "study_guide" not in by_name["已精讲考点"]
+
+    def test_one_shot_format_error_falls_back_to_smaller_batches(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """One-Shot 因思考模型输出截断触发 LLMResponseFormatError 时自动降级小批次不崩溃。"""
+        from app.core.errors import LLMResponseFormatError
+
+        canned = KnowledgeExtractionOutput(
+            knowledge_points=[
+                ExtractedKnowledgeItem(
+                    temp_id="kp1",
+                    parent_temp_id=None,
+                    level=1,
+                    name="支持向量机核心原理",
+                    description="超平面与最大间隔原理",
+                    core_summary="通过最大化几何间隔寻找最优分类超平面，并借助拉格朗日对偶求解。",
+                    key_takeaways=[
+                        "最优超平面仅由支持向量决定，与非支持向量样本无关。",
+                        "最大化几何间隔等价于最小化法向量二范数的平方。",
+                    ],
+                    source_snippet_indices=[0, 1, 2],
+                )
+            ]
+        )
+
+        class _TruncatedOneShotLLM(StubLLM):
+            def __init__(self) -> None:
+                super().__init__(canned_outputs=[canned])
+                self.calls = 0
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                self.calls += 1
+                assert options is not None
+                assert options.max_tokens == 8192
+                assert options.tool_choice == "auto"
+                if self.calls == 1:
+                    raise LLMResponseFormatError("AI 输出格式暂时异常，请稍后重试")
+                return super().generate_structured(messages, response_model, options)
+
+        llm = _TruncatedOneShotLLM()
+        service = KnowledgeService(session, llm, StubEmbedding())
+        points = service.extract_and_build_knowledge_tree(
+            material_id=seed_material["material_id"],
+            version_id=seed_material["version_id"],
+            user_id=seed_material["user_id"],
+        )
+        assert llm.calls >= 2
+        assert len(points) >= 1
