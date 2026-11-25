@@ -5,14 +5,19 @@ import {
   apiGetMaterialDetail,
   apiGetMaterialList,
   apiGetQuestionJob,
+  apiGetStudyGuidesStatus,
   apiListQuestionJobs,
   apiParseMaterial,
+  apiPrewarmStudyGuides,
 } from '@/api'
 import type {
   GenerateQuestionsParams,
   MaterialItem,
   MaterialStatus,
   QuestionGenerationJob,
+  StudyGuidePrewarmResult,
+  StudyGuidePrewarmStatus,
+  StudyGuidePrewarmStatusResult,
 } from '@/types'
 import { isMaterialParsing } from '@/utils/materialState'
 import { createPoller, type PollerHandle } from '@/utils/poller'
@@ -28,9 +33,22 @@ export interface MaterialParseTask {
   timedOut?: boolean
 }
 
+export interface StudyGuidePrewarmTask {
+  materialId: string
+  versionId?: string
+  title: string
+  status: StudyGuidePrewarmStatus
+  totalKps: number
+  readyKps: number
+  failedKps: number
+  currentKpName: string | null
+  updatedAt: number
+  timedOut?: boolean
+}
+
 export interface BackgroundTaskItem {
   key: string
-  kind: 'material_parse' | 'question_job'
+  kind: 'material_parse' | 'question_job' | 'study_guide_prewarm'
   targetId: string
   status: 'active' | 'completed' | 'failed'
   title: string
@@ -63,6 +81,10 @@ export function isQuestionJobActive(job: Pick<QuestionGenerationJob, 'status'>):
   return job.status === 'queued' || job.status === 'running'
 }
 
+export function isStudyGuidePrewarmActive(status: StudyGuidePrewarmStatus): boolean {
+  return status === 'queued' || status === 'running'
+}
+
 function isNotFoundOrForbidden(err: unknown): boolean {
   const status = (err as { statusCode?: number } | null | undefined)?.statusCode
   return status === 404 || status === 403
@@ -89,6 +111,7 @@ async function runWithConcurrency(
 export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
   const materialTasks = ref<Map<string, MaterialParseTask>>(new Map())
   const questionJobs = ref<Map<string, QuestionGenerationJob>>(new Map())
+  const studyGuidePrewarmTasks = ref<Map<string, StudyGuidePrewarmTask>>(new Map())
   const dismissedKeys = ref<Set<string>>(new Set())
   const isPolling = ref(false)
   let poller: PollerHandle = createPoller()
@@ -113,8 +136,17 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       .map((job) => job.id),
   )
 
+  const activePrewarmMaterialIds = computed(() =>
+    Array.from(studyGuidePrewarmTasks.value.values())
+      .filter((task) => isStudyGuidePrewarmActive(task.status))
+      .map((task) => task.materialId),
+  )
+
   const hasActiveTasks = computed(
-    () => activeMaterialIds.value.length > 0 || activeQuestionJobIds.value.length > 0,
+    () =>
+      activeMaterialIds.value.length > 0
+      || activeQuestionJobIds.value.length > 0
+      || activePrewarmMaterialIds.value.length > 0,
   )
 
   const syncMaterialStoreItem = (item: MaterialItem): void => {
@@ -165,6 +197,19 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     const next = new Map(questionJobs.value)
     next.delete(jobId)
     questionJobs.value = next
+  }
+
+  const setStudyGuidePrewarmTask = (task: StudyGuidePrewarmTask): void => {
+    const next = new Map(studyGuidePrewarmTasks.value)
+    next.set(task.materialId, task)
+    studyGuidePrewarmTasks.value = next
+  }
+
+  const removeStudyGuidePrewarmTask = (materialId: string): void => {
+    if (!studyGuidePrewarmTasks.value.has(materialId)) return
+    const next = new Map(studyGuidePrewarmTasks.value)
+    next.delete(materialId)
+    studyGuidePrewarmTasks.value = next
   }
 
   const trackMaterialParse = (material: MaterialItem): void => {
@@ -225,9 +270,61 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     return job
   }
 
+  const trackStudyGuidePrewarm = (
+    statusRes: StudyGuidePrewarmStatusResult,
+    title = '考前精讲',
+  ): void => {
+    const key = `guide:${statusRes.material_id}`
+    if (isStudyGuidePrewarmActive(statusRes.status)) {
+      unDismiss(key)
+    }
+    const existing = studyGuidePrewarmTasks.value.get(statusRes.material_id)
+    setStudyGuidePrewarmTask({
+      materialId: statusRes.material_id,
+      versionId: statusRes.version_id || existing?.versionId,
+      title: existing?.title || title,
+      status: statusRes.status,
+      totalKps: statusRes.total_kps,
+      readyKps: statusRes.ready_kps,
+      failedKps: statusRes.failed_kps,
+      currentKpName: statusRes.current_kp_name,
+      updatedAt: Date.now(),
+      timedOut: false,
+    })
+    if (isStudyGuidePrewarmActive(statusRes.status)) {
+      schedulePolling()
+    }
+  }
+
+  const startStudyGuidePrewarm = async (
+    materialId: string,
+    title = '考前精讲',
+    options?: { version_id?: string; force?: boolean },
+  ): Promise<StudyGuidePrewarmResult> => {
+    const res = await apiPrewarmStudyGuides(materialId, options)
+    unDismiss(`guide:${materialId}`)
+    setStudyGuidePrewarmTask({
+      materialId,
+      versionId: res.version_id || options?.version_id,
+      title,
+      status: res.status,
+      totalKps: res.total_kps,
+      readyKps: res.ready_kps,
+      failedKps: 0,
+      currentKpName: null,
+      updatedAt: Date.now(),
+      timedOut: false,
+    })
+    if (isStudyGuidePrewarmActive(res.status)) {
+      schedulePolling()
+    }
+    return res
+  }
+
   const pollOnce = async (): Promise<boolean> => {
     const matIds = [...activeMaterialIds.value]
     const jobIds = [...activeQuestionJobIds.value]
+    const prewarmIds = [...activePrewarmMaterialIds.value]
 
     const runners: Array<() => Promise<void>> = [
       ...matIds.map((materialId) => async () => {
@@ -264,6 +361,21 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
           console.error('[backgroundTask] poll question job failed', jobId, err)
         }
       }),
+      ...prewarmIds.map((materialId) => async () => {
+        try {
+          const existing = studyGuidePrewarmTasks.value.get(materialId)
+          const statusRes = await apiGetStudyGuidesStatus(materialId, existing?.versionId, {
+            silentToast: true,
+          })
+          trackStudyGuidePrewarm(statusRes, existing?.title)
+        } catch (err) {
+          if (isNotFoundOrForbidden(err)) {
+            removeStudyGuidePrewarmTask(materialId)
+            return
+          }
+          console.error('[backgroundTask] poll study guide prewarm failed', materialId, err)
+        }
+      }),
     ]
 
     await runWithConcurrency(runners, MAX_POLL_CONCURRENCY)
@@ -291,6 +403,16 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       }
     }
     if (jobChanged) questionJobs.value = nextJobs
+
+    const nextPrewarm = new Map(studyGuidePrewarmTasks.value)
+    let prewarmChanged = false
+    for (const [id, task] of nextPrewarm.entries()) {
+      if (isStudyGuidePrewarmActive(task.status) && !task.timedOut) {
+        nextPrewarm.set(id, { ...task, timedOut: true, updatedAt: Date.now() })
+        prewarmChanged = true
+      }
+    }
+    if (prewarmChanged) studyGuidePrewarmTasks.value = nextPrewarm
   }
 
   const refreshMaterialTask = async (materialId: string): Promise<MaterialItem | null> => {
@@ -335,6 +457,25 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
         return null
       }
       console.error('[backgroundTask] refresh question job failed', jobId, err)
+      return null
+    }
+  }
+
+  const refreshStudyGuidePrewarm = async (
+    materialId: string,
+    versionId?: string,
+  ): Promise<StudyGuidePrewarmStatusResult | null> => {
+    try {
+      const existing = studyGuidePrewarmTasks.value.get(materialId)
+      const res = await apiGetStudyGuidesStatus(materialId, versionId ?? existing?.versionId)
+      trackStudyGuidePrewarm(res, existing?.title)
+      return res
+    } catch (err) {
+      if (isNotFoundOrForbidden(err)) {
+        removeStudyGuidePrewarmTask(materialId)
+        return null
+      }
+      console.error('[backgroundTask] refresh study guide prewarm failed', materialId, err)
       return null
     }
   }
@@ -413,6 +554,24 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
         MAX_POLL_CONCURRENCY,
       )
 
+      const trackedPrewarmIds = [...activePrewarmMaterialIds.value]
+      await runWithConcurrency(
+        trackedPrewarmIds.map((materialId) => async () => {
+          try {
+            const existing = studyGuidePrewarmTasks.value.get(materialId)
+            const statusRes = await apiGetStudyGuidesStatus(materialId, existing?.versionId, {
+              silentToast: true,
+            })
+            trackStudyGuidePrewarm(statusRes, existing?.title)
+          } catch (err) {
+            if (isNotFoundOrForbidden(err)) {
+              removeStudyGuidePrewarmTask(materialId)
+            }
+          }
+        }),
+        MAX_POLL_CONCURRENCY,
+      )
+
       if (hasActiveTasks.value) {
         schedulePolling()
       }
@@ -442,6 +601,12 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
         next.delete(id)
         questionJobs.value = next
       }
+    } else if (key.startsWith('guide:')) {
+      const id = key.slice(6)
+      const task = studyGuidePrewarmTasks.value.get(id)
+      if (task && !isStudyGuidePrewarmActive(task.status)) {
+        removeStudyGuidePrewarmTask(id)
+      }
     }
   }
 
@@ -458,6 +623,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     isPolling.value = false
     materialTasks.value = new Map()
     questionJobs.value = new Map()
+    studyGuidePrewarmTasks.value = new Map()
     dismissedKeys.value = new Set()
   }
 
@@ -600,6 +766,61 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       }
     }
 
+    for (const task of studyGuidePrewarmTasks.value.values()) {
+      const key = `guide:${task.materialId}`
+      if (dismissedKeys.value.has(key) || task.status === 'idle') continue
+      const progressPercent =
+        task.totalKps > 0 ? Math.min(100, Math.round((task.readyKps / task.totalKps) * 100)) : 0
+      if (isStudyGuidePrewarmActive(task.status)) {
+        const detailText = task.timedOut
+          ? `${task.title} · 精讲同步已暂停（点击刷新）`
+          : task.status === 'queued'
+            ? `${task.title} · 正在排队生成考前精讲...`
+            : task.currentKpName
+              ? `正在精讲 (${task.readyKps}/${task.totalKps})：${task.currentKpName}`
+              : `正在生成整章精讲 (${task.readyKps}/${task.totalKps})...`
+        list.push({
+          key,
+          kind: 'study_guide_prewarm',
+          targetId: task.materialId,
+          status: 'active',
+          title: task.title,
+          detailText,
+          progressPercent,
+          materialId: task.materialId,
+          actionLabel: task.timedOut ? '刷新' : undefined,
+          timedOut: Boolean(task.timedOut),
+          dismissible: false,
+        })
+      } else if (task.status === 'completed') {
+        list.push({
+          key,
+          kind: 'study_guide_prewarm',
+          targetId: task.materialId,
+          status: 'completed',
+          title: task.title,
+          detailText: `${task.title} 整章精讲已就绪 (${task.readyKps}/${task.totalKps})`,
+          progressPercent: 100,
+          materialId: task.materialId,
+          actionLabel: '去查看',
+          dismissible: true,
+        })
+      } else {
+        list.push({
+          key,
+          kind: 'study_guide_prewarm',
+          targetId: task.materialId,
+          status: 'failed',
+          title: task.title,
+          detailText: `${task.title} 精讲部分生成完成 (${task.readyKps}/${task.totalKps}，${task.failedKps} 项失败)`,
+          progressPercent,
+          materialId: task.materialId,
+          actionLabel: '去查看',
+          dismissible: true,
+        })
+      }
+    }
+
     // 进行中任务排在最前
     return list.sort((a, b) => {
       if (a.status === 'active' && b.status !== 'active') return -1
@@ -611,18 +832,23 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
   return {
     materialTasks,
     questionJobs,
+    studyGuidePrewarmTasks,
     isPolling,
     activeMaterialIds,
     activeQuestionJobIds,
+    activePrewarmMaterialIds,
     hasActiveTasks,
     visibleTasks,
     trackMaterialParse,
     trackQuestionJob,
+    trackStudyGuidePrewarm,
     startMaterialParse,
     startQuestionJob,
+    startStudyGuidePrewarm,
     refreshActiveTasks,
     refreshMaterialTask,
     refreshQuestionJob,
+    refreshStudyGuidePrewarm,
     pollOnce,
     ensurePolling,
     stopPolling,

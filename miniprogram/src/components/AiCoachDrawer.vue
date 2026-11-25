@@ -20,6 +20,13 @@
         </view>
       </view>
 
+      <CoachScopeSelector
+        v-if="enableScopeSelector || selectableFolders !== undefined"
+        :folders="selectableFolders || []"
+        :selected-folder-id="folderId"
+        @select="(id) => emit('select-folder', id)"
+      />
+
       <view v-if="contextText" class="context-bar" @tap="toggleContextExpanded">
         <text class="context-tag">当前语境</text>
         <text :class="['context-text', { expanded: contextExpanded }]">{{ contextText }}</text>
@@ -67,7 +74,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import CoachMessageList from './CoachMessageList.vue'
+import CoachScopeSelector from './CoachScopeSelector.vue'
 import { useCoachChat } from '@/composables/useCoachChat'
+import type { FolderItem } from '@/types'
 import { safeNavigateTo } from '@/utils/navigation'
 
 const props = defineProps<{
@@ -80,9 +89,14 @@ const props = defineProps<{
   folderId?: string
   materialId?: string
   knowledgePointId?: string
+  selectableFolders?: FolderItem[]
+  enableScopeSelector?: boolean
 }>()
 
-const emit = defineEmits<{ (e: 'update:visible', val: boolean): void }>()
+const emit = defineEmits<{
+  (e: 'update:visible', val: boolean): void
+  (e: 'select-folder', folderId?: string): void
+}>()
 const contextExpanded = ref(false)
 
 const {

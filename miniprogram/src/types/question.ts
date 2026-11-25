@@ -117,13 +117,18 @@ export interface AskCoachParams {
   history?: AskCoachHistoryItem[]
 }
 
+export type CoachScopeKind = 'global' | 'folder' | 'material' | 'knowledge_point'
+
 export interface ScopedCoachParams {
+  scope?: CoachScopeKind
   folder_id?: string
   material_id?: string
   knowledge_point_id?: string
   user_prompt: string
   /** 多轮对话线程 ID（前端传 sessionKey）；与 backend ScopedCoachRequest.thread_id 对齐，可选。 */
   thread_id?: string
+  /** 近期历史对话（仅作服务端冷启动兜底）；与 backend ScopedCoachRequest.history 对齐，可选。 */
+  history?: AskCoachHistoryItem[]
 }
 
 // 题库批次：与 backend/app/schemas/question.py::QuestionBatchSummaryResponse 一致

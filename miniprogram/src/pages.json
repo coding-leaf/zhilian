@@ -60,6 +60,12 @@
           }
         },
         {
+          "path": "pages/knowledge/index",
+          "style": {
+            "navigationBarTitleText": "考点精讲"
+          }
+        },
+        {
           "path": "pages/questions/index",
           "style": {
             "navigationBarTitleText": "核对出题"

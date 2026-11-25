@@ -1,16 +1,21 @@
 import { request } from '@/utils/request'
+import { LONG_REQUEST_TIMEOUT_MS } from '@/utils/requestError'
 import type {
   KnowledgePointDetail,
   KnowledgeTreeResult,
   PointSourceListResult,
+  PollingRequestOptions,
+  StudyGuideResult,
 } from '@/types'
 import {
   adaptKnowledgePointDetail,
   adaptKnowledgeTree,
   adaptPointSourceList,
+  adaptStudyGuideResult,
   type WireKnowledgePointDetail,
   type WireKnowledgeTreeResult,
   type WirePointSourceList,
+  type WireStudyGuideResponse,
 } from '../adapters'
 
 export function apiGetKnowledgeTree(materialId: string, versionId?: string): Promise<KnowledgeTreeResult> {
@@ -34,4 +39,27 @@ export function apiGetKnowledgePointSnippets(id: string): Promise<PointSourceLis
     url: `/knowledge/${id}/snippets`,
     method: 'GET',
   }).then(adaptPointSourceList)
+}
+
+export function apiGetKnowledgeStudyGuide(
+  kpId: string,
+  requestOptions?: PollingRequestOptions,
+): Promise<StudyGuideResult> {
+  return request<WireStudyGuideResponse>({
+    url: `/knowledge/${kpId}/study-guide`,
+    method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
+  }).then(adaptStudyGuideResult)
+}
+
+export function apiGenerateKnowledgeStudyGuide(
+  kpId: string,
+  force = false,
+): Promise<StudyGuideResult> {
+  return request<WireStudyGuideResponse>({
+    url: `/knowledge/${kpId}/study-guide/generate`,
+    method: 'POST',
+    data: force ? { force: true } : {},
+    timeout: LONG_REQUEST_TIMEOUT_MS,
+  }).then(adaptStudyGuideResult)
 }

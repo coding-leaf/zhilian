@@ -10,6 +10,9 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import {
+  FOLDER_QUICK_PROMPTS,
+  GLOBAL_QUICK_PROMPTS,
+  MATERIAL_QUICK_PROMPTS,
   MAX_PERSISTED_SESSIONS,
   buildCoachLruIndexKey,
   buildCoachSessionKey,
@@ -141,6 +144,7 @@ describe('useCoachChat session isolation & error retry', () => {
       expect.objectContaining({
         url: '/coach/ask',
         data: {
+          scope: 'knowledge_point',
           knowledge_point_id: 'kp-1',
           user_prompt: '你好呀',
           thread_id: 'kp:kp-1',
@@ -154,6 +158,7 @@ describe('useCoachChat session isolation & error retry', () => {
       expect.objectContaining({
         url: '/coach/ask',
         data: {
+          scope: 'material',
           material_id: 'm-1',
           user_prompt: '讲义总结',
           thread_id: 'mat:m-1',
@@ -162,7 +167,7 @@ describe('useCoachChat session isolation & error retry', () => {
     )
   })
 
-  it('passes the session key as thread_id for every scoped coach turn', async () => {
+  it('passes scope, thread_id, and bounded paired history on scoped coach turns', async () => {
     requestMock.mockResolvedValue({ reply: '多轮答复', suggestions: [], sources: [] })
     const ctx = reactive<CoachContextParams>({ folderId: 'f-1' })
     const coach = useCoachChat(() => ctx)
@@ -173,20 +178,34 @@ describe('useCoachChat session isolation & error retry', () => {
       .map(([options]) => options as { url: string; data: Record<string, unknown> })
       .filter((options) => options.url === '/coach/ask')
     expect(folderCalls).toHaveLength(2)
-    for (const call of folderCalls) {
-      expect(call.data).toEqual({
-        folder_id: 'f-1',
-        user_prompt: expect.any(String),
-        thread_id: 'folder:f-1',
-      })
-    }
+    expect(folderCalls[0].data).toEqual({
+      scope: 'folder',
+      folder_id: 'f-1',
+      user_prompt: '第一轮',
+      thread_id: 'folder:f-1',
+    })
+    expect(folderCalls[1].data).toEqual({
+      scope: 'folder',
+      folder_id: 'f-1',
+      user_prompt: '那不满足这个条件会怎样',
+      thread_id: 'folder:f-1',
+      history: [
+        { role: 'user', content: '第一轮' },
+        { role: 'assistant', content: '多轮答复' },
+      ],
+    })
 
     ctx.folderId = undefined
     ctx.materialId = 'm-9'
     await coach.sendMessage('换到讲义')
     expect(requestMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        data: { material_id: 'm-9', user_prompt: '换到讲义', thread_id: 'mat:m-9' },
+        data: {
+          scope: 'material',
+          material_id: 'm-9',
+          user_prompt: '换到讲义',
+          thread_id: 'mat:m-9',
+        },
       }),
     )
   })
@@ -405,5 +424,94 @@ describe('useCoachChat session isolation & error retry', () => {
     )
     const legacyCoach = useCoachChat(() => ({ materialId: 'm-legacy' }))
     expect(legacyCoach.messageList.value.map((m) => m.content)).toEqual(['有效提问', '有效回复'])
+  })
+
+  it('allows global scope requests without IDs, isolates global vs folder history, and splits 3 quick-prompt sets', async () => {
+    setActivePinia(createPinia())
+    requestMock.mockImplementation(async ({ data }: { data: any }) => ({
+      reply: `reply:${data.scope}:${data.user_prompt}`,
+      suggestions: [],
+      sources: [],
+      mode: data.scope === 'global' ? 'general' : 'grounded',
+    }))
+
+    const ctx = reactive<CoachContextParams>({})
+    const coach = useCoachChat(() => ctx)
+
+    // 1. Global mode quick prompts & request
+    expect(coach.sessionKey.value).toBe('global')
+    expect(coach.quickPrompts.value).toEqual(GLOBAL_QUICK_PROMPTS)
+
+    await coach.sendMessage('什么是极限')
+    expect(requestMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: '/coach/ask',
+        data: {
+          scope: 'global',
+          user_prompt: '什么是极限',
+          thread_id: 'global',
+        },
+      }),
+    )
+    expect(coach.messageList.value).toHaveLength(2)
+    expect(coach.messageList.value[1].mode).toBe('general')
+
+    // 2. Folder mode quick prompts & isolated session
+    ctx.folderId = 'f-se'
+    expect(coach.sessionKey.value).toBe('folder:f-se')
+    expect(coach.quickPrompts.value).toEqual(FOLDER_QUICK_PROMPTS)
+    expect(coach.messageList.value).toEqual([])
+
+    await coach.sendMessage('梳理课程框架')
+    expect(requestMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: '/coach/ask',
+        data: {
+          scope: 'folder',
+          folder_id: 'f-se',
+          user_prompt: '梳理课程框架',
+          thread_id: 'folder:f-se',
+        },
+      }),
+    )
+
+    // 3. Material mode quick prompts
+    ctx.folderId = undefined
+    ctx.materialId = 'm-1'
+    expect(coach.quickPrompts.value).toEqual(MATERIAL_QUICK_PROMPTS)
+
+    // 4. Switch back to global retains global history
+    ctx.materialId = undefined
+    expect(coach.sessionKey.value).toBe('global')
+    expect(coach.messageList.value).toHaveLength(2)
+    expect(coach.messageList.value[0].content).toBe('什么是极限')
+  })
+
+  it('caps scoped coach history at 6 turns (12 messages) and strips orphan user turns', async () => {
+    setActivePinia(createPinia())
+    const ctx = reactive<CoachContextParams>({})
+    const coach = useCoachChat(() => ctx)
+
+    for (let i = 1; i <= 7; i += 1) {
+      requestMock.mockResolvedValueOnce({ reply: `a-${i}`, suggestions: [], sources: [] })
+      await coach.sendMessage(`q-${i}`)
+    }
+
+    // Trigger a failed turn (creates an orphan user bubble + error bubble)
+    requestMock.mockRejectedValueOnce(new Error('timeout'))
+    await coach.sendMessage('q-failed')
+
+    // Next successful turn should send only the last 6 valid turns (q-2..a-7) without orphan/error
+    requestMock.mockResolvedValueOnce({ reply: 'a-8', suggestions: [], sources: [] })
+    await coach.sendMessage('q-8')
+
+    const lastCall = requestMock.mock.calls.at(-1)?.[0] as {
+      data: { scope: string; history: Array<{ role: string; content: string }> }
+    }
+    expect(lastCall.data.scope).toBe('global')
+    expect(lastCall.data.history).toHaveLength(12)
+    expect(lastCall.data.history[0]).toEqual({ role: 'user', content: 'q-2' })
+    expect(lastCall.data.history[11]).toEqual({ role: 'assistant', content: 'a-7' })
+    expect(lastCall.data.history.some((m) => m.content === 'q-failed')).toBe(false)
   })
 })
