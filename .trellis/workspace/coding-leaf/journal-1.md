@@ -814,3 +814,28 @@ Swarm 4轨并行落地M2：学情4 Tab课程全量联动过滤与自定义题单
 ### Next Steps
 
 - 在讲义详情页对SVM.pdf点重新解析验证新切片与全屏考前精讲页；M3纯UI视觉精修按用户要求继续暂缓。
+
+
+## Session 25: 解析幂等、AI助教Markdown、已删资料过滤与考前精讲异步高优队列
+<!-- trellis-session: v=2 fp=fc7e71ab0ecd717f -->
+
+**Date**: 2026-11-26
+**Task**: 解析幂等、AI助教Markdown、已删资料过滤与考前精讲异步高优队列
+**Branch**: `feat/coach-scope-and-deep-study`
+
+### Summary
+
+修复解析双击与RQ退避重试重复入队，补全AI助教Markdown与参考讲义富文本渲染，学情Tab全范围过滤已删资料（保留历史练习记录），并将考前精讲迁移至zhilian_high异步队列与2s实时耗时轮询。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `28213db` | fix(services): 加固资料解析三层幂等锁与RQ重试清理，并将考前精讲迁移至高优异步队列 |
+| `d2d1a7c` | fix(repositories): 学情Tab全范围过滤已删除资料的掌握度、错题、题库与题单（保留历史练习记录） |
+| `03d2328` | fix(miniprogram): 补全AI助教Markdown渲染、解析防双击与考前精讲异步轮询体验 |
+| `2e7def3` | docs(docs): 沉淀解析幂等、已删资料可见性与异步考前精讲跨层契约规范 |
+
+### Status
+
+[OK] **Completed**

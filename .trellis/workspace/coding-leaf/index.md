@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-11-25
+- **Total Sessions**: 25
+- **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~816 | Active |
+| `journal-1.md` | ~841 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-11-26 | 解析幂等、AI助教Markdown、已删资料过滤与考前精讲异步高优队列 | `28213db`, `d2d1a7c`, `03d2328`, `2e7def3` | `feat/coach-scope-and-deep-study` |
 | 24 | 2026-11-25 | 主界面全局助教、视觉语义切片与两阶段考前精讲页落地 | `814fd89`, `81a61aa`, `baeb9e8`, `fd5b306`, `1b9a4a3` | `feat/coach-scope-and-deep-study` |
 | 23 | 2026-11-25 | M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地 | `5a22902`, `4fd53e0`, `c57c143`, `e3df28e` | `docs/readme-local-setup` |
 | 22 | 2026-11-24 | M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治 | `351e88c`, `0c303d1`, `05b1657`, `f4ee05f` | `docs/readme-local-setup` |
