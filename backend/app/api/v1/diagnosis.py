@@ -17,7 +17,7 @@ from fastapi import APIRouter, Body, Depends, Query, status
 from app.api.deps.auth import get_current_user
 from app.api.deps.diagnosis import get_diagnosis_service
 from app.api.deps.pagination import PaginationParams, get_pagination_params
-from app.core.errors import MaterialInvalidError
+from app.api.v1._filters import parse_folder_filter
 from app.models.user import User
 from app.schemas.diagnosis import (
     DeleteWrongRecordResponse,
@@ -211,15 +211,15 @@ def get_mastery_overview(
     Returns:
         UserMasteryOverviewResponse: 包含四档统计与薄弱点清单的总览响应。
     """
+    resolved_folder_id, is_unclassified = parse_folder_filter(
+        folder_id,
+        invalid_status_code=status.HTTP_400_BAD_REQUEST,
+    )
     extra_kwargs: dict[str, Any] = {}
-    if folder_id is not None:
-        if folder_id == "__none__":
-            extra_kwargs["unclassified"] = True
-        else:
-            try:
-                extra_kwargs["folder_id"] = uuid.UUID(folder_id)
-            except ValueError as exc:
-                raise MaterialInvalidError("folder_id 参数格式非法") from exc
+    if is_unclassified:
+        extra_kwargs["unclassified"] = True
+    elif resolved_folder_id is not None:
+        extra_kwargs["folder_id"] = resolved_folder_id
 
     overview = diagnosis_service.get_user_mastery_overview(
         user_id=current_user.id,
@@ -275,7 +275,10 @@ def list_wrong_records(
     diagnosis_service: Annotated[DiagnosisService, Depends(get_diagnosis_service)],
     pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     material_id: Annotated[uuid.UUID | None, Query(description="学习资料主键 UUID")] = None,
-    folder_id: Annotated[uuid.UUID | None, Query(description="课程文件夹主键 UUID")] = None,
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程文件夹主键 UUID 或 '__none__' 表示未分类"),
+    ] = None,
     unclassified: Annotated[bool, Query(description="仅未分类资料错题")] = False,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="知识点主键 UUID")] = None,
     error_type: Annotated[str | None, Query(description="错误类型分类过滤")] = None,
@@ -301,11 +304,15 @@ def list_wrong_records(
     Returns:
         WrongRecordListResponse: 包含原题快照的错题记录分页列表响应。
     """
+    resolved_folder_id, is_unclassified = parse_folder_filter(
+        folder_id,
+        unclassified=unclassified,
+    )
     result = diagnosis_service.list_wrong_records(
         user_id=current_user.id,
         material_id=material_id,
-        folder_id=folder_id,
-        unclassified=unclassified,
+        folder_id=resolved_folder_id,
+        unclassified=is_unclassified,
         status=status,
         is_mastered=is_mastered,
         knowledge_point_id=knowledge_point_id,
@@ -353,9 +360,18 @@ def list_wrong_records(
                     scope = scopes.get(item.knowledge_point_id)
                     if scope is not None:
                         item.material_id, item.folder_id = scope
+    group_kwargs: dict[str, Any] = {}
+    if resolved_folder_id is not None:
+        group_kwargs["folder_id"] = resolved_folder_id
+    if is_unclassified:
+        group_kwargs["unclassified"] = True
     groups = [
         WrongRecordGroupResponse.model_validate(group)
-        for group in diagnosis_service.list_wrong_record_groups(current_user.id, is_mastered)
+        for group in diagnosis_service.list_wrong_record_groups(
+            current_user.id,
+            is_mastered,
+            **group_kwargs,
+        )
     ]
     if total_count is None:
         total_count = len(items)

@@ -26,7 +26,9 @@ import {
   resolveWrongMarkAction,
   wrongMarkLabel,
 } from '@/pages/review/reviewView'
+import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { usePracticeStore } from '@/stores/practice'
+import { startWrongRegenerateJob } from '@/utils/questionGeneration'
 import type { WrongRecordItem } from '@/types'
 
 /** 手工标记记录：practice_id 为 NULL 就是「手工创建」的定义。 */
@@ -197,32 +199,20 @@ describe('manual wrong record enters the regeneration scope (AC-6, bounded)', ()
     setActivePinia(createPinia())
     requestMock.mockReset()
     requestMock.mockImplementation(async (options: any) => {
-      if (options.url === '/questions/generate') {
+      if (options.url === '/questions/jobs') {
         return {
-          qualified_questions: [
-            {
-              id: 'g-1',
-              question_type: 'single_choice',
-              stem: '再生题',
-              options: [
-                { key: 'A', content: '一' },
-                { key: 'B', content: '二' },
-              ],
-              answer: 'A',
-            },
-          ],
-          pending_questions: [],
-          quality_checks: [],
-        }
-      }
-      if (options.url === '/practices') {
-        return {
-          id: 'p-new',
-          title: '错题巩固练习',
-          status: 'not_started',
-          total_count: 1,
-          questions: [],
-          items: [],
+          id: 'job-wrong-manual',
+          status: 'queued',
+          folder_id: options.data?.folder_id ?? null,
+          total_kps: options.data?.knowledge_point_ids?.length ?? 1,
+          completed_kps: 0,
+          generated_count: 0,
+          question_ids: [],
+          auto_create_practice: options.data?.auto_create_practice,
+          source_type: options.data?.source_type,
+          practice_title: options.data?.practice_title,
+          created_at: '',
+          updated_at: '',
         }
       }
       throw new Error(`unexpected request: ${options.url}`)
@@ -243,13 +233,21 @@ describe('manual wrong record enters the regeneration scope (AC-6, bounded)', ()
     })
     expect(kpIds).toContain(manual.knowledge_point_id)
 
-    // 2. 举一反三发起再生题：请求里必须含该手工错题的考点。
-    const store = usePracticeStore()
-    await store.regenerateFromWrongPoints(kpIds, { folderId: 'f-1' })
+    // 2. 举一反三发起异步再生题任务：请求里必须含该手工错题的考点且走 POST /questions/jobs。
+    const job = await startWrongRegenerateJob({
+      knowledgePointIds: kpIds,
+      scope: { folderId: 'f-1' },
+    })
 
-    const generateCalls = calls('/questions/generate')
-    expect(generateCalls.length).toBeGreaterThan(0)
-    const requested = generateCalls.flatMap(([options]: any[]) => options.data.knowledge_point_ids)
+    expect(job.id).toBe('job-wrong-manual')
+    expect(useBackgroundTaskStore().questionJobs.has('job-wrong-manual')).toBe(true)
+    const jobCalls = calls('/questions/jobs')
+    expect(jobCalls.length).toBeGreaterThan(0)
+    const requested = jobCalls.flatMap(([options]: any[]) => options.data.knowledge_point_ids)
     expect(requested).toContain(manual.knowledge_point_id)
+    expect(jobCalls[0][0].data).toMatchObject({
+      auto_create_practice: true,
+      source_type: 'wrong_record',
+    })
   })
 })

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端架构与 <=300 行组件红线"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "request.ts 超时、RequestError、silentToast 与并发/刷新契约"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue SFC 规范、设计 Token、零裸 Hex、零 Emoji"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store 状态与生命周期边界"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "后端路由分层边界（folders PUT 别名）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端 folders PUT 契约对齐"}
+{"file": ".trellis/tasks/11-24-mp-weixin-compat-audit/research/01-js-runtime-and-api-compat.md", "reason": "JS 运行时、编译产物与微信平台 API 实证清单"}
+{"file": ".trellis/tasks/11-24-mp-weixin-compat-audit/research/02-vue-wxml-and-config-compat.md", "reason": "Vue 3 / WXML / 生命周期与 manifest 配置实证清单"}
+{"file": ".trellis/tasks/11-24-mp-weixin-compat-audit/research/03-wxss-layout-and-spec-gaps.md", "reason": "WXSS 样式兼容与规范缺口实证清单"}

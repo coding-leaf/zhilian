@@ -28,6 +28,7 @@ import ReportDetailPage from '@/subpackages/report/pages/detail/index.vue'
 import AttemptResultCard from '@/subpackages/report/components/AttemptResultCard.vue'
 import ReviewPage from '@/pages/review/index.vue'
 import WrongRecordCard from '@/pages/review/components/WrongRecordCard.vue'
+import { useAuthStore } from '@/stores/auth'
 import { usePracticeStore } from '@/stores/practice'
 import { resetLoadingGuardForTest } from '@/utils/loadingGuard'
 import type { AttemptResult, WrongRecordItem } from '@/types'
@@ -352,6 +353,7 @@ describe('Practice, Report & Review Closed-Loop Integration Flows', () => {
 
     const pinia = createPinia()
     setActivePinia(pinia)
+    useAuthStore().setToken('tok-review')
     wrapper = mount(ReviewPage, {
       global: {
         plugins: [pinia],

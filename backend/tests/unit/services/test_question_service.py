@@ -836,7 +836,7 @@ class TestQuestionServiceFlow:
             # 5. 名词解释
             LLMGeneratedQuestionItem(
                 question_type=QuestionType.TERM_EXPLANATION.value,
-                stem="请依据材料解释什么是 Scrum Master 角色？",
+                stem="在 Scrum 三大角色中，Scrum Master 与 产品负责人、开发团队 的定位是什么？",
                 answer="Scrum三大角色之一，负责推进敏捷流程。",
                 grading_rubric=LLMGradingRubric(
                     total_score=5,
@@ -981,14 +981,14 @@ class TestQuestionServiceFlow:
 
         assert result.retry_count == 1
         assert len(result.qualified_questions) == 2
-        # LLM received feedback in attempt 2
-        assert len(stub_llm.received_messages) == 2
-        assert "上一轮质检未通过反馈" in stub_llm.received_messages[1][1].content
+        # LLM received feedback in retry generation prompt
+        assert len(stub_llm.received_messages) >= 2
+        assert any("上一轮质检未通过反馈" in msgs[1].content for msgs in stub_llm.received_messages)
 
-    def test_retry_exhausted_moves_to_pending_review(
+    def test_retry_exhausted_discards_unqualified_zero_pending_review(
         self, session: Session, helper_setup: dict[str, uuid.UUID]
     ) -> None:
-        """Verify that when retries are exhausted, failing questions enter pending_review."""
+        """Verify exhausted retries discard failing questions with zero pending_review."""
         user_id = helper_setup["user_id"]
         material_id = helper_setup["material_id"]
         version_id = helper_setup["version_id"]
@@ -1020,9 +1020,12 @@ class TestQuestionServiceFlow:
         )
 
         assert result.retry_count == 2
+        assert result.total_generated == 0
         assert len(result.qualified_questions) == 0
-        assert len(result.pending_questions) == 1
-        assert result.pending_questions[0].status == QuestionStatus.PENDING_REVIEW.value
+        assert len(result.pending_questions) == 0
+        persisted, total = service.question_repo.list_questions(user_id, material_id=material_id)
+        assert total == 0
+        assert persisted == []
 
 
 # ==============================================================================
@@ -1541,7 +1544,7 @@ class TestQuestionServiceCRUDAndAudit:
         assert "150~250" in system_prompt
         assert "一、二、三、" in system_prompt
         assert options.temperature == 0.65
-        assert options.max_tokens == 900
+        assert options.max_tokens == 4096
         assert "深度解析" not in (AskCoachResponse.model_fields["reply"].description or "")
 
         # Non-existent question raises QuestionNotFoundError

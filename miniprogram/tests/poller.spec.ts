@@ -95,4 +95,63 @@ describe('cancellable poller utility', () => {
     expect(fetcher).not.toHaveBeenCalled()
     expect(res).toEqual({ status: 'stopped', lastValue: undefined })
   })
+
+  it('tolerates transient errors below maxConsecutiveErrors and resets counter on success', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const poller = createPoller()
+    let call = 0
+    const onError = vi.fn()
+    const promise = poller.run(
+      async () => {
+        call += 1
+        // 连续失败 2 次 -> 第 3 次成功重置计数 -> 再失败 2 次 -> 第 6 次完成
+        if (call === 1 || call === 2 || call === 4 || call === 5) {
+          throw new Error(`transient-${call}`)
+        }
+        return { done: call === 6, call }
+      },
+      {
+        maxAttempts: 8,
+        intervalMs: 500,
+        isDone: (v) => v.done,
+        onError,
+      },
+    )
+
+    for (let i = 0; i < 6; i += 1) {
+      await vi.advanceTimersByTimeAsync(i === 0 ? 0 : 500)
+    }
+
+    const res = await promise
+    expect(res).toEqual({ status: 'completed', value: { done: true, call: 6 } })
+    expect(onError).toHaveBeenCalledTimes(4)
+  })
+
+  it('throws and aborts polling once consecutive errors reach maxConsecutiveErrors', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const poller = createPoller()
+    let call = 0
+    const promise = poller.run(
+      async () => {
+        call += 1
+        throw new Error(`down-${call}`)
+      },
+      {
+        maxAttempts: 10,
+        intervalMs: 300,
+        maxConsecutiveErrors: 3,
+        isDone: () => false,
+      },
+    )
+    const caught = promise.catch((err) => err)
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(300)
+    await vi.advanceTimersByTimeAsync(300)
+
+    const error = await caught
+    expect(error).toBeInstanceOf(Error)
+    expect(error.message).toBe('down-3')
+    expect(call).toBe(3)
+  })
 })

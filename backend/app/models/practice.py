@@ -657,6 +657,13 @@ class GradingRecord(Base, TimestampMixin, TenantModelMixin):
 
     __table_args__ = (
         Index("ix_grading_records_item_final", "attempt_item_id", "is_final"),
+        Index(
+            "uq_grading_records_item_final",
+            "attempt_item_id",
+            unique=True,
+            sqlite_where=text("is_final = 1"),
+            postgresql_where=text("is_final IS TRUE"),
+        ),
         Index("ix_grading_records_practice_status", "practice_id", "status"),
         Index("ix_grading_records_user_practice", "user_id", "practice_id"),
     )

@@ -39,6 +39,9 @@ export interface BackgroundTaskItem {
   materialId?: string | null
   folderId?: string | null
   batchId?: string | null
+  resultPracticeId?: string | null
+  sourceType?: string | null
+  practiceTitle?: string | null
   actionLabel?: string
   timedOut?: boolean
   dismissible: boolean
@@ -48,6 +51,7 @@ export const FAST_POLL_INTERVAL_MS = 2500
 export const FAST_POLL_ATTEMPTS = 48
 export const SLOW_POLL_INTERVAL_MS = 5000
 export const SLOW_POLL_ATTEMPTS = 157
+export const MAX_POLL_CONCURRENCY = 2
 
 const TERMINAL_MATERIAL_STATUSES = new Set<MaterialStatus>([
   'ready',
@@ -57,6 +61,29 @@ const TERMINAL_MATERIAL_STATUSES = new Set<MaterialStatus>([
 
 export function isQuestionJobActive(job: Pick<QuestionGenerationJob, 'status'>): boolean {
   return job.status === 'queued' || job.status === 'running'
+}
+
+function isNotFoundOrForbidden(err: unknown): boolean {
+  const status = (err as { statusCode?: number } | null | undefined)?.statusCode
+  return status === 404 || status === 403
+}
+
+async function runWithConcurrency(
+  runners: Array<() => Promise<void>>,
+  limit = MAX_POLL_CONCURRENCY,
+): Promise<void> {
+  if (runners.length === 0) return
+  let cursor = 0
+  const workerCount = Math.min(limit, runners.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < runners.length) {
+        const idx = cursor
+        cursor += 1
+        await runners[idx]()
+      }
+    }),
+  )
 }
 
 export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
@@ -120,9 +147,23 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     materialTasks.value = next
   }
 
+  const removeMaterialTask = (materialId: string): void => {
+    if (!materialTasks.value.has(materialId)) return
+    const next = new Map(materialTasks.value)
+    next.delete(materialId)
+    materialTasks.value = next
+  }
+
   const setQuestionJob = (job: QuestionGenerationJob): void => {
     const next = new Map(questionJobs.value)
-    next.set(job.id, job)
+    next.set(job.id, { ...job, timedOut: Boolean(job.timedOut) })
+    questionJobs.value = next
+  }
+
+  const removeQuestionJob = (jobId: string): void => {
+    if (!questionJobs.value.has(jobId)) return
+    const next = new Map(questionJobs.value)
+    next.delete(jobId)
     questionJobs.value = next
   }
 
@@ -150,7 +191,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     if (isQuestionJobActive(job)) {
       unDismiss(key)
     }
-    setQuestionJob(job)
+    setQuestionJob({ ...job, timedOut: false })
     if (isQuestionJobActive(job)) {
       schedulePolling()
     }
@@ -188,10 +229,10 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     const matIds = [...activeMaterialIds.value]
     const jobIds = [...activeQuestionJobIds.value]
 
-    await Promise.all([
-      ...matIds.map(async (materialId) => {
+    const runners: Array<() => Promise<void>> = [
+      ...matIds.map((materialId) => async () => {
         try {
-          const item = await apiGetMaterialDetail(materialId)
+          const item = await apiGetMaterialDetail(materialId, { silentToast: true })
           syncMaterialStoreItem(item)
           const existing = materialTasks.value.get(materialId)
           setMaterialTask({
@@ -204,32 +245,52 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
             timedOut: false,
           })
         } catch (err) {
+          if (isNotFoundOrForbidden(err)) {
+            removeMaterialTask(materialId)
+            return
+          }
           console.error('[backgroundTask] poll material failed', materialId, err)
         }
       }),
-      ...jobIds.map(async (jobId) => {
+      ...jobIds.map((jobId) => async () => {
         try {
-          const job = await apiGetQuestionJob(jobId)
-          setQuestionJob(job)
+          const job = await apiGetQuestionJob(jobId, { silentToast: true })
+          setQuestionJob({ ...job, timedOut: false })
         } catch (err) {
+          if (isNotFoundOrForbidden(err)) {
+            removeQuestionJob(jobId)
+            return
+          }
           console.error('[backgroundTask] poll question job failed', jobId, err)
         }
       }),
-    ])
+    ]
+
+    await runWithConcurrency(runners, MAX_POLL_CONCURRENCY)
 
     return !hasActiveTasks.value
   }
 
-  const markActiveMaterialTasksTimedOut = (): void => {
-    const next = new Map(materialTasks.value)
-    let changed = false
-    for (const [id, task] of next.entries()) {
+  const markActiveTasksTimedOut = (): void => {
+    const nextMaterials = new Map(materialTasks.value)
+    let matChanged = false
+    for (const [id, task] of nextMaterials.entries()) {
       if (!TERMINAL_MATERIAL_STATUSES.has(task.status) && !task.timedOut) {
-        next.set(id, { ...task, timedOut: true, updatedAt: Date.now() })
-        changed = true
+        nextMaterials.set(id, { ...task, timedOut: true, updatedAt: Date.now() })
+        matChanged = true
       }
     }
-    if (changed) materialTasks.value = next
+    if (matChanged) materialTasks.value = nextMaterials
+
+    const nextJobs = new Map(questionJobs.value)
+    let jobChanged = false
+    for (const [id, job] of nextJobs.entries()) {
+      if (isQuestionJobActive(job) && !job.timedOut) {
+        nextJobs.set(id, { ...job, timedOut: true })
+        jobChanged = true
+      }
+    }
+    if (jobChanged) questionJobs.value = nextJobs
   }
 
   const refreshMaterialTask = async (materialId: string): Promise<MaterialItem | null> => {
@@ -251,7 +312,29 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
       }
       return item
     } catch (err) {
+      if (isNotFoundOrForbidden(err)) {
+        removeMaterialTask(materialId)
+        return null
+      }
       console.error('[backgroundTask] refresh material failed', materialId, err)
+      return null
+    }
+  }
+
+  const refreshQuestionJob = async (jobId: string): Promise<QuestionGenerationJob | null> => {
+    try {
+      const job = await apiGetQuestionJob(jobId)
+      setQuestionJob({ ...job, timedOut: false })
+      if (isQuestionJobActive(job)) {
+        schedulePolling()
+      }
+      return job
+    } catch (err) {
+      if (isNotFoundOrForbidden(err)) {
+        removeQuestionJob(jobId)
+        return null
+      }
+      console.error('[backgroundTask] refresh question job failed', jobId, err)
       return null
     }
   }
@@ -278,7 +361,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
         isDone: (allDone) => allDone,
       })
       if (result.status === 'timeout' && hasActiveTasks.value) {
-        markActiveMaterialTasksTimedOut()
+        markActiveTasksTimedOut()
       }
     } finally {
       isPolling.value = false
@@ -296,8 +379,8 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
   const refreshActiveTasks = async (): Promise<void> => {
     try {
       const [materials, jobList] = await Promise.all([
-        apiGetMaterialList().catch(() => [] as MaterialItem[]),
-        apiListQuestionJobs({ active_only: true }).catch(() => ({ items: [], total: 0 })),
+        apiGetMaterialList(undefined, { silentToast: true }).catch(() => [] as MaterialItem[]),
+        apiListQuestionJobs({ active_only: true }, { silentToast: true }).catch(() => ({ items: [], total: 0 })),
       ])
 
       for (const material of materials) {
@@ -308,9 +391,27 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
         }
       }
 
+      const activeFromServerIds = new Set<string>()
       for (const job of jobList.items) {
+        activeFromServerIds.add(job.id)
         trackQuestionJob(job)
       }
+
+      // 离开或切后台期间已落终态的任务不会出现在 active_only=true 中，按 id 补查一次终态
+      const missingActiveIds = activeQuestionJobIds.value.filter((id) => !activeFromServerIds.has(id))
+      await runWithConcurrency(
+        missingActiveIds.map((jobId) => async () => {
+          try {
+            const job = await apiGetQuestionJob(jobId, { silentToast: true })
+            setQuestionJob({ ...job, timedOut: false })
+          } catch (err) {
+            if (isNotFoundOrForbidden(err)) {
+              removeQuestionJob(jobId)
+            }
+          }
+        }),
+        MAX_POLL_CONCURRENCY,
+      )
 
       if (hasActiveTasks.value) {
         schedulePolling()
@@ -422,43 +523,61 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     for (const job of questionJobs.value.values()) {
       const key = `job:${job.id}`
       if (dismissedKeys.value.has(key)) continue
+      const baseTitle = job.practice_title || (job.source_type === 'wrong_record' ? '错题巩固练习' : '后台智能出题')
       if (isQuestionJobActive(job)) {
         const progressPercent =
           job.total_kps > 0
             ? Math.min(100, Math.round((job.completed_kps / job.total_kps) * 100))
             : 0
-        const detailText =
-          job.total_kps > 0
-            ? `正在后台出题 ${job.completed_kps}/${job.total_kps} 考点...`
+        const activePrefix = job.source_type === 'wrong_record' ? '正在生成错题巩固卷' : '正在后台出题'
+        const detailText = job.timedOut
+          ? `${baseTitle} · 进度同步已暂停（点击刷新）`
+          : job.total_kps > 0
+            ? `${activePrefix} ${job.completed_kps}/${job.total_kps} 考点...`
             : job.status === 'queued'
               ? '正在排队出题...'
-              : '正在后台出题...'
+              : `${activePrefix}...`
         list.push({
           key,
           kind: 'question_job',
           targetId: job.id,
           status: 'active',
-          title: '后台智能出题',
+          title: baseTitle,
           detailText,
           progressPercent,
           materialId: job.material_id,
           folderId: job.folder_id,
           batchId: job.batch_id,
+          resultPracticeId: job.result_practice_id ?? null,
+          sourceType: job.source_type ?? null,
+          practiceTitle: job.practice_title ?? null,
+          actionLabel: job.timedOut ? '刷新' : undefined,
+          timedOut: Boolean(job.timedOut),
           dismissible: false,
         })
       } else if (job.status === 'completed') {
+        const hasPractice = Boolean(job.result_practice_id)
+        const readyHeading = job.source_type === 'wrong_record' ? '错题巩固卷已就绪' : '试卷已就绪'
+        const detailText = hasPractice
+          ? (job.generated_count > 0 ? `${readyHeading}（${job.generated_count} 题）` : readyHeading)
+          : job.generated_count === 0
+            ? '本次未生成可用题目，可调整配置重试'
+            : `题目已生成完毕（${job.generated_count} 题）`
         list.push({
           key,
           kind: 'question_job',
           targetId: job.id,
           status: 'completed',
-          title: '后台智能出题',
-          detailText: `题目已生成完毕（${job.generated_count} 题）`,
+          title: baseTitle,
+          detailText,
           progressPercent: 100,
           materialId: job.material_id,
           folderId: job.folder_id,
           batchId: job.batch_id,
-          actionLabel: '去查看',
+          resultPracticeId: job.result_practice_id ?? null,
+          sourceType: job.source_type ?? null,
+          practiceTitle: job.practice_title ?? null,
+          actionLabel: hasPractice ? '立即作答' : '去查看',
           dismissible: true,
         })
       } else {
@@ -467,12 +586,15 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
           kind: 'question_job',
           targetId: job.id,
           status: 'failed',
-          title: '后台智能出题',
+          title: baseTitle,
           detailText: job.error_message ? `出题失败：${job.error_message}` : '后台出题失败',
           progressPercent: 0,
           materialId: job.material_id,
           folderId: job.folder_id,
           batchId: job.batch_id,
+          resultPracticeId: job.result_practice_id ?? null,
+          sourceType: job.source_type ?? null,
+          practiceTitle: job.practice_title ?? null,
           dismissible: true,
         })
       }
@@ -500,6 +622,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     startQuestionJob,
     refreshActiveTasks,
     refreshMaterialTask,
+    refreshQuestionJob,
     pollOnce,
     ensurePolling,
     stopPolling,

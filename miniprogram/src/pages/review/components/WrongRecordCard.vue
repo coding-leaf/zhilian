@@ -36,6 +36,13 @@
       </view>
       <view class="item-actions">
         <button
+          v-if="record.question_id"
+          class="collect-inline-btn"
+          @tap="emit('collect', record)"
+        >
+          收纳
+        </button>
+        <button
           v-if="!record.is_mastered"
           class="master-btn"
           :disabled="marking"
@@ -73,6 +80,7 @@ const emit = defineEmits<{
   (e: 'practice', record: WrongRecordItem): void
   (e: 'toggle-select', recordId: string): void
   (e: 'mark-mastered', record: WrongRecordItem): void
+  (e: 'collect', record: WrongRecordItem): void
 }>()
 
 const stem = computed(() => wrongSnapshotStem(props.record))
@@ -85,4 +93,19 @@ const typeText = computed(() => {
 
 <style lang="scss" scoped>
 @import '../review.scss';
+
+.collect-inline-btn {
+  font-size: 22rpx;
+  color: var(--color-academic-blue);
+  background: var(--color-blue-bg);
+  border: 1px solid var(--color-blue-border);
+  padding: 8rpx 16rpx;
+  border-radius: 8rpx;
+  line-height: 1.2;
+  margin: 0;
+
+  &::after {
+    border: none;
+  }
+}
 </style>

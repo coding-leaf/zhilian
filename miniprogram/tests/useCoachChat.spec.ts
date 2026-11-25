@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
 const { requestMock } = vi.hoisted(() => ({ requestMock: vi.fn() }))
 
@@ -9,10 +10,14 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import {
+  MAX_PERSISTED_SESSIONS,
+  buildCoachLruIndexKey,
   buildCoachSessionKey,
+  buildCoachStorageKey,
   useCoachChat,
   type CoachContextParams,
 } from '@/composables/useCoachChat'
+import { useAuthStore } from '@/stores/auth'
 
 describe('useCoachChat session isolation & error retry', () => {
   beforeEach(() => {
@@ -274,5 +279,131 @@ describe('useCoachChat session isolation & error retry', () => {
     const safeCoach = useCoachChat(() => ({ questionId: 'q-broken' }))
     expect(safeCoach.messageList.value).toEqual([])
     spy.mockRestore()
+  })
+
+  it('isolates persisted and in-memory coach histories across different userIds', async () => {
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    requestMock.mockImplementation(async ({ data }: { data: any }) => ({
+      reply: `reply:${data.user_prompt}`,
+      suggestions: [],
+    }))
+
+    auth.user = { id: 'user-A', nickname: 'A' }
+    const coachA = useCoachChat(() => ({ questionId: 'q-shared' }))
+    await coachA.sendMessage('用户A的提问')
+    expect(coachA.messageList.value).toHaveLength(2)
+    expect(uni.getStorageSync(buildCoachStorageKey('user-A', 'q:q-shared'))).toBeTruthy()
+
+    auth.user = { id: 'user-B', nickname: 'B' }
+    const coachB = useCoachChat(() => ({ questionId: 'q-shared' }))
+    expect(coachB.messageList.value).toEqual([])
+    await coachB.sendMessage('用户B的提问')
+    expect(coachB.messageList.value).toHaveLength(2)
+    expect(coachB.messageList.value[0].content).toBe('用户B的提问')
+
+    // 切回用户A，仍仅看到用户A的历史
+    auth.user = { id: 'user-A', nickname: 'A' }
+    const coachAReload = useCoachChat(() => ({ questionId: 'q-shared' }))
+    expect(coachAReload.messageList.value).toHaveLength(2)
+    expect(coachAReload.messageList.value[0].content).toBe('用户A的提问')
+  })
+
+  it('evicts least-recently-used coach sessions beyond 30-session LRU cap', async () => {
+    setActivePinia(createPinia())
+    const auth = useAuthStore()
+    auth.user = { id: 'user-lru', nickname: 'LRU' }
+    requestMock.mockImplementation(async ({ data }: { data: any }) => ({
+      reply: `reply:${data.user_prompt}`,
+      suggestions: [],
+    }))
+
+    const ctx = reactive<CoachContextParams>({ questionId: 'q-0' })
+    const coach = useCoachChat(() => ctx)
+
+    // 先写入 30 个会话（q-0 .. q-29）
+    for (let i = 0; i < MAX_PERSISTED_SESSIONS; i += 1) {
+      ctx.questionId = `q-${i}`
+      await coach.sendMessage(`ask-${i}`)
+    }
+
+    // 再次读取 q-0 刷新其活跃度（使其成为 MRU），q-1 变为最旧会话
+    const reader = useCoachChat(() => ({ questionId: 'q-0' }))
+    expect(reader.messageList.value).toHaveLength(2)
+
+    // 再写入 2 个新会话（q-30, q-31）应淘汰 q-1 与 q-2，而保留刚访问过的 q-0
+    ctx.questionId = 'q-30'
+    await coach.sendMessage('ask-30')
+    ctx.questionId = 'q-31'
+    await coach.sendMessage('ask-31')
+
+    const lruRaw = uni.getStorageSync(buildCoachLruIndexKey('user-lru'))
+    const lruList = JSON.parse(lruRaw) as string[]
+    expect(lruList).toHaveLength(MAX_PERSISTED_SESSIONS)
+    expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-1'))).toBe('')
+    expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-2'))).toBe('')
+    expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-0'))).toBeTruthy()
+    expect(uni.getStorageSync(buildCoachStorageKey('user-lru', 'q:q-31'))).toBeTruthy()
+  })
+
+  it('prevents concurrent double-sends while isThinking is true', async () => {
+    let resolveFirst!: (val: any) => void
+    requestMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve
+        }),
+    )
+
+    const coach = useCoachChat(() => ({ materialId: 'm-double' }))
+    const firstPromise = coach.sendMessage('第一条消息')
+    expect(coach.isThinking.value).toBe(true)
+
+    await coach.sendMessage('重复双击消息')
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(coach.messageList.value).toHaveLength(1)
+
+    resolveFirst({ reply: '正常回复', suggestions: [], sources: [] })
+    await firstPromise
+    expect(coach.isThinking.value).toBe(false)
+    expect(coach.messageList.value).toHaveLength(2)
+  })
+
+  it('reproduces Image 5: avoids persisting orphan user bubble on 502 failure and strips legacy trailing user turns on reload', async () => {
+    setActivePinia(createPinia())
+    requestMock.mockRejectedValueOnce(new Error('502 Bad Gateway'))
+
+    const ctx = reactive<CoachContextParams>({ materialId: 'm-img5' })
+    const coach = useCoachChat(() => ctx)
+
+    await coach.sendMessage('总结这部分内容的关键适用条件')
+    // Live session shows both user bubble and retryable assistant error bubble
+    expect(coach.messageList.value).toHaveLength(2)
+    expect(coach.messageList.value[0]).toMatchObject({
+      role: 'user',
+      content: '总结这部分内容的关键适用条件',
+    })
+    expect(coach.messageList.value[1]).toMatchObject({
+      role: 'assistant',
+      error: true,
+      retryQuery: '总结这部分内容的关键适用条件',
+    })
+
+    // Re-mounting / re-entering the same material must NOT leave an orphan user bubble
+    const reloaded = useCoachChat(() => ({ materialId: 'm-img5' }))
+    expect(reloaded.messageList.value).toEqual([])
+
+    // Legacy corrupted storage with a trailing unanswered user turn is also sanitized on reload
+    const legacyKey = buildCoachStorageKey('anonymous', 'mat:m-legacy')
+    uni.setStorageSync(
+      legacyKey,
+      JSON.stringify([
+        { id: 'u1', role: 'user', content: '有效提问' },
+        { id: 'a1', role: 'assistant', content: '有效回复' },
+        { id: 'u2', role: 'user', content: '孤儿提问' },
+      ]),
+    )
+    const legacyCoach = useCoachChat(() => ({ materialId: 'm-legacy' }))
+    expect(legacyCoach.messageList.value.map((m) => m.content)).toEqual(['有效提问', '有效回复'])
   })
 })

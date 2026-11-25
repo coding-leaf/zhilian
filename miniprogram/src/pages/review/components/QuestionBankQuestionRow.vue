@@ -2,11 +2,8 @@
   <view class="bank-question-wrap">
     <view class="bank-question-row">
       <view class="bank-question-main" @tap="emit('toggle')">
-        <view v-if="question.selectable" :class="['bank-checkbox', selected ? 'checked' : '']">
+        <view :class="['bank-checkbox', selected ? 'checked' : '']">
           <view v-if="selected" class="bank-check-mark" />
-        </view>
-        <view v-else class="bank-pending-badge">
-          <text class="bank-pending-text">待审核</text>
         </view>
 
         <view class="bank-question-body">
@@ -18,6 +15,9 @@
       <view class="bank-question-actions">
         <view class="bank-detail-btn" @tap="emit('toggle-detail')">
           <text class="bank-detail-text">{{ detailExpanded ? '收起解析' : '查看解析' }}</text>
+        </view>
+        <view class="bank-collect-btn" @tap="emit('collect')">
+          <text class="bank-collect-text">收纳</text>
         </view>
         <!-- 动作位：由 QuestionBatchRow 填充「记入错题 / 取消标记」（09-29-manual-wrong-mark） -->
         <slot name="action" />
@@ -77,6 +77,7 @@ const emit = defineEmits<{
   (e: 'toggle'): void
   (e: 'toggle-detail'): void
   (e: 'retry-detail'): void
+  (e: 'collect'): void
 }>()
 
 const typeLabel = computed(() => questionTypeLabel(props.question.type))

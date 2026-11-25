@@ -1,7 +1,15 @@
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import type { MaterialItem } from '@/types'
-import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
-import { describeFailure, RequestError } from '@/utils/requestError'
+import { extractUserErrorMessage, safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
+import { RequestError } from '@/utils/requestError'
+
+declare const wx:
+  | {
+      chooseMessageFile?: (options: Record<string, any>) => void
+    }
+  | undefined
 
 interface MaterialUploadDeps {
   getCurrentFolderId: () => string
@@ -14,9 +22,44 @@ interface MaterialUploadDeps {
 const IMAGE_SOURCE_TYPES: Array<'album' | 'camera'> = ['album', 'camera']
 const IMAGE_SIZE_TYPES: Array<'compressed' | 'original'> = ['compressed', 'original']
 const MESSAGE_FILE_EXTENSIONS = ['pdf', 'docx', 'doc', 'txt', 'md']
+const UPLOAD_NAVIGATE_DELAY_MS = 300
 
 function buildFallbackImageName(): string {
   return `讲义图片_${Date.now()}.jpg`
+}
+
+function isUserCancelError(err: unknown): boolean {
+  const errMsg =
+    typeof (err as { errMsg?: unknown })?.errMsg === 'string'
+      ? (err as { errMsg: string }).errMsg.toLowerCase()
+      : ''
+  return errMsg.includes('cancel')
+}
+
+function handlePickerFail(err: unknown, scene: 'media' | 'messageFile'): void {
+  if (isUserCancelError(err)) return
+  console.error(`[upload] ${scene} picker failed`, err)
+  const errno = (err as { errno?: number })?.errno
+  const errMsg =
+    typeof (err as { errMsg?: unknown })?.errMsg === 'string'
+      ? (err as { errMsg: string }).errMsg
+      : ''
+  if (errno === 104 || errno === 112 || /privacy|auth\s*deny|permission/i.test(errMsg)) {
+    safeShowToast('请先同意隐私协议并开启相册/文件权限')
+    return
+  }
+  safeShowToast(
+    scene === 'media'
+      ? '图片选择失败，请检查相册或相机权限'
+      : '文件选择失败，请检查权限后重试',
+  )
+}
+
+function getWechatMessageFilePicker(): ((options: Record<string, any>) => void) | null {
+  if (typeof wx !== 'undefined' && wx && typeof wx.chooseMessageFile === 'function') {
+    return wx.chooseMessageFile.bind(wx)
+  }
+  return null
 }
 
 /** 资料上传入口（微信小程序支持聊天文档与拍照/相册双通道，上传成功后自动触发后台解析）。 */
@@ -37,11 +80,20 @@ export function useMaterialUpload(deps: MaterialUploadDeps) {
     }
   }
 
+  const requireLogin = (): boolean => {
+    const authStore = useAuthStore()
+    if (authStore.isLoggedIn()) return true
+    safeNavigateTo('/pages/auth/login', { failMessage: '打开登录页失败' })
+    safeShowToast('请先登录后再上传资料')
+    return false
+  }
+
   const uploadSelectedFile = async (
     filePath: string,
     title: string | undefined,
     targetFolderId: string | undefined,
   ) => {
+    if (!requireLogin()) return
     try {
       let parseStarted = false
       const item = await withBlockingLoading('正在上传讲义...', async () => {
@@ -52,39 +104,48 @@ export function useMaterialUpload(deps: MaterialUploadDeps) {
         }
         return uploaded
       })
-      safeShowToast(
-        parseStarted ? '上传成功，已开始后台解析' : '上传成功，可手动点击开始解析',
-        'success',
-      )
-      deps.onUploaded(item)
+      safeShowToast({
+        title: parseStarted ? '上传成功，已开始后台解析' : '上传成功，可手动点击开始解析',
+        icon: 'none',
+      })
+      setTimeout(() => {
+        deps.onUploaded(item)
+      }, UPLOAD_NAVIGATE_DELAY_MS)
     } catch (err: any) {
       if (!(err instanceof RequestError)) {
-        safeShowToast(describeFailure(err, '上传失败，请重试'))
+        safeShowToast(extractUserErrorMessage(err, '上传失败，请重试'))
       }
     }
   }
 
   const pickImageAndUpload = (targetFolderId: string | undefined) => {
-    uni.chooseImage({
+    uni.chooseMedia({
       count: 1,
+      mediaType: ['image'],
       sizeType: IMAGE_SIZE_TYPES,
       sourceType: IMAGE_SOURCE_TYPES,
       success: async (res: any) => {
-        const filePath = res?.tempFilePaths?.[0] || res?.tempFiles?.[0]?.path
+        const firstFile = res?.tempFiles?.[0]
+        const filePath = firstFile?.tempFilePath || firstFile?.path || res?.tempFilePaths?.[0]
         if (!filePath) return
-        const fileName = res?.tempFiles?.[0]?.name || buildFallbackImageName()
+        const fileName = firstFile?.name || buildFallbackImageName()
         await uploadSelectedFile(filePath, fileName, targetFolderId)
       },
-      fail: () => {},
+      fail: (err: unknown) => {
+        handlePickerFail(err, 'media')
+      },
     })
   }
 
-  const pickWechatMessageFile = (wxAny: any, targetFolderId: string | undefined) => {
-    if (!wxAny?.chooseMessageFile) {
+  const pickWechatMessageFile = (
+    chooseMessageFile: ((options: Record<string, any>) => void) | null,
+    targetFolderId: string | undefined,
+  ) => {
+    if (!chooseMessageFile) {
       safeShowToast('当前环境不支持聊天文档选择，请拍照或从相册选择')
       return
     }
-    wxAny.chooseMessageFile({
+    chooseMessageFile({
       count: 1,
       type: 'file',
       extension: MESSAGE_FILE_EXTENSIONS,
@@ -94,30 +155,37 @@ export function useMaterialUpload(deps: MaterialUploadDeps) {
           await uploadSelectedFile(file.path, file.name, targetFolderId)
         }
       },
-      fail: () => {},
+      fail: (err: unknown) => {
+        handlePickerFail(err, 'messageFile')
+      },
     })
   }
 
   const chooseFile = () => {
+    if (!requireLogin()) return
     const currentFolderId = deps.getCurrentFolderId()
     const targetFolderId =
       currentFolderId === 'all' || currentFolderId === '__none__' ? undefined : currentFolderId
 
     // #ifdef MP-WEIXIN
-    const wxAny = (globalThis as any).wx || (typeof wx !== 'undefined' ? wx : null)
+    const messageFilePicker = getWechatMessageFilePicker()
     if (typeof uni.showActionSheet === 'function') {
       uni.showActionSheet({
         itemList: ['从微信聊天选择文档 (PDF/Word/TXT)', '拍照或从相册选择讲义图片'],
         success: ({ tapIndex }) => {
           if (tapIndex === 0) {
-            pickWechatMessageFile(wxAny, targetFolderId)
+            pickWechatMessageFile(messageFilePicker, targetFolderId)
             return
           }
           if (tapIndex === 1) {
             pickImageAndUpload(targetFolderId)
           }
         },
-        fail: () => {},
+        fail: (err: unknown) => {
+          if (!isUserCancelError(err)) {
+            console.error('[upload] showActionSheet failed', err)
+          }
+        },
       })
       return
     }

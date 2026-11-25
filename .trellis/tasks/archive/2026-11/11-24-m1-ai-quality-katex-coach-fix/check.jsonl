@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "核验 6 条 import-linter 分层契约全绿"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验迁移 0013 对称性与多租户隔离"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "核验 katex-mp.scss 与编译产物 100% 过微信静态门禁"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "核验所有修改 .vue <=300 行、零裸 Hex、零 Emoji"}
+{"file": ".trellis/tasks/11-24-m1-ai-quality-katex-coach-fix/prd.md", "reason": "逐条核对 M1 R1-R3 验收标准"}
+{"file": ".trellis/tasks/11-24-m1-ai-quality-katex-coach-fix/design.md", "reason": "核验实现与设计契约一致"}

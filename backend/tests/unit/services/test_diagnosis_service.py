@@ -568,7 +568,7 @@ class TestGenerateDiagnosisReport:
             name="草稿知识点",
             is_low_confidence=True,  # Low confidence trigger
         )
-        mock_repos["knowledge_repo"].get_by_id.return_value = low_conf_point
+        mock_repos["knowledge_repo"].list_by_ids.return_value = [low_conf_point]
 
         def create_report_mock(report: DiagnosisReport, user_id: uuid.UUID) -> DiagnosisReport:
             report.user_id = user_id

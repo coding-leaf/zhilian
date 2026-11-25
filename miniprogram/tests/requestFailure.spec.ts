@@ -86,7 +86,8 @@ describe('request layer: synchronous LLM endpoints keep a long timeout', () => {
     vi.restoreAllMocks()
   })
 
-  it('annotates question generation with the long timeout', async () => {
+  it('annotates question generation with the long timeout aligned to 60s WeChat limit', async () => {
+    expect(LONG_REQUEST_TIMEOUT_MS).toBe(60000)
     replySuccess({
       batch_id: 'b-1',
       total_generated: 0,

@@ -13,7 +13,7 @@ import {
   resolveRegenerateScope,
   type WrongGroupOption,
 } from '@/api/adapters/wrong'
-import { useBackgroundTaskStore } from '@/stores/backgroundTask'
+import { isQuestionJobActive, useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useFolderStore } from '@/stores/folder'
 import { usePracticeStore } from '@/stores/practice'
 import type {
@@ -23,7 +23,8 @@ import type {
   WrongRecordItem,
 } from '@/types'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
-import { describeFailure } from '@/utils/requestError'
+import { startWrongRegenerateJob } from '@/utils/questionGeneration'
+import { describeFailure, RequestError } from '@/utils/requestError'
 import {
   groupKnowledgePointIds,
   hasScope,
@@ -32,6 +33,19 @@ import {
   recordRegenerateScope,
   type ReviewSegment,
 } from '../reviewView'
+
+const formatErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof RequestError) return error.userMessage
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    return (error as { message: string }).message || fallback
+  }
+  return fallback
+}
 
 const PAGE_SIZE = 50
 const MAX_PAGES = 6
@@ -57,13 +71,22 @@ export function useReviewCenter() {
   const markingWrongIds = ref<string[]>([])
 
   const practices = ref<PracticeSummary[]>([])
+  const practiceTotal = ref(0)
   const isLoadingPractices = ref(false)
   const practiceError = ref('')
 
-  const isGenerating = ref(false)
+  const isDispatchingRegenerate = ref(false)
+  const isGenerating = computed(
+    () =>
+      isDispatchingRegenerate.value ||
+      Array.from(backgroundTaskStore.questionJobs.values()).some(
+        (job) => isQuestionJobActive(job) && job.source_type === 'wrong_record',
+      ),
+  )
   const bankDirty = ref(false)
 
   let inFlightRefresh: Promise<void> | null = null
+  let filterEpoch = 0
 
   const sortedMasteryPoints = computed(() => mergeMasteryPoints(masteryOverview.value))
   const weakMasteryPoints = computed(() =>
@@ -88,34 +111,49 @@ export function useReviewCenter() {
     () => masteryError.value || wrongError.value || practiceError.value || '',
   )
 
-  const loadMastery = async () => {
+  const loadMastery = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     masteryLoading.value = true
     masteryError.value = ''
     try {
-      masteryOverview.value = await apiGetMasteryOverview(selectedFolderId.value)
+      const overview = await apiGetMasteryOverview(folderId)
+      if (epoch !== filterEpoch) return
+      masteryOverview.value = overview
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load mastery overview', error)
       masteryError.value = describeFailure(error, '掌握度总览加载失败，请重试')
     } finally {
-      masteryLoading.value = false
+      if (epoch === filterEpoch) masteryLoading.value = false
     }
   }
 
-  const loadWrongs = async () => {
+  const loadWrongs = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     isLoadingWrongs.value = true
     wrongError.value = ''
     try {
       const collected: WrongRecordItem[] = []
       let total = 0
+      let firstPageGroups: WrongGroupOption[] = []
+      const scopeQuery =
+        folderId === '__none__'
+          ? { unclassified: true }
+          : folderId && folderId !== 'all'
+            ? { folder_id: folderId }
+            : {}
       for (let page = 1; page <= MAX_PAGES; page += 1) {
-        const res = await apiListWrongRecords({ page, page_size: PAGE_SIZE })
+        const res = await apiListWrongRecords({ ...scopeQuery, page, page_size: PAGE_SIZE })
+        if (epoch !== filterEpoch) return
         collected.push(...(res.items || []))
         total = res.total ?? collected.length
         if (page === 1) {
-          groupOptions.value = buildWrongGroupOptions(res.groups || [])
+          firstPageGroups = buildWrongGroupOptions(res.groups || [])
         }
         if (collected.length >= total) break
       }
+      if (epoch !== filterEpoch) return
+      groupOptions.value = firstPageGroups
       wrongRecords.value = collected
       const validIds = new Set(collected.filter((r) => !r.is_mastered).map((r) => r.id))
       selectedWrongIds.value = selectedWrongIds.value.filter((id) => validIds.has(id))
@@ -125,23 +163,32 @@ export function useReviewCenter() {
         selectedGroupKey.value = ''
       }
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load wrong records', error)
       wrongError.value = describeFailure(error, '错题本加载失败，请重试')
     } finally {
-      isLoadingWrongs.value = false
+      if (epoch === filterEpoch) isLoadingWrongs.value = false
     }
   }
 
-  const loadPractices = async () => {
+  const loadPractices = async (epoch = filterEpoch) => {
+    const folderId = selectedFolderId.value
     isLoadingPractices.value = true
     practiceError.value = ''
     try {
-      practices.value = await practiceStore.loadPractices(undefined, 20)
+      const items = await practiceStore.loadPractices({
+        limit: 20,
+        ...(folderId && folderId !== 'all' ? { folder_id: folderId } : {}),
+      })
+      if (epoch !== filterEpoch) return
+      practices.value = items
+      practiceTotal.value = practiceStore.practiceTotal
     } catch (error) {
+      if (epoch !== filterEpoch) return
       console.error('Failed to load practices', error)
       practiceError.value = describeFailure(error, '练习记录加载失败，请重试')
     } finally {
-      isLoadingPractices.value = false
+      if (epoch === filterEpoch) isLoadingPractices.value = false
     }
   }
 
@@ -153,14 +200,15 @@ export function useReviewCenter() {
       await inFlightRefresh
       return
     }
+    const epoch = filterEpoch
     inFlightRefresh = (async () => {
       try {
         await Promise.all([
           folderStore.loadFolders(),
           backgroundTaskStore.refreshActiveTasks(),
-          loadMastery(),
-          loadWrongs(),
-          loadPractices(),
+          loadMastery(epoch),
+          loadWrongs(epoch),
+          loadPractices(epoch),
           activeTab.value === 'bank' && options?.refreshBank
             ? options.refreshBank().then(() => { bankDirty.value = false })
             : Promise.resolve(),
@@ -175,16 +223,32 @@ export function useReviewCenter() {
     await inFlightRefresh
   }
 
-  const selectFolderFilter = async (folderId: string) => {
+  const selectFolderFilter = async (folderId: string, refreshBank?: () => Promise<void>) => {
+    filterEpoch += 1
+    const epoch = filterEpoch
     selectedFolderId.value = folderId
-    await loadMastery()
+    selectedWrongIds.value = []
+    selectedGroupKey.value = ''
+    if (activeTab.value !== 'bank') {
+      bankDirty.value = true
+    }
+    await Promise.all([
+      loadMastery(epoch),
+      loadWrongs(epoch),
+      loadPractices(epoch),
+      activeTab.value === 'bank' && refreshBank
+        ? refreshBank().then(() => {
+            if (epoch === filterEpoch) bankDirty.value = false
+          })
+        : Promise.resolve(),
+    ])
   }
 
   const switchTab = async (tab: ReviewSegment, refreshBank?: () => Promise<void>) => {
     activeTab.value = tab
-    if (tab === 'bank' && bankDirty.value && refreshBank) {
+    if (tab === 'bank' && bankDirty.value) {
       bankDirty.value = false
-      await refreshBank()
+      if (refreshBank) await refreshBank()
     }
   }
 
@@ -256,8 +320,8 @@ export function useReviewCenter() {
         }),
       )
       navigateToSession(session.id)
-    } catch (error: any) {
-      safeShowToast(error?.message || '暂未找到所属讲义，请从资料详情页发起出题')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '暂未找到所属讲义，请从资料详情页发起出题'))
     }
   }
 
@@ -289,32 +353,35 @@ export function useReviewCenter() {
             material_id: scope.folderId ? undefined : scope.materialId,
             knowledge_point_ids: jobKpIds,
             count: Math.min(10, Math.max(3, jobKpIds.length)),
+            auto_create_practice: true,
+            practice_title: '薄弱考点强化练习',
+            source_type: 'weakness',
           })
-          safeShowToast('题库题量不足，已在后台自动生成薄弱点练习题', 'success')
+          safeShowToast('已在后台生成强化巩固卷，完成后顶部提醒')
           return
-        } catch (jobErr: any) {
-          safeShowToast(jobErr?.message || err?.message || '发起薄弱强化失败')
+        } catch (jobErr: unknown) {
+          safeShowToast(formatErrorMessage(jobErr, formatErrorMessage(err, '发起薄弱强化失败')))
           return
         }
       }
-      safeShowToast(err?.message || '发起薄弱强化失败')
+      safeShowToast(formatErrorMessage(err, '发起薄弱强化失败'))
     }
   }
 
   const runRegenerate = async (kpIds: string[], scope: { folderId?: string; materialId?: string }) => {
-    isGenerating.value = true
+    if (isGenerating.value) return
+    isDispatchingRegenerate.value = true
     try {
-      const { session, coverage } = await withBlockingLoading('生成中...', () =>
-        practiceStore.regenerateFromWrongPoints(kpIds, scope),
-      )
-      if (coverage.missing.length > 0) {
-        safeShowToast(`仍有 ${coverage.missing.length} 个考点未覆盖`)
-      }
-      navigateToSession(session.id)
-    } catch (error: any) {
-      safeShowToast(error?.message || '生成失败')
+      await startWrongRegenerateJob({
+        knowledgePointIds: kpIds,
+        scope,
+        practiceTitle: '错题巩固练习',
+      })
+      safeShowToast('已在后台生成错题巩固卷，完成后顶部提醒')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '生成失败'))
     } finally {
-      isGenerating.value = false
+      isDispatchingRegenerate.value = false
     }
   }
 
@@ -356,8 +423,8 @@ export function useReviewCenter() {
       await apiMarkWrongRecordMastered(record.id, true)
       safeShowToast('已标为已掌握', 'success')
       await Promise.all([loadWrongs(), loadMastery()])
-    } catch (error: any) {
-      safeShowToast(error?.message || '操作失败，请重试')
+    } catch (error: unknown) {
+      safeShowToast(formatErrorMessage(error, '操作失败，请重试'))
     } finally {
       markingWrongIds.value = markingWrongIds.value.filter((id) => id !== record.id)
     }
@@ -388,8 +455,8 @@ export function useReviewCenter() {
         )
         navigateToSession(session.id)
         return
-      } catch (error: any) {
-        safeShowToast(error?.message || '创建重练失败，请重试')
+      } catch (error: unknown) {
+        safeShowToast(formatErrorMessage(error, '创建重练失败，请重试'))
         return
       }
     }
@@ -412,6 +479,7 @@ export function useReviewCenter() {
     selectedWrongIds,
     markingWrongIds,
     practices,
+    practiceTotal,
     isLoadingPractices,
     practiceError,
     isGenerating,

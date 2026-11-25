@@ -1,0 +1,17 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "6 条 import-linter 分层边界与模块布局约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLAlchemy 同步 Session、Alembic 迁移 0012 与迁移一致性闸门规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "AppError 与全局 500 JSON 异常处理约定"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "结构化日志与 user_ref 脱敏红线"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码复杂度(<=15)、mypy strict 与 pytest 覆盖率(>=80%)门禁"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端目录结构、单文件 <=300 行红线与学习闭环契约"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "request.ts 超时、RequestError、silentToast 与 127.0.0.1 契约"}
+{"file": ".trellis/spec/frontend/api-payload-contracts.md", "reason": "POST /practices question_ids/question_count 静默语义与异步作业契约"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia 各域 store 职责边界与清理约定"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue SFC 规范、设计 Token、零裸 Hex、零 Emoji、安全区适配"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useQuestionCompose 契约与命名约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "按域类型与 Wire Adapter 归一化边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端跨层契约与字段一致性自查"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/research/01-async-mistake-generation.md", "reason": "问题 1 错题异步化根因与精确代码锚点"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/research/02-initial-qgen-ux-flow.md", "reason": "问题 2 初次生题 UX 状态流转根因与精确代码锚点"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/research/03-connection-stability.md", "reason": "问题 3 前后端连接稳定性 P0/P1 根因与精确代码锚点"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/research/04-architecture-and-bugs-audit.md", "reason": "问题 4 项目架构盘点与 5 个 P0 硬 Bug 锚点"}

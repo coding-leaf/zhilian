@@ -6,17 +6,18 @@
 """
 
 import logging
+import threading
 import time
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from app.core.errors import SearchError
 from app.integrations._http_retry import (
     RetryableAdapterError,
+    build_httpx_client,
     handle_openai_http_response,
-    managed_httpx_client,
     run_with_retry,
 )
 from app.integrations.rerank.protocol import RerankItem, RerankProtocol
@@ -68,6 +69,25 @@ class SiliconFlowRerankAdapter(RerankProtocol):
         self.max_retries = max_retries
         self.retry_delay_base = retry_delay_base
         self._client = client
+        self._owned_client: httpx.Client | None = None
+        self._client_lock = threading.Lock()
+
+    def _get_client(self) -> httpx.Client:
+        """获取外部注入客户端或复用实例级持久化 httpx.Client 连接池。"""
+        if self._client is not None:
+            return cast(httpx.Client, self._client)
+        with self._client_lock:
+            if self._owned_client is None or self._owned_client.is_closed:
+                self._owned_client = build_httpx_client(timeout=self.timeout)
+            return self._owned_client
+
+    def close(self) -> None:
+        """释放实例级持久化 httpx.Client 连接池。"""
+        with self._client_lock:
+            client = self._owned_client
+            self._owned_client = None
+        if client is not None and not client.is_closed:
+            client.close()
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         """带重试地调用 /rerank；失败抛出 SearchError（由 rerank 统一降级）。"""
@@ -76,32 +96,28 @@ class SiliconFlowRerankAdapter(RerankProtocol):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        client = self._get_client()
 
-        def _client_factory() -> httpx.Client:
-            return httpx.Client(timeout=self.timeout)
+        def _attempt() -> dict[str, Any]:
+            try:
+                response = client.post(url, json=payload, headers=headers)
+                return handle_openai_http_response(
+                    response,
+                    service_label="重排服务",
+                    auth_error_cls=SearchError,
+                    service_error_cls=SearchError,
+                )
+            except (httpx.TimeoutException, TimeoutError) as timeout_err:
+                raise RetryableAdapterError(SearchError("重排服务调用超时")) from timeout_err
+            except (httpx.RequestError, ConnectionError) as req_err:
+                raise RetryableAdapterError(SearchError("重排网络请求异常")) from req_err
 
-        with managed_httpx_client(self._client, _client_factory) as client:
-
-            def _attempt() -> dict[str, Any]:
-                try:
-                    response = client.post(url, json=payload, headers=headers)
-                    return handle_openai_http_response(
-                        response,
-                        service_label="重排服务",
-                        auth_error_cls=SearchError,
-                        service_error_cls=SearchError,
-                    )
-                except (httpx.TimeoutException, TimeoutError) as timeout_err:
-                    raise RetryableAdapterError(SearchError("重排服务调用超时")) from timeout_err
-                except (httpx.RequestError, ConnectionError) as req_err:
-                    raise RetryableAdapterError(SearchError("重排网络请求异常")) from req_err
-
-            return run_with_retry(
-                _attempt,
-                max_retries=self.max_retries,
-                retry_delay_base=self.retry_delay_base,
-                sleep_fn=lambda delay: time.sleep(delay),
-            )
+        return run_with_retry(
+            _attempt,
+            max_retries=self.max_retries,
+            retry_delay_base=self.retry_delay_base,
+            sleep_fn=lambda delay: time.sleep(delay),
+        )
 
     @staticmethod
     def _parse(data: dict[str, Any], doc_count: int) -> list[RerankItem]:

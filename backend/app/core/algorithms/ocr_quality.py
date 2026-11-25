@@ -104,6 +104,15 @@ _EDGE_STRIP_CHARS: str = ".,;:!?()[]{}<>\"'`"
 _CJK_RE: re.Pattern[str] = re.compile(r"[\u4e00-\u9fff]")
 _GREEK_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0391-\u03a9\u03b1-\u03c9]")
 _PUA_CHAR_RE: re.Pattern[str] = re.compile(r"[\ue000-\uf8ff]")
+_UNCONDITIONAL_CORRUPT_GLYPH_RE: re.Pattern[str] = re.compile(r"[\ufffd\u2612\u25af]")
+_MATH_BOX_CHARS: str = (
+    r"\u2610\u2611\u25a0\u25a1\u25aa\u25ab\u25c6\u25c7\u25cb\u25cf\u274e\u2700-\u27bf"
+)
+_MATH_BOX_GARBLE_RE: re.Pattern[str] = re.compile(
+    rf"(?:[A-Za-z0-9_=+\-<>≤≥(\\]\s*[{_MATH_BOX_CHARS}]|"
+    rf"[{_MATH_BOX_CHARS}]\s*(?:[_^=+\-<>≤≥\\]|[\u0370-\u03ff]|(?:[ijkmnxyz]\b)))"
+)
+_MATH_BOX_CHAR_ONLY_RE: re.Pattern[str] = re.compile(rf"[{_MATH_BOX_CHARS}]")
 _EXTENDED_LATIN_CHAR_RE: re.Pattern[str] = re.compile(r"[\u0100-\u024f]")
 _STROKE_EXTENDED_LATIN_RE: re.Pattern[str] = re.compile(
     r"[\u0127\u0111\u00f8\u0142\u00fe\u0126\u0110\u00d8\u0141\u00de]"
@@ -371,12 +380,36 @@ def _collect_line_garble_fragments(line: str) -> tuple[list[str], bool]:
     return fragments, sym_only_line
 
 
+def _collect_corrupt_glyph_fragments(text: str) -> list[str]:
+    """收集 `\ufffd`/`☒`/`▯` 及数学语境方框占位符命中的局部上下文片段。"""
+    hits: list[str] = []
+    for pattern in (_UNCONDITIONAL_CORRUPT_GLYPH_RE, _MATH_BOX_GARBLE_RE):
+        for match in pattern.finditer(text):
+            start = max(0, match.start() - 4)
+            end = min(len(text), match.end() + 4)
+            frag = text[start:end].strip()
+            if frag and frag not in hits:
+                hits.append(frag)
+            if len(hits) >= 10:
+                return hits
+    return hits
+
+
+def _strip_corrupt_glyphs_from_line(line: str) -> str:
+    """移除无法修复的替换符/方框占位符与数学邻接损坏方框。"""
+    cleaned = _UNCONDITIONAL_CORRUPT_GLYPH_RE.sub("", line)
+    return _MATH_BOX_GARBLE_RE.sub(
+        lambda m: _MATH_BOX_CHAR_ONLY_RE.sub("", m.group(0)),
+        cleaned,
+    )
+
+
 def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
-    """探测文档/页面文本中是否存在缺失字体编码导致的 ASCII 符号乱码簇。
+    """探测文档/页面文本中是否存在缺失字体编码导致的符号乱码簇或损坏字形。
 
     专门识别 SymbolMT/Wingdings 等符号字体缺失 `/ToUnicode` 映射时产生的
-    ``AB&A&``、``"#$``、``!" ! #`` 等噪声簇及孤立符号噪声行，同时避免对正常 LaTeX
-    或 Markdown 装饰符误报。
+    ``AB&A&``、``"#$``、``!" ! #``、``☒``、``\ufffd``、``▯`` 等噪声簇，
+    同时避免对正常 LaTeX 或 Markdown 装饰符误报。
 
     Args:
         text: 待检测文本。
@@ -392,7 +425,8 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
     if non_ws_total == 0:
         return False, 0.0, ()
 
-    all_fragments: list[str] = []
+    corrupt_frags = _collect_corrupt_glyph_fragments(text)
+    all_fragments: list[str] = list(corrupt_frags)
     sym_only_lines = 0
     for line in text.splitlines():
         line_frags, is_sym_line = _collect_line_garble_fragments(line)
@@ -406,9 +440,11 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
         for frag in all_fragments
     )
     has_pua = _PUA_CHAR_RE.search(text) is not None
+    has_corrupt_glyph = bool(corrupt_frags)
     garble_ratio = min(1.0, garble_char_total / non_ws_total)
     is_garbled = (
         has_pua
+        or has_corrupt_glyph
         or sym_only_lines >= 1
         or len(all_fragments) >= 2
         or (len(all_fragments) == 1 and garble_ratio >= 0.15)
@@ -420,14 +456,15 @@ def detect_symbol_garble(text: str) -> tuple[bool, float, tuple[str, ...]]:
 def sanitize_symbol_garble(text: str) -> str:
     """在缺少视觉/大模型修复时确定性清除不可读符号乱码噪声。
 
-    除 ASCII 符号簇外，同样移除数学字体映射错乱的碎片（`σpiupi`、`ђvpi`、`ħx1`、PUA 等）。
+    除 ASCII 符号簇外，同样移除数学字体映射错乱碎片（如 `σpiupi`、`ħx1`、PUA、`☒`、`\ufffd`）。
     """
     cleaned_lines: list[str] = []
     for line in text.splitlines():
         _frags, is_sym_line = _collect_line_garble_fragments(line)
         if is_sym_line:
             continue
-        tokens = line.split()
+        stripped_corrupt = _strip_corrupt_glyphs_from_line(line)
+        tokens = stripped_corrupt.split()
         math_garbled = set(_math_garble_tokens(tokens))
         kept_tokens = [
             _PUA_CHAR_RE.sub("", tok)
@@ -510,6 +547,9 @@ def detect_broken_math_layout(text: str) -> bool:
     """
     if not text or not text.strip():
         return False
+
+    if _collect_corrupt_glyph_fragments(text):
+        return True
 
     non_code_lines = _extract_non_code_lines(text)
     if any(_math_garble_tokens(ln.split()) for ln in non_code_lines):

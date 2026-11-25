@@ -421,19 +421,27 @@ class ProviderRegistry:
         )
 
         queue_redis_url = settings.redis.redis_url if settings.queue.provider == "redis" else None
+        queue_extra: dict[str, Any] = (
+            {"redis_settings": settings.redis} if settings.queue.provider == "redis" else {}
+        )
         queue = create_queue_adapter(
             adapter_type=settings.queue.provider,
             redis_url=queue_redis_url,
             immediate_mode=settings.queue.immediate_mode,
             retry_limit=settings.queue.retry_limit,
+            **queue_extra,
         )
 
         idempotency_redis_url = (
             settings.redis.redis_url if settings.idempotency.provider == "redis" else None
         )
+        idempotency_extra: dict[str, Any] = (
+            {"redis_settings": settings.redis} if settings.idempotency.provider == "redis" else {}
+        )
         idempotency = create_idempotency_adapter(
             adapter_type=settings.idempotency.provider,
             redis_url=idempotency_redis_url,
+            **idempotency_extra,
         )
 
         return cls(

@@ -99,6 +99,10 @@ class PracticeCreateRequest(BaseModel):
         default=None,
         description="指定题目主键列表（用于错题本勾选题精确组卷；提供时优先直接以此题目列表生成练习试卷）",
     )
+    collection_id: uuid.UUID | None = Field(
+        default=None,
+        description="可选自定义题单主键（提供时按题单内前 50 道未软删题目创建练习）",
+    )
     idempotency_key: str | None = Field(
         default=None,
         max_length=128,
@@ -125,18 +129,27 @@ class PracticeCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_practice_scope(self) -> "PracticeCreateRequest":
-        """校验 folder_id / question_ids 缺省时必须显式提供至少一个知识点。"""
-        if self.folder_id is None and not self.knowledge_point_ids and not self.question_ids:
-            raise ValueError("folder_id、knowledge_point_ids 与 question_ids 至少提供一个")
+        """校验 folder_id / question_ids / collection_id 缺省时必须显式提供至少一个知识点。"""
+        if (
+            self.folder_id is None
+            and not self.knowledge_point_ids
+            and not self.question_ids
+            and self.collection_id is None
+        ):
+            raise ValueError(
+                "folder_id、knowledge_point_ids、question_ids 与 collection_id 至少提供一个"
+            )
         return self
 
     @model_validator(mode="after")
     def _sync_question_count_with_ids(self) -> "PracticeCreateRequest":
-        """当指定 question_ids 且 question_count 缺省或大于题目数时，自动同步为实际题量。"""
+        """当指定 question_ids 或 collection_id 时同步题量上限。"""
         if self.question_ids and (
             self.question_count == 10 or self.question_count > len(self.question_ids)
         ):
             self.question_count = len(self.question_ids)
+        elif self.collection_id is not None and "question_count" not in self.model_fields_set:
+            self.question_count = 50
         return self
 
 
@@ -548,7 +561,9 @@ class PracticeSummaryResponse(BaseModel):
     material_id: uuid.UUID | None = Field(
         default=None, description="关联学习资料主键（课程范围练习为空）"
     )
+    material_title: str | None = Field(default=None, description="关联学习资料标题")
     folder_id: uuid.UUID | None = Field(default=None, description="关联课程文件夹标识")
+    folder_name: str | None = Field(default=None, description="关联课程文件夹名称")
     title: str = Field(..., description="练习标题")
     status: str = Field(..., description="练习生命周期状态")
     question_count: int = Field(default=0, ge=0, description="题目总数")
@@ -571,7 +586,9 @@ class PracticeSummaryResponse(BaseModel):
                 "id",
                 "practice_id",
                 "material_id",
+                "material_title",
                 "folder_id",
+                "folder_name",
                 "title",
                 "status",
                 "question_count",

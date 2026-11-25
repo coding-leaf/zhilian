@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend architecture & verification standards"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Strict import-linter 6-layer boundaries and pure core/algorithms rules"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite+PG compatible models, Alembic migrations, short-tx and JSONB rules"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Ruff complexity<=15, mypy strict, forbidden patterns, test coverage"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture, .vue<=300 lines, zero raw Hex, zero Emoji"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "WeChat Miniprogram hard rules: no PATCH, no dynamic import, no span WXSS, safe-area"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "Request error handling, concurrency, auth guard"}
+{"file": ".trellis/spec/frontend/api-payload-contracts.md", "reason": "Wire payload adapter contracts"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Wire* types and strict TS boundaries"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia store and composable patterns"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue 3 SFC decomposition and styling rules"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer contract alignment across DB/API/Frontend"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse parse_folder_filter and trim_excerpt_cleanly"}
+{"file": ".trellis/tasks/11-24-product-ux-quality-upgrade/research/02-review-filter-and-collections.md", "reason": "Detailed Pillar #2 audit and design specification"}
+{"file": ".trellis/tasks/11-24-product-ux-quality-upgrade/research/03-chunking-and-kp-summary-redesign.md", "reason": "Detailed Pillar #3 audit and design specification"}

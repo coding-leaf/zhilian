@@ -31,6 +31,12 @@ def _format_point(point: KnowledgePoint) -> str:
     formulas = _as_text_list(structured.get("key_formulas"))[:_MAX_LIST_ITEMS]
     if formulas:
         parts.append("公式：" + "；".join(formulas))
+    derivations = _as_text_list(structured.get("derivation_steps"))[:_MAX_LIST_ITEMS]
+    if derivations:
+        parts.append("步骤：" + " → ".join(derivations))
+    mistakes = _as_text_list(structured.get("common_mistakes"))[:_MAX_LIST_ITEMS]
+    if mistakes:
+        parts.append("易错：" + "；".join(mistakes))
     indent = "  " * min(max(point.level - 1, 0), 2)
     return f"{indent}- " + " | ".join(parts)
 

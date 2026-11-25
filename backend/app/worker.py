@@ -1,8 +1,10 @@
 """Restricted RQ job entry points and standalone worker process."""
 
 import asyncio
+import atexit
 import logging
 import os
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +15,7 @@ from rq.job import Job
 
 from app.container import AppContainer
 from app.core.config import get_settings
+from app.integrations.redis_client import build_redis_client, close_redis_client
 
 if os.name == "nt":  # pragma: no cover - 平台分支，仅在 Windows 生效
     # RQ 2.12 的 `BaseRegistry.death_penalty_class` 被**硬编码**为 `UnixSignalDeathPenalty`
@@ -78,16 +81,57 @@ REGISTERED_TASKS: dict[str, Callable[[AppContainer, dict[str, str], uuid.UUID], 
 }
 
 
+_container_lock = threading.Lock()
+_worker_container: AppContainer | None = None
+_worker_container_creator: Any = None
+_worker_container_pid: int | None = None
+
+
+def get_worker_container() -> AppContainer:
+    """Return the process-level singleton AppContainer for worker jobs (fork-safe)."""
+    global _worker_container, _worker_container_creator, _worker_container_pid
+    current_creator = getattr(AppContainer.create, "__func__", AppContainer.create)
+    current_pid = os.getpid()
+    with _container_lock:
+        if (
+            _worker_container is None
+            or _worker_container_creator is not current_creator
+            or _worker_container_pid != current_pid
+        ):
+            # After POSIX fork, discard inherited parent references without closing
+            # parent sockets and build a fresh process-local container.
+            _worker_container = AppContainer.create()
+            _worker_container_creator = current_creator
+            _worker_container_pid = current_pid
+        return _worker_container
+
+
+def shutdown_worker_container() -> None:
+    """Gracefully shut down and clear the cached process-level worker container."""
+    global _worker_container, _worker_container_creator, _worker_container_pid
+    current_pid = os.getpid()
+    with _container_lock:
+        container = _worker_container if _worker_container_pid == current_pid else None
+        _worker_container = None
+        _worker_container_creator = None
+        _worker_container_pid = None
+    if container is not None:
+        try:
+            asyncio.run(container.shutdown())
+        except Exception:
+            logger.exception("worker singleton AppContainer shutdown failed")
+
+
+atexit.register(shutdown_worker_container)
+
+
 def execute_registered_task(task_name: str, payload: dict[str, str], user_id: str) -> None:
-    """Execute a server-owned job with a new container and database session."""
+    """Execute a server-owned job using the process-level singleton container and fresh session."""
     handler = REGISTERED_TASKS.get(task_name)
     if handler is None or payload.get("user_id") != user_id:
         raise ValueError("未授权的后台任务或用户不匹配")
-    container = AppContainer.create()
-    try:
-        handler(container, payload, uuid.UUID(user_id))
-    finally:
-        asyncio.run(container.shutdown())
+    container = get_worker_container()
+    handler(container, payload, uuid.UUID(user_id))
 
 
 def run_worker() -> None:
@@ -95,16 +139,23 @@ def run_worker() -> None:
     settings = get_settings()
     if settings.queue.provider != "redis":
         raise RuntimeError("worker 需要 ZHILIAN_QUEUE__PROVIDER=redis")
-    connection = Redis.from_url(settings.redis.redis_url)
-    queues = [Queue("zhilian_high", connection=connection), Queue("zhilian", connection=connection)]
-    # Windows 没有 fork：`Worker.wait_for_horse` 调用 POSIX-only 的 `os.wait4`，
-    # 而 `SpawnWorker` 只重写了 `fork_work_horse`、仍继承同一个 `wait_for_horse`，
-    # 因此它在 Windows 上照样抛 `AttributeError: module 'os' has no attribute 'wait4'`。
-    # 只有 `SimpleWorker` 派生自 `BaseWorker`、在同进程内执行任务，不触碰 fork/wait4。
-    # 代价：同进程执行无法强杀超时任务，一个卡死的任务会阻塞整个 worker；
-    # 解析流水线各外设调用自带超时，故接受此代价。
-    worker_type = SimpleWorker if os.name == "nt" else Worker
-    worker_type(queues, connection=connection).work(with_scheduler=True)
+    connection = build_redis_client(settings=settings.redis, blocking=True)
+    try:
+        queues = [
+            Queue("zhilian_high", connection=connection),
+            Queue("zhilian", connection=connection),
+        ]
+        # Windows 没有 fork：`Worker.wait_for_horse` 调用 POSIX-only 的 `os.wait4`，
+        # 而 `SpawnWorker` 只重写了 `fork_work_horse`、仍继承同一个 `wait_for_horse`，
+        # 因此它在 Windows 上照样抛 `AttributeError: module 'os' has no attribute 'wait4'`。
+        # 只有 `SimpleWorker` 派生自 `BaseWorker`、在同进程内执行任务，不触碰 fork/wait4。
+        # 代价：同进程执行无法强杀超时任务，一个卡死的任务会阻塞整个 worker；
+        # 解析流水线各外设调用自带超时，故接受此代价。
+        worker_type = SimpleWorker if os.name == "nt" else Worker
+        worker_type(queues, connection=connection).work(with_scheduler=True)
+    finally:
+        close_redis_client(connection)
+        shutdown_worker_container()
 
 
 def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
@@ -157,15 +208,12 @@ def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
 def _mark_grading_failed(payload: dict[str, str], user_id: str) -> None:
     """以短生命周期会话回写判题任务终态失败，供用户可见并主动重试。"""
     practice_id = uuid.UUID(payload["practice_id"])
-    container = AppContainer.create()
-    try:
-        with container.get_session() as session:
-            container.create_practice_service(session).mark_grading_failed(
-                uuid.UUID(user_id),
-                practice_id,
-            )
-    finally:
-        asyncio.run(container.shutdown())
+    container = get_worker_container()
+    with container.get_session() as session:
+        container.create_practice_service(session).mark_grading_failed(
+            uuid.UUID(user_id),
+            practice_id,
+        )
 
 
 def _mark_generation_job_failed(
@@ -175,16 +223,13 @@ def _mark_generation_job_failed(
 ) -> None:
     """以短生命周期会话回写异步出题任务终态失败。"""
     job_id = uuid.UUID(payload["job_id"])
-    container = AppContainer.create()
-    try:
-        with container.get_session() as session:
-            container.create_question_service(session).mark_generation_job_failed(
-                user_id=uuid.UUID(user_id),
-                job_id=job_id,
-                error_message=f"后台出题任务执行失败 ({exception_name})",
-            )
-    finally:
-        asyncio.run(container.shutdown())
+    container = get_worker_container()
+    with container.get_session() as session:
+        container.create_question_service(session).mark_generation_job_failed(
+            user_id=uuid.UUID(user_id),
+            job_id=job_id,
+            error_message=f"后台出题任务执行失败 ({exception_name})",
+        )
 
 
 def _mark_material_parse_failed(
@@ -196,18 +241,15 @@ def _mark_material_parse_failed(
     material_id = uuid.UUID(payload["material_id"])
     version_id = uuid.UUID(payload["version_id"])
     uid = uuid.UUID(user_id)
-    container = AppContainer.create()
-    try:
-        with container.get_session() as session:
-            container.create_material_service(session).mark_orphaned_parse_failed(
-                material_id=material_id,
-                version_id=version_id,
-                user_id=uid,
-                failed_stage="worker_terminated",
-                error_message=f"后台解析任务异常终止 ({exception_name})，请重新解析",
-            )
-    finally:
-        asyncio.run(container.shutdown())
+    container = get_worker_container()
+    with container.get_session() as session:
+        container.create_material_service(session).mark_orphaned_parse_failed(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=uid,
+            failed_stage="worker_terminated",
+            error_message=f"后台解析任务异常终止 ({exception_name})，请重新解析",
+        )
 
 
 def handle_job_terminal_failure(

@@ -5,6 +5,7 @@ import type {
   AskCoachParams,
   AskCoachResponse,
   GenerateQuestionsParams,
+  PollingRequestOptions,
   QuestionBankListResult,
   QuestionBankQuery,
   QuestionBatchListResult,
@@ -13,6 +14,7 @@ import type {
   QuestionGenerationJob,
   QuestionGenerationJobListResult,
   QuestionGenerationJobQuery,
+  QuestionGroupedSummaryResult,
   QuestionItem,
   ScopedCoachParams,
 } from '@/types'
@@ -22,10 +24,12 @@ import {
   adaptQuestionBatchList,
   adaptQuestionGenerationJob,
   adaptQuestionGenerationJobList,
+  adaptQuestionGroupedSummary,
   type WireQuestion,
   type WireQuestionBankList,
   type WireQuestionBatchList,
   type WireQuestionGenerationJob,
+  type WireQuestionGroupedSummary,
 } from '../adapters'
 
 export type {
@@ -41,6 +45,7 @@ export type {
   ScopedCoachParams,
 }
 
+/** @deprecated 请改用 `apiCreateQuestionJob` 异步出题任务。 */
 export function apiGenerateQuestions(params: GenerateQuestionsParams): Promise<QuestionGenerateResult> {
   return request<Omit<QuestionGenerateResult, 'qualified_questions' | 'pending_questions'> & {
     qualified_questions: WireQuestion[]
@@ -80,6 +85,7 @@ export function apiCreateQuestionJob(
 
 export function apiListQuestionJobs(
   query: QuestionGenerationJobQuery = {},
+  requestOptions?: PollingRequestOptions,
 ): Promise<QuestionGenerationJobListResult> {
   const queryParts: string[] = []
   if (query.active_only !== undefined) queryParts.push(`active_only=${query.active_only}`)
@@ -89,13 +95,18 @@ export function apiListQuestionJobs(
   return request<{ items?: WireQuestionGenerationJob[] | null; total?: number | null } | WireQuestionGenerationJob[]>({
     url: `/questions/jobs${qs}`,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then(adaptQuestionGenerationJobList)
 }
 
-export function apiGetQuestionJob(jobId: string): Promise<QuestionGenerationJob> {
+export function apiGetQuestionJob(
+  jobId: string,
+  requestOptions?: PollingRequestOptions,
+): Promise<QuestionGenerationJob> {
   return request<WireQuestionGenerationJob>({
     url: `/questions/jobs/${jobId}`,
     method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
   }).then(adaptQuestionGenerationJob)
 }
 
@@ -105,19 +116,31 @@ export function apiListQuestionBatches(
 ): Promise<QuestionBatchListResult> {
   const page = params.page ?? 1
   const pageSize = params.page_size ?? 20
+  const queryParts = [`page=${page}`, `page_size=${pageSize}`]
+  if (params.folder_id && params.folder_id !== 'all') {
+    queryParts.push(`folder_id=${encodeURIComponent(params.folder_id)}`)
+  }
   return request<WireQuestionBatchList>({
-    url: `/questions/batches?page=${page}&page_size=${pageSize}`,
+    url: `/questions/batches?${queryParts.join('&')}`,
     method: 'GET',
   }).then(adaptQuestionBatchList)
 }
 
-/** 题库区块的题目列表（展开批次 / 解析整批题目 ID 共用）。 */
+/** 题库区块的题目列表（展开批次 / 讲义考点展开 / 解析整批题目 ID 共用）。 */
 export function apiListQuestionBankItems(
   query: QuestionBankQuery = {},
 ): Promise<QuestionBankListResult> {
   const queryParts: string[] = []
   if (query.batchId) queryParts.push(`batch_id=${encodeURIComponent(query.batchId)}`)
   if (query.unbatched) queryParts.push('unbatched=true')
+  if (query.folder_id && query.folder_id !== 'all') {
+    queryParts.push(`folder_id=${encodeURIComponent(query.folder_id)}`)
+  }
+  if (query.unclassified) queryParts.push('unclassified=true')
+  if (query.material_id) queryParts.push(`material_id=${encodeURIComponent(query.material_id)}`)
+  if (query.knowledge_point_id) {
+    queryParts.push(`knowledge_point_id=${encodeURIComponent(query.knowledge_point_id)}`)
+  }
   if (query.reviewStatus) queryParts.push(`review_status=${query.reviewStatus}`)
   queryParts.push(`page=${query.page ?? 1}`)
   queryParts.push(`page_size=${query.page_size ?? 20}`)
@@ -126,6 +149,18 @@ export function apiListQuestionBankItems(
     url: `/questions?${queryParts.join('&')}`,
     method: 'GET',
   }).then(adaptQuestionBankList)
+}
+
+/** 按「讲义 -> 考点」分组的题目计数摘要。 */
+export function apiGetQuestionGroupedSummary(
+  folderId?: string,
+): Promise<QuestionGroupedSummaryResult> {
+  const qs =
+    folderId && folderId !== 'all' ? `?folder_id=${encodeURIComponent(folderId)}` : ''
+  return request<WireQuestionGroupedSummary>({
+    url: `/questions/grouped-summary${qs}`,
+    method: 'GET',
+  }).then(adaptQuestionGroupedSummary)
 }
 
 export interface AskQuestionCoachOptions {

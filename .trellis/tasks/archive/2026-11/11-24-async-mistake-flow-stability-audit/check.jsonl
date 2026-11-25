@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "校验 import-linter 6 条分层边界未被破坏"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验迁移 0012、部分唯一索引、短事务边界与多租户 user_id 过滤"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验全局异常处理器与业务错误码脱敏一致性"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "校验无明文 user_id/token 泄露到日志"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验后端 lint/mypy/coverage 质量门禁"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "校验 silentToast、401 单飞刷新、并发限流与超时分类"}
+{"file": ".trellis/spec/frontend/api-payload-contracts.md", "reason": "校验前后端异步出题自动建卷与 POST /practices 契约一致"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "校验触碰 .vue 单文件 <=300 行、零裸 Hex、零 Emoji、底栏安全区"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验前端 eslint/vue-tsc/vitest 门禁"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验前后端契约对齐与无隐式字段漂移"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/prd.md", "reason": "对照验收标准逐项核验完成度（含不强制跳转提醒流）"}
+{"file": ".trellis/tasks/11-24-async-mistake-flow-stability-audit/design.md", "reason": "对照技术设计复核实现无偏离与无遗漏"}

@@ -236,13 +236,11 @@ export type LoginOutcome = { ok: true } | { ok: false; reason: LoginFailureReaso
 
 ---
 
-## 已知偏离
+## 已知偏离与韧性基线（2026-11-24 已收敛）
 
-- **`localhost` 仍是默认主机名**（`http://localhost:8000/api/v1`）。2026-09-29 的故障环境里
-  `xray_tun` 在回环广播地址 `127.255.255.255/32` 上装了路由（v2rayN TUN 模式），
-  换成字面量 `127.0.0.1` 可消掉域名解析这一环；但这属于独立决策，尚未采纳。
-- **`uploadFile` 没有逐请求超时**：`uni.uploadFile` 无 `timeout` 参数（平台限制），
-  超时只能靠 `app.json` 的 `networkTimeout`。其失败分支已统一到 `RequestError` 契约。
-- **`pages/index/index.vue::onMounted` 的静默自动登录未改**：它 `await authStore.loginWithWechat()`
-  后忽略返回值。改返回类型后行为不变（仍编译通过）。**故意不改**：在启动路径加失败 toast 会让
-  每个未登录用户「打开即报错」，是 UX 回归。若将来要处理，应在页面内以非打扰方式（如横幅）呈现。
+- **默认开发主机名已收敛为 `127.0.0.1`**（`http://127.0.0.1:8000/api/v1`），规避 TUN/IPv6 `localhost` 解析阻塞；`src/manifest.json` 的 `mp-weixin.networkTimeout` 已显式配置 `{ request: 60000, uploadFile: 60000 }`（严格对齐微信 60,000ms 硬上限），`uploadFile` 失败分类传入真实 `60000ms`；HTTP 方法白名单收敛为 `GET/POST/PUT/DELETE`（严禁 `PATCH`），零动态 `import()`（改用 `getActivePinia()` 同步查找，详见 [mp-weixin-compatibility.md](./mp-weixin-compatibility.md)）。
+- **`silentToast: true` 契约**：后台轮询（`backgroundTaskStore`）与草稿同步（`apiSavePracticeDraft`）必须透传 `{ silentToast: true }`；`request.ts` 在 `silentToast: true` 时**严禁弹 Toast，且严禁调用 `dismissBlockingLoading()`**，避免误杀前台正常 loading。
+- **并发限流、GET 去重与幂等重试**：`request.ts` 内置 `MAX_CONCURRENT_REQUESTS = 6` FIFO 调度器（低于微信 10 并发硬上限，在重试退避/401 刷新等待前释放槽位）、同 URL in-flight GET 合并去重，以及 GET 遇到 `network`/`timeout`/502/503/504 时最多 2 次带 jitter 指数退避重试。
+- **401 单飞刷新与登出清理**：`stores/auth.ts` 持久化 `refresh_token`；`request.ts` 收到 401 时走单飞 `POST /auth/refresh` 换新并重放并发请求，失败时经防重锁单次执行 `clearAuth()` + `reLaunch`；`clearAuth()` 必须重置 `backgroundTask`/`practice`/`diagnosis`/`material`/`folder` 五个域 store 并停止轮询；`App.vue` `onHide` 停轮询、`onShow` 按需恢复。
+- **轮询与草稿队列容错**：`utils/poller.ts` 默认容忍 `maxConsecutiveErrors = 3` 次连续瞬时失败不中断；`utils/draftQueue.ts` 通过递增 `epoch` 代际号 + 静态 `practiceId` 绑定防切题污染，并发上限 `<= 2`，答题输入 500ms 防抖并在切题/交卷前即时 flush。
+- **`pages/index/index.vue::onMounted` 的静默自动登录未改**：故意保留静默策略，避免未登录用户打开即报错；冷启动已通过 `refreshAll` 合并避免 `onMounted`+`onShow` 双重并发爆发。

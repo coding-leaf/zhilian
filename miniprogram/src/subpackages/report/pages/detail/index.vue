@@ -1,5 +1,7 @@
 <template>
   <view class="report-container">
+    <BackgroundTaskBar auto-refresh />
+
     <view v-if="detail.loadError.value" class="paper-card error-card">
       <text class="error-text">{{ detail.loadError.value }}</text>
       <button class="paper-btn-primary retry-btn" @tap="detail.bootstrap">重新加载</button>
@@ -42,6 +44,7 @@
           @regrade="detail.openGrading('regrade', $event)"
           @self-evaluate="detail.openGrading('self-evaluate', $event)"
           @coach="openCoach"
+          @collect="openCollect"
         />
       </view>
     </template>
@@ -52,9 +55,10 @@
         v-if="detail.wrongKnowledgePointIds.value.length > 0 && detail.canRegenerate.value"
         class="reinforce-bar-btn"
         :loading="detail.isRegenerating.value"
+        :disabled="detail.isRegenerating.value"
         @tap="detail.startAdaptivePractice"
       >
-        错题靶向强化
+        {{ detail.isRegenerating.value ? '后台生题中...' : '错题靶向强化' }}
       </button>
       <button class="paper-btn-primary primary-bar-btn" @tap="handleGoReview">
         查看学情总览
@@ -78,6 +82,11 @@
       :user-answer="coachUserAnswer"
       :grading-points="coachGradingPoints"
     />
+
+    <CollectionPickerDrawer
+      v-model:visible="showCollectDrawer"
+      :question-id="collectQuestionId"
+    />
   </view>
 </template>
 
@@ -86,6 +95,8 @@ import { ref } from 'vue'
 import { onLoad, onPullDownRefresh, onUnload } from '@dcloudio/uni-app'
 import type { AttemptResult } from '@/types'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
+import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import CollectionPickerDrawer from '@/components/CollectionPickerDrawer.vue'
 import { safeShowToast } from '@/utils/loadingGuard'
 import ReportSummaryCard from '../../components/ReportSummaryCard.vue'
 import AttemptResultCard from '../../components/AttemptResultCard.vue'
@@ -103,6 +114,8 @@ const coachKnowledgePointId = ref<string | undefined>()
 const coachContext = ref('')
 const coachUserAnswer = ref('')
 const coachGradingPoints = ref<string[]>([])
+const showCollectDrawer = ref(false)
+const collectQuestionId = ref('')
 
 onLoad((options) => {
   const id = options?.practice_id
@@ -137,6 +150,12 @@ const openCoach = (result: AttemptResult) => {
     ? result.missingKeywords
     : result.gradingPoints
   showCoach.value = true
+}
+
+const openCollect = (result: AttemptResult) => {
+  if (!result.questionId) return
+  collectQuestionId.value = result.questionId
+  showCollectDrawer.value = true
 }
 
 const handleBackHome = () => {

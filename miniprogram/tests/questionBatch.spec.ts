@@ -175,10 +175,10 @@ describe('已选题数', () => {
 })
 
 describe('批次标签推导', () => {
-  it('单资料批次用资料名', () => {
+  it('单资料批次用资料名（不展示待审核计数）', () => {
     const label = describeBatchLabel(makeBatch(), NOW)
 
-    expect(label).toBe('3月1日 08:00 · 软件工程导论.pdf · 2 题 · 1 题待审核')
+    expect(label).toBe('3月1日 08:00 · 软件工程导论.pdf · 2 题')
   })
 
   it('多资料同课程批次用课程名，而不是其中某一份资料', () => {

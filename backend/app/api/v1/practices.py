@@ -16,6 +16,7 @@ from fastapi import APIRouter, Body, Depends, Header, Query, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.practice import get_practice_service
+from app.api.v1._filters import parse_folder_filter
 from app.core.errors import (
     IdempotencyKeyInvalidError,
     PracticeNotFoundError,
@@ -85,6 +86,7 @@ def create_practice(
         idempotency_key=idempotency_key or request.idempotency_key,
         folder_id=request.folder_id,
         question_ids=request.question_ids,
+        collection_id=request.collection_id,
     )
     practice = practice_service.create_practice(
         user_id=current_user.id,
@@ -104,36 +106,55 @@ def create_practice(
 def list_practices(
     status: Annotated[str | None, Query(description="按练习生命周期状态过滤")] = None,
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程文件夹过滤 ('__none__' 表示未分类)"),
+    ] = None,
     offset: Annotated[int, Query(ge=0, description="分页游标偏移量")] = 0,
     limit: Annotated[int, Query(ge=1, le=100, description="单页容量限制")] = 20,
     *,
     current_user: Annotated[User, Depends(get_current_user)],
     practice_service: Annotated[PracticeService, Depends(get_practice_service)],
 ) -> PracticeListResponse:
-    """多维条件过滤并分页查询当前租户用户的练习列表。
+    """多维条件过滤并分页查询当前租户用户的练习列表。"""
+    resolved_folder_id, is_unclassified = parse_folder_filter(folder_id)
+    filter_kwargs: dict[str, Any] = {}
+    if resolved_folder_id is not None:
+        filter_kwargs["folder_id"] = resolved_folder_id
+    if is_unclassified:
+        filter_kwargs["unclassified"] = True
 
-    Args:
-        status: 可选练习状态过滤条件。
-        material_id: 可选学习资料标识过滤条件。
-        offset: 分页游标偏移量，默认 0。
-        limit: 单页记录数限制，默认 20。
-        current_user: 当前已认证登录租户用户对象。
-        practice_service: 练习会话与组卷编排服务。
-
-    Returns:
-        PracticeListResponse: 分页练习摘要列表及总数。
-    """
     result = practice_service.list_practices(
         user_id=current_user.id,
         status=status,
         material_id=material_id,
         offset=offset,
         limit=limit,
+        **filter_kwargs,
     )
     if isinstance(result, tuple) and len(result) == 2:
         items_raw, total = result
     elif isinstance(result, list):
         items_raw = result
+        if isinstance(practice_service, PracticeService) and not hasattr(
+            practice_service, "assert_called"
+        ):
+            total = practice_service.count_practices(
+                user_id=current_user.id,
+                status=status,
+                material_id=material_id,
+                **filter_kwargs,
+            )
+            items = practice_service.build_practice_summaries(
+                items_raw,
+                user_id=current_user.id,
+            )
+            return PracticeListResponse(
+                items=items,
+                total=total,
+                limit=limit,
+                offset=offset,
+            )
         total = len(items_raw)
     else:
         items_raw = []

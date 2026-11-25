@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from app.core.config import RedisSettings
 from app.core.errors import PermissionDeniedError, QueueError, QueueTimeoutError
 from app.integrations._http_retry import run_with_retry
 from app.integrations.queue.protocol import (
@@ -23,6 +24,7 @@ from app.integrations.queue.protocol import (
     TaskResult,
     serialize_task_message,
 )
+from app.integrations.redis_client import build_redis_client, close_redis_client, mask_redis_url
 
 T = TypeVar("T")
 
@@ -53,6 +55,9 @@ class RedisQueueAdapter(QueueProtocol):
         *,
         redis_url: str | None = None,
         redis_client: Any | None = None,
+        redis_settings: RedisSettings | None = None,
+        socket_timeout: float | None = None,
+        max_connections: int | None = None,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         queue_prefix: str = "queue",
     ) -> None:
@@ -61,6 +66,9 @@ class RedisQueueAdapter(QueueProtocol):
         Args:
             redis_url: Redis 连接 URI（如 redis://:pass@host:port/0）。
             redis_client: 可选外部注入的 Redis 客户端实例（支持 Fake / Mock 打桩）。
+            redis_settings: 可选 RedisSettings 强类型配置。
+            socket_timeout: 可选单命令读写超时（秒）。
+            max_connections: 可选连接池上限。
             max_retries: 最大重试次数，默认 3 次。
             queue_prefix: 队列命名空间前缀。
 
@@ -69,16 +77,20 @@ class RedisQueueAdapter(QueueProtocol):
         """
         self._max_retries = max_retries
         self._queue_prefix = queue_prefix
-        self._masked_url = _mask_redis_url(redis_url)
+        resolved_url = redis_url or (redis_settings.redis_url if redis_settings else None)
+        self._masked_url = mask_redis_url(resolved_url)
 
         if redis_client is not None:
             self._client = redis_client
         else:
             try:
-                import redis
-
-                target_url = redis_url or "redis://localhost:6379/0"
-                self._client = redis.from_url(target_url, decode_responses=True)
+                self._client = build_redis_client(
+                    redis_url=redis_url,
+                    settings=redis_settings,
+                    socket_timeout=socket_timeout,
+                    max_connections=max_connections,
+                    decode_responses=True,
+                )
             except ImportError as exception:
                 raise QueueError(
                     "未安装 redis 依赖包，请安装 redis 后重试",
@@ -89,6 +101,14 @@ class RedisQueueAdapter(QueueProtocol):
                     f"初始化 Redis 客户端连接失败: {exception}",
                     details={"url": self._masked_url},
                 ) from exception
+
+    def close(self) -> None:
+        """释放 Redis 客户端与底层连接池。"""
+        close_redis_client(self._client)
+
+    def ping(self) -> bool:
+        """健康探测 Redis 连通性。"""
+        return bool(self._client.ping())
 
     @staticmethod
     def _classify_redis_error(exception: Exception) -> tuple[bool, bool]:

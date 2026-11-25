@@ -27,6 +27,7 @@
       :question="currentQuestion"
       :user-answer="currentUserAnswer"
       :save-status-text="saveStatusText"
+      :overlay-open="showCardDrawer || showCoachDrawer"
       @select-single="selectSingleOption"
       @toggle-multiple="toggleMultipleOption"
       @input-answer="handleTextInput"
@@ -57,7 +58,7 @@
       <button
         class="nav-btn prev-btn"
         :disabled="practiceStore.currentIndex === 0"
-        @tap="practiceStore.prevQuestion"
+        @tap="handlePrevQuestion"
       >
         上一题
       </button>
@@ -65,7 +66,7 @@
       <button
         v-if="practiceStore.currentIndex < practiceStore.questions.length - 1"
         class="paper-btn-primary nav-btn"
-        @tap="practiceStore.nextQuestion"
+        @tap="handleNextQuestion"
       >
         下一题
       </button>
@@ -74,6 +75,7 @@
         v-else
         class="paper-btn-primary submit-btn"
         :loading="practiceStore.isSubmitting"
+        :disabled="practiceStore.isSubmitting"
         @tap="confirmSubmit"
       >
         交卷
@@ -83,8 +85,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import { usePracticeStore } from '@/stores/practice'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
@@ -95,9 +97,43 @@ import {
   toggleMultipleSelection,
 } from '../../utils/practiceSession'
 
+const TEXT_DRAFT_DEBOUNCE_MS = 500
+
+interface PendingTextDraft {
+  timer: ReturnType<typeof setTimeout>
+  answer: string
+  practiceId?: string
+}
+
 const practiceStore = usePracticeStore()
 const showCardDrawer = ref(false)
 const showCoachDrawer = ref(false)
+const pendingDebounceCount = ref(0)
+const pendingTextDrafts = new Map<string, PendingTextDraft>()
+
+const syncPendingCount = () => {
+  pendingDebounceCount.value = pendingTextDrafts.size
+}
+
+const flushPendingTextDrafts = (questionId?: string) => {
+  const ids = questionId ? [questionId] : Array.from(pendingTextDrafts.keys())
+  for (const id of ids) {
+    const entry = pendingTextDrafts.get(id)
+    if (!entry) continue
+    clearTimeout(entry.timer)
+    pendingTextDrafts.delete(id)
+    practiceStore.persistDraftAnswer(id, entry.answer, entry.practiceId)
+  }
+  syncPendingCount()
+}
+
+const clearPendingTextDrafts = () => {
+  for (const entry of pendingTextDrafts.values()) {
+    clearTimeout(entry.timer)
+  }
+  pendingTextDrafts.clear()
+  syncPendingCount()
+}
 
 const currentQuestion = computed(() => practiceStore.currentQuestion)
 const currentUserAnswer = computed(() =>
@@ -109,7 +145,7 @@ const progressWidth = computed(() => {
 })
 const saveStatusText = computed(() => {
   if (practiceStore.draftFailures.length > 0) return '存在未保存作答'
-  return practiceStore.isSavingDrafts ? '保存中...' : '已保存'
+  return practiceStore.isSavingDrafts || pendingDebounceCount.value > 0 ? '保存中...' : '已保存'
 })
 
 const coachTitle = computed(() => {
@@ -134,6 +170,7 @@ const coachUserAnswer = computed(() => {
 const RESUMABLE_STATUSES = new Set(['not_started', 'in_progress', 'paused'])
 
 onLoad(async (options) => {
+  clearPendingTextDrafts()
   if (!options?.practice_id) {
     safeShowToast('缺少练习标识')
     return
@@ -149,6 +186,14 @@ onLoad(async (options) => {
   } catch (error: any) {
     safeShowToast(error?.message || '加载练习失败')
   }
+})
+
+onUnload(() => {
+  flushPendingTextDrafts()
+})
+
+onBeforeUnmount(() => {
+  flushPendingTextDrafts()
 })
 
 const selectSingleOption = (value: string) => {
@@ -167,7 +212,18 @@ const toggleMultipleOption = (value: string) => {
 
 const handleTextInput = (value: string) => {
   if (!currentQuestion.value) return
-  practiceStore.recordAnswer(currentQuestion.value.id, value)
+  const questionId = currentQuestion.value.id
+  const practiceId = practiceStore.currentSession?.id
+  practiceStore.setLocalAnswer(questionId, value)
+  const existing = pendingTextDrafts.get(questionId)
+  if (existing) clearTimeout(existing.timer)
+  const timer = setTimeout(() => {
+    pendingTextDrafts.delete(questionId)
+    syncPendingCount()
+    practiceStore.persistDraftAnswer(questionId, value, practiceId)
+  }, TEXT_DRAFT_DEBOUNCE_MS)
+  pendingTextDrafts.set(questionId, { timer, answer: value, practiceId })
+  syncPendingCount()
 }
 
 const openQuestionCoach = () => {
@@ -175,12 +231,24 @@ const openQuestionCoach = () => {
   showCoachDrawer.value = true
 }
 
+const handlePrevQuestion = () => {
+  flushPendingTextDrafts()
+  practiceStore.prevQuestion()
+}
+
+const handleNextQuestion = () => {
+  flushPendingTextDrafts()
+  practiceStore.nextQuestion()
+}
+
 const jumpToIndex = (idx: number) => {
+  flushPendingTextDrafts()
   practiceStore.jumpTo(idx)
   showCardDrawer.value = false
 }
 
 const confirmSubmit = () => {
+  flushPendingTextDrafts()
   const unanswered = practiceStore.unansweredCount
   const content = unanswered > 0
     ? `尚有 ${unanswered} 道题未作答，确认交卷？待判题目稍后可在学情页查看结果。`
@@ -193,6 +261,7 @@ const confirmSubmit = () => {
     confirmColor: '#1E3A8A',
     success: async ({ confirm }: { confirm: boolean }) => {
       if (!confirm) return
+      flushPendingTextDrafts()
       try {
         await withBlockingLoading('正在提交交卷...', () => practiceStore.submit())
         const practiceId = practiceStore.currentSession?.id

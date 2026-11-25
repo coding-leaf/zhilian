@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "校验触碰 .vue <=300 行、零裸 Hex、零 Emoji"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "校验 request.ts 零 PATCH、零动态 import() 与安全超时"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验 eslint/vue-tsc/vitest 门禁"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "校验后端 folders.py 修改不破坏分层"}
+{"file": ".trellis/tasks/11-24-mp-weixin-compat-audit/prd.md", "reason": "核验 R1-R4 验收标准全部达成"}
+{"file": ".trellis/tasks/11-24-mp-weixin-compat-audit/design.md", "reason": "核验技术设计与编译产物实测一致"}

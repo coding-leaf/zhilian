@@ -1002,7 +1002,7 @@ class TestKnowledgeServiceWorkflow:
         filtered = service.get_snippets_for_point(kp.id, user_id)
         assert [s.id for s in filtered] == [real_snippet.id]
 
-        # 若某知识点仅关联短切片，则保留防空
+        # 若某知识点仅关联噪声/纯标题切片，过滤后应诚实返回 [] 而非强行吐出噪声
         kp_only_short = KnowledgePoint(
             user_id=user_id,
             material_id=material_id,
@@ -1019,6 +1019,138 @@ class TestKnowledgeServiceWorkflow:
             )
         )
         session.commit()
-        assert [s.id for s in service.get_snippets_for_point(kp_only_short.id, user_id)] == [
-            noise_title.id
+        assert service.get_snippets_for_point(kp_only_short.id, user_id) == []
+
+    def test_get_snippets_for_point_drops_thank_you_strips_watermark_and_caps_five(
+        self, session: Session, seed_material: dict[str, Any]
+    ) -> None:
+        """读取期过滤「谢谢！」与目录页，剥离校名水印，并按相关性排序最多返回 5 条。"""
+        user_id = seed_material["user_id"]
+        material_id = seed_material["material_id"]
+        version_id = seed_material["version_id"]
+
+        kp = KnowledgePoint(
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            name="支持向量机软间隔",
+            description="引入松弛变量允许少量样本违背间隔约束",
+            batch_id="b_wm",
+        )
+        session.add(kp)
+        session.flush()
+
+        thank_you = MaterialSnippet(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            snippet_index=20,
+            content="谢谢！",
+            char_length=3,
+            start_offset=4000,
+            end_offset=4003,
+            chapter_title="小结",
+        )
+        wm_valid = MaterialSnippet(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            material_id=material_id,
+            version_id=version_id,
+            snippet_index=21,
+            content=(
+                "支持向量机软间隔定义：引入松弛变量 $\\xi_i \\ge 0$ 与惩罚系数 $C$。\n"
+                "福建師範大學\n"
+                "FUJIAN NORMAL UNIVERSITY"
+            ),
+            char_length=95,
+            start_offset=4004,
+            end_offset=4099,
+            chapter_title="第五章 支持向量机",
+            source_info={"source_ref": "第 12-13 页", "page_number": 12, "page_end": 13},
+        )
+        extra_valid = [
+            MaterialSnippet(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                material_id=material_id,
+                version_id=version_id,
+                snippet_index=22 + i,
+                content=f"支持向量机软间隔推论 {i}：用于控制训练误差与几何间隔之间的折中。",
+                char_length=38,
+                start_offset=4100 + i * 50,
+                end_offset=4138 + i * 50,
+                chapter_title="第五章 支持向量机",
+            )
+            for i in range(6)
         ]
+        session.add_all([thank_you, wm_valid, *extra_valid])
+        session.flush()
+        session.add_all(
+            [
+                KnowledgePointSnippet(user_id=user_id, knowledge_point_id=kp.id, snippet_id=s.id)
+                for s in [thank_you, wm_valid, *extra_valid]
+            ]
+        )
+        session.commit()
+
+        service = KnowledgeService(session, StubLLM(), StubEmbedding())
+        results = service.get_snippets_for_point(kp.id, user_id)
+        assert len(results) == 5
+        assert all("谢谢" not in s.content for s in results)
+        assert results[0].id == wm_valid.id
+        assert "福建師範大學" not in results[0].content
+        assert "FUJIAN NORMAL UNIVERSITY" not in results[0].content
+
+        # Schema maps page_end cleanly from source_info
+        from app.schemas.knowledge import SnippetSourceResponse
+
+        dto = SnippetSourceResponse.model_validate(results[0])
+        assert dto.page_index == 12
+        assert dto.page_end == 13
+
+    def test_char_budget_batching_and_coach_context_new_fields(self) -> None:
+        """验证字符预算分批贴合章节边界且 _coach_context 兼容输出推导步骤与易错点。"""
+        from app.services._coach_context import build_overview_context
+        from app.services.knowledge import _build_snippet_batches
+
+        snips = [
+            MaterialSnippet(
+                id=uuid.uuid4(),
+                user_id=uuid.uuid4(),
+                material_id=uuid.uuid4(),
+                version_id=uuid.uuid4(),
+                snippet_index=i,
+                content="字" * 2000,
+                char_length=2000,
+                start_offset=i * 2000,
+                end_offset=(i + 1) * 2000,
+                chapter_title="第一章" if i < 2 else "第二章",
+            )
+            for i in range(4)
+        ]
+        batches = _build_snippet_batches(snips, max_batch_snippets=12, max_batch_chars=6000)
+        assert len(batches) == 2
+        assert [s.snippet_index for s in batches[0]] == [0, 1]
+        assert [s.snippet_index for s in batches[1]] == [2, 3]
+
+        kp = KnowledgePoint(
+            user_id=uuid.uuid4(),
+            material_id=uuid.uuid4(),
+            version_id=uuid.uuid4(),
+            name="软间隔 SVM",
+            description="desc",
+            level=2,
+            batch_id="b1",
+            structured_content={
+                "core_summary": "允许少量样本违背间隔约束",
+                "key_takeaways": ["引入松弛变量"],
+                "key_formulas": ["$\\min \\frac{1}{2}\\|w\\|^2 + C\\sum \\xi_i$"],
+                "derivation_steps": ["1. 构造拉格朗日函数", "2. KKT 求解"],
+                "common_mistakes": ["C 过大易过拟合"],
+            },
+        )
+        overview = build_overview_context([kp])
+        assert overview is not None
+        assert "步骤：1. 构造拉格朗日函数 → 2. KKT 求解" in overview
+        assert "易错：C 过大易过拟合" in overview

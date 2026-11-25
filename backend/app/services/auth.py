@@ -105,43 +105,54 @@ class AuthService:
         Raises:
             AuthenticationError: 微信授权服务调用失败或返回错误码。
         """
-        # 1. 确定性测试/开发凭证映射
-        if code == "dev_code":
-            return "wx_dev_deterministic_user"
-        if code.startswith(("dev_", "mock_")):
+        settings = get_settings()
+        is_production = settings.env == "production"
+
+        # 1. 确定性测试/开发凭证映射（仅限非生产环境）
+        if code == "dev_code" or code.startswith(("dev_", "mock_")):
+            if is_production:
+                raise AuthenticationError("生产环境禁止使用开发测试登录凭证")
+            if code == "dev_code":
+                return "wx_dev_deterministic_user"
             return f"wx_dev_{code}"
 
         # 2. 真实微信鉴权置换
-        settings = get_settings()
-        if settings.wechat_app_id and settings.wechat_app_secret:
-            secret_value = settings.wechat_app_secret.get_secret_value()
-            if secret_value:
-                try:
-                    url = "https://api.weixin.qq.com/sns/jscode2session"
-                    params = {
-                        "appid": settings.wechat_app_id,
-                        "secret": secret_value,
-                        "js_code": code,
-                        "grant_type": "authorization_code",
-                    }
-                    response = httpx.get(url, params=params, timeout=10.0)
-                    response.raise_for_status()
-                    data = response.json()
-                    if "openid" in data:
-                        return cast(str, data["openid"])
-                    err_code = data.get("errcode", -1)
-                    err_msg = data.get("errmsg", "未知错误")
-                    raise AuthenticationError(
-                        f"微信授权登录失败 (错误码 {err_code}): {err_msg}",
-                        details={"errcode": err_code, "errmsg": err_msg},
-                    )
-                except httpx.HTTPError as exc:
-                    raise AuthenticationError(
-                        f"微信授权接口网络请求失败: {exc}",
-                        details={"error": str(exc)},
-                    ) from exc
+        wechat_app_id = (settings.wechat_app_id or "").strip()
+        secret_value = (
+            settings.wechat_app_secret.get_secret_value().strip()
+            if settings.wechat_app_secret is not None
+            else ""
+        )
+        if wechat_app_id and secret_value:
+            try:
+                url = "https://api.weixin.qq.com/sns/jscode2session"
+                params = {
+                    "appid": wechat_app_id,
+                    "secret": secret_value,
+                    "js_code": code,
+                    "grant_type": "authorization_code",
+                }
+                response = httpx.get(url, params=params, timeout=10.0)
+                response.raise_for_status()
+                data = response.json()
+                if "openid" in data:
+                    return cast(str, data["openid"])
+                err_code = data.get("errcode", -1)
+                err_msg = data.get("errmsg", "未知错误")
+                raise AuthenticationError(
+                    f"微信授权登录失败 (错误码 {err_code}): {err_msg}",
+                    details={"errcode": err_code, "errmsg": err_msg},
+                )
+            except httpx.HTTPError as exc:
+                raise AuthenticationError(
+                    f"微信授权接口网络请求失败: {exc}",
+                    details={"error": str(exc)},
+                ) from exc
 
-        # 3. 兜底回退（未配置微信密钥的开发/单测环境）
+        # 3. 兜底回退（仅允许未配置微信密钥的开发/单测环境，生产环境严格拒绝）
+        if is_production:
+            raise AuthenticationError("生产环境未配置微信登录凭据，拒绝无凭据登录")
+
         if len(code) <= 50:
             return f"wx_{code}"
         hashed_suffix = hashlib.sha256(code.encode("utf-8")).hexdigest()[:28]

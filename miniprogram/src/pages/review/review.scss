@@ -42,6 +42,10 @@
   border-radius: 8rpx;
   flex-shrink: 0;
   margin: 0;
+
+  &::after {
+    border: none;
+  }
 }
 
 .folder-filter-scroll {
@@ -202,9 +206,14 @@
 }
 
 .reinforce-weak-btn {
-  margin-top: 20rpx;
+  margin: 20rpx 0 0;
   height: 78rpx;
+  line-height: 1.4;
   font-size: 26rpx;
+
+  &::after {
+    border: none;
+  }
 }
 
 .segment-bar {
@@ -397,6 +406,10 @@
   border-radius: 10rpx;
   margin: 0;
   flex-shrink: 0;
+
+  &::after {
+    border: none;
+  }
 }
 
 .group-scroll {
@@ -462,9 +475,14 @@
 
 .restart-wrong-btn {
   height: 64rpx;
+  line-height: 64rpx;
   padding: 0 24rpx;
   font-size: 24rpx;
   margin: 0;
+
+  &::after {
+    border: none;
+  }
 }
 
 .hint-card {
@@ -602,6 +620,10 @@
   border-radius: 8rpx;
   line-height: 1.2;
   margin: 0;
+
+  &::after {
+    border: none;
+  }
 }
 
 .single-gen-btn {
@@ -611,6 +633,10 @@
   padding: 0;
   margin: 0;
   line-height: 1.2;
+
+  &::after {
+    border: none;
+  }
 }
 
 .practice-card {

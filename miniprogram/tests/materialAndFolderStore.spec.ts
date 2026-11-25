@@ -198,10 +198,10 @@ describe('useFolderStore', () => {
       if (url === '/folders' && method === 'POST') {
         return { id: 'f-1', name: data.name, ready_material_count: 0, knowledge_point_count: 0 }
       }
-      if (url === '/folders/f-1' && method === 'PATCH') {
+      if (url === '/folders/f-1' && method === 'PUT') {
         return { id: 'f-1', name: data.name, ready_material_count: 0, knowledge_point_count: 0 }
       }
-      if (url === '/folders/f-missing' && method === 'PATCH') {
+      if (url === '/folders/f-missing' && method === 'PUT') {
         return { id: 'f-missing', name: data.name, ready_material_count: 0, knowledge_point_count: 0 }
       }
       if (url.startsWith('/folders/') && method === 'DELETE') {

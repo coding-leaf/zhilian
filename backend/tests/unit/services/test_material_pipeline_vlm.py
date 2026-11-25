@@ -622,3 +622,156 @@ class TestPrepareMaterialSnippets:
             self._prepare(embedding, ["   "])
 
         assert embedding.document_batches == []
+
+    def test_prepare_persists_page_end_for_merged_same_chapter_slides(self) -> None:
+        embedding = RecordingEmbedding()
+        paragraphs = [
+            ParagraphInput(text="第五章 软间隔", is_title=True, doc_type="pptx", page_number=11),
+            ParagraphInput(
+                text="软间隔允许少量训练样本落入间隔带中并通过松弛变量度量其损失。",
+                source_ref="第 12 页",
+                doc_type="pptx",
+                page_number=12,
+            ),
+            ParagraphInput(
+                text="惩罚系数 $C>0$ 控制分类准确率与最大几何间隔之间的平衡。",
+                source_ref="第 13 页",
+                doc_type="pptx",
+                page_number=13,
+            ),
+        ]
+        snippets = self._prepare(embedding, paragraphs)
+        assert len(snippets) == 1
+        assert snippets[0].source_info == {
+            "source_ref": "第 12-13 页",
+            "page_number": 12,
+            "page_end": 13,
+        }
+
+
+class TestDenoisingAndRenderedOcrFallback:
+    def test_repair_strips_watermarks_drops_toc_and_thank_you_pages(self) -> None:
+        from app.core.algorithms.document_denoising import PageTextBlock
+
+        pdf = _make_pdf(5)
+        wm = PageTextBlock("福建師範大學\nFUJIAN NORMAL UNIVERSITY", 40, 520, 400, 580, 800, 600)
+        pages = [
+            PdfPageExtraction(
+                1,
+                "第五章 支持向量机\n主讲教师：王老师\n福建師範大學\nFUJIAN NORMAL UNIVERSITY",
+                False,
+                False,
+                blocks=(wm,),
+            ),
+            PdfPageExtraction(
+                2,
+                "二、线性可分支持向量机\n福建師範大學",
+                False,
+                False,
+                blocks=(wm,),
+            ),
+            PdfPageExtraction(
+                3,
+                (
+                    "线性可分支持向量机通过最大化几何间隔构建最优分离超平面，"
+                    "并由支持向量决定决策边界。\n"
+                    "福建師範大學\n"
+                    "FUJIAN NORMAL UNIVERSITY"
+                ),
+                False,
+                False,
+                blocks=(wm,),
+            ),
+            PdfPageExtraction(
+                4,
+                "小结\n1. 基本概念\n2. 线性可分\n3. 软间隔\n福建師範大學",
+                False,
+                False,
+                blocks=(wm,),
+            ),
+            PdfPageExtraction(
+                5,
+                "谢谢！\n福建師範大學\nFUJIAN NORMAL UNIVERSITY",
+                False,
+                False,
+                blocks=(wm,),
+            ),
+        ]
+        paragraphs, full_text = _repair(pages, pdf, vlm=None)
+        assert "福建師範大學" not in full_text
+        assert "FUJIAN NORMAL UNIVERSITY" not in full_text
+        assert "谢谢" not in full_text
+        assert "小结" not in full_text
+        assert [p.text for p in paragraphs] == [
+            "二、线性可分支持向量机",
+            "线性可分支持向量机通过最大化几何间隔构建最优分离超平面，并由支持向量决定决策边界。",
+        ]
+        assert paragraphs[0].is_title is True
+        assert paragraphs[1].is_title is False
+
+    def test_dirty_page_without_vlm_renders_png_for_ocr_fallback(self) -> None:
+        from app.integrations.ocr.protocol import OCRProtocol, OCRResult, OCRTextBlock
+
+        class _ImageOnlyOCR(OCRProtocol):
+            def __init__(self) -> None:
+                self.image_calls = 0
+
+            def recognize_image(self, image_bytes: bytes) -> OCRResult:
+                self.image_calls += 1
+                assert image_bytes.startswith(_PNG_MAGIC)
+                text = "目标函数为 $\\min \\frac{1}{2}\\|w\\|^2 + C \\sum_{i=1}^n \\xi_i$。"
+                return OCRResult(full_text=text, blocks=(OCRTextBlock(text=text, confidence=0.95),))
+
+        pdf = _make_pdf(1)
+        ocr = _ImageOnlyOCR()
+        dirty = PdfPageExtraction(
+            page_number=1,
+            text="目标函数：min 1/2 ||w||^2 + C ☒ ξ_i",
+            lacks_tounicode_symbol_font=False,
+            has_symbol_garble=True,
+            suspicious_fragments=("C ☒ ξ",),
+        )
+        paragraphs, full_text = repair_garbled_pdf_pages(
+            [dirty],
+            pdf,
+            ocr=ocr,
+            llm=None,
+            vlm=None,
+        )
+        assert ocr.image_calls == 1
+        assert "\\sum_{i=1}^n" in full_text
+        assert "☒" not in full_text
+        assert len(paragraphs) == 1
+
+    def test_denoise_pptx_slides_filters_template_slides(self) -> None:
+        from app.services._material_pipeline import denoise_pptx_slides
+
+        raw = [
+            ParagraphInput(
+                "机器学习\n主讲人：李老师", "第 1 页", "pptx", is_title=True, page_number=1
+            ),
+            ParagraphInput("目录", "第 2 页", "pptx", is_title=True, page_number=2),
+            ParagraphInput(
+                "1. 概念\n2. 推导\n3. 总结", "第 2 页", "pptx", is_title=False, page_number=2
+            ),
+            ParagraphInput("核心定理", "第 3 页", "pptx", is_title=True, page_number=3),
+            ParagraphInput(
+                "拉格朗日对偶将原始带约束凸优化转化为对偶变量的无约束最大化问题，满足 KKT 条件。",
+                "第 3 页",
+                "pptx",
+                is_title=False,
+                page_number=3,
+            ),
+            ParagraphInput("谢谢！", "第 4 页", "pptx", is_title=False, page_number=4),
+        ]
+        denoised, text = denoise_pptx_slides(raw)
+        assert "谢谢" not in text
+        assert "目录" not in text
+        assert [(p.page_number, p.is_title, p.text) for p in denoised] == [
+            (3, True, "核心定理"),
+            (
+                3,
+                False,
+                "拉格朗日对偶将原始带约束凸优化转化为对偶变量的无约束最大化问题，满足 KKT 条件。",
+            ),
+        ]

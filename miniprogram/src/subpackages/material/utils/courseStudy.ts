@@ -105,8 +105,74 @@ export function hasStructuredContent(
     sc.core_summary?.trim()
     || sc.key_takeaways?.length
     || sc.key_formulas?.length
-    || sc.boundary_notes?.length,
+    || sc.derivation_steps?.length
+    || sc.boundary_notes?.length
+    || sc.common_mistakes?.length,
   )
+}
+
+export function formatSnippetPageRange(
+  pageIndex: number | null | undefined,
+  pageEnd?: number | null,
+): string {
+  const start = typeof pageIndex === 'number' && Number.isFinite(pageIndex) && pageIndex >= 1
+    ? Math.floor(pageIndex)
+    : 1
+  if (typeof pageEnd === 'number' && Number.isFinite(pageEnd) && Math.floor(pageEnd) > start) {
+    return `第 ${start}–${Math.floor(pageEnd)} 页`
+  }
+  return `第 ${start} 页`
+}
+
+function hasUnclosedMath(prefix: string): boolean {
+  let inDisplay = false
+  let inInline = false
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (prefix[i] === '\\') {
+      i += 1
+      continue
+    }
+    if (prefix[i] === '$') {
+      if (prefix.startsWith('$$', i)) {
+        if (!inInline) inDisplay = !inDisplay
+        i += 1
+      } else if (!inDisplay) {
+        inInline = !inInline
+      }
+    }
+  }
+  return inDisplay || inInline
+}
+
+export function trimSnippetExcerpt(
+  raw: string | null | undefined,
+  maxChars = 240,
+): { text: string; truncated: boolean } {
+  const content = (raw ?? '').trim()
+  if (!content || maxChars <= 0 || content.length <= maxChars) {
+    return { text: content, truncated: false }
+  }
+  const limit = Math.max(1, maxChars - 1)
+  const minCut = Math.floor(limit * 0.4)
+  const findSafeCut = (lo: number, chars: string): number | null => {
+    for (let i = limit - 1; i >= lo; i -= 1) {
+      if (chars.includes(content[i]) && !hasUnclosedMath(content.slice(0, i + 1))) {
+        return i + 1
+      }
+    }
+    return null
+  }
+  let cut = findSafeCut(minCut, '。！？!?\n')
+    ?? findSafeCut(minCut, '，；、,;')
+    ?? findSafeCut(0, '。！？!?\n')
+  if (cut === null) {
+    cut = limit
+    while (cut > 0 && hasUnclosedMath(content.slice(0, cut))) {
+      cut -= 1
+    }
+    if (cut === 0) cut = limit
+  }
+  return { text: `${content.slice(0, cut).trimEnd()}…`, truncated: true }
 }
 
 export function stripInlineMarkdownAndMath(raw: string | null | undefined): string {

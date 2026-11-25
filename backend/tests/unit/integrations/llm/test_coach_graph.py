@@ -185,6 +185,6 @@ def test_coach_graph_uses_conversational_prompt_and_bounded_options() -> None:
     assert "150~260" in system_prompt
     assert "一、二、三、" in system_prompt
     assert options.temperature == 0.45
-    assert options.max_tokens == 900
+    assert options.max_tokens == 4096
     reply_desc = CoachDraft.model_fields["reply"].description or ""
     assert "150-260" in reply_desc

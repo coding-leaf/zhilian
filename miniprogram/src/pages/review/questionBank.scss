@@ -213,22 +213,6 @@
   color: var(--color-correct);
 }
 
-.bank-pending-badge {
-  width: 72rpx;
-  height: 40rpx;
-  border-radius: 8rpx;
-  background: var(--color-warning-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.bank-pending-text {
-  font-size: 20rpx;
-  color: var(--color-warm-amber);
-}
-
 .bank-question-body {
   flex: 1;
   min-width: 0;
@@ -297,14 +281,51 @@
   margin-top: 2rpx;
 }
 
-.bank-pending-hint {
-  display: block;
-  font-size: 22rpx;
-  color: var(--color-ink-muted);
-  padding: 16rpx 0 4rpx;
-}
-
 .bank-action-card {
   margin-top: 8rpx;
   margin-bottom: 20rpx;
+}
+
+.bank-view-tabs {
+  display: flex;
+  gap: 10rpx;
+  padding: 6rpx;
+  margin-bottom: 20rpx;
+  background: var(--color-paper-card);
+  border: 1px solid var(--color-paper-border);
+  border-radius: 12rpx;
+}
+
+.bank-view-tab {
+  flex: 1;
+  text-align: center;
+  padding: 12rpx 8rpx;
+  border-radius: 8rpx;
+}
+
+.bank-view-tab.active {
+  background: var(--color-academic-blue);
+}
+
+.bank-view-tab-text {
+  font-size: 23rpx;
+  font-weight: 600;
+  color: var(--color-ink-secondary);
+}
+
+.bank-view-tab.active .bank-view-tab-text {
+  color: var(--color-ink-on-primary);
+}
+
+.bank-collect-btn {
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  border: 1px solid var(--color-border-slate);
+  background: var(--color-teal-bg);
+}
+
+.bank-collect-text {
+  font-size: 20rpx;
+  color: var(--color-teal-dark);
+  font-weight: 600;
 }

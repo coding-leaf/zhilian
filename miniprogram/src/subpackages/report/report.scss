@@ -121,6 +121,12 @@
   height: 76rpx;
   font-size: 26rpx;
   background: var(--color-orange);
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .report-container .section-title {
@@ -426,6 +432,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .regrade-action-btn {
@@ -462,6 +474,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
+}
+
+.modal-cancel-btn,
+.modal-confirm-btn {
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .secondary-bar-btn {

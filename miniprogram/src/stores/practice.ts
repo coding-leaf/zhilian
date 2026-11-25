@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type {
+  PracticeListQuery,
   PracticeSession,
   QuestionItem,
   RegradeResponse,
@@ -17,7 +18,6 @@ import {
   apiSelfEvaluate,
   apiListPractices,
   buildAttemptResults,
-  type CoverageResult,
   type CreatePracticeParams,
 } from '@/api'
 import { createDraftQueue } from '@/utils/draftQueue'
@@ -28,26 +28,22 @@ import {
   readPracticeDraft,
   writePracticeDraft,
 } from '@/utils/practiceHelpers'
-import { regenerateWrongPractice } from '@/utils/questionGeneration'
 import { useAuthStore } from './auth'
 
 export { isAnswered }
-
-export interface RegenerateScope {
-  folderId?: string
-  materialId?: string
-}
-
-export interface RegenerateResult {
-  session: PracticeSession
-  coverage: CoverageResult
-}
 
 function resolveUserId(): string {
   try {
     return useAuthStore().user?.id || 'anonymous'
   } catch {
     return 'anonymous'
+  }
+}
+
+function clearPracticeDraftWithFallback(userId: string, practiceId: string): void {
+  clearPracticeStorage(userId, practiceId)
+  if (userId !== 'anonymous') {
+    clearPracticeStorage('anonymous', practiceId)
   }
 }
 
@@ -58,6 +54,7 @@ export const usePracticeStore = defineStore('practice', () => {
   const isSubmitting = ref<boolean>(false)
   const isSavingDrafts = ref<boolean>(false)
   const draftFailures = ref<string[]>([])
+  const practiceTotal = ref<number>(0)
 
   const questions = computed<QuestionItem[]>(() => currentSession.value?.questions || [])
   const attemptResults = computed<AttemptResult[]>(() => buildAttemptResults(currentSession.value))
@@ -72,17 +69,18 @@ export const usePracticeStore = defineStore('practice', () => {
 
   const unansweredCount = computed<number>(() => questions.value.length - answeredCount.value)
 
-  // 逐题草稿写入队列：同题串行、失败可见、交卷前必须 flush 成功
+  // 逐题草稿写入队列：同题串行、代际隔离、静态绑定 practiceId、限流 <=2、静默不误杀前台 loading
   const draftQueue = createDraftQueue(
-    async (questionId, answer) => {
-      const practiceId = currentSession.value?.id
+    async (questionId, answer, boundPracticeId) => {
+      const practiceId = boundPracticeId || currentSession.value?.id
       if (!practiceId) return
-      await apiSavePracticeDraft(practiceId, questionId, answer)
+      await apiSavePracticeDraft(practiceId, questionId, answer, 0, { silentToast: true })
     },
     (state) => {
       isSavingDrafts.value = state.isPending
       draftFailures.value = state.failures.map((failure) => failure.questionId)
     },
+    { maxConcurrent: 2 },
   )
 
   // 1. 初始化或继续练习
@@ -111,12 +109,33 @@ export const usePracticeStore = defineStore('practice', () => {
     return currentSession.value
   }
 
-  // 2. 记录单题答案：本地即时持久化 + 队列异步写后台
-  const recordAnswer = (questionId: string, answer: unknown) => {
+  // 2a. 仅更新内存答案（供文本输入防抖路径立即刷新 UI 与答题卡进度）
+  const setLocalAnswer = (questionId: string, answer: unknown) => {
     userAnswers.value = { ...userAnswers.value, [questionId]: answer }
+  }
+
+  // 2b. 将单题答案持久化到本地并静态绑定 practiceId 推入后台草稿队列
+  const persistDraftAnswer = (
+    questionId: string,
+    answer?: unknown,
+    boundPracticeId?: string,
+  ) => {
+    const practiceId = boundPracticeId || currentSession.value?.id
+    if (!practiceId) return
+    const resolvedAnswer = answer !== undefined ? answer : userAnswers.value[questionId]
+    const answersSnapshot =
+      answer !== undefined && userAnswers.value[questionId] !== answer
+        ? { ...userAnswers.value, [questionId]: answer }
+        : userAnswers.value
+    writePracticeDraft(resolveUserId(), practiceId, answersSnapshot)
+    draftQueue.enqueue(questionId, resolvedAnswer, practiceId)
+  }
+
+  // 2c. 记录单题答案：本地即时持久化 + 队列异步写后台
+  const recordAnswer = (questionId: string, answer: unknown) => {
+    setLocalAnswer(questionId, answer)
     if (currentSession.value) {
-      writePracticeDraft(resolveUserId(), currentSession.value.id, userAnswers.value)
-      draftQueue.enqueue(questionId, answer)
+      persistDraftAnswer(questionId, answer, currentSession.value.id)
     }
   }
 
@@ -138,7 +157,7 @@ export const usePracticeStore = defineStore('practice', () => {
       await apiSubmitPractice(practiceId, confirmUnanswered, submitKey)
       const session = await apiGetPracticeSession(practiceId)
       currentSession.value = session
-      clearPracticeStorage(resolveUserId(), practiceId)
+      clearPracticeDraftWithFallback(resolveUserId(), practiceId)
       return session
     } finally {
       isSubmitting.value = false
@@ -171,22 +190,14 @@ export const usePracticeStore = defineStore('practice', () => {
     return res
   }
 
-  // 5. 错题自适应一键再生题：限定单一课程或未分类资料范围
-  const regenerateFromWrongPoints = async (
-    knowledgePointIds: string[],
-    scope: RegenerateScope,
-  ): Promise<RegenerateResult> => {
-    const result = await regenerateWrongPractice(knowledgePointIds, scope)
-    currentSession.value = result.session
-    currentIndex.value = 0
-    userAnswers.value = {}
-    draftQueue.reset()
-    return result
-  }
-
-  // 6. 查询本人练习列表：学情页恢复未完成练习与打开历史报告
-  const loadPractices = async (status?: string, limit = 20) => {
-    const res = await apiListPractices({ status, limit })
+  // 5. 查询本人练习列表：学情页恢复未完成练习与打开历史报告
+  const loadPractices = async (statusOrQuery?: string | PracticeListQuery, limit = 20) => {
+    const query: PracticeListQuery =
+      typeof statusOrQuery === 'object' && statusOrQuery !== null
+        ? statusOrQuery
+        : { status: statusOrQuery, limit }
+    const res = await apiListPractices(query)
+    practiceTotal.value = res.total ?? (res.items?.length || 0)
     return res.items || []
   }
 
@@ -202,6 +213,22 @@ export const usePracticeStore = defineStore('practice', () => {
     if (index >= 0 && index < questions.value.length) currentIndex.value = index
   }
 
+  // 6. 登出/切账号重置会话与草稿队列，清理匿名草稿兜底键
+  const resetState = () => {
+    const activePracticeId = currentSession.value?.id
+    draftQueue.reset()
+    if (activePracticeId) {
+      clearPracticeStorage('anonymous', activePracticeId)
+    }
+    currentSession.value = null
+    currentIndex.value = 0
+    userAnswers.value = {}
+    isSubmitting.value = false
+    isSavingDrafts.value = false
+    draftFailures.value = []
+    practiceTotal.value = 0
+  }
+
   return {
     currentSession,
     currentIndex,
@@ -209,6 +236,7 @@ export const usePracticeStore = defineStore('practice', () => {
     isSubmitting,
     isSavingDrafts,
     draftFailures,
+    practiceTotal,
     questions,
     attemptResults,
     currentQuestion,
@@ -216,16 +244,19 @@ export const usePracticeStore = defineStore('practice', () => {
     unansweredCount,
     initPractice,
     refreshSession,
+    setLocalAnswer,
+    persistDraftAnswer,
     recordAnswer,
     retryAllDrafts,
     submit,
     requestRegrade,
     retryGrading,
     selfEvaluate,
-    regenerateFromWrongPoints,
     loadPractices,
     nextQuestion,
     prevQuestion,
     jumpTo,
+    resetState,
+    reset: resetState,
   }
 })

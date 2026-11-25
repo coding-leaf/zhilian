@@ -10,8 +10,57 @@
  * 本模块通过引用计数保证 1:1 严格配对，并在 `finally` 内优先关闭 Loading 后再抛错或弹 Toast。
  */
 
+import { RequestError } from './requestError'
+
 let activeLoadingCount = 0
 let isNativeLoadingVisible = false
+
+export type SafeToastIcon = 'none' | 'success' | 'error' | 'loading'
+
+export interface SafeToastOptions {
+  title: string
+  icon?: SafeToastIcon
+  duration?: number
+  mask?: boolean
+}
+
+const WECHAT_ICON_TOAST_MAX_CHARS = 7
+
+/**
+ * 提取面向终端用户的安全错误提示文案：
+ * - 优先读取 `RequestError.userMessage`，绝不把 `[METHOD http://...]` 等内部调试 URL 泄露到 Toast；
+ * - 对普通 Error / 字符串也会剥离潜在的 URL 片段；
+ * - 为空时回落至 `fallback`。
+ */
+export function extractUserErrorMessage(
+  err: unknown,
+  fallback: string = '操作失败，请重试',
+): string {
+  if (err instanceof RequestError) {
+    return err.userMessage || fallback
+  }
+
+  let raw = ''
+  if (err && typeof err === 'object') {
+    const maybeUserMessage = (err as { userMessage?: unknown }).userMessage
+    if (typeof maybeUserMessage === 'string' && maybeUserMessage.trim()) {
+      return maybeUserMessage.trim()
+    }
+    const maybeMessage = (err as { message?: unknown }).message
+    if (typeof maybeMessage === 'string') {
+      raw = maybeMessage
+    }
+  } else if (typeof err === 'string') {
+    raw = err
+  }
+
+  const sanitized = raw
+    .replace(/\s*\[[A-Z]+\s+https?:\/\/[^\]]+\]\s*$/i, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .trim()
+
+  return sanitized || fallback
+}
 
 export function isBlockingLoadingActive(): boolean {
   return isNativeLoadingVisible
@@ -28,14 +77,40 @@ export function dismissBlockingLoading(): void {
 }
 
 /**
- * 安全弹出 Toast：若 Loading 仍在展示中，先关闭 Loading 再弹 Toast，防止相互顶掉。
+ * 安全弹出 Toast：
+ * 1. 若 Loading 仍在展示中，先关闭 Loading 再弹 Toast，防止单槽位相互顶掉；
+ * 2. 微信小程序带图标（`success`/`error`/`loading`）Toast 最多显示 7 个汉字，
+ *    超过 7 字时自动降级为 `icon: 'none'`（支持 2 行完整展示）以防真机强截断。
  */
 export function safeShowToast(
-  title: string,
-  icon: 'none' | 'success' | 'error' = 'none',
+  titleOrOptions: string | SafeToastOptions,
+  icon: SafeToastIcon = 'none',
 ): void {
+  const options: SafeToastOptions =
+    typeof titleOrOptions === 'string'
+      ? { title: titleOrOptions, icon }
+      : titleOrOptions
+
+  const title = options.title || ''
+  const requestedIcon: SafeToastIcon = options.icon ?? 'none'
+  const resolvedIcon: SafeToastIcon =
+    requestedIcon !== 'none' && Array.from(title.trim()).length > WECHAT_ICON_TOAST_MAX_CHARS
+      ? 'none'
+      : requestedIcon
+
   dismissBlockingLoading()
-  uni.showToast({ title, icon })
+
+  const toastPayload: UniApp.ShowToastOptions = {
+    title,
+    icon: resolvedIcon,
+  }
+  if (options.duration !== undefined) {
+    toastPayload.duration = options.duration
+  }
+  if (options.mask !== undefined) {
+    toastPayload.mask = options.mask
+  }
+  uni.showToast(toastPayload)
 }
 
 /**

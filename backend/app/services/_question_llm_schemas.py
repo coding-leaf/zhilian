@@ -101,18 +101,122 @@ def _normalize_llm_options(raw_options: Any) -> Any:
     return normalized
 
 
-def _normalize_llm_answer(raw_answer: Any) -> str:
+_CHOICE_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^[(\[（]?\s*([A-Za-z])\s*(?:[)\]）.、:：]|\s+(?![,;&]))\s*\S+"
+)
+_TRUE_BOOL_STRS: frozenset[str] = frozenset(
+    {"TRUE", "T", "1", "YES", "Y", "对", "正确", "是", "V", "√"}
+)
+_FALSE_BOOL_STRS: frozenset[str] = frozenset(
+    {"FALSE", "F", "0", "NO", "N", "错", "错误", "否", "X", "×"}
+)
+
+
+def _build_option_content_map(options: Any) -> dict[str, str]:
+    """构建选项正文小写文本到选项字母键的反向映射。"""
+    if not isinstance(options, list):
+        return {}
+    mapping: dict[str, str] = {}
+    for opt in options:
+        if isinstance(opt, dict):
+            key = str(opt.get("key", "")).strip().upper()
+            content = str(opt.get("content", "")).strip().lower()
+            if key and content:
+                mapping[content] = key
+    return mapping
+
+
+def _extract_choice_key(segment: str, option_map: dict[str, str]) -> str | None:
+    """从单个选项片段（如 'A. 最大间隔' / '(A)' / '选项 A' / 选项正文）中提取选项字母键。"""
+    cleaned = re.sub(r"^(?:正确)?(?:选项|答案)\s*[:：]?\s*", "", segment.strip()).strip()
+    if not cleaned:
+        return None
+    exact = _OPTION_KEY_TOKEN_RE.match(cleaned)
+    if exact:
+        return exact.group(1).upper()
+    prefixed = _CHOICE_PREFIX_RE.match(cleaned)
+    if prefixed:
+        return prefixed.group(1).upper()
+    return option_map.get(cleaned.lower())
+
+
+def _normalize_choice_answer_text(
+    text: str,
+    *,
+    question_type: str,
+    option_map: dict[str, str],
+) -> str:
+    """规范化单选/多选题答案字符串，剥离多余前缀与选项正文。"""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+
+    if question_type == "single_choice":
+        # 保留明确的多答案格式（如 "A, B" / "A、B"），以便下游规则校验拦截多选单答冲突。
+        multi_tokens = [tok for tok in re.split(r"[,;、\s|]+", stripped) if tok.strip()]
+        matched_multi = [_OPTION_KEY_TOKEN_RE.match(tok) for tok in multi_tokens]
+        if len(multi_tokens) > 1 and all(m is not None for m in matched_multi):
+            return ",".join(m.group(1).upper() for m in matched_multi if m is not None)
+        key = _extract_choice_key(stripped, option_map)
+        return key if key is not None else stripped
+
+    segments = [seg for seg in re.split(r"[,;；|\n]+", stripped) if seg.strip()]
+    if len(segments) == 1:
+        # 兼容 "A、B"（多键）vs "A、支持向量"（单键+正文）
+        sub_tokens = [tok for tok in re.split(r"[、\s]+", stripped) if tok.strip()]
+        matched_sub = [_OPTION_KEY_TOKEN_RE.match(tok) for tok in sub_tokens]
+        if len(sub_tokens) > 1 and all(m is not None for m in matched_sub):
+            return ",".join(m.group(1).upper() for m in matched_sub if m is not None)
+        key = _extract_choice_key(stripped, option_map)
+        return key if key is not None else stripped
+
+    resolved: list[str] = []
+    for seg in segments:
+        key = _extract_choice_key(seg, option_map)
+        if key is None:
+            return stripped
+        resolved.append(key)
+    return ",".join(resolved)
+
+
+def _normalize_llm_answer(
+    raw_answer: Any,
+    *,
+    question_type: str = "",
+    options: Any = None,
+) -> str:
     """将布尔/列表/数字/字符串形式的参考答案规整为统一纯字符串。"""
     if raw_answer is None:
         return "A"
     if isinstance(raw_answer, bool):
         return "正确" if raw_answer else "错误"
+
+    q_type = str(question_type).strip().lower()
+    option_map = _build_option_content_map(options)
+
     if isinstance(raw_answer, (list, tuple)):
         items = [str(x).strip() for x in raw_answer if x is not None and str(x).strip()]
+        if q_type in ("single_choice", "multiple_choice"):
+            extracted = [_extract_choice_key(item, option_map) for item in items]
+            if extracted and all(k is not None for k in extracted):
+                return ",".join(k for k in extracted if k is not None)
         if all(len(x) == 1 and x.isalpha() for x in items):
             return ",".join(x.upper() for x in items)
         return "; ".join(items) if len(items) > 1 else (items[0] if items else "")
-    return str(raw_answer).strip()
+
+    text = str(raw_answer).strip()
+    if q_type == "true_false":
+        upper = text.upper()
+        if upper in _TRUE_BOOL_STRS:
+            return "正确"
+        if upper in _FALSE_BOOL_STRS:
+            return "错误"
+        return text
+
+    if q_type in ("single_choice", "multiple_choice"):
+        return _normalize_choice_answer_text(text, question_type=q_type, option_map=option_map)
+
+    return text
 
 
 def _clean_optional_rubric(raw_rubric: Any) -> Any:
@@ -233,7 +337,11 @@ class LLMGeneratedQuestionItem(BaseModel):
             raw_answer = (
                 d.get("correct_answer") if "correct_answer" in d else d.get("standard_answer")
             )
-        d["answer"] = _normalize_llm_answer(raw_answer)
+        d["answer"] = _normalize_llm_answer(
+            raw_answer,
+            question_type=str(d.get("question_type") or ""),
+            options=d.get("options"),
+        )
 
         if "grading_rubric" in d:
             d["grading_rubric"] = _clean_optional_rubric(d.get("grading_rubric"))

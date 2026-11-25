@@ -29,6 +29,7 @@ from app.api.deps.auth import get_current_user
 from app.api.deps.folder import get_folder_service
 from app.api.deps.material import get_material_service
 from app.api.deps.pagination import PaginationParams, get_pagination_params
+from app.api.v1._filters import parse_folder_filter
 from app.container import AppContainer
 from app.core.errors import MaterialInvalidError
 from app.core.security import generate_user_ref
@@ -113,34 +114,11 @@ def _read_upload_content_guarded(file: UploadFile, request: Request) -> bytes:
 
 
 def _parse_folder_filter(folder_id: str | None) -> tuple[uuid.UUID | None, bool]:
-    """解析课程过滤查询参数为 (课程主键, 是否未分类) 二元组。
-
-    ``__none__`` 表示仅返回未分类资料；合法的 UUID 字符串表示按课程过滤；
-    缺省或空串表示不按课程限定；非法格式抛出参数校验异常。
-
-    Args:
-        folder_id: 原始课程过滤查询参数。
-
-    Returns:
-        tuple[uuid.UUID | None, bool]: (课程主键, 是否未分类)。
-
-    Raises:
-        MaterialInvalidError: 课程过滤参数格式非法 (HTTP 400)。
-    """
-    if folder_id is None:
-        return None, False
-    trimmed = folder_id.strip()
-    if not trimmed:
-        return None, False
-    if trimmed == "__none__":
-        return None, True
-    try:
-        return uuid.UUID(trimmed), False
-    except ValueError as exc:
-        raise MaterialInvalidError(
-            "课程过滤参数格式非法",
-            details={"folder_id": trimmed},
-        ) from exc
+    """解析课程过滤查询参数为 (课程主键, 是否未分类) 二元组 (materials 兼容 400)。"""
+    return parse_folder_filter(
+        folder_id,
+        invalid_status_code=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 def run_material_pipeline_background(

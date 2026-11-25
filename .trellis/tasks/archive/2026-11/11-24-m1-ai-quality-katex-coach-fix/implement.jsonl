@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "校验纯函数算法层(core/algorithms)与服务层分层边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验迁移 0013 可逆性、短事务与多租户过滤"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验 LLMResponseFormatError 脱敏与降级策略"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验后端 ruff/mypy/import-linter/pytest 覆盖率门禁"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "严守零动态 import()、es2018、无非法 WXSS 选择器与 <=60s 超时"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "校验 request.ts 401 守卫与超时契约"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "校验 SFC <=300 行、零裸 Hex、零 Emoji、styleIsolation"}
+{"file": ".trellis/tasks/11-24-product-ux-quality-upgrade/research/01-autonomous-ai-quality-gate.md", "reason": "M1-A AI 自主质检与零待审核代码锚点"}
+{"file": ".trellis/tasks/11-24-product-ux-quality-upgrade/research/04-math-renderer-evaluation.md", "reason": "M1-B KaTeX AST 渲染器与自托管字体蓝图"}
+{"file": ".trellis/tasks/11-24-product-ux-quality-upgrade/research/05-intermittent-errors-and-ui-polish.md", "reason": "M1-C aliyun 502 与 AI 助教拒答/孤儿气泡锚点"}

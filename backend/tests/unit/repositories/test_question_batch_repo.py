@@ -158,7 +158,7 @@ class TestListQuestionBatches:
 
         assert [(row[0], row[1], row[2]) for row in rows] == [
             ("batch_b", 1, 1),
-            ("batch_a", 3, 2),
+            ("batch_a", 2, 2),
         ]
         # SQLite 不保留时区，取回的是朴素时间；按 UTC 归一后比较
         assert rows[1][3].replace(tzinfo=UTC) == base
@@ -195,7 +195,7 @@ class TestListQuestionBatches:
         by_batch = {row[0]: row for row in rows}
 
         assert None in by_batch, "batch_id IS NULL 的题目必须仍能被看到"
-        assert by_batch[None][1] == 2
+        assert by_batch[None][1] == 1
         assert by_batch[None][2] == 1
         assert repo.count_question_batches(user_id) == 2
 

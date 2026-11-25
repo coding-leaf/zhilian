@@ -681,3 +681,106 @@ Implemented P0-P2 RAG pipeline: PyMuPDF extraction & dirty-page SiliconFlow VLM 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复
+<!-- trellis-session: v=2 fp=21ade5f4fc0d2b46 -->
+
+**Date**: 2026-11-24
+**Task**: 错题异步化、初次生题极简提醒流、连接稳定性加固与5个P0硬Bug修复
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+4路Swarm调研与并行实施：(1)迁移0012+POST /questions/jobs自动建卷与幂等、前端清零同步错题生成；(2)初次生题与错题均改为只提醒不强跳、去双进度条与杂乱题库预览；(3)Redis/LLM/DB短事务/Worker单例与前端并发限流/401单飞刷新/silentToast加固；(4)修复生产登录鉴权后门、Commit-First竞态、退步知识点永空、自评重判诊断陈旧与draftQueue切题死锁；双端门禁全绿并沉淀规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f3e93a6` | feat(backend): 异步出题自动建卷、Commit-First 判题与诊断流水线修复 |
+| `1cc915e` | fix(backend): 连接稳定性加固与生产登录鉴权安全修复 |
+| `2462d59` | feat(miniprogram): 错题异步化、初次生题极简提醒流与网络韧性加固 |
+| `c70e145` | docs(spec): 更新数据库短事务/Commit-First 与前端网络/异步出题契约规范 |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 21: 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀
+<!-- trellis-session: v=2 fp=928844d9fbde66ec -->
+
+**Date**: 2026-11-24
+**Task**: 微信小程序兼容性专项审计、P0/P1修复与自动化门禁沉淀
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+3路并行审计源码与dist/mp-weixin编译产物并2路并行修复：(1)后端folders增补PUT别名、前端清零动态import()与PATCH、manifest隐私/60s超时/es2018编译/chooseMedia/safeNavigateTo/safeShowToast/loginWithWechat单飞；(2)浮层textarea:fixed/隐藏底层输入/填空缓冲、去WXSS[disabled]/补button::after/修双sticky/生命周期竞态与button:loading+:disabled配对；(3)新增mpWeixinCompatGuard.spec.ts自动化门禁并沉淀mp-weixin-compatibility.md，双端门禁与build:mp-weixin产物扫描全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c57b789` | feat(backend): 课程重命名接口增补 PUT 别名以兼容微信小程序 wx.request |
+| `94f7a35` | fix(miniprogram): 修复微信小程序编译产物、API、原生输入与 WXSS 兼容缺陷并新增静态门禁 |
+| `e995b4b` | docs(spec): 沉淀微信小程序兼容性规范 mp-weixin-compatibility.md |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 22: M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治
+<!-- trellis-session: v=2 fp=570ea44d59406e35 -->
+
+**Date**: 2026-11-24
+**Task**: M1：AI自主质检零待审核、KaTeX公式渲染器与502/AI助教报错根治
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+完成父任务11-24-product-ux-quality-upgrade的5路全量调研与M1里程碑3路并行实施：(1)修复中文数学题NO_SOURCE误杀+新增批量AI Judge/Repair+终态零pending_review+迁移0013软删历史待审核题+清理前端待审核UI；(2)引入katex@0.16.21 AST适配器与katex-mp.scss(.kt-s去span选择器)+FastAPI自托管40个KaTeX字体，退役旧手写公式转换器；(3)放宽deepseek-flash思考模型max_tokens(2048/4096)+结构化失败纯文本降级+修复助教孤儿气泡/快捷提问拒答/短噪声短电路/3处未登录401守卫。双端门禁与build:mp-weixin(主包674KB)全绿并沉淀规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `351e88c` | feat(backend): AI自主质检闭环、零pending_review与迁移0013 |
+| `0c303d1` | fix(backend): 适配思考模型助教502降级并托管KaTeX静态字体 |
+| `05b1657` | feat(miniprogram): 接入KaTeX公式渲染器、移除待审核UI并修复助教孤儿气泡与401守卫 |
+| `f4ee05f` | docs(spec): 沉淀KaTeX公式托管与AI自主质检/思考模型预算规范 |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 23: M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地
+<!-- trellis-session: v=2 fp=669823a623bb869a -->
+
+**Date**: 2026-11-25
+**Task**: M2 学情全量联动归类与PDF/PPT去噪切片复习知识卡落地
+**Branch**: `docs/readme-local-setup`
+
+### Summary
+
+Swarm 4轨并行落地M2：学情4 Tab课程全量联动过滤与自定义题单收藏夹（迁移0014）、PDF/PPT去噪切片与乱码VLM/OCR兜底、三层封杀元考点与考前复习级知识卡、跨页收纳抽屉与微信ignoreDevUnusedFiles配置固化；全量后端(92.29% cov)与前端(38 files/311 tests, 0 span warning)门禁通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a22902` | feat(backend): 学情4 Tab课程全量联动过滤与自定义题单收藏夹（迁移0014） |
+| `4fd53e0` | feat(backend): PDF/PPT去噪切片、乱码VLM/OCR兜底与复习级知识点卡片 |
+| `c57c143` | feat(miniprogram): 学情联动、题库三视图收纳抽屉与复习级知识卡 |
+| `e3df28e` | docs(spec): 沉淀M2课程过滤、题单API、知识卡与微信构建配置规范 |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 可按需生成PR文档或推进M3（Academic Editorial全站UI视觉精修）并归档父任务11-24-product-ux-quality-upgrade。

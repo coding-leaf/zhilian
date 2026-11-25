@@ -128,6 +128,12 @@ const parsing = computed(() => isMaterialParsing(props.item))
   background: var(--color-academic-blue);
   padding: 6rpx 20rpx;
   border-radius: 8rpx;
+  margin: 0;
+  line-height: 1.4;
+
+  &::after {
+    border: none;
+  }
 }
 
 .processing-hint {

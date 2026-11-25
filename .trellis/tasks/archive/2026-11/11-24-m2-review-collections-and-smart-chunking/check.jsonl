@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Verify import-linter 6-layer compliance and pure core/algorithms"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify Alembic 0014 migration SQLite+PG consistency and zero N+1"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify ruff complexity<=15, mypy strict, >=80% branch coverage"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Verify .vue<=300 lines, zero raw Hex, zero Emoji"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "Verify zero PATCH, zero dynamic import, zero span WXSS, safe-area"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Verify Wire* adapters and vue-tsc clean"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify backend/frontend field & filter parity"}

@@ -26,7 +26,10 @@ class KnowledgeTreeNodeResponse(BaseModel):
     description: str = Field(default="", description="知识点概念简述")
     structured_content: dict[str, Any] | None = Field(
         default=None,
-        description="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+        description=(
+            "知识点结构化内容 (core_summary/key_takeaways/key_formulas/"
+            "boundary_notes/可选 derivation_steps/common_mistakes)"
+        ),
     )
     sort_order: int = Field(default=0, description="资料内顺序序号")
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
@@ -68,7 +71,10 @@ class KnowledgePointDetailResponse(BaseModel):
     description: str = Field(default="", description="知识点概念简述")
     structured_content: dict[str, Any] | None = Field(
         default=None,
-        description="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+        description=(
+            "知识点结构化内容 (core_summary/key_takeaways/key_formulas/"
+            "boundary_notes/可选 derivation_steps/common_mistakes)"
+        ),
     )
     sort_order: int = Field(default=0, description="资料内顺序序号")
     level: int = Field(default=1, ge=1, le=5, description="知识点层级深度 1~5")
@@ -92,6 +98,7 @@ class SnippetSourceResponse(BaseModel):
     material_id: uuid.UUID = Field(..., description="归属资料主键")
     version_id: uuid.UUID = Field(..., description="归属版本标识")
     page_index: int = Field(default=1, ge=1, description="所在页码索引 (从 1 起算)")
+    page_end: int | None = Field(default=None, ge=1, description="跨页合并时的结束页码索引 (可选)")
     snippet_index: int = Field(..., ge=0, description="版本内连续切片序号")
     chapter_title: str = Field(default="", description="所属章节标题")
     content: str = Field(..., description="切片纯文本内容")
@@ -112,13 +119,24 @@ class SnippetSourceResponse(BaseModel):
             return data
 
         # 处理 ORM 实体
+        source_info = getattr(data, "source_info", None)
         page_index = getattr(data, "page_index", None)
         if page_index is None:
-            source_info = getattr(data, "source_info", None)
             if isinstance(source_info, dict):
                 page_index = source_info.get("page_number", source_info.get("page_index", 1))
             else:
                 page_index = 1
+
+        raw_page_end = getattr(data, "page_end", None)
+        if raw_page_end is None and isinstance(source_info, dict):
+            raw_page_end = source_info.get("page_end")
+        page_end: int | None = None
+        if (
+            isinstance(raw_page_end, int)
+            and not isinstance(raw_page_end, bool)
+            and raw_page_end >= 1
+        ):
+            page_end = raw_page_end
 
         content = getattr(data, "content", "")
         char_length = getattr(data, "char_length", None)
@@ -134,6 +152,7 @@ class SnippetSourceResponse(BaseModel):
             "char_length": char_length,
             "chapter_title": getattr(data, "chapter_title", "") or "",
             "page_index": page_index,
+            "page_end": page_end,
         }
 
 

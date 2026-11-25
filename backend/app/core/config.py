@@ -484,6 +484,23 @@ class AppSettings(BaseSettings):
         default=None,
         description="微信小程序 AppSecret",
     )
+    cors_allow_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="CORS 允许的来源白名单（含通配符 * 时自动关闭 allow_credentials）",
+    )
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _parse_cors_allow_origins(cls, value: Any) -> Any:
+        """支持逗号分隔字符串或字符串列表配置 CORS 白名单。"""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                return value
+            return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+        return value
 
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
@@ -552,3 +569,32 @@ def validate_secret_key(settings: AppSettings | None = None) -> None:
         "当前环境 (%s) 正在使用开发默认 JWT 密钥，生产部署前必须通过 ZHILIAN_SECRET_KEY 覆写。",
         resolved.env,
     )
+
+
+def validate_wechat_credentials(settings: AppSettings | None = None) -> None:
+    """校验生产环境微信登录凭据非空（启动期 fail-fast）。
+
+    生产环境若未配置 wechat_app_id 或 wechat_app_secret，必须中止启动，
+    防止回退到不安全的无凭据映射。
+
+    Args:
+        settings: 待校验配置，缺省使用 get_settings() 单例。
+
+    Raises:
+        RuntimeError: 当运行环境为 production 且微信凭据缺失时。
+    """
+    resolved = settings if settings is not None else get_settings()
+    if resolved.env != "production":
+        return
+
+    app_id = (resolved.wechat_app_id or "").strip()
+    app_secret = (
+        resolved.wechat_app_secret.get_secret_value().strip()
+        if resolved.wechat_app_secret is not None
+        else ""
+    )
+    if not app_id or not app_secret:
+        raise RuntimeError(
+            "生产环境安全校验失败: 缺少微信小程序登录凭据，"
+            "请通过环境变量 ZHILIAN_WECHAT_APP_ID 和 ZHILIAN_WECHAT_APP_SECRET 注入。"
+        )

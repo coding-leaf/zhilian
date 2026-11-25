@@ -9,8 +9,10 @@ from typing import Any
 from app.core.algorithms.question_quality import (
     CandidateQuestion,
     ExistingQuestionReference,
+    QualitySeverity,
+    QuestionQualityConfig,
     QuestionQualityReport,
-    filter_qualified_questions,
+    evaluate_single_question,
 )
 from app.core.algorithms.text_excerpt import trim_excerpt_cleanly
 from app.integrations.embedding.protocol import EmbeddingProtocol
@@ -22,6 +24,12 @@ from app.services._question_llm_schemas import (
     LLMGeneratedQuestionItem,
     LLMQuestionBatchOutput,
 )
+from app.services._question_quality_judge import (
+    FlaggedCandidateEntry,
+    judge_and_repair_candidates,
+)
+
+RETRY_TEMPERATURES: tuple[float, ...] = (0.3, 0.5, 0.65)
 
 
 @dataclass(frozen=True)
@@ -170,6 +178,7 @@ def build_generation_prompt(
     count: int,
     difficulty: int,
     feedback: str | None = None,
+    passed_stems: Sequence[str] | None = None,
 ) -> list[LLMMessage]:
     """构造大模型出题提示词上下文。"""
     system_content = (
@@ -201,10 +210,13 @@ def build_generation_prompt(
         "\n【参考资料切片正文】:",
         context_text,
     ]
+    if passed_stems:
+        stem_lines = "\n".join(f"- {stem[:80]}" for stem in passed_stems[:10])
+        user_parts.append("\n【已通过质检的题干摘要（严禁重复或换皮改写）】:\n" + stem_lines)
     if feedback:
         user_parts.append(
             f"\n【上一轮质检未通过反馈】:\n{feedback}\n"
-            "请特别注意修正上述缺陷，严格避免重复、缺乏实词依据或答案冲突！"
+            "请特别注意修正上述缺陷，严格避免重复、脱离资料或答案冲突！"
         )
     user_parts.append("\n请输出符合契约的结构化题目列表。")
 
@@ -313,6 +325,30 @@ def collect_quality_checks_by_question(
     return checks_map
 
 
+def _build_check_entities(
+    question_id: str,
+    check_items: Sequence[Any],
+    *,
+    user_id: uuid.UUID,
+    batch_id: str,
+) -> list[QuestionQualityCheck]:
+    """将单题预检结果明细列表转换为 QuestionQualityCheck ORM 实体。"""
+    q_uuid = uuid.UUID(question_id)
+    return [
+        QuestionQualityCheck(
+            user_id=user_id,
+            question_id=q_uuid,
+            batch_id=batch_id,
+            check_type=check_item.check_type.value,
+            is_passed=check_item.is_passed,
+            reason=check_item.reason,
+            similarity_score=check_item.similarity_score,
+            check_metadata=check_item.metadata,
+        )
+        for check_item in check_items
+    ]
+
+
 def run_question_generation_loop(
     *,
     llm: LLMProtocol,
@@ -326,7 +362,7 @@ def run_question_generation_loop(
     existing_refs: Sequence[ExistingQuestionReference],
     options: GenerateQuestionsOptions,
 ) -> GenerationLoopOutcome:
-    """执行大模型结构化出题、向量化、纯函数质检与失败反馈重抽循环。"""
+    """执行大模型结构化出题、确定性预检、批量 AI 裁判/修复与提温避重补抽循环。"""
     target_count = options.count
     retry_count = 0
     prompt_feedback: str | None = None
@@ -335,12 +371,15 @@ def run_question_generation_loop(
     candidate_checks_map: dict[str, list[QuestionQualityCheck]] = {}
     qualified_questions_list: list[CandidateQuestion] = []
     last_unqualified_questions: list[CandidateQuestion] = []
+    quality_config = QuestionQualityConfig()
+    cropped_existing = list(existing_refs[: quality_config.max_existing_questions_window])
 
     while retry_count <= options.max_retries:
         needed_count = target_count - len(qualified_questions_list)
         if needed_count <= 0:
             break
 
+        temperature = RETRY_TEMPERATURES[min(retry_count, len(RETRY_TEMPERATURES) - 1)]
         messages = build_generation_prompt(
             kp_name=kp_name,
             kp_description=kp_description,
@@ -349,11 +388,12 @@ def run_question_generation_loop(
             count=needed_count,
             difficulty=options.difficulty,
             feedback=prompt_feedback,
+            passed_stems=[q.stem for q in qualified_questions_list],
         )
         output, _ = llm.generate_structured(
             messages=messages,
             response_model=LLMQuestionBatchOutput,
-            options=LLMOptions(temperature=0.3),
+            options=LLMOptions(temperature=temperature),
         )
         generated_items = output.questions if output else []
         if not generated_items:
@@ -379,32 +419,69 @@ def run_question_generation_loop(
         for cand in attempt_candidates:
             candidate_questions_map[cand.question_id] = cand
 
-        report = filter_qualified_questions(
-            candidates=qualified_questions_list + attempt_candidates,
-            existing_questions=existing_refs,
-        )
-        candidate_checks_map.update(
-            collect_quality_checks_by_question(report, user_id=user_id, batch_id=batch_id)
-        )
-        qualified_questions_list = list(report.qualified_questions)
-        last_unqualified_questions = list(report.unqualified_questions)
+        attempt_prior: list[CandidateQuestion] = []
+        flagged_entries: list[FlaggedCandidateEntry] = []
+        for cand in attempt_candidates:
+            res, _ = evaluate_single_question(
+                cand,
+                cropped_existing,
+                [*qualified_questions_list, *attempt_prior],
+                quality_config,
+            )
+            attempt_prior.append(cand)
+            if res.severity == QualitySeverity.PASS:
+                qualified_questions_list.append(cand)
+                candidate_checks_map[cand.question_id] = _build_check_entities(
+                    cand.question_id,
+                    res.check_items,
+                    user_id=user_id,
+                    batch_id=batch_id,
+                )
+            else:
+                flagged_entries.append(
+                    FlaggedCandidateEntry(
+                        candidate=cand,
+                        precheck_result=res,
+                        llm_item=item_map[cand.question_id],
+                    )
+                )
+
+        round_reject_reasons: list[str] = []
+        if flagged_entries:
+            judge_res = judge_and_repair_candidates(
+                llm=llm,
+                embedding=embedding,
+                flagged_entries=flagged_entries,
+                existing_refs=cropped_existing,
+                prior_qualified=qualified_questions_list,
+                kp_name=kp_name,
+                kp_description=kp_description,
+                context_text=context_text,
+                snippet_metadata=snippet_metadata,
+                config=quality_config,
+                user_id=user_id,
+                batch_id=batch_id,
+            )
+            qualified_questions_list.extend(judge_res.approved_candidates)
+            candidate_items_map.update(judge_res.approved_items_map)
+            for acc in judge_res.approved_candidates:
+                candidate_questions_map[acc.question_id] = acc
+            candidate_checks_map.update(judge_res.checks_map)
+            last_unqualified_questions = judge_res.rejected_candidates
+            round_reject_reasons = judge_res.rejected_reasons
+        else:
+            last_unqualified_questions = []
 
         if len(qualified_questions_list) >= target_count:
             break
-        if retry_count >= options.max_retries or not last_unqualified_questions:
+        if retry_count >= options.max_retries:
             break
         retry_count += 1
-        unqualified_reasons = [
-            (
-                f"题型[{candidate_questions_map[res.question_id].question_type}]"
-                f"未通过原因: {res.unqualified_reason}"
-            )
-            for res in report.results
-            if not res.is_qualified
-            and res.unqualified_reason
-            and res.question_id in candidate_questions_map
-        ]
-        prompt_feedback = "；".join(unqualified_reasons[:3])
+        prompt_feedback = (
+            "；".join(round_reject_reasons[:3])
+            if round_reject_reasons
+            else "请严格依据资料切片补足剩余题量，避免与已通过题目重复。"
+        )
 
     return GenerationLoopOutcome(
         qualified_questions=qualified_questions_list,

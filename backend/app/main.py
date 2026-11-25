@@ -10,20 +10,41 @@
 - 提供结构化多组件健康检查端点 (GET /health)。
 """
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.v1 import api_v1_router
 from app.container import AppContainer
-from app.core.config import get_settings, validate_secret_key
+from app.core.config import (
+    AppSettings,
+    get_settings,
+    validate_secret_key,
+    validate_wechat_credentials,
+)
 from app.core.errors import AppError
+
+logger = logging.getLogger(__name__)
+
+
+def build_cors_options(settings: AppSettings) -> dict[str, Any]:
+    """按运行配置生成安全的 CORSMiddleware 参数（避免通配符与 credentials 混用）。"""
+    origins = list(settings.cors_allow_origins)
+    allow_wildcard = "*" in origins
+    return {
+        "allow_origins": origins,
+        "allow_credentials": bool(origins) and not allow_wildcard,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
 
 
 @asynccontextmanager
@@ -37,8 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     own_container = False
     if container is None:
         settings = get_settings()
-        # 生产环境使用开发默认密钥时启动期 fail-fast（安全基线红线）
+        # 生产环境使用开发默认密钥或缺失微信登录凭据时启动期 fail-fast（安全基线红线）
         validate_secret_key(settings)
+        validate_wechat_credentials(settings)
         container = AppContainer.create_from_settings(settings)
         app.state.container = container
         own_container = True
@@ -79,13 +101,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 允许跨域（本地开发、小程序与真机调试）
+# 允许跨域（按环境配置白名单，通配符模式自动关闭 allow_credentials）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **build_cors_options(get_settings()),
 )
 
 
@@ -115,8 +134,69 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """全局兜底未捕获异常处理器：记录结构化堆栈并返回脱敏 JSON 500。"""
+    logger.exception(
+        "unhandled server exception",
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "error_code": 50000,
+            "exception_type": type(exc).__name__,
+        },
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "code": 50000,
+            "message": "服务暂时繁忙，请稍后重试",
+            "details": {},
+        },
+    )
+
+
 # 挂载 API v1 路由总线
 app.include_router(api_v1_router)
+
+_KATEX_FONTS_DIR = (Path(__file__).resolve().parent / "static" / "fonts" / "katex").resolve()
+_ALLOWED_FONT_MEDIA_TYPES: dict[str, str] = {
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+}
+_FONT_CACHE_HEADERS: dict[str, str] = {
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin": "*",
+}
+
+
+@app.get(
+    "/static/fonts/katex/{font_path:path}",
+    tags=["static"],
+    include_in_schema=False,
+)
+async def serve_katex_font(font_path: str) -> FileResponse:
+    """只读提供自托管 KaTeX 数学字体（.woff2 / .ttf），带强缓存与路径穿越防护。"""
+    if (
+        not font_path
+        or "/" in font_path
+        or "\\" in font_path
+        or "\x00" in font_path
+        or ".." in font_path
+        or font_path.startswith(".")
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    suffix = Path(font_path).suffix.lower()
+    media_type = _ALLOWED_FONT_MEDIA_TYPES.get(suffix)
+    if media_type is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    target = (_KATEX_FONTS_DIR / font_path).resolve()
+    if not target.is_relative_to(_KATEX_FONTS_DIR) or not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Font not found")
+
+    return FileResponse(path=target, media_type=media_type, headers=_FONT_CACHE_HEADERS)
 
 
 @app.get("/health", tags=["system"], summary="服务健康检查")

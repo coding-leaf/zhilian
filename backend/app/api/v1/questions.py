@@ -9,13 +9,14 @@
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request, status
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, status
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.pagination import PaginationParams, get_pagination_params
 from app.api.deps.question import get_question_service
+from app.api.v1._filters import parse_folder_filter
 from app.models.user import User
 from app.schemas.question import (
     AskCoachRequest,
@@ -28,8 +29,10 @@ from app.schemas.question import (
     QuestionEditLogResponse,
     QuestionGenerateRequest,
     QuestionGenerateResponse,
+    QuestionGenerationJobCreateRequest,
     QuestionGenerationJobListResponse,
     QuestionGenerationJobResponse,
+    QuestionGroupedSummaryResponse,
     QuestionListResponse,
     QuestionQualityCheckResponse,
     QuestionUpdateRequest,
@@ -120,7 +123,8 @@ def _build_generate_response(
     "/questions/generate",
     response_model=QuestionGenerateResponse,
     status_code=status.HTTP_200_OK,
-    summary="触发出题生成与质检门禁",
+    deprecated=True,
+    summary="触发出题生成与质检门禁（已废弃，请改用 POST /questions/jobs）",
 )
 def generate_questions(
     user: Annotated[User, Depends(get_current_user)],
@@ -211,10 +215,18 @@ def generate_questions(
 def create_question_generation_job(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
-    payload: Annotated[QuestionGenerateRequest, Body(description="异步出题配置请求体")],
+    payload: Annotated[QuestionGenerationJobCreateRequest, Body(description="异步出题配置请求体")],
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", description="可选幂等键，用于防重入与复用同源任务"),
+    ] = None,
 ) -> QuestionGenerationJobResponse:
     """创建后台异步出题任务并入队调度，立即返回 queued 状态任务凭证。"""
-    job = question_service.create_generation_job(user_id=user.id, payload=payload)
+    job = question_service.create_generation_job(
+        user_id=user.id,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
     return QuestionGenerationJobResponse.model_validate(job)
 
 
@@ -269,33 +281,63 @@ def get_question_generation_job(
 def list_question_batches(
     user: Annotated[User, Depends(get_current_user)],
     question_service: Annotated[QuestionService, Depends(get_question_service)],
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程文件夹过滤 ('__none__' 表示未分类)"),
+    ] = None,
+    unclassified: Annotated[bool, Query(description="仅未分类资料批次")] = False,
     page: Annotated[int, Query(ge=1, description="当前页码，从 1 开始")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页批次数")] = 20,
 ) -> QuestionBatchListResponse:
-    """按 batch_id 服务端聚合分页返回本人的题目批次摘要。
+    """按 batch_id 服务端聚合分页返回本人的题目批次摘要。"""
+    resolved_folder_id, is_unclassified = parse_folder_filter(
+        folder_id,
+        unclassified=unclassified,
+    )
+    filter_kwargs: dict[str, Any] = {}
+    if resolved_folder_id is not None:
+        filter_kwargs["folder_id"] = resolved_folder_id
+    if is_unclassified:
+        filter_kwargs["unclassified"] = True
 
-    本路由**必须**注册在 ``/questions/{id}`` 之前：FastAPI 按注册顺序匹配，
-    否则 ``batches`` 会被 ``{id}`` 捕获并按 UUID 解析失败返回 422。
-
-    Args:
-        user: 当前已认证登录租户用户对象。
-        question_service: 题目领域编排服务。
-        page: 页码。
-        page_size: 每页批次数，上限 100。
-
-    Returns:
-        QuestionBatchListResponse: 批次摘要分页列表及真实批次总数。
-    """
     items, total = question_service.list_question_batches(
         user_id=user.id,
         page=page,
         page_size=page_size,
+        **filter_kwargs,
     )
     return QuestionBatchListResponse(
         items=items,
         total=total,
         limit=page_size,
         offset=max(page - 1, 0) * page_size,
+    )
+
+
+@router.get(
+    "/questions/grouped-summary",
+    response_model=QuestionGroupedSummaryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="按讲义与考点聚合查询题库摘要",
+)
+def get_question_grouped_summary(
+    user: Annotated[User, Depends(get_current_user)],
+    question_service: Annotated[QuestionService, Depends(get_question_service)],
+    folder_id: Annotated[
+        str | None,
+        Query(description="课程文件夹过滤 ('__none__' 表示未分类)"),
+    ] = None,
+    unclassified: Annotated[bool, Query(description="仅未分类资料")] = False,
+) -> QuestionGroupedSummaryResponse:
+    """按讲义与考点聚合返回当前课程范围的可用题量（注册于 /questions/{id} 之前）。"""
+    resolved_folder_id, is_unclassified = parse_folder_filter(
+        folder_id,
+        unclassified=unclassified,
+    )
+    return question_service.get_grouped_summary(
+        user_id=user.id,
+        folder_id=resolved_folder_id,
+        unclassified=is_unclassified,
     )
 
 
@@ -402,7 +444,11 @@ def list_questions(
     question_service: Annotated[QuestionService, Depends(get_question_service)],
     pagination: Annotated[PaginationParams, Depends(get_pagination_params)],
     material_id: Annotated[uuid.UUID | None, Query(description="按学习资料标识过滤")] = None,
-    folder_id: Annotated[uuid.UUID | None, Query(description="按课程文件夹标识过滤")] = None,
+    folder_id: Annotated[
+        str | None,
+        Query(description="按课程文件夹标识过滤 ('__none__' 表示未分类)"),
+    ] = None,
+    unclassified: Annotated[bool, Query(description="仅未分类资料题目")] = False,
     knowledge_point_id: Annotated[uuid.UUID | None, Query(description="按知识点标识过滤")] = None,
     question_type: Annotated[str | None, Query(description="按题型过滤")] = None,
     difficulty: Annotated[int | None, Query(ge=1, le=5, description="按难度系数 1~5 过滤")] = None,
@@ -435,11 +481,18 @@ def list_questions(
         QuestionListResponse: 分页题目列表及总数。
     """
     effective_status = review_status if review_status is not None else status_filter
+    resolved_folder_id, is_unclassified = parse_folder_filter(
+        folder_id,
+        unclassified=unclassified,
+    )
+    extra_kwargs: dict[str, Any] = {}
+    if is_unclassified:
+        extra_kwargs["unclassified"] = True
 
     items, total = question_service.list_questions(
         user_id=user.id,
         material_id=material_id,
-        folder_id=folder_id,
+        folder_id=resolved_folder_id,
         knowledge_point_id=knowledge_point_id,
         question_type=question_type,
         difficulty=difficulty,
@@ -450,6 +503,7 @@ def list_questions(
         page_size=pagination.limit,
         limit=pagination.limit,
         offset=pagination.offset,
+        **extra_kwargs,
     )
     list_items = [QuestionDetailResponse.model_validate(q) for q in items]
     question_service.attach_source_snippets(list_items, user_id=user.id)

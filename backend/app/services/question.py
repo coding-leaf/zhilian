@@ -24,18 +24,23 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.algorithms.question_quality import (
     ExistingQuestionReference,
     extract_keywords,
+    strip_latex_commands,
 )
 from app.core.algorithms.text_excerpt import trim_excerpt_cleanly
 from app.core.config import RerankSettings
 from app.core.errors import (
+    AppError,
+    EmbeddingAuthError,
     FolderNotFoundError,
     KnowledgeNotFoundError,
+    LLMAuthError,
     MaterialNotFoundError,
     MissingSourceSnippetError,
     QuestionGenerationJobNotFoundError,
     QuestionNotFoundError,
     SearchError,
 )
+from app.core.idempotency import validate_idempotency_key
 from app.core.security import generate_user_ref
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.coach_graph import CoachGraphConfig, run_coach_graph
@@ -62,6 +67,7 @@ from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
 from app.schemas.material import SourceSnippetDTO
 from app.schemas.question import (
+    MAX_ASYNC_GENERATION_QUESTIONS,
     AskCoachHistoryItem,
     AskCoachResponse,
     CoachSourceResponse,
@@ -69,6 +75,10 @@ from app.schemas.question import (
     QuestionBatchSummaryResponse,
     QuestionDetailResponse,
     QuestionGenerateRequest,
+    QuestionGenerationJobCreateRequest,
+    QuestionGroupedKnowledgePointDTO,
+    QuestionGroupedMaterialDTO,
+    QuestionGroupedSummaryResponse,
     ScopedCoachResponse,
 )
 from app.services._coach_context import build_overview_context, pick_suggested_topics
@@ -135,6 +145,57 @@ def _is_in_memory_sqlite(session: Session) -> bool:
     return ":memory:" in url_str
 
 
+def _is_retryable_generation_error(exc: Exception) -> bool:
+    """区分可由 RQ 重试的基础设施瞬时异常与不可重试的业务/参数异常。"""
+    if isinstance(exc, (LLMAuthError, EmbeddingAuthError)):
+        return False
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    if isinstance(exc, AppError):
+        return exc.status_code in (429, 500, 502, 503, 504)
+    return False
+
+
+def _extract_kp_signature_from_payload(payload: QuestionGenerateRequest) -> tuple[str, ...]:
+    """提取归一化排序后的目标知识点签名，用于活跃任务幂等去重。"""
+    if payload.knowledge_point_ids:
+        return tuple(sorted({str(kp_id) for kp_id in payload.knowledge_point_ids}))
+    if payload.knowledge_point_id is not None:
+        return (str(payload.knowledge_point_id),)
+    return ()
+
+
+def _extract_kp_signature_from_dict(raw_payload: dict[str, Any] | None) -> tuple[str, ...]:
+    """从持久化 request_payload 字典提取归一化知识点签名。"""
+    if not isinstance(raw_payload, dict):
+        return ()
+    raw_ids = raw_payload.get("knowledge_point_ids")
+    if isinstance(raw_ids, list) and raw_ids:
+        return tuple(sorted({str(item) for item in raw_ids if item}))
+    single_id = raw_payload.get("knowledge_point_id")
+    if single_id:
+        return (str(single_id),)
+    return ()
+
+
+def _resolve_auto_practice_title(payload: QuestionGenerateRequest) -> str:
+    """解析异步自动建卷标题（优先用户指定标题，否则按来源意图兜底）。"""
+    if payload.practice_title and payload.practice_title.strip():
+        return payload.practice_title.strip()[:128]
+    if payload.source_type == "wrong_record":
+        return "错题巩固练习"
+    if payload.source_type == "weakness":
+        return "薄弱点专项练习"
+    return "专项练习"
+
+
+def _resolve_practice_source_type(job_source_type: str | None) -> str:
+    """将出题任务来源意图映射为合法的 PracticeSourceType 枚举值。"""
+    if job_source_type in ("wrong_record", "weakness"):
+        return job_source_type
+    return "normal"
+
+
 def _run_generation_job_in_background(
     session_factory: sessionmaker[Session],
     job_id: uuid.UUID,
@@ -152,7 +213,16 @@ def _run_generation_job_in_background(
                 embedding=embedding,
                 search_adapter=search_adapter,
             )
-            bg_service.run_generation_job(job_id=job_id, user_id=user_id)
+            try:
+                bg_service.run_generation_job(job_id=job_id, user_id=user_id)
+            except Exception as exc:
+                # 内存队列后台线程无 RQ 重试回调，失败时需确保任务不长期滞留 running。
+                bg_service.mark_generation_job_failed(
+                    user_id=user_id,
+                    job_id=job_id,
+                    error_message=str(exc)[:500],
+                )
+                raise
     except Exception:
         logger.exception(
             "background question generation job failed: job_id=%s",
@@ -291,8 +361,10 @@ class QuestionService:
             elif snippet.id in search_map:
                 score = search_map[snippet.id].score
             elif kp_words:
-                hit_count = sum(1 for w in set(kp_words) if w in snippet.content)
-                score = hit_count / len(set(kp_words))
+                normalized_snippet = strip_latex_commands(snippet.content).lower()
+                unique_kp_words = set(kp_words)
+                hit_count = sum(1 for w in unique_kp_words if w in normalized_snippet)
+                score = hit_count / len(unique_kp_words)
             else:
                 score = 1.0
 
@@ -404,7 +476,7 @@ class QuestionService:
             options=effective_options,
         )
 
-        # 4. 构造题目与质检实体 (合格品 + 残余待人工审核品)
+        # 4. 仅构造质检合格的可用题目与质检审计实体（严禁落库 pending_review）
         target_count = effective_options.count
         qualified_questions = [
             build_question_entity(
@@ -420,30 +492,17 @@ class QuestionService:
             )
             for cand in outcome.qualified_questions[:target_count]
         ]
-        remaining_needed = target_count - len(qualified_questions)
-        pending_questions = [
-            build_question_entity(
-                cand,
-                outcome.candidate_items_map[cand.question_id],
-                user_id=user_id,
-                material_id=material_id,
-                version_id=effective_version_id,
-                knowledge_point_id=knowledge_point_id,
-                batch_id=effective_batch_id,
-                status=QuestionStatus.PENDING_REVIEW.value,
-                snippet_metadata=snippet_metadata,
-            )
-            for cand in outcome.last_unqualified_questions[:remaining_needed]
-        ]
+        pending_questions: list[Question] = []
+        discarded_count = len(outcome.last_unqualified_questions)
         all_quality_checks = [
             check
-            for q in qualified_questions + pending_questions
+            for q in qualified_questions
             for check in outcome.candidate_checks_map.get(str(q.id), ())
         ]
         retry_count = outcome.retry_count
 
         # 7. 原子数据库事务落库
-        all_entities = qualified_questions + pending_questions
+        all_entities = qualified_questions
         try:
             with self.session.begin_nested():
                 saved_questions = self.question_repo.batch_create_questions(all_entities, user_id)
@@ -471,7 +530,8 @@ class QuestionService:
                 "error_code": 0,
                 "total_generated": len(saved_questions),
                 "qualified_count": len(qualified_questions),
-                "pending_count": len(pending_questions),
+                "pending_count": 0,
+                "discarded_count": discarded_count,
                 "checks_count": len(saved_checks),
                 "retry_count": retry_count,
             },
@@ -907,10 +967,11 @@ class QuestionService:
         batch_id: str,
         outcomes: Sequence[tuple[KnowledgePointGenerationWorkSpec, GenerationLoopOutcome]],
     ) -> tuple[list[Question], list[QuestionQualityCheck], int]:
-        """在调用线程将并发生成结果映射为 Question 与质检 ORM 实体列表。"""
+        """在调用线程将并发生成结果映射为仅包含合格可用题目的 Question 与质检 ORM 实体列表。"""
         all_entities: list[Question] = []
         all_checks: list[QuestionQualityCheck] = []
         total_retry = 0
+        discarded_count = 0
 
         for spec, outcome in outcomes:
             target_count = spec.options.count
@@ -929,26 +990,22 @@ class QuestionService:
                 )
                 for cand in outcome.qualified_questions[:target_count]
             ]
-            remaining_needed = target_count - len(qualified)
-            pending = [
-                build_question_entity(
-                    cand,
-                    outcome.candidate_items_map[cand.question_id],
-                    user_id=user_id,
-                    material_id=spec.material_id,
-                    version_id=spec.version_id,
-                    knowledge_point_id=spec.knowledge_point_id,
-                    batch_id=batch_id,
-                    status=QuestionStatus.PENDING_REVIEW.value,
-                    snippet_metadata=snippet_meta_list,
-                )
-                for cand in outcome.last_unqualified_questions[:remaining_needed]
-            ]
-            kp_entities = qualified + pending
-            all_entities.extend(kp_entities)
-            for q in kp_entities:
+            discarded_count += len(outcome.last_unqualified_questions)
+            all_entities.extend(qualified)
+            for q in qualified:
                 all_checks.extend(outcome.candidate_checks_map.get(str(q.id), ()))
             total_retry += outcome.retry_count
+
+        if discarded_count > 0:
+            logger.info(
+                "discarded unqualified candidates after autonomous quality gate",
+                extra={
+                    "request_id": batch_id,
+                    "user_ref": generate_user_ref(user_id),
+                    "qualified_count": len(all_entities),
+                    "discarded_count": discarded_count,
+                },
+            )
 
         return all_entities, all_checks, total_retry
 
@@ -1012,13 +1069,97 @@ class QuestionService:
             for kp_id, k_count in zip(ordered_kp_ids, kp_counts, strict=True)
         ]
 
+    def _find_reusable_generation_job(
+        self,
+        *,
+        user_id: uuid.UUID,
+        payload: QuestionGenerateRequest,
+        clean_idempotency_key: str | None,
+    ) -> QuestionGenerationJob | None:
+        """按显式幂等键或同范围活跃任务查找可复用的异步出题任务。"""
+        if clean_idempotency_key is not None:
+            by_key = self.question_repo.find_generation_job_by_idempotency_key(
+                user_id=user_id,
+                idempotency_key=clean_idempotency_key,
+            )
+            if by_key is not None:
+                return by_key
+
+        target_sig = _extract_kp_signature_from_payload(payload)
+        active_candidates = self.question_repo.list_active_generation_jobs(
+            user_id=user_id,
+            material_id=payload.material_id,
+            folder_id=payload.folder_id,
+            source_type=payload.source_type,
+            source_practice_id=payload.source_practice_id,
+        )
+        for existing in active_candidates:
+            if _extract_kp_signature_from_dict(existing.request_payload) == target_sig:
+                return existing
+        return None
+
+    def _auto_create_practice_for_job(
+        self,
+        *,
+        user_id: uuid.UUID,
+        payload: QuestionGenerateRequest,
+        saved_questions: Sequence[Question],
+    ) -> tuple[uuid.UUID | None, str | None]:
+        """在异步出题收尾短事务内按可用题目原子建卷（不单独提交事务）。"""
+        if not payload.auto_create_practice:
+            return None, None
+        available_ids = [
+            q.id for q in saved_questions if q.status == QuestionStatus.AVAILABLE.value
+        ][:MAX_ASYNC_GENERATION_QUESTIONS]
+        if not available_ids:
+            return None, "本次生成的题目暂未通过质检，暂无可用题目自动建卷，请调整配置后重试"
+
+        from app.services.practice import (
+            CreatePracticeOptions,
+            PracticeAssemblyMode,
+            PracticeService,
+        )
+
+        practice_service = PracticeService(session=self.session)
+        practice_view = practice_service.create_practice(
+            user_id=user_id,
+            options=CreatePracticeOptions(
+                title=_resolve_auto_practice_title(payload),
+                material_id=payload.material_id,
+                folder_id=payload.folder_id,
+                knowledge_point_ids=[],
+                question_count=len(available_ids),
+                question_ids=available_ids,
+                question_types=list(payload.question_types),
+                difficulty=payload.difficulty,
+                mode=PracticeAssemblyMode.SEQUENTIAL,
+                source_type=_resolve_practice_source_type(payload.source_type),
+            ),
+            defer_commit=True,
+        )
+        return practice_view.id, None
+
     def create_generation_job(
         self,
         *,
         user_id: uuid.UUID,
         payload: QuestionGenerateRequest,
+        idempotency_key: str | None = None,
     ) -> QuestionGenerationJob:
-        """创建异步出题任务并入队调度。"""
+        """创建异步出题任务并入队调度，支持幂等键与同范围活跃任务去重。"""
+        clean_key = (
+            validate_idempotency_key(idempotency_key)
+            if idempotency_key is not None and idempotency_key.strip()
+            else None
+        )
+        reusable = self._find_reusable_generation_job(
+            user_id=user_id,
+            payload=payload,
+            clean_idempotency_key=clean_key,
+        )
+        if reusable is not None:
+            return reusable
+
         plan = self._resolve_generation_plan(user_id=user_id, payload=payload)
         job = QuestionGenerationJob(
             user_id=user_id,
@@ -1030,6 +1171,9 @@ class QuestionService:
             completed_kps=0,
             generated_count=0,
             question_ids=[],
+            source_type=payload.source_type,
+            source_practice_id=payload.source_practice_id,
+            idempotency_key=clean_key,
         )
         self.question_repo.create_generation_job(job, user_id)
         self.session.commit()
@@ -1124,7 +1268,7 @@ class QuestionService:
         job_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> QuestionGenerationJob:
-        """执行异步出题队列任务：受控 3 并发跑纯 LLM 阶段并实时更新 KP 进度。"""
+        """执行异步出题队列任务：短事务读取 → 释放连接跑并发 LLM → 短事务原子落库与自动建卷。"""
         job = self.question_repo.get_generation_job_by_id(job_id, user_id)
         if job is None:
             raise QuestionGenerationJobNotFoundError()
@@ -1138,7 +1282,7 @@ class QuestionService:
 
         batch_id = f"batch_{uuid.uuid4().hex[:12]}"
         try:
-            payload = QuestionGenerateRequest.model_validate(job.request_payload)
+            payload = QuestionGenerationJobCreateRequest.model_validate(job.request_payload)
             base_options = GenerateQuestionsOptions(
                 question_types=tuple(payload.question_types),
                 count=payload.count,
@@ -1154,12 +1298,22 @@ class QuestionService:
                 plan=plan,
                 base_options=base_options,
             )
+            # 释放只读事务与数据库连接，禁止在并发 LLM/Embedding I/O 期间持有 idle in transaction。
+            self.session.rollback()
+
+            completed_counter = 0
 
             def _on_kp_done(
                 _spec: KnowledgePointGenerationWorkSpec,
                 _outcome: GenerationLoopOutcome,
             ) -> None:
-                job.completed_kps += 1
+                nonlocal completed_counter
+                completed_counter += 1
+                self.question_repo.update_generation_job_progress(
+                    job_id,
+                    user_id,
+                    completed_kps=completed_counter,
+                )
                 self.session.commit()
 
             outcomes = execute_concurrent_kp_generation(
@@ -1180,26 +1334,54 @@ class QuestionService:
                 saved_questions = self.question_repo.batch_create_questions(all_entities, user_id)
                 self.question_repo.batch_create_quality_checks(all_checks, user_id)
 
-            job.status = QuestionGenerationJobStatus.COMPLETED.value
-            job.batch_id = batch_id
-            job.generated_count = len(saved_questions)
-            job.question_ids = [str(q.id) for q in saved_questions]
-            job.completed_kps = len(specs)
-            job.completed_at = datetime.now(UTC)
+            persisted_job = self.question_repo.get_generation_job_by_id(job_id, user_id)
+            if persisted_job is None:
+                raise QuestionGenerationJobNotFoundError()
+
+            if not saved_questions:
+                persisted_job.status = QuestionGenerationJobStatus.FAILED.value
+                persisted_job.batch_id = batch_id
+                persisted_job.generated_count = 0
+                persisted_job.question_ids = []
+                persisted_job.result_practice_id = None
+                persisted_job.error_message = (
+                    "AI 质检未能从当前资料切片生成合格题目，请调整考点、题型或补充讲义后重试"
+                )
+                persisted_job.completed_kps = len(specs)
+                persisted_job.completed_at = datetime.now(UTC)
+                self.session.commit()
+                self.session.refresh(persisted_job)
+                return persisted_job
+
+            result_practice_id, auto_practice_notice = self._auto_create_practice_for_job(
+                user_id=user_id,
+                payload=payload,
+                saved_questions=saved_questions,
+            )
+
+            persisted_job.status = QuestionGenerationJobStatus.COMPLETED.value
+            persisted_job.batch_id = batch_id
+            persisted_job.generated_count = len(saved_questions)
+            persisted_job.question_ids = [str(q.id) for q in saved_questions]
+            persisted_job.result_practice_id = result_practice_id
+            persisted_job.error_message = auto_practice_notice
+            persisted_job.completed_kps = len(specs)
+            persisted_job.completed_at = datetime.now(UTC)
             self.session.commit()
-            self.session.refresh(job)
-            return job
+            self.session.refresh(persisted_job)
+            return persisted_job
         except Exception as exc:
             self.session.rollback()
-            refreshed = self.question_repo.get_generation_job_by_id(job_id, user_id)
-            if (
-                refreshed is not None
-                and refreshed.status != QuestionGenerationJobStatus.COMPLETED.value
-            ):
-                refreshed.status = QuestionGenerationJobStatus.FAILED.value
-                refreshed.error_message = str(exc)[:500]
-                refreshed.completed_at = datetime.now(UTC)
-                self.session.commit()
+            if not _is_retryable_generation_error(exc):
+                refreshed = self.question_repo.get_generation_job_by_id(job_id, user_id)
+                if (
+                    refreshed is not None
+                    and refreshed.status != QuestionGenerationJobStatus.COMPLETED.value
+                ):
+                    refreshed.status = QuestionGenerationJobStatus.FAILED.value
+                    refreshed.error_message = str(exc)[:500]
+                    refreshed.completed_at = datetime.now(UTC)
+                    self.session.commit()
             raise
 
     def get_question(
@@ -1273,6 +1455,7 @@ class QuestionService:
         *,
         status: str | None = None,
         folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         batch_id: str | None = None,
         unbatched: bool = False,
         limit: int | None = None,
@@ -1310,8 +1493,15 @@ class QuestionService:
         effective_status = (
             review_status if review_status is not None else (status or kwargs.get("status"))
         )
+        if effective_status is None:
+            effective_status = QuestionStatus.AVAILABLE.value
         calc_limit = limit if limit is not None else page_size
         calc_offset = offset if offset is not None else (max(page - 1, 0) * calc_limit)
+
+        resolved_unclassified = unclassified or bool(kwargs.get("unclassified", False))
+        extra_repo_kwargs: dict[str, Any] = {}
+        if resolved_unclassified:
+            extra_repo_kwargs["unclassified"] = True
 
         return self.question_repo.list_questions(
             user_id=resolved_user_id,
@@ -1327,40 +1517,38 @@ class QuestionService:
             include_deleted=include_deleted or bool(kwargs.get("include_deleted", False)),
             limit=calc_limit,
             offset=calc_offset,
+            **extra_repo_kwargs,
         )
 
     def list_question_batches(
         self,
         user_id: uuid.UUID,
         *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[QuestionBatchSummaryResponse], int]:
-        """按出题批次聚合分页查询批次摘要并装配来源。
-
-        三次批量查询完成装配：本页批次聚合、批次总数、本页批次的来源资料。
-        不对批次逐条补查来源 (N+1)。
-
-        Args:
-            user_id: 租户用户标识。
-            page: 当前页码，从 1 开始，默认 1。
-            page_size: 单页批次数量限制，默认 20。
-
-        Returns:
-            tuple[list[QuestionBatchSummaryResponse], int]: (本页批次摘要, 真实批次总数)。
-        """
+        """按出题批次聚合分页查询批次摘要并装配来源。"""
         resolved_page_size = max(1, page_size)
         offset = max(page - 1, 0) * resolved_page_size
+        scope_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            scope_kwargs["folder_id"] = folder_id
+        if unclassified:
+            scope_kwargs["unclassified"] = True
 
         rows = self.question_repo.list_question_batches(
             user_id,
             limit=resolved_page_size,
             offset=offset,
+            **scope_kwargs,
         )
-        total = self.question_repo.count_question_batches(user_id)
+        total = self.question_repo.count_question_batches(user_id, **scope_kwargs)
         sources_by_batch = self._group_batch_sources(
             user_id,
             [batch_id for batch_id, *_rest in rows],
+            **scope_kwargs,
         )
 
         items = [
@@ -1381,19 +1569,19 @@ class QuestionService:
         self,
         user_id: uuid.UUID,
         batch_ids: Sequence[str | None],
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> dict[str, list[QuestionBatchSourceDTO]]:
-        """一次查询批量装配本页批次的来源资料。
-
-        Args:
-            user_id: 租户用户标识。
-            batch_ids: 本页批次标识 (可含 None，None 不参与来源查询)。
-
-        Returns:
-            dict[str, list[QuestionBatchSourceDTO]]: 批次标识 → 来源资料投影列表。
-        """
+        """一次查询批量装配本页批次的来源资料。"""
         non_null_ids = [batch_id for batch_id in batch_ids if batch_id is not None]
+        scope_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            scope_kwargs["folder_id"] = folder_id
+        if unclassified:
+            scope_kwargs["unclassified"] = True
         grouped: dict[str, list[QuestionBatchSourceDTO]] = {}
-        for row in self.question_repo.list_batch_sources(user_id, non_null_ids):
+        for row in self.question_repo.list_batch_sources(user_id, non_null_ids, **scope_kwargs):
             grouped.setdefault(row[0], []).append(
                 QuestionBatchSourceDTO(
                     material_id=row[1],
@@ -1403,6 +1591,70 @@ class QuestionService:
                 )
             )
         return grouped
+
+    def get_grouped_summary(
+        self,
+        user_id: uuid.UUID,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+    ) -> QuestionGroupedSummaryResponse:
+        """按讲义与考点聚合题库可用题目计数（单次聚合 + 批量回填标题，零 N+1）。"""
+        counts = self.question_repo.list_grouped_question_counts(
+            user_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+        )
+        if not counts:
+            return QuestionGroupedSummaryResponse(total_questions=0, materials=[])
+
+        material_ids = list(dict.fromkeys(mat_id for mat_id, _, _ in counts))
+        kp_ids = list(dict.fromkeys(kp_id for _, kp_id, _ in counts if kp_id is not None))
+        material_map, folder_map, kp_map = self.question_repo.resolve_grouped_summary_meta(
+            user_id,
+            material_ids,
+            kp_ids,
+        )
+
+        kp_buckets: dict[uuid.UUID, list[QuestionGroupedKnowledgePointDTO]] = {}
+        mat_totals: dict[uuid.UUID, int] = {}
+        total_questions = 0
+        for mat_id, kp_id, count in counts:
+            total_questions += count
+            mat_totals[mat_id] = mat_totals.get(mat_id, 0) + count
+            kp_buckets.setdefault(mat_id, []).append(
+                QuestionGroupedKnowledgePointDTO(
+                    kp_id=kp_id,
+                    kp_name=kp_map.get(kp_id) if kp_id is not None else None,
+                    question_count=count,
+                )
+            )
+
+        materials: list[QuestionGroupedMaterialDTO] = []
+        for mat_id, mat_total in mat_totals.items():
+            mat_title, mat_folder_id = material_map.get(mat_id, ("未命名资料", None))
+            sorted_kps = sorted(
+                kp_buckets.get(mat_id, []),
+                key=lambda item: (-item.question_count, item.kp_name or ""),
+            )
+            materials.append(
+                QuestionGroupedMaterialDTO(
+                    material_id=mat_id,
+                    material_title=mat_title,
+                    folder_id=mat_folder_id,
+                    folder_name=(
+                        folder_map.get(mat_folder_id) if mat_folder_id is not None else None
+                    ),
+                    question_count=mat_total,
+                    knowledge_points=sorted_kps,
+                )
+            )
+
+        materials.sort(key=lambda item: (-item.question_count, item.material_title))
+        return QuestionGroupedSummaryResponse(
+            total_questions=total_questions,
+            materials=materials,
+        )
 
     def update_question(
         self,
@@ -1790,7 +2042,10 @@ class QuestionService:
             *history_messages,
             LLMMessage(role="user", content=user_prompt),
         ]
-        options = LLMOptions(temperature=0.65, max_tokens=900)
+        options = LLMOptions(temperature=0.65, max_tokens=4096)
+        # 释放只读事务归还数据库连接，避免同步 LLM 调用期间长时间占用连接池。
+        if not self.session.new and not self.session.dirty and not self.session.deleted:
+            self.session.commit()
 
         output, _ = self.llm.generate_structured(
             messages=messages,
@@ -1926,6 +2181,11 @@ class QuestionService:
             else user_prompt
         )
         rerank_cfg = self.rerank_settings
+        suggested_topics = pick_suggested_topics(scope.points)
+        overview_context = build_overview_context(scope.points)
+        # 在执行外部 Embedding / 检索 / Rerank / 多轮 LLM 前释放只读事务，归还数据库连接。
+        if not self.session.new and not self.session.dirty and not self.session.deleted:
+            self.session.commit()
         result = run_coach_graph(
             search=self.search_adapter,
             llm=self.llm,
@@ -1944,8 +2204,8 @@ class QuestionService:
             ),
             history=history,
             scope_title=scope.title,
-            suggested_topics=pick_suggested_topics(scope.points),
-            overview_context=build_overview_context(scope.points),
+            suggested_topics=suggested_topics,
+            overview_context=overview_context,
             thread_id=f"{user_id}:{scope.key}:{thread_id}" if thread_id else None,
         )
         if memory_key is not None and self.memory_store is not None:

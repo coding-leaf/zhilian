@@ -729,3 +729,70 @@ def test_naming_empty_names() -> None:
     assert result.is_passed is False
     assert result.score == 0.0
     assert "列表为空" in (result.reason or "")
+
+
+def test_meta_kp_blacklist_non_substantive_chapter_skip_and_content_depth() -> None:
+    """Meta KP names fail readability, summary chapters skip, CONTENT_DEPTH guards depth."""
+    from app.core.algorithms.knowledge_quality import check_content_depth
+
+    meta_naming = check_naming_readability(
+        ["本章知识小结梳理", "目录", "支持向量机"],
+        KnowledgeQualityConfig(),
+    )
+    assert meta_naming.is_passed is False
+    assert "元结构" in (meta_naming.reason or "")
+
+    # Non-substantive chapters ("小结", "目录") must NOT trigger missing-chapter failure
+    cov = check_chapter_coverage(
+        covered_chapters={"第五章 支持向量机"},
+        chapter_stats=[
+            ChapterSnippetStat("第五章 支持向量机", 18, 0.80),
+            ChapterSnippetStat("小结", 2, 0.10),
+            ChapterSnippetStat("目录", 2, 0.10),
+        ],
+        config=KnowledgeQualityConfig(),
+    )
+    assert cov.is_passed is True
+
+    # Bare noun takeaways and meta-disclaimers fail CONTENT_DEPTH
+    shallow_points = [
+        CandidateKnowledgePoint(
+            name="核技巧",
+            level=2,
+            is_leaf=True,
+            structured_content={
+                "core_summary": "核技巧",
+                "key_takeaways": ["核技巧", "映射"],
+            },
+        ),
+        CandidateKnowledgePoint(
+            name="软间隔推导",
+            level=2,
+            is_leaf=True,
+            structured_content={
+                "core_summary": "软间隔允许少量样本违背间隔约束，用于线性不可分数据。",
+                "key_takeaways": ["小结仅给出条目名称，未展开具体推导"],
+            },
+        ),
+    ]
+    depth_bad = check_content_depth(shallow_points, KnowledgeQualityConfig())
+    assert depth_bad.is_passed is False
+    assert depth_bad.item_code == CheckItemCode.CONTENT_DEPTH
+
+    # Well-structured review card passes CONTENT_DEPTH
+    rich_points = [
+        CandidateKnowledgePoint(
+            name="核技巧与核函数",
+            level=2,
+            is_leaf=True,
+            structured_content={
+                "core_summary": "核技巧通过核函数隐式计算高维特征空间内积，避免直接求解高维映射。",
+                "key_takeaways": [
+                    "核函数满足 Mercer 半正定条件即可对应某个再生核希尔伯特空间内积。",
+                    "常用核函数包括线性核、多项式核与高斯 RBF 核，后者可映射至无穷维空间。",
+                ],
+            },
+        )
+    ]
+    depth_ok = check_content_depth(rich_points, KnowledgeQualityConfig())
+    assert depth_ok.is_passed is True

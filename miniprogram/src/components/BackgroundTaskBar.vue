@@ -24,13 +24,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
+import { safeShowToast } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
 
 defineOptions({ options: { virtualHost: true } })
 
 const props = defineProps<{
   disableAutoNavigate?: boolean
   autoRefresh?: boolean
+  excludeJobId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -38,45 +42,49 @@ const emit = defineEmits<{
   (e: 'dismiss', task: BackgroundTaskItem): void
 }>()
 
+const authStore = useAuthStore()
 const taskStore = useBackgroundTaskStore()
-const tasks = computed(() => taskStore.visibleTasks)
+const tasks = computed(() =>
+  taskStore.visibleTasks.filter(
+    (task) => !(props.excludeJobId && task.kind === 'question_job' && task.targetId === props.excludeJobId),
+  ),
+)
 
 onMounted(() => {
-  if (props.autoRefresh) void taskStore.refreshActiveTasks()
+  if (props.autoRefresh && authStore.isLoggedIn()) void taskStore.refreshActiveTasks()
 })
 
 const navigateToTask = (task: BackgroundTaskItem) => {
   if (task.kind === 'material_parse' && task.materialId) {
-    uni.navigateTo({
-      url: `/subpackages/material/pages/course/index?id=${task.materialId}`,
-      fail: () => uni.showToast({ title: '打开讲义详情失败', icon: 'none' }),
+    safeNavigateTo(`/subpackages/material/pages/course/index?id=${task.materialId}`, {
+      failMessage: '打开讲义详情失败',
     })
     return
   }
   if (task.kind !== 'question_job') return
-  const query: string[] = ['view=generated']
-  if (task.materialId) query.unshift(`material_id=${encodeURIComponent(task.materialId)}`)
-  else if (task.folderId) query.unshift(`folder_id=${encodeURIComponent(task.folderId)}`)
-  else {
-    uni.switchTab({
-      url: '/pages/review/index',
-      fail: () => uni.showToast({ title: '跳转学情页失败', icon: 'none' }),
-    })
+  if (task.resultPracticeId) {
+    safeNavigateTo(
+      `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
+      { failMessage: '打开练习失败' },
+    )
     return
   }
-  if (task.batchId) query.push(`batch_id=${encodeURIComponent(task.batchId)}`)
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?${query.join('&')}`,
-    fail: () => uni.showToast({ title: '打开出题结果失败', icon: 'none' }),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('跳转学情页失败'),
   })
 }
 
 const handleOpenTask = (task: BackgroundTaskItem) => {
-  emit('open-task', task)
   if (task.timedOut && task.kind === 'material_parse' && task.materialId) {
     void taskStore.refreshMaterialTask(task.materialId)
     return
   }
+  if (task.timedOut && task.kind === 'question_job') {
+    void taskStore.refreshQuestionJob(task.targetId)
+    return
+  }
+  emit('open-task', task)
   if (!props.disableAutoNavigate) navigateToTask(task)
   if (task.dismissible) taskStore.dismissTask(task.key)
 }
@@ -89,7 +97,7 @@ const handleDismiss = (task: BackgroundTaskItem) => {
 
 <style lang="scss" scoped>
 .task-bar-container {
-  position: sticky; top: 0; z-index: var(--z-sticky);
+  position: sticky; top: 0; z-index: calc(var(--z-sticky) + 5);
   display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 16rpx;
 }
 .task-strip {

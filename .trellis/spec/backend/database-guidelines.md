@@ -55,12 +55,16 @@ rg -o '__tablename__ = "(\w+)"' -r '$1' backend/app/models
 
 ## Transactions & Session Lifecycle
 
-- `AppContainer.get_session()` 是事务上下文管理器：正常退出不自动 commit，异常时 `rollback()`，最终始终 `close()`。
+- `AppContainer.get_session()` 是事务上下文管理器：正常退出不自动 commit，异常时 `rollback()`，最终始终 `close()`，并在同线程绑定 `use_active_search_session(session)`。
 - Service 层负责 `self.session.commit()` / `self.session.rollback()`；路由层不得开事务。
+- **短事务边界（禁止跨外部 I/O 持有未提交事务）**：在发起 LLM / VLM / Embedding / Rerank / S3 等慢速外部网络调用前，必须先把已读取的 ORM 属性提取为纯内存快照并调用 `self.session.rollback()`（或 `commit()`）释放连接，外部 I/O 完成后再开短事务写回。`PgvectorHybridSearchAdapter._get_thread_active_session` 仅在 `candidate.in_transaction()` 时复用外层会话（防嵌套连接池死锁）；若外层已释放事务，检索层自动开启并立即关闭独立短只读会话，避免重新拖入 `idle in transaction`。
+- **Commit-First 入队铁律**：所有异步作业派发（`submit_practice`、`retry_grading`、`create_generation_job`、`trigger_parse`）必须**先 `self.session.commit()` 落盘状态，再 `queue.enqueue(...)`**；若入队失败，通过补偿短事务回写可恢复状态（如 `partially_graded`）。
+- **连接池与方言韧性**：SQLite 引擎在 `connect` 事件强制启用 `WAL`、`synchronous=NORMAL`、`busy_timeout=15000`、`foreign_keys=ON`（`timeout=15.0`）；PostgreSQL 引擎强制配置 `pool_recycle=1800`、`pool_pre_ping=True` 与 psycopg TCP keepalives。
+- **`grading_records` 单作答项唯一终态约束**：由部分唯一索引 `uq_grading_records_item_final`（`UNIQUE (attempt_item_id) WHERE is_final = true`，迁移 `0012`）在数据库层兜底，禁止同一 `attempt_item_id` 出现多条 `is_final=true` 记录。
 - 跨多个子操作的单事务编排：内层传 `defer_commit=True` 仅 `flush()`，**仅由最外层**在全部成功时 `commit()`，任一失败 `rollback()` + re-raise。
 - 幂等快照等「旁路写入」失败要降级告警，不得让已成功的主事务返回 5xx。
 
-代码锚点：`backend/app/container.py::AppContainer.get_session`、`backend/app/services/question.py::QuestionService.generate_questions_for_knowledge_points`、`backend/app/services/question.py::QuestionService.generate_questions_for_folder`。
+代码锚点：`backend/app/container.py::AppContainer.get_session`、`backend/app/integrations/search/pgvector.py::use_active_search_session`、`backend/app/services/practice.py::PracticeService.submit_practice`、`backend/app/services/question.py::QuestionService.run_generation_job`、`backend/migrations/versions/0012_async_job_practice_and_grading_unique.py`。
 
 ---
 

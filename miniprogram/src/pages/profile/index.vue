@@ -58,6 +58,8 @@
 import { computed, ref } from 'vue'
 import { onPullDownRefresh, onShow } from '@dcloudio/uni-app'
 import { useAuthStore } from '@/stores/auth'
+import { extractUserErrorMessage, safeShowToast } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
 import LearningStatisticsCard from './components/LearningStatisticsCard.vue'
 import ProfileEditModal from './components/ProfileEditModal.vue'
 import { useLearningStatistics } from './composables/useLearningStatistics'
@@ -91,10 +93,7 @@ onPullDownRefresh(async () => {
 })
 
 const goToLogin = () => {
-  uni.navigateTo({
-    url: '/pages/auth/login',
-    fail: () => uni.showToast({ title: '打开登录页失败', icon: 'none' }),
-  })
+  safeNavigateTo('/pages/auth/login', { failMessage: '打开登录页失败' })
 }
 
 const openEditModal = () => {
@@ -107,22 +106,34 @@ const openEditModal = () => {
 
 const chooseAvatar = () => {
   if (!authStore.isLoggedIn()) return goToLogin()
-  uni.chooseImage({
+  uni.chooseMedia({
     count: 1,
+    mediaType: ['image'],
     sizeType: ['compressed'],
     sourceType: ['album', 'camera'],
-    success: async ({ tempFilePaths }) => {
-      const path = tempFilePaths[0]
+    success: async (res: any) => {
+      const firstFile = res?.tempFiles?.[0]
+      const path = firstFile?.tempFilePath || firstFile?.path || res?.tempFilePaths?.[0]
       if (!path) return
       isUploadingAvatar.value = true
       try {
         await authStore.updateAvatar(path)
-        uni.showToast({ title: '头像已更新', icon: 'success' })
-      } catch {
-        uni.showToast({ title: '头像上传失败，原头像已保留', icon: 'none' })
+        safeShowToast('头像已更新', 'success')
+      } catch (err) {
+        safeShowToast(extractUserErrorMessage(err, '头像上传失败，原头像已保留'))
       } finally {
         isUploadingAvatar.value = false
       }
+    },
+    fail: (err: any) => {
+      const errMsg = typeof err?.errMsg === 'string' ? err.errMsg.toLowerCase() : ''
+      if (errMsg.includes('cancel')) return
+      console.error('[profile] chooseMedia failed', err)
+      if (err?.errno === 104 || err?.errno === 112 || /privacy|auth\s*deny|permission/i.test(errMsg)) {
+        safeShowToast('请先同意隐私协议并开启相册/相机权限')
+        return
+      }
+      safeShowToast('选择头像失败，请检查相册权限')
     },
   })
 }
@@ -131,10 +142,10 @@ const handleSaveProfile = async (nickname: string) => {
   isSaving.value = true
   try {
     await authStore.updateProfile({ nickname })
-    uni.showToast({ title: '修改成功', icon: 'success' })
+    safeShowToast('修改成功', 'success')
     showEditModal.value = false
-  } catch (err: any) {
-    uni.showToast({ title: err?.message || '保存失败', icon: 'none' })
+  } catch (err: unknown) {
+    safeShowToast(extractUserErrorMessage(err, '保存失败'))
   } finally {
     isSaving.value = false
   }
@@ -148,7 +159,7 @@ const handleLogout = () => {
     success: (res) => {
       if (res.confirm) {
         authStore.clearAuth()
-        uni.showToast({ title: '已退出登录', icon: 'none' })
+        safeShowToast('已退出登录')
       }
     },
   })
@@ -250,6 +261,7 @@ const handleLogout = () => {
 
 .logout-btn {
   height: 88rpx;
+  margin: 0;
   background: var(--color-danger-bg-soft);
   color: var(--color-wrong);
   font-size: 30rpx;
@@ -258,5 +270,9 @@ const handleLogout = () => {
   align-items: center;
   justify-content: center;
   font-weight: 500;
+
+  &::after {
+    border: none;
+  }
 }
 </style>

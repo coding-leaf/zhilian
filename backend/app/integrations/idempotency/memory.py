@@ -10,6 +10,7 @@
 
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
@@ -21,16 +22,49 @@ from app.integrations.idempotency.protocol import (
     validate_idempotency_key,
 )
 
+DEFAULT_MAX_ENTRIES: int = 10000
+
 
 class MemoryIdempotencyAdapter(IdempotencyProtocol):
-    """基于内存的线程安全分布式幂等拦截器适配器。"""
+    """基于内存的线程安全分布式幂等拦截器适配器（带容量上限与 LRU 淘汰）。"""
 
-    def __init__(self) -> None:
-        """初始化内存幂等拦截器。"""
+    def __init__(self, *, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
+        """初始化内存幂等拦截器。
+
+        Args:
+            max_entries: 最大内存记录条数上限（默认 10000），超出时优先清理过期键再按 LRU 淘汰。
+        """
+        if max_entries <= 0:
+            raise ValueError("max_entries 必须大于 0")
         self._lock = threading.Lock()
-        self._records: dict[str, IdempotencyRecord] = {}
+        self._max_entries = max_entries
+        self._records: OrderedDict[str, IdempotencyRecord] = OrderedDict()
         self._clock: Callable[[], float] = time.time
         self._fault_injections: dict[str, Exception] = {}
+
+    def _evict_expired_and_enforce_limit_locked(
+        self,
+        current_time: float,
+        *,
+        incoming_key: str,
+    ) -> None:
+        """在持有锁的前提下执行写路径过期清理与有界 LRU 淘汰。"""
+        # 1. O(1) 均摊：从队头持续清理最久未访问且已过期的记录
+        while self._records:
+            oldest_key, oldest_record = next(iter(self._records.items()))
+            if current_time >= oldest_record.expire_at:
+                self._records.pop(oldest_key, None)
+            else:
+                break
+
+        # 2. 若写入新键将触及容量上限，先全量扫除剩余过期键，再按 LRU 淘汰最旧键
+        needs_room = incoming_key not in self._records
+        if needs_room and len(self._records) >= self._max_entries:
+            expired_keys = [k for k, rec in self._records.items() if current_time >= rec.expire_at]
+            for expired_key in expired_keys:
+                self._records.pop(expired_key, None)
+            while len(self._records) >= self._max_entries:
+                self._records.popitem(last=False)
 
     def set_clock(self, clock_fn: Callable[[], float]) -> None:
         """配置模拟时钟提供者（用于 TTL 过期测试）。
@@ -129,7 +163,9 @@ class MemoryIdempotencyAdapter(IdempotencyProtocol):
                 locked_at=current_time,
                 expire_at=current_time + ttl_seconds,
             )
+            self._evict_expired_and_enforce_limit_locked(current_time, incoming_key=storage_key)
             self._records[storage_key] = record
+            self._records.move_to_end(storage_key)
             return True
 
     def set_result(
@@ -176,7 +212,9 @@ class MemoryIdempotencyAdapter(IdempotencyProtocol):
                 locked_at=locked_at,
                 expire_at=current_time + ttl_seconds,
             )
+            self._evict_expired_and_enforce_limit_locked(current_time, incoming_key=storage_key)
             self._records[storage_key] = completed_record
+            self._records.move_to_end(storage_key)
 
     def get_result(self, key: str, user_id: str) -> dict[str, Any] | None:
         """获取已成功完成的幂等请求响应快照。
@@ -216,6 +254,7 @@ class MemoryIdempotencyAdapter(IdempotencyProtocol):
                 )
 
             if existing_record.status == "COMPLETED":
+                self._records.move_to_end(storage_key)
                 return existing_record.result
 
             return None

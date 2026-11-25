@@ -10,12 +10,14 @@
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import PracticeNotFoundError
+from app.models.material import Material, MaterialFolder
 from app.models.practice import AttemptItem, Practice, PracticeStatus
 
 
@@ -107,35 +109,134 @@ class PracticeRepository:
         )
         return self.session.execute(stmt).scalars().first()
 
+    @staticmethod
+    def _apply_practice_filters(
+        stmt: Any,
+        *,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+        status: str | None = None,
+    ) -> Any:
+        """为练习列表与总数查询统一拼接多维租户安全过滤条件。"""
+        if material_id is not None:
+            stmt = stmt.where(Practice.material_id == material_id)
+        if folder_id is not None:
+            stmt = stmt.outerjoin(
+                Material,
+                and_(Practice.material_id == Material.id, Material.user_id == user_id),
+            ).where(
+                (Practice.folder_id == folder_id)
+                | (Practice.folder_id.is_(None) & (Material.folder_id == folder_id))
+            )
+        elif unclassified:
+            stmt = stmt.outerjoin(
+                Material,
+                and_(Practice.material_id == Material.id, Material.user_id == user_id),
+            ).where(
+                Practice.folder_id.is_(None)
+                & (Practice.material_id.is_(None) | Material.folder_id.is_(None))
+            )
+        if status is not None:
+            stmt = stmt.where(Practice.status == status)
+        return stmt
+
     def list_practices(
         self,
         user_id: uuid.UUID,
         *,
         material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
         status: str | None = None,
         limit: int = 20,
         offset: int = 0,
     ) -> list[Practice]:
-        """多维分页查询指定用户的练习列表。
-
-        Args:
-            user_id: 租户用户标识。
-            material_id: 可选资料标识过滤。
-            status: 可选练习状态过滤。
-            limit: 分页大小，默认 20。
-            offset: 分页偏移量，默认 0。
-
-        Returns:
-            list[Practice]: 练习实体列表。
-        """
+        """多维分页查询指定用户的练习列表。"""
         stmt = select(Practice).where(Practice.user_id == user_id)
-        if material_id is not None:
-            stmt = stmt.where(Practice.material_id == material_id)
-        if status is not None:
-            stmt = stmt.where(Practice.status == status)
-
+        stmt = self._apply_practice_filters(
+            stmt,
+            user_id=user_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+            status=status,
+        )
         stmt = stmt.order_by(Practice.created_at.desc()).limit(limit).offset(offset)
         return list(self.session.execute(stmt).scalars().all())
+
+    def count_practices(
+        self,
+        user_id: uuid.UUID,
+        *,
+        material_id: uuid.UUID | None = None,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
+        status: str | None = None,
+    ) -> int:
+        """统计符合过滤条件的练习真实总数（与 ``list_practices`` 同一 WHERE 条件）。"""
+        stmt = select(func.count(Practice.id)).where(Practice.user_id == user_id)
+        stmt = self._apply_practice_filters(
+            stmt,
+            user_id=user_id,
+            material_id=material_id,
+            folder_id=folder_id,
+            unclassified=unclassified,
+            status=status,
+        )
+        return int(self.session.execute(stmt).scalar_one())
+
+    def resolve_practice_display_names(
+        self,
+        user_id: uuid.UUID,
+        practices: Sequence[Practice],
+    ) -> tuple[dict[uuid.UUID, str], dict[uuid.UUID, str]]:
+        """批量回填本页练习关联的课程名称与资料标题，消除 N+1 查询。"""
+        if not practices:
+            return {}, {}
+
+        material_ids = list({p.material_id for p in practices if p.material_id is not None})
+        material_meta: dict[uuid.UUID, tuple[str, uuid.UUID | None]] = {}
+        if material_ids:
+            mat_rows = self.session.execute(
+                select(Material.id, Material.title, Material.folder_id).where(
+                    Material.user_id == user_id,
+                    Material.id.in_(material_ids),
+                )
+            ).all()
+            material_meta = {mid: (title, fid) for mid, title, fid in mat_rows}
+
+        folder_ids = list(
+            {p.folder_id for p in practices if p.folder_id is not None}
+            | {fid for _, fid in material_meta.values() if fid is not None}
+        )
+        folder_names: dict[uuid.UUID, str] = {}
+        if folder_ids:
+            folder_rows = self.session.execute(
+                select(MaterialFolder.id, MaterialFolder.name).where(
+                    MaterialFolder.user_id == user_id,
+                    MaterialFolder.id.in_(folder_ids),
+                )
+            ).all()
+            folder_names = {fid: name for fid, name in folder_rows}
+
+        folder_by_practice: dict[uuid.UUID, str] = {}
+        material_by_practice: dict[uuid.UUID, str] = {}
+        for practice in practices:
+            mat_info = (
+                material_meta.get(practice.material_id)
+                if practice.material_id is not None
+                else None
+            )
+            if mat_info is not None:
+                material_by_practice[practice.id] = mat_info[0]
+            effective_folder_id = practice.folder_id or (
+                mat_info[1] if mat_info is not None else None
+            )
+            if effective_folder_id is not None and effective_folder_id in folder_names:
+                folder_by_practice[practice.id] = folder_names[effective_folder_id]
+        return folder_by_practice, material_by_practice
 
     def update_practice_status(
         self,
@@ -176,8 +277,10 @@ class PracticeRepository:
         practice_id: uuid.UUID,
         user_id: uuid.UUID,
         *,
-        from_status: str,
+        from_status: str | Sequence[str],
         to_status: str,
+        submit_idempotency_key: str | None = None,
+        submitted_at: datetime | None = None,
     ) -> bool:
         """以条件更新原子地跃迁练习状态 (compare-and-swap)。
 
@@ -188,20 +291,33 @@ class PracticeRepository:
         Args:
             practice_id: 练习标识。
             user_id: 租户用户标识。
-            from_status: 期望的当前状态。
+            from_status: 期望的当前状态或允许状态集合。
             to_status: 目标状态。
+            submit_idempotency_key: 可选同步写入的交卷幂等键。
+            submitted_at: 可选同步写入的交卷时间戳。
 
         Returns:
             bool: 是否由本次调用完成状态跃迁 (False 表示状态已被其他请求改变)。
         """
+        status_cond = (
+            Practice.status == from_status
+            if isinstance(from_status, str)
+            else Practice.status.in_(tuple(from_status))
+        )
+        values: dict[str, Any] = {"status": to_status}
+        if submit_idempotency_key is not None:
+            values["submit_idempotency_key"] = submit_idempotency_key
+        if submitted_at is not None:
+            values["submitted_at"] = submitted_at
+
         stmt = (
             update(Practice)
             .where(
                 Practice.id == practice_id,
                 Practice.user_id == user_id,
-                Practice.status == from_status,
+                status_cond,
             )
-            .values(status=to_status)
+            .values(**values)
             .execution_options(synchronize_session="fetch")
         )
         result = self.session.execute(stmt)

@@ -54,6 +54,8 @@ from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.practice import PracticeRepository
 from app.repositories.question import QuestionRepository
 from app.services._diagnosis_report import (
+    MasteryBaselineSnapshot,
+    apply_diagnosis_report_updates,
     build_diagnosis_report_entity,
     build_evaluation_inputs_and_mistakes,
     collect_involved_point_ids,
@@ -474,12 +476,121 @@ class DiagnosisService:
             return None
         return self.generate_diagnosis_report(user_id=user_id, practice_id=practice_id)
 
+    def refresh_diagnosis_report(
+        self,
+        *,
+        user_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        current_time: datetime | None = None,
+        request_id: str | None = None,
+    ) -> DiagnosisReport | None:
+        """在自评覆盖或 AI 重判改动最终得分后，原地刷新（或首次生成）诊断报告。"""
+        practice = self.practice_repo.get_practice_by_id(
+            practice_id=practice_id,
+            user_id=user_id,
+            include_items=False,
+        )
+        if (
+            practice is None
+            or practice.status != PracticeStatus.COMPLETED.value
+            or practice.completed_at is None
+        ):
+            return None
+        items = self.practice_repo.list_attempt_items(practice_id=practice_id, user_id=user_id)
+        grading_records = self.grading_repo.list_final_records_by_practice(
+            practice_id=practice_id,
+            user_id=user_id,
+        )
+        grading_map = {record.attempt_item_id: record for record in grading_records}
+        if not items or any(
+            item.id not in grading_map
+            or grading_map[item.id].status != GradingStatus.SUCCESS.value
+            or grading_map[item.id].score is None
+            for item in items
+        ):
+            return None
+        return self.generate_diagnosis_report(
+            user_id=user_id,
+            practice_id=practice_id,
+            current_time=current_time,
+            request_id=request_id,
+            force_refresh=True,
+        )
+
+    def _persist_or_update_report(
+        self,
+        *,
+        existing_report: DiagnosisReport | None,
+        report_id: uuid.UUID,
+        practice_id: uuid.UUID,
+        user_id: uuid.UUID,
+        synthesis_result: Any,
+        total_questions: int,
+        unanswered_count: int,
+        wrong_count: int,
+        score_rate: float,
+        is_structure_degraded: bool,
+        start_time: float,
+        request_id: str,
+    ) -> DiagnosisReport:
+        """原子写入新建报告或原地刷新既有诊断报告，处理并发唯一约束竞争。"""
+        if existing_report is not None:
+            apply_diagnosis_report_updates(
+                existing_report,
+                synthesis_result=synthesis_result,
+                total_questions=total_questions,
+                unanswered_count=unanswered_count,
+                wrong_count=wrong_count,
+                score_rate=score_rate,
+                is_structure_degraded=is_structure_degraded,
+            )
+            self.session.flush()
+            self.session.commit()
+            return existing_report
+
+        report = build_diagnosis_report_entity(
+            report_id=report_id,
+            practice_id=practice_id,
+            user_id=user_id,
+            synthesis_result=synthesis_result,
+            total_questions=total_questions,
+            unanswered_count=unanswered_count,
+            wrong_count=wrong_count,
+            score_rate=score_rate,
+            is_structure_degraded=is_structure_degraded,
+        )
+        try:
+            created_report = self.diagnosis_repo.create_diagnosis_report(report, user_id=user_id)
+            self.session.commit()
+            return created_report
+        except IntegrityError:
+            self.session.rollback()
+            raced_report = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
+                practice_id=practice_id,
+                user_id=user_id,
+            )
+            if raced_report is not None:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                self._log_metric(
+                    action="GENERATE_DIAGNOSIS_REPORT_IDEMPOTENT",
+                    request_id=request_id,
+                    user_id=user_id,
+                    target_id=practice_id,
+                    duration_ms=duration_ms,
+                    error_code=0,
+                    extra={"report_id": str(raced_report.id)},
+                )
+                return raced_report
+            raise
+
     def generate_diagnosis_report(
         self,
         user_id: uuid.UUID,
         practice_id: uuid.UUID,
         current_time: datetime | None = None,
         request_id: str | None = None,
+        *,
+        force_refresh: bool = False,
     ) -> DiagnosisReport:
         """全卷判题终态触发生成学情诊断报告与错题联动持久化。
 
@@ -551,12 +662,12 @@ class DiagnosisService:
                 },
             )
 
-        # 3. 幂等校验
+        # 3. 幂等校验（force_refresh=True 时允许原地重算并刷新既有报告）
         existing_report = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
             practice_id=practice_id,
             user_id=user_id,
         )
-        if existing_report is not None:
+        if existing_report is not None and not force_refresh:
             self._log_metric(
                 action="GENERATE_DIAGNOSIS_REPORT_IDEMPOTENT",
                 request_id=request_id,
@@ -586,7 +697,7 @@ class DiagnosisService:
             grading_records=grading_records,
         )
 
-        # 5. 汇集知识点并计算/读取基线与最新掌握度
+        # 5. 汇集知识点并先冻结练习前基线快照，再计算并落库最新掌握度
         sorted_point_ids = collect_involved_point_ids(
             practice.knowledge_point_ids, item_evaluations
         )
@@ -594,7 +705,13 @@ class DiagnosisService:
             knowledge_point_ids=sorted_point_ids,
             user_id=user_id,
         )
-        previous_record_map = {record.knowledge_point_id: record for record in previous_records}
+        previous_record_map: dict[uuid.UUID, MasteryBaselineSnapshot] = {
+            record.knowledge_point_id: MasteryBaselineSnapshot(
+                mastery_score=float(record.mastery_score),
+                last_practiced_at=record.last_practiced_at,
+            )
+            for record in previous_records
+        }
 
         updated_mastery_list = self.calculate_and_update_mastery(
             user_id=user_id,
@@ -619,14 +736,14 @@ class DiagnosisService:
             item_evaluations=item_evaluations,
             evaluation_time=evaluation_time,
         )
-        report_id = uuid.uuid4()
+        report_id = existing_report.id if existing_report is not None else uuid.uuid4()
         synthesis_result = synthesize_diagnosis_report(
             report_id=str(report_id),
             evaluated_knowledge_items=evaluation_inputs,
             mistakes=mistake_evidences,
         )
 
-        # 7. 联动同步错题本并构建 DiagnosisReport 实体
+        # 7. 联动同步错题本并新建或原地刷新 DiagnosisReport 实体
         sync_wrong_records_from_evaluations(
             diagnosis_repo=self.diagnosis_repo,
             user_id=user_id,
@@ -635,7 +752,8 @@ class DiagnosisService:
             fallback_point_id=fallback_point_id,
         )
         score_rate = round(total_scored / total_maximum, 4) if total_maximum > 0.0 else 0.0
-        report = build_diagnosis_report_entity(
+        persisted_report = self._persist_or_update_report(
+            existing_report=existing_report if force_refresh else None,
             report_id=report_id,
             practice_id=practice_id,
             user_id=user_id,
@@ -645,51 +763,28 @@ class DiagnosisService:
             wrong_count=wrong_count,
             score_rate=score_rate,
             is_structure_degraded=is_structure_degraded,
+            start_time=start_time,
+            request_id=request_id,
         )
-
-        try:
-            created_report = self.diagnosis_repo.create_diagnosis_report(report, user_id=user_id)
-            self.session.commit()
-        except IntegrityError:
-            # 并发落库竞争：``diagnosis_reports.practice_id`` 唯一约束被另一并发请求
-            # 抢先命中，回滚后回查既有报告并幂等返回，避免向上抛出未处理 500
-            # (BUG-DIAG-019)。
-            self.session.rollback()
-            existing_report = self.diagnosis_repo.get_diagnosis_report_by_practice_id(
-                practice_id=practice_id,
-                user_id=user_id,
-            )
-            if existing_report is not None:
-                duration_ms = (time.perf_counter() - start_time) * 1000.0
-                self._log_metric(
-                    action="GENERATE_DIAGNOSIS_REPORT_IDEMPOTENT",
-                    request_id=request_id,
-                    user_id=user_id,
-                    target_id=practice_id,
-                    duration_ms=duration_ms,
-                    error_code=0,
-                    extra={"report_id": str(existing_report.id)},
-                )
-                return existing_report
-            raise
 
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         self._log_metric(
-            action="GENERATE_DIAGNOSIS_REPORT",
+            action="REFRESH_DIAGNOSIS_REPORT" if force_refresh else "GENERATE_DIAGNOSIS_REPORT",
             request_id=request_id,
             user_id=user_id,
             target_id=practice_id,
             duration_ms=duration_ms,
             error_code=0,
             extra={
-                "report_id": str(report.id),
+                "report_id": str(persisted_report.id),
                 "total_questions": len(items),
                 "wrong_count": wrong_count,
                 "score_rate": score_rate,
                 "is_structure_degraded": is_structure_degraded,
+                "force_refresh": force_refresh,
             },
         )
-        return created_report
+        return persisted_report
 
     def get_diagnosis_report(
         self,
@@ -1125,24 +1220,34 @@ class DiagnosisService:
         return self.diagnosis_repo.get_wrong_record_display_meta(user_id, knowledge_point_ids)
 
     def list_wrong_record_groups(
-        self, user_id: uuid.UUID, is_mastered: bool | None = None
+        self,
+        user_id: uuid.UUID,
+        is_mastered: bool | None = None,
+        *,
+        folder_id: uuid.UUID | None = None,
+        unclassified: bool = False,
     ) -> list[dict[str, Any]]:
-        """Group the complete wrong-record collection by course and source."""
+        """Group the wrong-record collection by course and source, honoring folder filter."""
+        repo_kwargs: dict[str, Any] = {}
+        if folder_id is not None:
+            repo_kwargs["folder_id"] = folder_id
+        if unclassified:
+            repo_kwargs["unclassified"] = True
         groups: dict[tuple[uuid.UUID | None, uuid.UUID | None], dict[str, Any]] = {}
         for (
-            folder_id,
+            group_folder_id,
             folder_name,
             material_id,
             material_title,
             count,
-        ) in self.diagnosis_repo.list_wrong_record_groups(user_id, is_mastered):
-            key = (folder_id, None if folder_id is not None else material_id)
+        ) in self.diagnosis_repo.list_wrong_record_groups(user_id, is_mastered, **repo_kwargs):
+            key = (group_folder_id, None if group_folder_id is not None else material_id)
             if key not in groups:
                 groups[key] = {
-                    "folder_id": folder_id,
+                    "folder_id": group_folder_id,
                     "folder_name": folder_name,
                     "material_id": key[1],
-                    "material_title": material_title if folder_id is None else None,
+                    "material_title": material_title if group_folder_id is None else None,
                     "count": 0,
                 }
             groups[key]["count"] += count

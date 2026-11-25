@@ -8,6 +8,7 @@ from app.api.deps.auth import (
     http_bearer,
     validate_user_status,
 )
+from app.api.deps.collection import get_collection_service
 from app.api.deps.container import get_container
 from app.api.deps.db import get_db_session
 from app.api.deps.diagnosis import get_diagnosis_service
@@ -22,6 +23,7 @@ from app.api.deps.user import get_user_service
 __all__ = [
     "PaginationParams",
     "get_auth_service",
+    "get_collection_service",
     "get_container",
     "get_current_token_payload",
     "get_current_user",

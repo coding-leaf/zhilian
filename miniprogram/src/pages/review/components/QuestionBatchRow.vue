@@ -8,7 +8,7 @@
 
       <view class="bank-batch-info" @tap="emit('toggle')">
         <text class="bank-batch-label">{{ label }}</text>
-        <text class="bank-batch-meta">共 {{ batch.questionCount }} 题</text>
+        <text class="bank-batch-meta">共 {{ batch.availableCount }} 题</text>
       </view>
 
       <text class="bank-expand-btn" @tap="emit('toggle-expand')">
@@ -43,6 +43,7 @@
           @toggle="emit('toggle-question', question.id)"
           @toggle-detail="emit('toggle-detail', question.id)"
           @retry-detail="emit('retry-detail', question.id)"
+          @collect="emit('collect', question.id)"
         >
           <!-- 动作位（由 09-29-question-bank-page 预留）：记入错题 / 取消标记 -->
           <template #action>
@@ -60,9 +61,6 @@
             </view>
           </template>
         </QuestionBankQuestionRow>
-        <text v-if="batch.pendingReviewCount > 0" class="bank-pending-hint">
-          待审核题目需先通过质检才能加入练习。
-        </text>
       </template>
     </view>
   </view>
@@ -104,6 +102,7 @@ const emit = defineEmits<{
   (e: 'toggle-wrong', questionId: string): void
   (e: 'toggle-detail', questionId: string): void
   (e: 'retry-detail', questionId: string): void
+  (e: 'collect', questionId: string): void
 }>()
 
 const label = computed(() => describeBatchLabel(props.batch))

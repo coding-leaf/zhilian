@@ -23,10 +23,12 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 15000
  * 同步调用大模型的接口所用超时（毫秒）。
  *
  * 出题质检、主观题重判与助教答疑都在请求路径内等大模型返回，15 秒不够用。
- * 事实源：`backend/app/services/question.py`（`run_structured_agent_workflow`）与
- * `backend/app/services/grading.py::regrade_attempt`（docstring 标注「大模型重判调用失败」）。
+ * 收敛至 60_000ms 以严格对齐微信小程序 `manifest.json` 的 60s 硬上限。
  */
-export const LONG_REQUEST_TIMEOUT_MS = 90000
+export const LONG_REQUEST_TIMEOUT_MS = 60000
+
+/** 文件上传默认超时（毫秒），与 `manifest.json` 中 `networkTimeout.uploadFile`（微信 60s 硬上限）对齐。 */
+export const UPLOAD_REQUEST_TIMEOUT_MS = 60000
 
 /** 小程序平台在拿不到 errno 时回填的占位串，不该混进日志。 */
 const ERRNO_PLACEHOLDER = '<Undefined>'

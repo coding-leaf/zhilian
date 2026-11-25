@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.models.question import QuestionType
 from app.schemas.material import SourceSnippetDTO
 
+MAX_SYNC_GENERATION_QUESTIONS: int = 20
+MAX_ASYNC_GENERATION_QUESTIONS: int = 50
+
+QuestionJobSourceType = Literal["initial_compose", "wrong_record", "weakness"]
+
 
 class QuestionGenerateRequest(BaseModel):
     """触发出题生成请求入参模型。"""
@@ -82,6 +87,34 @@ class QuestionGenerateRequest(BaseModel):
 
     max_retries: int = Field(
         default=2, ge=0, le=5, description="质检未通过最大重抽轮次，0~5，默认 2"
+    )
+    auto_create_practice: bool = Field(
+        default=False,
+        description="异步出题完成后是否自动根据可用题目原子建卷",
+    )
+    practice_title: str | None = Field(
+        default=None,
+        max_length=128,
+        description="自动建卷使用的练习标题（可选）",
+    )
+    source_type: QuestionJobSourceType | None = Field(
+        default=None,
+        description="出题任务来源意图 (initial_compose|wrong_record|weakness)",
+    )
+    source_practice_id: uuid.UUID | None = Field(
+        default=None,
+        description="错题再生成溯源原练习主键 UUIDv4（可选）",
+    )
+
+
+class QuestionGenerationJobCreateRequest(QuestionGenerateRequest):
+    """创建异步出题队列任务请求入参模型（支持最多 50 题）。"""
+
+    count: int = Field(
+        default=5,
+        ge=1,
+        le=MAX_ASYNC_GENERATION_QUESTIONS,
+        description="异步出题目标数量，1~50，默认 5",
     )
 
 
@@ -208,6 +241,38 @@ class QuestionBatchListResponse(BaseModel):
     total: int = Field(..., ge=0, description="符合条件的批次总数")
     limit: int = Field(default=20, ge=1, description="单页批次数量限制")
     offset: int = Field(default=0, ge=0, description="分页游标偏移量")
+
+
+class QuestionGroupedKnowledgePointDTO(BaseModel):
+    """题库讲义/考点分组内的考点计数摘要。"""
+
+    kp_id: uuid.UUID | None = Field(default=None, description="知识点主键")
+    kp_name: str | None = Field(default=None, description="知识点名称")
+    question_count: int = Field(..., ge=0, description="该考点下可用题目数")
+
+
+class QuestionGroupedMaterialDTO(BaseModel):
+    """题库讲义/考点分组内的讲义聚合摘要。"""
+
+    material_id: uuid.UUID = Field(..., description="讲义主键")
+    material_title: str = Field(..., description="讲义标题")
+    folder_id: uuid.UUID | None = Field(default=None, description="所属课程主键")
+    folder_name: str | None = Field(default=None, description="所属课程名称")
+    question_count: int = Field(..., ge=0, description="该讲义下可用题目总数")
+    knowledge_points: list[QuestionGroupedKnowledgePointDTO] = Field(
+        default_factory=list,
+        description="按考点拆分的题目计数列表",
+    )
+
+
+class QuestionGroupedSummaryResponse(BaseModel):
+    """题库按讲义与考点结构化聚合视图响应模型。"""
+
+    total_questions: int = Field(..., ge=0, description="当前范围活跃题目总数")
+    materials: list[QuestionGroupedMaterialDTO] = Field(
+        default_factory=list,
+        description="按讲义分组的题目计数与考点明细",
+    )
 
 
 class QuestionListQuery(BaseModel):
@@ -399,6 +464,16 @@ class QuestionGenerationJobResponse(BaseModel):
     question_ids: list[uuid.UUID] = Field(
         default_factory=list, description="已生成的题目 UUID 列表"
     )
+    result_practice_id: uuid.UUID | None = Field(
+        default=None, description="自动建卷产出的练习主键 UUID"
+    )
+    source_type: str | None = Field(
+        default=None, description="任务来源意图 (initial_compose|wrong_record|weakness)"
+    )
+    source_practice_id: uuid.UUID | None = Field(
+        default=None, description="错题再生成溯源原练习主键 UUID"
+    )
+    practice_title: str | None = Field(default=None, description="自动建卷标题（可选）")
     error_message: str | None = Field(default=None, description="失败原因摘要")
     created_at: datetime = Field(..., description="任务创建时间")
     updated_at: datetime = Field(..., description="任务最后更新时间")
@@ -410,6 +485,19 @@ class QuestionGenerationJobResponse(BaseModel):
         if value is None:
             return []
         return list(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _extract_practice_title_from_mapping(cls, data: Any) -> Any:
+        """从字典形态的 request_payload 兜底提取 practice_title。"""
+        if isinstance(data, dict) and data.get("practice_title") is None:
+            payload = data.get("request_payload")
+            if isinstance(payload, dict):
+                raw_title = payload.get("practice_title")
+                if isinstance(raw_title, str) and raw_title.strip():
+                    data = dict(data)
+                    data["practice_title"] = raw_title.strip()
+        return data
 
 
 class QuestionGenerationJobListResponse(BaseModel):
@@ -426,6 +514,8 @@ class ScopedCoachResponse(AskCoachResponse):
 
 
 __all__ = [
+    "MAX_ASYNC_GENERATION_QUESTIONS",
+    "MAX_SYNC_GENERATION_QUESTIONS",
     "AskCoachHistoryItem",
     "AskCoachRequest",
     "AskCoachResponse",
@@ -441,8 +531,13 @@ __all__ = [
     "QuestionEditLogResponse",
     "QuestionGenerateRequest",
     "QuestionGenerateResponse",
+    "QuestionGenerationJobCreateRequest",
     "QuestionGenerationJobListResponse",
     "QuestionGenerationJobResponse",
+    "QuestionGroupedKnowledgePointDTO",
+    "QuestionGroupedMaterialDTO",
+    "QuestionGroupedSummaryResponse",
+    "QuestionJobSourceType",
     "QuestionListQuery",
     "QuestionListResponse",
     "QuestionQualityCheckListResponse",

@@ -359,3 +359,81 @@ export interface AskCoachParams {
 ### 7. Wrong vs Correct
 - **Wrong**：无条件把 `question.answer` 拼入 `ask_coach` 上下文（做题未作答前直接剧透答案）。
 - **Correct**：仅在 `user_answer` 非空（已作答/复盘态）才附带 `【标准答案】` 与 `【解析】`。
+
+
+---
+
+## Scenario: 异步出题自动建卷与「只提醒不强跳」契约（`POST /api/v1/questions/jobs`，2026-11-24）
+
+### 1. Scope / Trigger
+改动 `QuestionGenerationJob` 模型/迁移（`0012`）、`POST /questions/jobs`、`BackgroundTaskBar`、初次生题页（`questions/index.vue`）或错题再生入口时。
+
+### 2. Signatures
+```python
+# backend/app/schemas/question.py::QuestionGenerationJobCreateRequest
+count: int = Field(default=5, ge=1, le=50)  # 异步作业支持至 MAX_PRACTICE_QUESTIONS=50；同步 POST /questions/generate 已 deprecated 且维持 <=20
+auto_create_practice: bool = False
+practice_title: str | None = None
+source_type: Literal["initial_compose", "wrong_record", "weakness"] | None = None
+source_practice_id: uuid.UUID | None = None
+# 可选请求头：Idempotency-Key
+
+# QuestionGenerationJobResponse 新增字段
+result_practice_id: uuid.UUID | None = None
+source_type: str | None = None
+source_practice_id: uuid.UUID | None = None
+practice_title: str | None = None
+```
+
+### 3. Contracts
+- **前端清零同步出题**：所有初次生题与错题再生入口（报告页、学情错题本、薄弱点强化）必须统一调用 `backgroundTaskStore.startQuestionJob({ ..., auto_create_practice: true, source_type })`，严禁调用已废弃的同步 `apiGenerateQuestions` 或 `withBlockingLoading('生成中...')`。
+- **Worker 原子建卷与幂等**：`create_generation_job` 按 `Idempotency-Key` 或同作用域活跃任务（`queued`/`running`）去重复用；`run_generation_job` 完成后若 `auto_create_practice=True` 且存在可用题，原子创建 `Practice`（`question_count=len(available_ids)`，不触发默认 10 题截断）并将 `practice.id` 落入 `result_practice_id`。
+- **只提醒、不强制跳转（核心 UX 契约）**：无论初次生题还是错题再生，作业完成后**严禁自动 `redirectTo`/`navigateTo` 抢夺页面焦点**。出题页切至极简 `QuestionReadyCard`（禁止铺开带答案/切片的杂乱题库列表），其余页面（含报告页 `report/pages/detail/index.vue`）通过 `<BackgroundTaskBar />` 展示就绪提醒，用户点击「立即作答」直达 `/subpackages/practice/pages/session/index?practice_id=${resultPracticeId}`。
+
+### 4. Validation & Error Matrix
+| 条件 | 结果 |
+| --- | --- |
+| 重复双击同一错题/作用域出题 | 复用活跃 Job 返回 202，不重复入队 LLM |
+| 本批可用题为 0（全部 `pending_review`） | `status=completed`，`result_practice_id=None`，提示调整配置重试 |
+| Worker 遇可重试网络/LLM 5xx | 回滚并 re-raise 交 RQ 重试，不提前标 `failed`；重试耗尽由 `handle_job_terminal_failure` 落终态 |
+| 轮询遇 404/403 | `backgroundTaskStore` 立即移除追踪项，停止无效轮询 |
+
+### 5. Good/Base/Bad Cases
+- **Good**：报告页点「针对错题出题」→ 202 立即返回，顶部 `BackgroundTaskBar` 显示进度；完成后出现「错题巩固卷已就绪 · 立即作答」，点击直达答题页。
+- **Bad**：在点击错题再生后锁死屏幕等 90s 同步接口，或在生题完成后强制跳转或弹出带参考答案的杂乱题库预览页。
+
+### 6. Tests Required
+- `backend/tests/unit/services/test_async_question_job_auto_practice.py`：验证自动建卷、`result_practice_id` 落盘、活跃任务幂等去重、可重试异常不提前写死 `failed`。
+- `miniprogram/tests/asyncWrongRegenerate.spec.ts` & `studyAndComposeFlow.spec.ts`：验证零同步出题调用、无强跳提醒卡与 `BackgroundTaskBar` 直达 `session/index`。
+
+### 7. Wrong vs Correct
+- **Wrong**：`watch(job.status === 'completed')` 里自动调用 `uni.redirectTo('/subpackages/practice/pages/session/index')` 或展开 `QuestionPreviewPanel`。
+- **Correct**：出题页仅切至 `mode = 'ready'` 渲染极简 `QuestionReadyCard`，其他页由 `<BackgroundTaskBar />` 提醒，由用户主动点击进入练习。
+
+
+---
+
+## Scenario: AI 自主出题质检闭环与思考模型助教预算（2026-11-24）
+
+- **终态零 `pending_review`**：
+  - `backend/app/core/algorithms/question_quality.py` 采用去 LaTeX 命令 + 中文 2-gram + 大小写不敏感分词，输出三态 `PASS / SOFT_FLAG / HARD_DEFECT`。
+  - `backend/app/services/_question_quality_judge.py` 将非 `PASS` 题合并为 1 次批量 AI Judge/Repair（`max_tokens=4096`），`approve` 仅允许用于 `SOFT_FLAG`，`repair` 必须重过确定性结构校验，`reject` 丢弃；缺口按 `0.3 -> 0.5 -> 0.65` 提温避重补抽。
+  - 严禁向学生端落库或展示 `pending_review`（存量记录由迁移 `0013_retire_pending_review` 软删除；响应保留 `pending_count=0`/`pending_review_count=0` 向后兼容）；整批 0 合格题时异步任务直接置 `failed`。
+- **思考模型（如 `deepseek-flash`）助教预算与降级**：
+  - `coach_graph.py` 意图/改写节点 `max_tokens=2048`，答疑生成与 `question.py::ask_coach` `max_tokens=4096`（严禁再用 `120`/`900` 触发思考 token 截断 502）；
+  - 结构化解析异常时 `generate_overview`/`generate_grounded` 自动降级纯文本 `llm.generate()`，且 `agent_graph.py` 异常对外返回脱敏中文文案；
+  - `useCoachChat.ts` 禁止 `isThinking` 并发双发，持久化前剥离未获回复的孤儿用户气泡。
+
+## Scenario: 学情 4 Tab 课程过滤、自定义题单收藏夹与复习级知识卡（2026-11-25）
+
+- **统一课程过滤参数（`backend/app/api/v1/_filters.py::parse_folder_filter`）**：
+  - 全量支持 `?folder_id=<uuid|__none__>`（`GET /wrong-records` 同时保留 `unclassified=true` 向后兼容，`GET /mastery` 非法 UUID 保留 HTTP 400）。
+  - `GET /practices` 通过 `OUTER JOIN Material` 同时匹配课程级练习（`Practice.folder_id == X`）与单资料练习（`Practice.folder_id IS NULL AND Material.folder_id == X`），返回真实 `count_practices` `total` 并批量回填 `folder_name` / `material_title`；`POST /practices` 支持可选 `collection_id` 整单开练（上限 `MAX_PRACTICE_QUESTIONS=50`）。
+  - `GET /questions/grouped-summary` 注册于 `/questions/{question_id}` 之前，零迁移单次聚合返回「讲义 → 考点」题目树。
+  - 前端 `useReviewCenter.ts` 切换顶部课程时带 `filterEpoch` 防竞态，并发刷新 4 Tab 并清理错题勾选、题库三态勾选与批次展开缓存。
+- **自定义题单 API（严禁 `PATCH`，仅 `GET/POST/PUT/DELETE`）**：
+  - `GET/POST /collections`、`PUT/DELETE /collections/{id}`（删题单仅级联删关联项，绝不删原题）、`GET /collections/{id}/questions`（自动排除软删题）、`POST /collections/{id}/items`（幂等批量收纳）、`DELETE /collections/{id}/items/{question_id}`、`GET/POST /questions/{id}/collections`（单题原子同步归属）。
+  - 前端收纳入口统一挂载单例 `CollectionPickerDrawer.vue`（<= 250 行，`env(safe-area-inset-bottom)`）。
+- **考前复习级知识卡与 PDF/PPT 去噪（零 DB 迁移）**：
+  - `KnowledgePoint.structured_content`（JSONB）向后兼容新增可选 `derivation_steps: string[]` 与 `common_mistakes: string[]`，`core_summary` 改用 `trim_excerpt_cleanly(..., max_chars=200)` 保护公式；`SnippetSourceResponse` 新增可选 `page_end: int | None`（持久化于 `MaterialSnippet.source_info["page_end"]`）。
+  - `document_denoising.py` 负责跨页页眉/页脚/校名水印剔除、`PageRole` 模板页过滤（致谢/目录/空小结）及写入/读取双层原文依据过滤排序（老资料过滤后为空返回 `[]` 而非回吐「谢谢！」）；`ocr_quality.py` 与前端 `richText.ts::isGarbledSnippetText` 同步识别 `☒`（`\u2612`）/ `\ufffd` / `▯`。

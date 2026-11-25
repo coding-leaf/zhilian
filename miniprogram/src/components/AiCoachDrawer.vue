@@ -42,9 +42,11 @@
           class="chat-textarea"
           placeholder="向助教追问，支持多行输入..."
           :disabled="isThinking"
+          :fixed="true"
+          confirm-type="send"
           auto-height
           :maxlength="500"
-          :cursor-spacing="20"
+          :cursor-spacing="24"
           :adjust-position="true"
           :show-confirm-bar="false"
           @confirm="sendMessage"
@@ -66,6 +68,7 @@
 import { ref, watch } from 'vue'
 import CoachMessageList from './CoachMessageList.vue'
 import { useCoachChat } from '@/composables/useCoachChat'
+import { safeNavigateTo } from '@/utils/navigation'
 
 const props = defineProps<{
   visible: boolean
@@ -115,9 +118,8 @@ const closeDrawer = () => {
   emit('update:visible', false)
 }
 const openSource = (id: string) => {
-  uni.navigateTo({
-    url: `/subpackages/material/pages/course/index?id=${id}`,
-    fail: () => uni.showToast({ title: '打开来源讲义失败', icon: 'none' }),
+  safeNavigateTo(`/subpackages/material/pages/course/index?id=${id}`, {
+    failMessage: '打开来源讲义失败',
   })
 }
 </script>
@@ -175,5 +177,9 @@ const openSource = (id: string) => {
   border: 1px solid var(--color-paper-border); border-radius: 12rpx;
   padding: 18rpx 20rpx; font-size: 26rpx; line-height: 1.45; box-sizing: border-box;
 }
-.send-btn { width: 132rpx; height: 76rpx; font-size: 26rpx; flex-shrink: 0; }
+.send-btn {
+  width: 132rpx; height: 76rpx; font-size: 26rpx; flex-shrink: 0;
+  margin: 0; line-height: 1.4;
+  &::after { border: none; }
+}
 </style>

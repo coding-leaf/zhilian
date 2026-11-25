@@ -1,6 +1,6 @@
 <template>
   <view class="index-container">
-    <BackgroundTaskBar :auto-refresh="authStore.isLoggedIn()" />
+    <BackgroundTaskBar :auto-refresh="false" />
 
     <!-- 顶部温润书卷 Hero Header -->
     <view class="hero-section">
@@ -203,22 +203,33 @@ const { chooseFile } = useMaterialUpload({
   onUploaded: goToDetail,
 })
 
+let hasCompletedInitialLoad = false
+let inFlightRefresh: Promise<void> | null = null
+
 const refreshAll = async () => {
   if (!authStore.isLoggedIn()) return
-  await Promise.all([
+  if (inFlightRefresh) return inFlightRefresh
+  inFlightRefresh = Promise.all([
     folderStore.loadFolders(),
     loadMaterialListNonBlocking(folderStore.currentFolderId),
     taskStore.refreshActiveTasks(),
   ])
+    .then(() => undefined)
+    .finally(() => {
+      inFlightRefresh = null
+    })
+  return inFlightRefresh
 }
 
 onMounted(async () => {
   if (!authStore.isLoggedIn()) await authStore.loginWithWechat()
   await refreshAll()
+  hasCompletedInitialLoad = true
 })
 
 onShow(() => {
-  if (!authStore.isLoggedIn()) return
+  // 首次冷启已由 onMounted 统一拉取，避免与 onShow 重叠触发双倍并发请求
+  if (!hasCompletedInitialLoad || inFlightRefresh || !authStore.isLoggedIn()) return
   void taskStore.refreshActiveTasks()
   void materialStore.loadMaterialList(folderStore.currentFolderId)
 })

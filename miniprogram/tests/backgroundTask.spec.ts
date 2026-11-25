@@ -10,6 +10,7 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useMaterialStore } from '@/stores/material'
 
@@ -190,9 +191,10 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
 
   it('handles open-task navigation and dismiss action on completed BackgroundTaskBar notices', async () => {
     const navSpy = vi.spyOn(uni, 'navigateTo')
+    const switchTabSpy = vi.spyOn(uni, 'switchTab')
     const store = useBackgroundTaskStore()
     store.trackQuestionJob({
-      id: 'job-done',
+      id: 'job-done-practice',
       status: 'completed',
       material_id: 'm-9',
       folder_id: null,
@@ -201,6 +203,9 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
       generated_count: 5,
       batch_id: 'b-9',
       question_ids: ['q-1'],
+      result_practice_id: 'p-ready-9',
+      source_type: 'wrong_record',
+      practice_title: '错题巩固练习',
       error_message: null,
       created_at: '',
       updated_at: '',
@@ -208,15 +213,39 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
     })
 
     const wrapper = mount(BackgroundTaskBar)
-    expect(wrapper.text()).toContain('去查看')
+    expect(wrapper.text()).toContain('错题巩固卷已就绪')
+    expect(wrapper.text()).toContain('立即作答')
     await wrapper.find('.task-action-btn').trigger('tap')
     expect(navSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: '/subpackages/material/pages/questions/index?material_id=m-9&view=generated&batch_id=b-9',
+        url: '/subpackages/practice/pages/session/index?practice_id=p-ready-9',
       }),
     )
     expect(store.visibleTasks).toEqual([])
     wrapper.unmount()
+
+    store.trackQuestionJob({
+      id: 'job-done-fallback',
+      status: 'completed',
+      material_id: 'm-9',
+      folder_id: null,
+      total_kps: 3,
+      completed_kps: 3,
+      generated_count: 2,
+      batch_id: 'b-10',
+      question_ids: ['q-2'],
+      result_practice_id: null,
+      error_message: null,
+      created_at: '',
+      updated_at: '',
+      completed_at: '2026-11-17T10:00:00',
+    })
+    const wrapperFallback = mount(BackgroundTaskBar)
+    await wrapperFallback.find('.task-action-btn').trigger('tap')
+    expect(switchTabSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: '/pages/review/index' }),
+    )
+    wrapperFallback.unmount()
 
     store.trackMaterialParse({
       id: 'm-10',
@@ -248,6 +277,19 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
             parse_status: readyAfterRefresh ? 'ready' : 'extracting_knowledge',
             progress_percentage: readyAfterRefresh ? 100 : 60,
             created_at: '',
+          }
+        }
+        if (url === '/questions/jobs/job-other') {
+          return {
+            id: 'job-other',
+            status: 'running',
+            material_id: 'm-2',
+            total_kps: 2,
+            completed_kps: 1,
+            generated_count: 0,
+            question_ids: [],
+            created_at: '',
+            updated_at: '',
           }
         }
         throw new Error(`unexpected: ${url}`)
@@ -285,5 +327,166 @@ describe('useBackgroundTaskStore & BackgroundTaskBar', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('passes silentToast: true on polling/refreshActiveTasks, throttles poll concurrency <= 2, and removes 404/403 tasks', async () => {
+    let inflight = 0
+    let maxInflight = 0
+    const pollOptions: any[] = []
+
+    requestMock.mockImplementation(async (options: any) => {
+      pollOptions.push(options)
+      inflight += 1
+      maxInflight = Math.max(maxInflight, inflight)
+      await new Promise((r) => setTimeout(r, 5))
+      inflight -= 1
+
+      if (options.url === '/materials/m-404') {
+        const err: any = new Error('not found')
+        err.statusCode = 404
+        throw err
+      }
+      if (options.url === '/questions/jobs/job-403') {
+        const err: any = new Error('forbidden')
+        err.statusCode = 403
+        throw err
+      }
+      if (options.url.startsWith('/materials/')) {
+        const id = options.url.split('/').pop()
+        return { id, title: id, status: 'parsing', parse_status: 'ocr_processing', progress_percentage: 20, created_at: '' }
+      }
+      if (options.url.startsWith('/questions/jobs/')) {
+        const id = options.url.split('/').pop()
+        return { id, status: 'running', total_kps: 2, completed_kps: 1, generated_count: 1, question_ids: [], created_at: '', updated_at: '' }
+      }
+      return { items: [], total: 0 }
+    })
+
+    const store = useBackgroundTaskStore()
+    store.trackMaterialParse({ id: 'm-1', title: 'M1', status: 'parsing', created_at: '' })
+    store.trackMaterialParse({ id: 'm-404', title: 'M404', status: 'parsing', created_at: '' })
+    store.trackQuestionJob({ id: 'job-1', status: 'running', total_kps: 2, completed_kps: 0, generated_count: 0, question_ids: [], created_at: '', updated_at: '' })
+    store.trackQuestionJob({ id: 'job-403', status: 'running', total_kps: 2, completed_kps: 0, generated_count: 0, question_ids: [], created_at: '', updated_at: '' })
+    store.stopPolling()
+
+    await store.pollOnce()
+    expect(maxInflight).toBeLessThanOrEqual(2)
+    expect(pollOptions.every((opt) => opt.silentToast === true)).toBe(true)
+    expect(store.materialTasks.has('m-404')).toBe(false)
+    expect(store.questionJobs.has('job-403')).toBe(false)
+    expect(store.materialTasks.has('m-1')).toBe(true)
+    expect(store.questionJobs.has('job-1')).toBe(true)
+
+    pollOptions.length = 0
+    await store.refreshActiveTasks()
+    expect(pollOptions.some((opt) => opt.url === '/materials' && opt.silentToast === true)).toBe(true)
+    expect(pollOptions.some((opt) => opt.url.startsWith('/questions/jobs') && opt.silentToast === true)).toBe(true)
+  })
+
+  it('marks active questionJobs timedOut on exhaustion, supports refreshQuestionJob, and excludes active job in BackgroundTaskBar', async () => {
+    vi.useFakeTimers()
+    try {
+      let completedAfterRefresh = false
+      requestMock.mockImplementation(async ({ url }: { url: string }) => {
+        if (url === '/questions/jobs/job-slow') {
+          return {
+            id: 'job-slow',
+            status: completedAfterRefresh ? 'completed' : 'running',
+            material_id: 'm-1',
+            total_kps: 4,
+            completed_kps: completedAfterRefresh ? 4 : 1,
+            generated_count: completedAfterRefresh ? 4 : 0,
+            result_practice_id: completedAfterRefresh ? 'p-slow-1' : null,
+            source_type: 'initial_compose',
+            question_ids: [],
+            created_at: '',
+            updated_at: '',
+          }
+        }
+        if (url === '/questions/jobs/job-other') {
+          return {
+            id: 'job-other',
+            status: 'running',
+            material_id: 'm-2',
+            total_kps: 2,
+            completed_kps: 1,
+            generated_count: 0,
+            question_ids: [],
+            created_at: '',
+            updated_at: '',
+          }
+        }
+        throw new Error(`unexpected: ${url}`)
+      })
+
+      const store = useBackgroundTaskStore()
+      store.trackQuestionJob({
+        id: 'job-slow',
+        status: 'running',
+        material_id: 'm-1',
+        total_kps: 4,
+        completed_kps: 0,
+        generated_count: 0,
+        source_type: 'initial_compose',
+        question_ids: [],
+        created_at: '',
+        updated_at: '',
+      })
+      store.trackQuestionJob({
+        id: 'job-other',
+        status: 'running',
+        material_id: 'm-2',
+        total_kps: 2,
+        completed_kps: 1,
+        generated_count: 0,
+        question_ids: [],
+        created_at: '',
+        updated_at: '',
+      })
+      store.stopPolling()
+
+      const excludedBar = mount(BackgroundTaskBar, { props: { excludeJobId: 'job-slow' } })
+      expect(excludedBar.text()).not.toContain('0/4 考点')
+      expect(excludedBar.text()).toContain('1/2 考点')
+      excludedBar.unmount()
+
+      const pollPromise = store.ensurePolling(100, 2)
+      await vi.advanceTimersByTimeAsync(500)
+      await pollPromise
+
+      expect(store.questionJobs.get('job-slow')?.timedOut).toBe(true)
+      const slowItem = store.visibleTasks.find((t) => t.key === 'job:job-slow')
+      expect(slowItem).toMatchObject({ timedOut: true, actionLabel: '刷新' })
+
+      completedAfterRefresh = true
+      const bar = mount(BackgroundTaskBar)
+      const slowRefreshBtn = bar.findAll('.task-strip').find((el) => el.text().includes('进度同步已暂停'))?.find('.task-action-btn')
+      expect(slowRefreshBtn).toBeDefined()
+      await slowRefreshBtn!.trigger('tap')
+      await vi.waitFor(() => {
+        expect(store.questionJobs.get('job-slow')?.status).toBe('completed')
+      })
+      expect(store.questionJobs.get('job-slow')?.result_practice_id).toBe('p-slow-1')
+      expect(bar.text()).toContain('试卷已就绪')
+      expect(bar.text()).toContain('立即作答')
+      bar.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips autoRefresh in BackgroundTaskBar when user is not logged in', async () => {
+    const wrapper = mount(BackgroundTaskBar, { props: { autoRefresh: true } })
+    await Promise.resolve()
+    expect(requestMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+
+    const authStore = useAuthStore()
+    authStore.setToken('tok-bg')
+    requestMock.mockResolvedValue({ items: [], total: 0 })
+    const loggedInWrapper = mount(BackgroundTaskBar, { props: { autoRefresh: true } })
+    await Promise.resolve()
+    expect(requestMock).toHaveBeenCalled()
+    loggedInWrapper.unmount()
   })
 })

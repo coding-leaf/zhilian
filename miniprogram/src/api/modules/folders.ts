@@ -23,7 +23,7 @@ export function apiCreateFolder(name: string): Promise<FolderItem> {
 export function apiRenameFolder(folderId: string, name: string): Promise<FolderItem> {
   return request<FolderItem>({
     url: `/folders/${folderId}`,
-    method: 'PATCH',
+    method: 'PUT',
     data: { name },
   })
 }

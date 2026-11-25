@@ -351,3 +351,36 @@ def test_calculate_gibberish_ratio_details() -> None:
     # 含有常见标点与公式的正常文本，乱码率应为 0.0
     math_text = "公式: E = mc^2, f(x) = a * x + b; {1, 2, 3}."
     assert calculate_gibberish_ratio(math_text) == 0.0
+
+
+def test_detect_symbol_garble_catches_tofu_boxes_and_replacement_chars() -> None:
+    """Single ☒ (U+2612), replacement char, ▯, and math-adjacent boxes trigger garble repair."""
+    from app.core.algorithms.ocr_quality import (
+        detect_broken_math_layout,
+        detect_symbol_garble,
+        sanitize_symbol_garble,
+    )
+
+    for sample in (
+        "软间隔目标函数：min 1/2 ||w||^2 + C ☒ ξ_i",
+        "存在未知映射符号 \ufffd 导致公式残缺",
+        "求和公式 ▯_{i=1}^n x_i = 0",
+        "约束条件满足 x_1 + □ = 0 与 C □ ξ_i",
+    ):
+        is_garbled, _ratio, frags = detect_symbol_garble(sample)
+        assert is_garbled is True, f"expected garbled for {sample!r}"
+        assert len(frags) >= 1
+        assert detect_broken_math_layout(sample) is True
+        cleaned = sanitize_symbol_garble(sample)
+        assert "☒" not in cleaned
+        assert "\ufffd" not in cleaned
+        assert "▯" not in cleaned
+
+    # Legitimate checklists, Markdown tables, and clean LaTeX must NOT false-positive
+    for clean in (
+        "□ 已完成复习任务一\n● 第二章重点回顾",
+        "| 符号 | 含义 |\n| --- | --- |\n| $C$ | 惩罚系数 |",
+        "软间隔目标函数为 $\\min \\frac{1}{2}\\|w\\|^2 + C\\sum_{i=1}^n \\xi_i$。",
+    ):
+        is_garbled, _ratio, _frags = detect_symbol_garble(clean)
+        assert is_garbled is False, f"unexpected false positive for {clean!r}"

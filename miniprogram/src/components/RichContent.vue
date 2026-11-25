@@ -11,6 +11,7 @@ import { parseRichContent } from '@/utils/richText'
 defineOptions({
   options: {
     virtualHost: true,
+    styleIsolation: 'apply-shared',
   },
 })
 

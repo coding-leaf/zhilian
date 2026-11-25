@@ -8,6 +8,7 @@
 """
 
 import json
+import logging
 import re
 from collections.abc import Sequence
 from typing import Any, Literal, TypedDict, cast
@@ -22,6 +23,8 @@ from app.integrations.llm.protocol import (
     LLMProtocol,
     LLMResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AgentWorkflowState(TypedDict, total=False):
@@ -99,6 +102,7 @@ def call_model_node(
             )
         else:
             effective_options = LLMOptions(
+                timeout=None,
                 tools=tools,
                 tool_choice=tool_choice,
             )
@@ -183,6 +187,40 @@ def decide_after_validation(
     return "fallback_node"
 
 
+def _format_schema_hints(response_model: type[BaseModel]) -> str:
+    """生成用于自愈重试的精简目标 Schema 字段说明。"""
+    schema = response_model.model_json_schema()
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return json.dumps(schema, ensure_ascii=False)[:800]
+
+    required = set(schema.get("required") or [])
+    field_parts: list[str] = []
+    for name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        prop_type = prop.get("type")
+        if not prop_type and isinstance(prop.get("anyOf"), list):
+            prop_type = "|".join(
+                str(opt.get("type", "any"))
+                for opt in prop["anyOf"]
+                if isinstance(opt, dict) and opt.get("type")
+            )
+        if not prop_type and "$ref" in prop:
+            prop_type = str(prop["$ref"]).rsplit("/", 1)[-1]
+        if prop_type == "array" and isinstance(prop.get("items"), dict):
+            item_spec = prop["items"]
+            item_type = item_spec.get("type") or (
+                str(item_spec["$ref"]).rsplit("/", 1)[-1] if "$ref" in item_spec else "any"
+            )
+            prop_type = f"array<{item_type}>"
+        req_flag = "required" if name in required else "optional"
+        desc = prop.get("description")
+        desc_text = f" ({desc})" if isinstance(desc, str) and desc.strip() else ""
+        field_parts.append(f"{name}: {prop_type or 'any'} [{req_flag}]{desc_text}")
+    return "; ".join(field_parts)
+
+
 def repair_prompt_node(
     state: AgentWorkflowState,
 ) -> dict[str, Any]:
@@ -204,13 +242,19 @@ def repair_prompt_node(
         else:
             raw_content = raw_response.content
     error_message = state.get("error_message") or "Unknown validation error"
+    response_model = state.get("response_model")
+    schema_hint = ""
+    if response_model is not None:
+        hints = _format_schema_hints(response_model)
+        if hints:
+            schema_hint = f" Expected schema fields: {hints}."
 
     current_messages.append(LLMMessage(role="assistant", content=raw_content or "{}"))
     current_messages.append(
         LLMMessage(
             role="user",
             content=(
-                f"Your previous response failed validation: {error_message}. "
+                f"Your previous response failed validation: {error_message}.{schema_hint} "
                 "Please correct the output and return strictly valid JSON conforming to the schema."
             ),
         )
@@ -320,15 +364,17 @@ def run_structured_agent_workflow[T: BaseModel](
         return cast(T, result["parsed_data"]), cast(LLMResponse, result["raw_response"])
 
     error_detail = result.get("error_message") or "输出格式不符合 Schema 规范且自愈失败"
-    last_content = ""
-    if result.get("raw_response"):
-        last_content = result["raw_response"].content[:200]
+    retry_count = result.get("retry_count", 0)
+    logger.warning(
+        "structured agent validation failed after retry=%s: %s",
+        retry_count,
+        str(error_detail)[:300],
+    )
 
     raise LLMResponseFormatError(
-        f"结构化 Agent 状态图校验自愈失败: {error_detail}",
+        "AI 输出格式暂时异常，请稍后重试",
         details={
-            "retry_count": result.get("retry_count", 0),
-            "last_content_preview": last_content,
+            "retry_count": retry_count,
         },
     )
 

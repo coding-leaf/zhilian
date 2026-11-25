@@ -496,6 +496,34 @@ class QuestionGenerationJob(Base, TimestampMixin, TenantModelMixin):
         default=list,
         comment="已生成的题目 UUID 字符串列表",
     )
+    result_practice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("practices.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="自动建卷产出的练习主键 UUID (可空)",
+    )
+    source_type: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        default=None,
+        comment="任务来源意图 (initial_compose|wrong_record|weakness)",
+    )
+    source_practice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="错题再生成溯源原练习主键 UUID (可空)",
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        default=None,
+        index=True,
+        comment="异步出题任务幂等键 (可空)",
+    )
     error_message: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -513,6 +541,17 @@ class QuestionGenerationJob(Base, TimestampMixin, TenantModelMixin):
         Index("ix_question_generation_jobs_user_status", "user_id", "status"),
         Index("ix_question_generation_jobs_user_created", "user_id", "created_at"),
     )
+
+    @property
+    def practice_title(self) -> str | None:
+        """从请求载荷快照中安全提取自动建卷标题。"""
+        if not isinstance(self.request_payload, dict):
+            return None
+        raw = self.request_payload.get("practice_title")
+        if not isinstance(raw, str):
+            return None
+        cleaned = raw.strip()
+        return cleaned or None
 
     def __repr__(self) -> str:
         return (

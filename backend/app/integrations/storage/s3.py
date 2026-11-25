@@ -87,8 +87,21 @@ class S3StorageAdapter(StorageProtocol):
             aws_session_token=self.session_token,
             region_name=self.region_name,
             use_ssl=self.secure,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=10,
+                read_timeout=30,
+                max_pool_connections=20,
+            ),
         )
+
+    def close(self) -> None:
+        """关闭底层 boto3 S3 客户端并释放 HTTP 连接池。"""
+        if self._client is None:
+            return
+        close_fn = getattr(self._client, "close", None)
+        if callable(close_fn):
+            close_fn()
 
     @property
     def client(self) -> Any:

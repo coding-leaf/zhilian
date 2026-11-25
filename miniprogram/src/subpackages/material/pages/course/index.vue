@@ -64,6 +64,7 @@ import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
 import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
 import { safeShowToast } from '@/utils/loadingGuard'
+import { safeNavigateTo } from '@/utils/navigation'
 import type { KnowledgeTreeNode } from '@/types'
 import MaterialCourseHeader from '../../components/MaterialCourseHeader.vue'
 import KnowledgePointList from '../../components/KnowledgePointList.vue'
@@ -114,27 +115,22 @@ const handleOpenTask = (task: BackgroundTaskItem) => {
       void course.loadDetail()
       return
     }
-    uni.navigateTo({
-      url: `/subpackages/material/pages/course/index?id=${task.materialId}`,
-      fail: () => safeShowToast('打开讲义详情失败'),
+    safeNavigateTo(`/subpackages/material/pages/course/index?id=${task.materialId}`, {
+      failMessage: '打开讲义详情失败',
     })
     return
   }
   if (task.kind !== 'question_job') return
-  const query: string[] = ['view=generated']
-  if (task.materialId) query.unshift(`material_id=${encodeURIComponent(task.materialId)}`)
-  else if (task.folderId) query.unshift(`folder_id=${encodeURIComponent(task.folderId)}`)
-  else {
-    uni.switchTab({
-      url: '/pages/review/index',
-      fail: () => safeShowToast('跳转学情页失败'),
-    })
+  if (task.resultPracticeId) {
+    safeNavigateTo(
+      `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(task.resultPracticeId)}`,
+      { failMessage: '打开练习失败，请重试' },
+    )
     return
   }
-  if (task.batchId) query.push(`batch_id=${encodeURIComponent(task.batchId)}`)
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?${query.join('&')}`,
-    fail: () => safeShowToast('打开出题结果失败'),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('跳转我的题库失败'),
   })
 }
 
@@ -160,10 +156,10 @@ const openMaterialCoach = () => {
 const goToPracticePoint = (point: KnowledgeTreeNode) => {
   if (!course.materialId.value || !point?.id) return
   course.showPointModal.value = false
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?material_id=${encodeURIComponent(course.materialId.value)}&kp_id=${encodeURIComponent(point.id)}`,
-    fail: () => safeShowToast('打开出题页失败，请重试'),
-  })
+  safeNavigateTo(
+    `/subpackages/material/pages/questions/index?material_id=${encodeURIComponent(course.materialId.value)}&kp_id=${encodeURIComponent(point.id)}`,
+    { failMessage: '打开出题页失败，请重试' },
+  )
 }
 
 const practiceSelectedPoint = () => {
@@ -173,17 +169,15 @@ const practiceSelectedPoint = () => {
 
 const goToQuestionConfig = () => {
   if (!course.materialId.value) return
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?material_id=${course.materialId.value}`,
-    fail: () => safeShowToast('打开出题页失败，请重试'),
+  safeNavigateTo(`/subpackages/material/pages/questions/index?material_id=${course.materialId.value}`, {
+    failMessage: '打开出题页失败，请重试',
   })
 }
 
 const goToGeneratedQuestions = () => {
-  if (!course.materialId.value) return
-  uni.navigateTo({
-    url: `/subpackages/material/pages/questions/index?material_id=${course.materialId.value}&view=generated`,
-    fail: () => safeShowToast('打开已生成题目失败，请重试'),
+  uni.switchTab({
+    url: '/pages/review/index',
+    fail: () => safeShowToast('打开我的题库失败，请重试'),
   })
 }
 </script>

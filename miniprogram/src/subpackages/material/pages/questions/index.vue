@@ -1,27 +1,24 @@
 <template>
   <view class="questions-container">
-    <BackgroundTaskBar disable-auto-navigate @open-task="handleOpenBackgroundTask" />
+    <BackgroundTaskBar
+      :exclude-job-id="compose.activeJobId.value"
+      disable-auto-navigate
+      @open-task="handleOpenBackgroundTask"
+    />
 
     <view class="page-header">
-      <text class="page-title">{{ isConfigMode ? '智能组卷与出题配置' : '核对生成题目' }}</text>
-      <text class="page-subtitle">
-        {{ isConfigMode
-          ? '勾选考点、指定题型与难度，提交后台非阻塞出题'
-          : `已生成 ${compose.remainingQuestions.value.length} 道题目，核对答案与解析后开始作答` }}
-      </text>
+      <text class="page-title">{{ pageTitle }}</text>
+      <text class="page-subtitle">{{ pageSubtitle }}</text>
     </view>
 
-    <view v-if="compose.isJobInFlight.value" class="paper-card job-progress-banner">
-      <text class="job-banner-text">{{ compose.jobProgressText.value }}</text>
+    <view v-if="compose.viewMode.value === 'generating'" class="paper-card job-progress-banner">
+      <text class="job-banner-text">{{ compose.jobProgressText.value || '正在后台出题...' }}</text>
+      <text class="job-hint-text">可随时离开，完成后顶部提醒</text>
       <view class="job-progress-track">
         <view class="job-progress-fill" :style="{ width: `${compose.jobProgressPercent.value}%` }" />
       </view>
       <view class="job-banner-actions">
-        <button
-          v-if="compose.scope.value.materialId"
-          class="job-nav-btn"
-          @tap="goBrowseMaterial"
-        >
+        <button v-if="compose.scope.value.materialId" class="job-nav-btn" @tap="goBrowseMaterial">
           先去浏览讲义
         </button>
         <button class="job-nav-btn job-nav-secondary" @tap="goToWorkbench">
@@ -30,8 +27,23 @@
       </view>
     </view>
 
+    <QuestionReadyCard
+      v-else-if="compose.viewMode.value === 'ready'"
+      :available-count="compose.readyAvailableCount.value"
+      :covered-kp-count="compose.readyCoveredKpCount.value"
+      :pending-review-count="compose.readyPendingCount.value"
+      :missing-kp-count="compose.coverage.value.missing.length"
+      :practice-title="compose.readyPracticeTitle.value"
+      :is-loading="compose.isLoadingReady.value"
+      :is-starting="compose.isStarting.value"
+      :can-start="compose.canStart.value"
+      @start="handleStartPractice"
+      @go-bank="goToReviewBank"
+      @reconfig="compose.reconfig"
+    />
+
     <QuestionConfigPanel
-      v-if="isConfigMode"
+      v-else
       :available-kp-list="compose.availableKpList.value"
       :kp-groups="compose.kpGroups.value"
       :selected-kp-ids="compose.selectedKpIds.value"
@@ -43,7 +55,7 @@
       :planned-count="compose.plannedCount.value"
       :exceeds-practice-limit="compose.exceedsPracticeLimit.value"
       :is-all-kp-selected="compose.isAllKpSelected.value"
-      :is-loading-kp="isLoadingKp"
+      :is-loading-kp="compose.isLoadingKp.value"
       :is-generating="compose.isGenerating.value"
       :is-job-in-flight="compose.isJobInFlight.value"
       @open-picker="showKpDrawer = true"
@@ -53,23 +65,6 @@
       @update:question-count="compose.questionCount.value = $event"
       @update:difficulty="compose.difficulty.value = $event"
       @generate="handleGenerate"
-    />
-
-    <QuestionPreviewPanel
-      v-else
-      :questions="compose.remainingQuestions.value"
-      :generated-batch-notice="compose.generatedBatchNotice.value"
-      :generation-notice="compose.generationNotice.value"
-      :missing-count="compose.coverage.value.missing.length"
-      :is-generating="compose.isGenerating.value"
-      :is-job-in-flight="compose.isJobInFlight.value"
-      :is-starting="compose.isStarting.value"
-      :can-start="compose.canStart.value"
-      @fill-gap="compose.fillCoverageGap"
-      @remove="compose.removeQuestion"
-      @regenerate="compose.regenerateQuestion"
-      @reconfig="isConfigMode = true"
-      @start="handleStartPractice"
     />
 
     <KnowledgePointPickerDrawer
@@ -85,32 +80,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
-import { MAX_PRACTICE_QUESTIONS } from '@/api'
 import BackgroundTaskBar from '@/components/BackgroundTaskBar.vue'
 import { useBackgroundTaskStore, type BackgroundTaskItem } from '@/stores/backgroundTask'
-import { useMaterialStore } from '@/stores/material'
-import { usePracticeStore } from '@/stores/practice'
-import { useFolderStore } from '@/stores/folder'
-import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
+import { safeShowToast } from '@/utils/loadingGuard'
 import { describeFailure, RequestError } from '@/utils/requestError'
 import KnowledgePointPickerDrawer from '../../components/KnowledgePointPickerDrawer.vue'
 import QuestionConfigPanel from '../../components/QuestionConfigPanel.vue'
-import QuestionPreviewPanel from '../../components/QuestionPreviewPanel.vue'
+import QuestionReadyCard from '../../components/QuestionReadyCard.vue'
 import { useQuestionCompose } from '../../composables/useQuestionCompose'
-import { mapTreeNodesToComposeOptions } from '../../utils/composeHelpers'
-import { flattenTreeWithParents } from '../../utils/courseStudy'
 
-const materialStore = useMaterialStore()
-const practiceStore = usePracticeStore()
-const folderStore = useFolderStore()
 const taskStore = useBackgroundTaskStore()
 const compose = useQuestionCompose()
-
-const isConfigMode = ref(true)
-const isLoadingKp = ref(false)
 const showKpDrawer = ref(false)
+let isInitialLoading = false
+
+const pageTitle = computed(() => {
+  if (compose.viewMode.value === 'generating') return '正在后台智能出题'
+  if (compose.viewMode.value === 'ready') return '试卷已就绪'
+  return '智能组卷与出题配置'
+})
+
+const pageSubtitle = computed(() => {
+  if (compose.viewMode.value === 'generating') return '可随时离开继续浏览，完成后顶部提醒'
+  if (compose.viewMode.value === 'ready') return '确认即可直接进入答题，也可前往我的题库查看'
+  return '勾选考点、指定题型与难度，提交后台非阻塞出题'
+})
 
 watch(
   () => compose.activeJob.value?.status,
@@ -119,102 +115,81 @@ watch(
     if (!job) return
     if (status === 'completed') {
       const count = await compose.applyCompletedJob(job)
-      if (count > 0) {
-        isConfigMode.value = false
-        safeShowToast(`已生成 ${count} 道题目`, 'success')
-      }
+      if (count > 0) safeShowToast(`试卷已就绪（${count} 题）`)
     } else if (status === 'failed') {
       safeShowToast(job.error_message || '后台出题失败，请重试')
       compose.clearActiveJob()
+      compose.viewMode.value = 'config'
     }
   },
 )
 
 onLoad(async (options) => {
-  const preselectedKpId = options?.kp_id
-  if (options?.folder_id) {
-    compose.setScope({ folderId: options.folder_id })
-    await loadKpFromFolder(options.folder_id, preselectedKpId)
-  } else if (options?.material_id) {
-    compose.setScope({ materialId: options.material_id })
-    await loadKpFromMaterial(options.material_id, preselectedKpId)
-  }
-  if (options?.view === 'generated') {
-    if (options?.batch_id) {
-      await loadGeneratedBatch(options.batch_id)
-    } else if (options?.material_id) {
-      await loadGeneratedQuestions(options.material_id)
+  isInitialLoading = true
+  try {
+    const scopeOptions = { folderId: options?.folder_id, materialId: options?.material_id }
+    if (scopeOptions.folderId) compose.setScope({ folderId: scopeOptions.folderId })
+    else if (scopeOptions.materialId) compose.setScope({ materialId: scopeOptions.materialId })
+
+    if (options?.view === 'generated') {
+      compose.viewMode.value = 'ready'
+      compose.isLoadingReady.value = true
+    } else if (compose.hasScopeActiveJob(scopeOptions)) {
+      await compose.attachActiveJobForScope()
     }
-  } else {
-    await taskStore.refreshActiveTasks()
-    compose.attachActiveJobForScope()
+
+    await compose.loadScopeKnowledgePoints({ ...scopeOptions, preselectedKpId: options?.kp_id })
+
+    if (options?.view === 'generated') {
+      try {
+        if (options?.batch_id) await loadGeneratedBatch(options.batch_id)
+        else if (options?.material_id) await loadGeneratedQuestions(options.material_id)
+      } finally {
+        compose.isLoadingReady.value = false
+      }
+    } else {
+      await taskStore.refreshActiveTasks()
+      await compose.attachActiveJobForScope()
+    }
+  } finally {
+    isInitialLoading = false
   }
 })
 
-onShow(() => {
-  compose.attachActiveJobForScope()
+onShow(async () => {
+  if (isInitialLoading || compose.viewMode.value === 'ready') return
+  await compose.attachActiveJobForScope()
 })
-
-const loadKpFromFolder = async (folderId: string, preselectedKpId?: string) => {
-  isLoadingKp.value = true
-  try {
-    const res = await folderStore.loadFolderKnowledgePoints(folderId)
-    const list = (res.groups || []).flatMap((group) =>
-      compose.flattenKnowledgePoints(group.knowledge_points || [], {
-        materialId: group.material_id,
-        materialTitle: group.material_title,
-      }),
-    )
-    compose.setKnowledgePoints(list, preselectedKpId)
-  } finally {
-    isLoadingKp.value = false
-  }
-}
-
-const loadKpFromMaterial = async (materialId: string, preselectedKpId?: string) => {
-  isLoadingKp.value = true
-  try {
-    const tree = await materialStore.loadKnowledgeTree(materialId)
-    const nodes = flattenTreeWithParents(tree?.nodes)
-    compose.setKnowledgePoints(mapTreeNodesToComposeOptions(nodes), preselectedKpId)
-  } finally {
-    isLoadingKp.value = false
-  }
-}
 
 const loadGeneratedBatch = async (batchId: string) => {
   try {
-    const count = await withBlockingLoading('加载生成题目...', () =>
-      compose.loadBatchQuestions(batchId),
-    )
-    if (count > 0) {
-      isConfigMode.value = false
-      return
+    const count = await compose.loadBatchQuestions(batchId)
+    if (count === 0) {
+      compose.viewMode.value = 'ready'
+      safeShowToast('该批次暂无可用题目')
     }
-    safeShowToast('该批次暂无可用题目')
   } catch (error: any) {
-    if (!(error instanceof RequestError)) {
-      safeShowToast(describeFailure(error, '加载生成题目失败'))
-    }
+    if (!(error instanceof RequestError)) safeShowToast(describeFailure(error, '加载生成题目失败'))
   }
 }
 
-/** 「继续核对已生成题目」入口：直接进入核对视图，无数据时留在配置区并提示。 */
 const loadGeneratedQuestions = async (materialId: string) => {
   try {
-    const count = await withBlockingLoading('加载已生成题目...', () =>
-      compose.loadExistingQuestions(materialId),
-    )
-    if (count > 0) {
-      isConfigMode.value = false
-      return
+    const count = await compose.loadExistingQuestions(materialId)
+    if (count === 0) {
+      compose.viewMode.value = 'config'
+      safeShowToast('该讲义暂无可用题目')
     }
-    safeShowToast('该讲义暂无已生成题目')
   } catch (error: any) {
-    if (!(error instanceof RequestError)) {
-      safeShowToast(describeFailure(error, '已生成题目加载失败'))
-    }
+    if (!(error instanceof RequestError)) safeShowToast(describeFailure(error, '已生成题目加载失败'))
   }
+}
+
+const navigateToSession = (practiceId: string) => {
+  uni.navigateTo({
+    url: `/subpackages/practice/pages/session/index?practice_id=${encodeURIComponent(practiceId)}`,
+    fail: () => safeShowToast('打开练习失败，请重试'),
+  })
 }
 
 const handleOpenBackgroundTask = async (task: BackgroundTaskItem) => {
@@ -225,65 +200,46 @@ const handleOpenBackgroundTask = async (task: BackgroundTaskItem) => {
     })
     return
   }
-  if (task.kind === 'question_job' && task.batchId) {
-    await loadGeneratedBatch(task.batchId)
+  if (task.kind !== 'question_job') return
+  if (task.resultPracticeId) return navigateToSession(task.resultPracticeId)
+  if (task.batchId) {
+    compose.viewMode.value = 'ready'
+    compose.isLoadingReady.value = true
+    try {
+      await loadGeneratedBatch(task.batchId)
+    } finally {
+      compose.isLoadingReady.value = false
+    }
+    return
   }
+  goToReviewBank()
 }
 
 const handleGenerate = async () => {
   const generatedCount = await compose.generate()
-  if (generatedCount > 0) {
-    isConfigMode.value = false
-    safeShowToast(`已生成 ${generatedCount} 道题目`, 'success')
-  }
+  if (generatedCount > 0) safeShowToast(`试卷已就绪（${generatedCount} 题）`)
 }
 
 const goBrowseMaterial = () => {
   const materialId = compose.scope.value.materialId
   if (!materialId) return
-  uni.navigateTo({ url: `/subpackages/material/pages/course/index?id=${materialId}`, fail: () => safeShowToast('打开讲义详情失败') })
+  uni.navigateTo({
+    url: `/subpackages/material/pages/course/index?id=${materialId}`,
+    fail: () => safeShowToast('打开讲义详情失败'),
+  })
 }
 
 const goToWorkbench = () => {
   uni.switchTab({ url: '/pages/index/index', fail: () => safeShowToast('返回工作台失败') })
 }
 
+const goToReviewBank = () => {
+  uni.switchTab({ url: '/pages/review/index', fail: () => safeShowToast('打开我的题库失败') })
+}
+
 const handleStartPractice = async () => {
-  if (!compose.canStart.value) {
-    safeShowToast('请先补齐考点覆盖')
-    return
-  }
-  compose.isStarting.value = true
-  try {
-    const questionIds = compose.remainingQuestions.value
-      .map((question) => question.id)
-      .slice(0, MAX_PRACTICE_QUESTIONS)
-    const session = await withBlockingLoading('准备考场中...', () =>
-      practiceStore.initPractice(undefined, {
-        title: compose.scope.value.folderId ? '课程针对性测验' : '讲义专题测验',
-        folder_id: compose.scope.value.folderId,
-        material_id: compose.scope.value.folderId ? undefined : compose.scope.value.materialId,
-        knowledge_point_ids: compose.targetKpIdsForCoverage.value,
-        question_types: compose.selectedTypes.value,
-        question_ids: questionIds.length > 0 ? questionIds : undefined,
-        question_count: questionIds.length > 0 ? questionIds.length : undefined,
-      }),
-    )
-    if (!session?.id) {
-      safeShowToast('练习初始化失败，请重试')
-      return
-    }
-    uni.navigateTo({
-      url: `/subpackages/practice/pages/session/index?practice_id=${session.id}`,
-      fail: () => safeShowToast('打开练习失败，请重试'),
-    })
-  } catch (error: any) {
-    if (!(error instanceof RequestError)) {
-      safeShowToast(describeFailure(error, '初始化练习失败'))
-    }
-  } finally {
-    compose.isStarting.value = false
-  }
+  const practiceId = await compose.resolvePracticeForReadyCard()
+  if (practiceId) navigateToSession(practiceId)
 }
 </script>
 

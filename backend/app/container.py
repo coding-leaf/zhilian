@@ -12,18 +12,20 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import AppSettings, get_settings
 from app.integrations.container import ProviderRegistry
 from app.integrations.llm.coach_memory import CoachSessionMemory
+from app.integrations.search.pgvector import use_active_search_session
 from app.repositories.diagnosis import DiagnosisRepository
 from app.repositories.material import MaterialRepository
 from app.repositories.question import QuestionRepository
 from app.services._material_pipeline import resolve_progress_redis_client
 from app.services.auth import AuthService
+from app.services.collection import CollectionService
 from app.services.diagnosis import DiagnosisService
 from app.services.folder import FolderService
 from app.services.grading import GradingService
@@ -31,6 +33,18 @@ from app.services.knowledge import KnowledgeService
 from app.services.material import MaterialService
 from app.services.practice import PracticeService
 from app.services.question import QuestionService
+
+
+def _configure_sqlite_connection(dbapi_connection: Any, _connection_record: Any) -> None:
+    """Configure SQLite WAL mode, busy_timeout, synchronous, and foreign keys."""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
 
 
 class HealthResult(dict[str, Any]):
@@ -102,9 +116,19 @@ class AppContainer:
                 engine = create_engine(
                     settings.db.db_url,
                     echo=settings.db.echo,
-                    connect_args={"check_same_thread": False},
+                    connect_args={"check_same_thread": False, "timeout": 15.0},
                 )
+                event.listen(engine, "connect", _configure_sqlite_connection)
             else:
+                pg_connect_args: dict[str, Any] = {}
+                if settings.db.db_url.startswith("postgresql"):
+                    pg_connect_args = {
+                        "connect_timeout": 5,
+                        "keepalives": 1,
+                        "keepalives_idle": 30,
+                        "keepalives_interval": 10,
+                        "keepalives_count": 3,
+                    }
                 engine = create_engine(
                     settings.db.db_url,
                     echo=settings.db.echo,
@@ -112,6 +136,8 @@ class AppContainer:
                     max_overflow=settings.db.max_overflow,
                     pool_timeout=settings.db.pool_timeout,
                     pool_pre_ping=settings.db.pool_pre_ping,
+                    pool_recycle=1800,
+                    connect_args=pg_connect_args,
                 )
 
         if session_factory is None:
@@ -152,7 +178,8 @@ class AppContainer:
         """
         session = self.session_factory()
         try:
-            yield session
+            with use_active_search_session(session):
+                yield session
         except Exception:
             session.rollback()
             raise
@@ -261,6 +288,10 @@ class AppContainer:
         """纯工厂方法：构建绑定独立 Session 的 DiagnosisService。"""
         return DiagnosisService(session=session)
 
+    def create_collection_service(self, session: Session) -> CollectionService:
+        """纯工厂方法：构建绑定独立 Session 的 CollectionService。"""
+        return CollectionService(session=session)
+
     # --------------------------------------------------------------------------
     # 生命周期与健康探测
     # --------------------------------------------------------------------------
@@ -277,11 +308,37 @@ class AppContainer:
         await self.providers.shutdown()
         self.engine.dispose()
 
+    def _probe_redis_health(self) -> dict[str, Any] | None:
+        """当队列或幂等启用了 Redis 时执行短超时 ping 探活。"""
+        redis_enabled = (
+            self.settings.queue.provider == "redis" or self.settings.idempotency.provider == "redis"
+        )
+        if not redis_enabled:
+            return None
+
+        probe_target = (
+            self.providers.queue
+            if self.settings.queue.provider == "redis"
+            else self.providers.idempotency
+        )
+        try:
+            ping_fn = getattr(probe_target, "ping", None)
+            if callable(ping_fn):
+                pong = bool(ping_fn())
+            else:
+                client = getattr(probe_target, "_client", None)
+                pong = bool(client.ping()) if client is not None else False
+            if not pong:
+                return {"status": "disconnected", "error": "Redis ping returned falsy"}
+            return {"status": "connected"}
+        except Exception as exc:
+            return {"status": "disconnected", "error": str(exc)}
+
     def check_health(self) -> HealthResult:
         """执行多组件健康状态检查并返回结构化诊断信息。
 
         Returns:
-            HealthResult: 包含数据库、存储及提供商状态的多组件健康诊断结构。
+            HealthResult: 包含数据库、Redis、存储及提供商状态的多组件健康诊断结构。
         """
         db_status = "connected"
         db_details: dict[str, Any] = {
@@ -297,28 +354,31 @@ class AppContainer:
             db_details["status"] = db_status
             db_details["error"] = str(exc)
 
-        overall_status = "ok" if db_status == "connected" else "degraded"
+        redis_details = self._probe_redis_health()
+        redis_healthy = redis_details is None or redis_details["status"] == "connected"
+        overall_status = "ok" if (db_status == "connected" and redis_healthy) else "degraded"
 
-        result = HealthResult(
-            {
-                "status": overall_status,
-                "app": "ZhiLian",
-                "environment": self.settings.env,
-                "database": db_details,
-                "storage": {
-                    "provider": self.settings.storage.provider,
-                    "bucket": self.settings.storage.bucket_name,
-                },
-                "providers": {
-                    "llm": self.settings.llm.provider,
-                    "ocr": self.settings.ocr.provider,
-                    "embedding": self.settings.embedding.provider,
-                    "search": self.settings.search.provider,
-                    "queue": self.settings.queue.provider,
-                },
-            }
-        )
-        return result
+        payload: dict[str, Any] = {
+            "status": overall_status,
+            "app": "ZhiLian",
+            "environment": self.settings.env,
+            "database": db_details,
+            "storage": {
+                "provider": self.settings.storage.provider,
+                "bucket": self.settings.storage.bucket_name,
+            },
+            "providers": {
+                "llm": self.settings.llm.provider,
+                "ocr": self.settings.ocr.provider,
+                "embedding": self.settings.embedding.provider,
+                "search": self.settings.search.provider,
+                "queue": self.settings.queue.provider,
+            },
+        }
+        if redis_details is not None:
+            payload["redis"] = redis_details
+
+        return HealthResult(payload)
 
 
 __all__ = ["AppContainer", "HealthResult"]
