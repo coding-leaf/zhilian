@@ -265,3 +265,54 @@ def test_extract_pdf_preserves_block_coordinates_and_detects_tofu_garble() -> No
     assert "\u2612" in garbled_pages[0].text
     assert garbled_pages[0].has_symbol_garble is True
     assert garbled_pages[0].needs_repair is True
+
+
+def test_slide_layout_and_2d_math_expression_detection_in_extractors() -> None:
+    """Landscape slides with 2D math or dense vector formulas trigger VLM; borders do not."""
+    import pymupdf
+
+    from app.core.extractors import extract_pdf_pages_with_diagnostics
+
+    doc = pymupdf.open()
+    try:
+        # Slide 1: 16:9 PPT slide with isolated/stacked 2D math blocks (no tofu)
+        s1 = doc.new_page(width=960, height=540)
+        s1.insert_text((60, 60), "Support Vector Machine Margin", fontsize=16)
+        s1.insert_text((200, 200), "w^T x_i + b >= 1", fontsize=14)
+        s1.insert_text((210, 224), "||w||", fontsize=14)
+
+        # Slide 2: 16:9 PPT prose slide with 4 template border lines (must NOT trigger VLM)
+        s2 = doc.new_page(width=960, height=540)
+        s2.insert_text((60, 60), "Hyperplane Geometry Overview Without Formulas", fontsize=14)
+        for i in range(4):
+            s2.draw_line((100, 150 + i * 20), (300, 150 + i * 20))
+
+        # Slide 3: 16:9 PPT slide with math operators + dense vector formula drawings (>= 20)
+        s3 = doc.new_page(width=960, height=540)
+        s3.insert_text((60, 60), "Optimization: f(x) = 0", fontsize=14)
+        for i in range(22):
+            s3.draw_line((100, 100 + i * 8), (300, 100 + i * 8))
+
+        # Page 4: Portrait plain prose page
+        p4 = doc.new_page(width=595, height=842)
+        p4.insert_text((60, 60), "Ordinary portrait prose page without formulas.", fontsize=12)
+        pdf_bytes: bytes = doc.tobytes()
+    finally:
+        doc.close()
+
+    pages = extract_pdf_pages_with_diagnostics(pdf_bytes)
+    assert len(pages) == 4
+
+    assert pages[0].is_slide_layout is True
+    assert pages[0].has_math_expression_layout is True
+
+    assert pages[1].is_slide_layout is True
+    assert pages[1].has_math_expression_layout is False
+    assert pages[1].has_formula_visual_risk is False
+
+    assert pages[2].is_slide_layout is True
+    assert pages[2].has_formula_visual_risk is True
+
+    assert pages[3].is_slide_layout is False
+    assert pages[3].has_math_expression_layout is False
+    assert pages[3].has_formula_visual_risk is False

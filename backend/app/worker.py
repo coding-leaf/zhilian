@@ -16,6 +16,13 @@ from rq.job import Job
 from app.container import AppContainer
 from app.core.config import get_settings
 from app.integrations.redis_client import build_redis_client, close_redis_client
+from app.services._study_guide import (
+    format_study_guide_error_message,
+    mark_study_guide_prewarm_failed,
+    release_study_guide_lock,
+    resolve_study_guide_redis_client,
+    set_study_guide_error,
+)
 
 if os.name == "nt":  # pragma: no cover - 平台分支，仅在 Windows 生效
     # RQ 2.12 的 `BaseRegistry.death_penalty_class` 被**硬编码**为 `UnixSignalDeathPenalty`
@@ -74,10 +81,43 @@ def _generate_questions(
         )
 
 
+def _prewarm_study_guides(
+    container: AppContainer, payload: dict[str, str], user_id: uuid.UUID
+) -> None:
+    force = str(payload.get("force", "")).lower() == "true"
+    redis_client = resolve_study_guide_redis_client(container)
+    with container.get_session() as session:
+        container.create_knowledge_service(session).run_study_guide_prewarm(
+            material_id=uuid.UUID(payload["material_id"]),
+            version_id=uuid.UUID(payload["version_id"]),
+            user_id=user_id,
+            force=force,
+            redis_client=redis_client,
+        )
+
+
+def _generate_study_guide(
+    container: AppContainer, payload: dict[str, str], user_id: uuid.UUID
+) -> None:
+    force = str(payload.get("force", "")).lower() == "true"
+    lock_token = payload.get("lock_token") or None
+    redis_client = resolve_study_guide_redis_client(container)
+    with container.get_session() as session:
+        container.create_knowledge_service(session).run_study_guide_generation(
+            knowledge_point_id=uuid.UUID(payload["knowledge_point_id"]),
+            user_id=user_id,
+            force=force,
+            lock_token=lock_token,
+            redis_client=redis_client,
+        )
+
+
 REGISTERED_TASKS: dict[str, Callable[[AppContainer, dict[str, str], uuid.UUID], None]] = {
     "parse_material_pipeline": _parse_material,
     "grading_jobs": _grade_practice,
     "generate_questions_job": _generate_questions,
+    "prewarm_study_guides": _prewarm_study_guides,
+    "generate_study_guide": _generate_study_guide,
 }
 
 
@@ -187,7 +227,16 @@ def _resolve_job_payload(job: Job) -> tuple[str, dict[str, str], str]:
         if isinstance(kwargs_dict.get("payload"), dict):
             payload = {str(key): str(value) for key, value in kwargs_dict["payload"].items()}
         else:
-            for key in ("material_id", "version_id", "user_id", "job_id", "practice_id"):
+            for key in (
+                "material_id",
+                "version_id",
+                "user_id",
+                "job_id",
+                "practice_id",
+                "knowledge_point_id",
+                "lock_token",
+                "force",
+            ):
                 if key in kwargs_dict and kwargs_dict[key] is not None:
                     payload[key] = str(kwargs_dict[key])
         if isinstance(kwargs_dict.get("user_id"), str):
@@ -308,6 +357,34 @@ def handle_job_terminal_failure(
             _mark_generation_job_failed(payload, user_id, exception_name)
         except Exception:
             logger.exception("异步出题任务失败状态回写异常: job_id=%s", job.id)
+        return
+
+    if task_name == "prewarm_study_guides" and payload.get("version_id"):
+        try:
+            container = get_worker_container()
+            mark_study_guide_prewarm_failed(
+                version_id=uuid.UUID(payload["version_id"]),
+                redis_client=resolve_study_guide_redis_client(container),
+            )
+        except Exception:
+            logger.exception("整章考前精讲预热失败状态回写异常: job_id=%s", job.id)
+        return
+
+    if task_name == "generate_study_guide" and payload.get("knowledge_point_id"):
+        try:
+            kp_id = uuid.UUID(payload["knowledge_point_id"])
+            container = get_worker_container()
+            redis_client = resolve_study_guide_redis_client(container)
+            set_study_guide_error(
+                kp_id,
+                format_study_guide_error_message(exc_value, exception_name),
+                redis_client=redis_client,
+            )
+            lock_token = payload.get("lock_token")
+            if lock_token:
+                release_study_guide_lock(kp_id, lock_token, redis_client=redis_client)
+        except Exception:
+            logger.exception("单考点考前精讲失败状态回写异常: job_id=%s", job.id)
         return
 
     if task_name != "grading_jobs" or not user_id or not payload.get("practice_id"):

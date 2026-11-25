@@ -1,11 +1,16 @@
 import { computed, ref, watch } from 'vue'
-import { apiGetMasteryOverview } from '@/api'
+import { apiGetMasteryOverview, apiGetStudyGuidesStatus } from '@/api'
 import { useBackgroundTaskStore } from '@/stores/backgroundTask'
 import { useMaterialStore } from '@/stores/material'
 import { safeShowToast, withBlockingLoading } from '@/utils/loadingGuard'
 import { canStartMaterialParse, isMaterialParsing } from '@/utils/materialState'
 import { describeFailure, RequestError } from '@/utils/requestError'
-import type { KnowledgeSnippet, KnowledgeTreeNode, MaterialItem } from '@/types'
+import type {
+  KnowledgeSnippet,
+  KnowledgeTreeNode,
+  MaterialItem,
+  StudyGuidePrewarmStatusResult,
+} from '@/types'
 import { buildMasteryMap, flattenTreeWithParents, type MasteryEntry } from '../utils/courseStudy'
 
 /** 资料详情、知识树展开、掌握度映射、重新解析同步与考点切片加载编排。 */
@@ -26,6 +31,9 @@ export function useCourseDetail() {
   const isRefreshing = ref(false)
   const isLoadingSnippets = ref(false)
   const snippetLoadFailed = ref(false)
+  const prewarmStatus = ref<StudyGuidePrewarmStatusResult | null>(null)
+  const isStartingPrewarm = ref(false)
+  const isStartingParse = ref(false)
 
   const selectedPointDetail = computed(() => materialStore.activeKnowledgePoint)
   const canStartParse = computed(() => canStartMaterialParse(material.value))
@@ -79,14 +87,71 @@ export function useCourseDetail() {
     }
   }
 
-  const loadReadyAssets = async () => {
+  const refreshKnowledgeTree = async () => {
+    if (!materialId.value) return
     const tree = await materialStore.loadKnowledgeTree(materialId.value)
     if (tree?.nodes) {
       knowledgeNodes.value = flattenTreeWithParents(tree.nodes)
     } else {
       knowledgeNodes.value = []
     }
-    await Promise.all([loadGeneratedQuestionCount(), refreshMastery()])
+  }
+
+  const loadPrewarmStatus = async (silent = true) => {
+    if (!materialId.value) return
+    try {
+      const status = await apiGetStudyGuidesStatus(
+        materialId.value,
+        material.value?.current_version_id,
+        { silentToast: silent },
+      )
+      prewarmStatus.value = status
+      if (status.status === 'queued' || status.status === 'running') {
+        taskStore.trackStudyGuidePrewarm(status, material.value?.title || '考前精讲')
+      }
+    } catch {
+      // 忽略旧环境或瞬时查询失败，不影响页面主流程
+    }
+  }
+
+  const startPrewarmAll = async () => {
+    if (!materialId.value || isStartingPrewarm.value) return
+    const currentStatus = prewarmStatus.value?.status
+    if (currentStatus === 'queued' || currentStatus === 'running') return
+    isStartingPrewarm.value = true
+    try {
+      const res = await taskStore.startStudyGuidePrewarm(
+        materialId.value,
+        material.value?.title || '考前精讲',
+        { version_id: material.value?.current_version_id },
+      )
+      prewarmStatus.value = {
+        material_id: res.material_id,
+        version_id: res.version_id,
+        status: res.status,
+        total_kps: res.total_kps,
+        ready_kps: res.ready_kps,
+        failed_kps: 0,
+        current_kp_name: null,
+      }
+      if (res.status === 'completed') {
+        await refreshKnowledgeTree()
+        safeShowToast('全章精讲已就绪', 'success')
+      } else {
+        safeShowToast('已启动全章精讲生成', 'success')
+      }
+    } catch (err: any) {
+      if (!(err instanceof RequestError)) {
+        safeShowToast(describeFailure(err, '启动精讲预热失败'))
+      }
+    } finally {
+      isStartingPrewarm.value = false
+    }
+  }
+
+  const loadReadyAssets = async () => {
+    await refreshKnowledgeTree()
+    await Promise.all([loadGeneratedQuestionCount(), refreshMastery(), loadPrewarmStatus(true)])
   }
 
   const loadDetail = async () => {
@@ -133,11 +198,35 @@ export function useCourseDetail() {
   watch(
     () => materialStore.currentMaterial,
     async (next) => {
-      if (!next || next.id !== materialId.value) return
+      if (!next || next.id !== materialId.value || isLoading.value) return
       const prevStatus = material.value?.status
       material.value = next
       if (next.status === 'ready' && prevStatus !== 'ready') {
         await loadReadyAssets()
+      }
+    },
+  )
+
+  watch(
+    () => (materialId.value ? taskStore.studyGuidePrewarmTasks.get(materialId.value) : undefined),
+    async (nextTask) => {
+      if (!nextTask) return
+      const prevStatus = prewarmStatus.value?.status
+      const prevReady = prewarmStatus.value?.ready_kps ?? 0
+      prewarmStatus.value = {
+        material_id: nextTask.materialId,
+        version_id: nextTask.versionId ?? '',
+        status: nextTask.status,
+        total_kps: nextTask.totalKps,
+        ready_kps: nextTask.readyKps,
+        failed_kps: nextTask.failedKps,
+        current_kp_name: nextTask.currentKpName,
+      }
+      if (
+        (nextTask.status === 'completed' && prevStatus !== 'completed')
+        || nextTask.readyKps > prevReady
+      ) {
+        await refreshKnowledgeTree()
       }
     },
   )
@@ -148,7 +237,8 @@ export function useCourseDetail() {
   }
 
   const startParse = async (force = false) => {
-    if (!materialId.value) return
+    if (!materialId.value || isStartingParse.value || isParsing.value) return
+    isStartingParse.value = true
     const prevMaterial = material.value
     const title = prevMaterial?.title || '学习资料'
     try {
@@ -170,11 +260,13 @@ export function useCourseDetail() {
       if (!(err instanceof RequestError)) {
         safeShowToast(describeFailure(err, '解析启动失败'))
       }
+    } finally {
+      isStartingParse.value = false
     }
   }
 
   const confirmAndReparse = () => {
-    if (!materialId.value) return
+    if (!materialId.value || isStartingParse.value || isParsing.value) return
     if (material.value?.status === 'failed' || material.value?.status === 'retake_required') {
       void startParse(true)
       return
@@ -225,12 +317,18 @@ export function useCourseDetail() {
     isRefreshing,
     isLoadingSnippets,
     snippetLoadFailed,
+    prewarmStatus,
+    isStartingPrewarm,
+    isStartingParse,
     canStartParse,
     isParsing,
     isParseTimedOut,
     parseProgressText,
     initCourse,
     loadDetail,
+    refreshKnowledgeTree,
+    loadPrewarmStatus,
+    startPrewarmAll,
     refreshParseProgress,
     refreshMastery,
     startParse,

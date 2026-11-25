@@ -5,8 +5,16 @@ import type {
   MaterialListResult,
   MaterialStatistics,
   PollingRequestOptions,
+  StudyGuidePrewarmResult,
+  StudyGuidePrewarmStatusResult,
 } from '@/types'
-import { adaptMaterial } from '../adapters'
+import {
+  adaptMaterial,
+  adaptStudyGuidePrewarmResult,
+  adaptStudyGuidePrewarmStatus,
+  type WireStudyGuidePrewarmResponse,
+  type WireStudyGuideStatusResponse,
+} from '../adapters'
 
 export function apiGetMaterialStatistics(): Promise<MaterialStatistics> {
   return request<MaterialStatistics>({
@@ -81,3 +89,31 @@ export function apiParseMaterial(materialId: string, force = false): Promise<{ m
 }
 
 export const apiTriggerMaterialParse = apiParseMaterial
+
+export function apiPrewarmStudyGuides(
+  materialId: string,
+  options?: { version_id?: string; force?: boolean },
+): Promise<StudyGuidePrewarmResult> {
+  const payload: { version_id?: string; force?: boolean } = {}
+  if (options?.version_id) payload.version_id = options.version_id
+  if (options?.force !== undefined) payload.force = options.force
+  return request<WireStudyGuidePrewarmResponse>({
+    url: `/materials/${materialId}/study-guides/prewarm`,
+    method: 'POST',
+    data: payload,
+  }).then(adaptStudyGuidePrewarmResult)
+}
+
+export function apiGetStudyGuidesStatus(
+  materialId: string,
+  versionId?: string,
+  requestOptions?: PollingRequestOptions,
+): Promise<StudyGuidePrewarmStatusResult> {
+  let url = `/materials/${materialId}/study-guides/status`
+  if (versionId) url += `?version_id=${encodeURIComponent(versionId)}`
+  return request<WireStudyGuideStatusResponse>({
+    url,
+    method: 'GET',
+    ...(requestOptions?.silentToast !== undefined ? { silentToast: requestOptions.silentToast } : {}),
+  }).then(adaptStudyGuidePrewarmStatus)
+}

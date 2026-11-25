@@ -74,7 +74,8 @@ describe('knowledge snippet adaptation & course page rendering', () => {
     expect(res.snippets[1].chapter_title).toBeNull()
   })
 
-  it('renders structured study card, real mastery badge, collapsed snippets, and garbled snippet guard', async () => {
+  it('renders study card, mastery & study-guide badges, and navigates to full-screen study guide page on tap', async () => {
+    const navSpy = vi.spyOn(uni, 'navigateTo')
     mocks.request.mockImplementation(async ({ url }: { url: string }) => {
       if (url === '/materials/m-1') {
         return {
@@ -105,6 +106,7 @@ describe('knowledge snippet adaptation & course page rendering', () => {
               level: 1,
               sort_order: 1,
               is_low_confidence: false,
+              has_study_guide: true,
               children: [],
             },
           ],
@@ -112,6 +114,17 @@ describe('knowledge snippet adaptation & course page rendering', () => {
       }
       if (url === '/questions?material_id=m-1') {
         return { items: [] }
+      }
+      if (url === '/materials/m-1/study-guides/status') {
+        return {
+          material_id: 'm-1',
+          version_id: 'v-1',
+          status: 'completed',
+          total_kps: 1,
+          ready_kps: 1,
+          failed_kps: 0,
+          current_kp_name: null,
+        }
       }
       if (url.startsWith('/mastery')) {
         return {
@@ -124,53 +137,6 @@ describe('knowledge snippet adaptation & course page rendering', () => {
               level: 'proficient',
               practice_count: 3,
               correct_count: 3,
-            },
-          ],
-        }
-      }
-      if (url === '/knowledge/kp-1') {
-        return {
-          id: 'kp-1',
-          material_id: 'm-1',
-          version_id: 'v-1',
-          parent_id: null,
-          name: '进程调度',
-          description: 'CPU 调度算法与周转时间分析',
-          structured_content: {
-            core_summary: '按就绪队列策略分配 CPU 时间片，优化吞吐与响应。',
-            key_takeaways: ['短作业优先平均等待时间最短', '时间片轮转兼顾交互响应'],
-            key_formulas: ['T_w = T_{turn} - T_{service}'],
-            boundary_notes: ['时间片过小会增加上下文切换开销'],
-          },
-          level: 1,
-          is_low_confidence: false,
-          batch_id: 'b-1',
-          created_at: '2026-11-17T08:00:00',
-        }
-      }
-      if (url === '/knowledge/kp-1/snippets') {
-        return {
-          knowledge_point_id: 'kp-1',
-          snippets: [
-            {
-              id: 's-1',
-              material_id: 'm-1',
-              version_id: 'v-1',
-              page_index: 3,
-              snippet_index: 0,
-              chapter_title: '第 3 章 调度策略',
-              content: '短作业优先可最小化平均等待时间。',
-              char_length: 16,
-            },
-            {
-              id: 's-2',
-              material_id: 'm-1',
-              version_id: 'v-1',
-              page_index: 7,
-              snippet_index: 1,
-              chapter_title: '',
-              content: 'AB&A&\n"#$"$\n!" ! #',
-              char_length: 17,
             },
           ],
         }
@@ -200,30 +166,19 @@ describe('knowledge snippet adaptation & course page rendering', () => {
     await flushPromises()
 
     expect(wrapper.find('.mastery-pill').text()).toBe('熟练 85%')
+    expect(wrapper.find('.guide-ready-pill').text()).toBe('已精讲')
+    expect(wrapper.text()).toContain('考前精讲笔记 · 已生成 1/1 项')
     expect(wrapper.text()).not.toContain('高频必考')
     expect(wrapper.text()).not.toContain('L1')
 
     await wrapper.find('.tree-node-card').trigger('tap')
     await flushPromises()
 
-    // 原文溯源默认折叠，且结构化要点已直接呈现
-    expect(wrapper.findAll('.snip-page')).toHaveLength(0)
-    expect(wrapper.text()).toContain('核心定义')
-    expect(wrapper.text()).toContain('关键结论')
-    expect(wrapper.text()).toContain('核心公式与符号')
-    expect(wrapper.text()).toContain('适用条件与易错边界')
-    expect(wrapper.text()).toContain('查看教材原文依据 (2处)')
-
-    await wrapper.find('.snippet-toggle-row').trigger('tap')
-    await flushPromises()
-
-    const pages = wrapper.findAll('.snip-page').map((node) => node.text())
-    const chapters = wrapper.findAll('.snip-chapter').map((node) => node.text())
-    expect(pages).toEqual(['第 3 页', '第 7 页'])
-    expect(chapters).toEqual(['第 3 章 调度策略'])
-    // 第 2 条乱码切片被安全折叠提示替换，不再直接倾倒 AB&A& 乱码
-    expect(wrapper.text()).toContain('检测到旧版讲义公式编码异常')
-    expect(wrapper.text()).not.toContain('AB&A&')
+    expect(navSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/subpackages/material/pages/knowledge/index?kp_id=kp-1&material_id=m-1',
+      }),
+    )
   })
 
   it('encapsulates avatar upload in apiUploadAvatar and authStore.updateAvatar', async () => {

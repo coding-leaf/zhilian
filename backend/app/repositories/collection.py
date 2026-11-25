@@ -102,7 +102,7 @@ class CollectionRepository:
         user_id: uuid.UUID,
         collection_ids: Sequence[uuid.UUID],
     ) -> dict[uuid.UUID, int]:
-        """单次 GROUP BY 批量统计多个题单内的活跃题目数（排除软删除题目）。"""
+        """单次 GROUP BY 批量统计多个题单内的活跃题目数（排除软删除题目及已删资料）。"""
         if not collection_ids:
             return {}
         stmt = (
@@ -111,11 +111,14 @@ class CollectionRepository:
                 func.count(QuestionCollectionItem.id),
             )
             .join(Question, QuestionCollectionItem.question_id == Question.id)
+            .join(Material, Question.material_id == Material.id)
             .where(
                 QuestionCollectionItem.user_id == user_id,
                 QuestionCollectionItem.collection_id.in_(list(collection_ids)),
                 Question.user_id == user_id,
                 Question.is_deleted.is_(False),
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
             )
             .group_by(QuestionCollectionItem.collection_id)
         )
@@ -150,17 +153,20 @@ class CollectionRepository:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[tuple[QuestionCollectionItem, Question, str | None, str | None]], int]:
-        """分页查询题单内活跃题目及其知识点/讲义名称。"""
+        """分页查询题单内活跃题目及其知识点/讲义名称（排除已删资料）。"""
         base_filters = (
             QuestionCollectionItem.user_id == user_id,
             QuestionCollectionItem.collection_id == collection_id,
             Question.user_id == user_id,
             Question.is_deleted.is_(False),
+            Material.user_id == user_id,
+            Material.is_deleted.is_(False),
         )
         total_stmt = (
             select(func.count(QuestionCollectionItem.id))
             .select_from(QuestionCollectionItem)
             .join(Question, QuestionCollectionItem.question_id == Question.id)
+            .join(Material, Question.material_id == Material.id)
             .where(*base_filters)
         )
         total = int(self.session.execute(total_stmt).scalar_one())
@@ -174,14 +180,11 @@ class CollectionRepository:
                 Material.title,
             )
             .join(Question, QuestionCollectionItem.question_id == Question.id)
+            .join(Material, Question.material_id == Material.id)
             .outerjoin(
                 KnowledgePoint,
                 (KnowledgePoint.id == Question.knowledge_point_id)
                 & (KnowledgePoint.user_id == user_id),
-            )
-            .outerjoin(
-                Material,
-                (Material.id == Question.material_id) & (Material.user_id == user_id),
             )
             .where(*base_filters)
             .order_by(
@@ -201,15 +204,18 @@ class CollectionRepository:
         *,
         limit: int = 50,
     ) -> list[uuid.UUID]:
-        """查询题单内前 ``limit`` 道未软删除题目主键（供整单开练使用）。"""
+        """查询题单内前 ``limit`` 道未软删除且所属资料未删除的题目主键（供整单开练使用）。"""
         stmt = (
             select(Question.id)
             .join(QuestionCollectionItem, QuestionCollectionItem.question_id == Question.id)
+            .join(Material, Question.material_id == Material.id)
             .where(
                 QuestionCollectionItem.user_id == user_id,
                 QuestionCollectionItem.collection_id == collection_id,
                 Question.user_id == user_id,
                 Question.is_deleted.is_(False),
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
             )
             .order_by(
                 QuestionCollectionItem.sort_order.asc(),
@@ -224,13 +230,19 @@ class CollectionRepository:
         user_id: uuid.UUID,
         question_ids: Sequence[uuid.UUID],
     ) -> set[uuid.UUID]:
-        """校验题目归属当前用户且未软删除。"""
+        """校验题目归属当前用户、未软删除且所属资料未删除。"""
         if not question_ids:
             return set()
-        stmt = select(Question.id).where(
-            Question.user_id == user_id,
-            Question.is_deleted.is_(False),
-            Question.id.in_(list(question_ids)),
+        stmt = (
+            select(Question.id)
+            .join(Material, Question.material_id == Material.id)
+            .where(
+                Question.user_id == user_id,
+                Question.is_deleted.is_(False),
+                Question.id.in_(list(question_ids)),
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
         )
         return set(self.session.execute(stmt).scalars().all())
 

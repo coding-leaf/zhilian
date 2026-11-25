@@ -183,7 +183,7 @@ class DiagnosisRepository:
         self,
         user_id: uuid.UUID,
     ) -> list[MasteryRecord]:
-        """获取指定租户用户全部知识点的掌握度记录。
+        """获取指定租户用户全部活跃资料下知识点的掌握度记录。
 
         Args:
             user_id: 租户用户标识。
@@ -193,7 +193,17 @@ class DiagnosisRepository:
         """
         statement = (
             select(MasteryRecord)
-            .where(MasteryRecord.user_id == user_id)
+            .join(
+                KnowledgePoint,
+                MasteryRecord.knowledge_point_id == KnowledgePoint.id,
+            )
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(
+                MasteryRecord.user_id == user_id,
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
             .order_by(MasteryRecord.updated_at.desc())
         )
         return list(self.session.execute(statement).scalars().all())
@@ -203,9 +213,9 @@ class DiagnosisRepository:
         material_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> list[MasteryRecord]:
-        """获取指定学习资料下所有知识点的租户掌握度记录。
+        """获取指定学习资料下所有知识点的租户掌握度记录（排除已软删除资料）。
 
-        通过内联关联 KnowledgePoint 实体，严格约束租户隔离。
+        通过内联关联 KnowledgePoint 与 Material 实体，严格约束租户隔离与可见性。
 
         Args:
             material_id: 学习资料标识。
@@ -220,10 +230,13 @@ class DiagnosisRepository:
                 KnowledgePoint,
                 MasteryRecord.knowledge_point_id == KnowledgePoint.id,
             )
+            .join(Material, KnowledgePoint.material_id == Material.id)
             .where(
                 MasteryRecord.user_id == user_id,
                 KnowledgePoint.material_id == material_id,
                 KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
             )
             .order_by(MasteryRecord.updated_at.desc())
         )
@@ -491,22 +504,25 @@ class DiagnosisRepository:
         error_type: str | None = None,
         question_type: str | None = None,
     ) -> Any:
-        """为错题列表或统计查询统一拼接多维度租户安全过滤条件。"""
-        if material_id is not None or folder_id is not None or unclassified:
-            statement = statement.join(
+        """为错题列表或统计查询统一拼接多维度租户安全过滤条件（始终排除已删资料）。"""
+        statement = (
+            statement.join(
                 KnowledgePoint,
                 WrongRecord.knowledge_point_id == KnowledgePoint.id,
-            ).where(KnowledgePoint.user_id == user_id)
-            if material_id is not None:
-                statement = statement.where(KnowledgePoint.material_id == material_id)
-            if folder_id is not None or unclassified:
-                statement = statement.join(
-                    Material, KnowledgePoint.material_id == Material.id
-                ).where(Material.user_id == user_id)
-                if folder_id is not None:
-                    statement = statement.where(Material.folder_id == folder_id)
-                if unclassified:
-                    statement = statement.where(Material.folder_id.is_(None))
+            )
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
+        )
+        if material_id is not None:
+            statement = statement.where(KnowledgePoint.material_id == material_id)
+        if folder_id is not None:
+            statement = statement.where(Material.folder_id == folder_id)
+        if unclassified:
+            statement = statement.where(Material.folder_id.is_(None))
         if is_mastered is not None:
             statement = statement.where(WrongRecord.is_mastered == is_mastered)
         if knowledge_point_id is not None:
@@ -603,11 +619,22 @@ class DiagnosisRepository:
         return int(self.session.execute(statement).scalar_one())
 
     def list_unmastered_wrong_question_ids(self, user_id: uuid.UUID) -> set[uuid.UUID]:
-        """查询当前用户尚未攻克的错题原题主键集合。"""
-        stmt = select(WrongRecord.question_id).where(
-            WrongRecord.user_id == user_id,
-            WrongRecord.is_mastered.is_(False),
-            WrongRecord.question_id.is_not(None),
+        """查询当前用户尚未攻克的错题原题主键集合（排除已软删除资料）。"""
+        stmt = (
+            select(WrongRecord.question_id)
+            .join(
+                KnowledgePoint,
+                WrongRecord.knowledge_point_id == KnowledgePoint.id,
+            )
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(
+                WrongRecord.user_id == user_id,
+                WrongRecord.is_mastered.is_(False),
+                WrongRecord.question_id.is_not(None),
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
         )
         return {qid for qid in self.session.execute(stmt).scalars().all() if qid is not None}
 
@@ -616,10 +643,21 @@ class DiagnosisRepository:
         user_id: uuid.UUID,
         threshold: float = 0.40,
     ) -> set[uuid.UUID]:
-        """查询当前用户掌握度低于阈值的薄弱知识点主键集合。"""
-        stmt = select(MasteryRecord.knowledge_point_id).where(
-            MasteryRecord.user_id == user_id,
-            MasteryRecord.mastery_score < threshold,
+        """查询当前用户掌握度低于阈值的薄弱知识点主键集合（排除已软删除资料）。"""
+        stmt = (
+            select(MasteryRecord.knowledge_point_id)
+            .join(
+                KnowledgePoint,
+                MasteryRecord.knowledge_point_id == KnowledgePoint.id,
+            )
+            .join(Material, KnowledgePoint.material_id == Material.id)
+            .where(
+                MasteryRecord.user_id == user_id,
+                MasteryRecord.mastery_score < threshold,
+                KnowledgePoint.user_id == user_id,
+                Material.user_id == user_id,
+                Material.is_deleted.is_(False),
+            )
         )
         return set(self.session.execute(stmt).scalars().all())
 
@@ -691,6 +729,7 @@ class DiagnosisRepository:
                 WrongRecord.user_id == user_id,
                 KnowledgePoint.user_id == user_id,
                 Material.user_id == user_id,
+                Material.is_deleted.is_(False),
             )
             .group_by(Material.folder_id, MaterialFolder.name, Material.id, Material.title)
         )

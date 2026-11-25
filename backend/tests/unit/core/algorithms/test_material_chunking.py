@@ -384,3 +384,41 @@ def test_cross_page_merge_same_chapter_and_thank_you_noise_filtered() -> None:
     no_cross = split_material_into_snippets(paragraphs, allow_cross_page_merge=False)
     assert [s.page_number for s in no_cross.snippets] == [12, 13, 14]
     assert all(s.page_end is None for s in no_cross.snippets)
+
+
+def test_formula_marked_as_title_never_overwrites_chapter_or_gets_swallowed() -> None:
+    """Math expressions with is_title=True stay in body instead of hijacking chapter_title."""
+    from app.core.algorithms.material_chunking import is_valid_chapter_title
+
+    assert is_valid_chapter_title("第五章 支持向量机") is True
+    assert is_valid_chapter_title("ω^T x_i + b") is False
+    assert is_valid_chapter_title("-ω^T x_i + b") is False
+    assert is_valid_chapter_title("||ω||") is False
+
+    paragraphs = [
+        ParagraphInput(
+            text="第五章 支持向量机",
+            source_ref="第 7 页",
+            doc_type="pdf",
+            is_title=True,
+            page_number=7,
+        ),
+        ParagraphInput(
+            text="ω^T x_i + b",
+            source_ref="第 7 页",
+            doc_type="pdf",
+            is_title=True,
+            page_number=7,
+        ),
+        ParagraphInput(
+            text="几何间隔定义了样本点到分离超平面的带符号距离，决定最大间隔边界。",
+            source_ref="第 7 页",
+            doc_type="pdf",
+            is_title=False,
+            page_number=7,
+        ),
+    ]
+    res = split_material_into_snippets(paragraphs, allow_cross_page_merge=True)
+    assert len(res.snippets) == 1
+    assert res.snippets[0].chapter_title == "第五章 支持向量机"
+    assert "ω^T x_i + b" in res.snippets[0].content

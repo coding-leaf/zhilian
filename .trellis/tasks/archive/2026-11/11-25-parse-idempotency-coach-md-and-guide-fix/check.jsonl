@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality gates (ruff, mypy strict, import-linter, pytest branch cov >= 80%)"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend quality gates (eslint, vue-tsc, vitest, mp-weixin build, SFC <= 300 lines)"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "WeChat Mini Program compatibility guardrails"}
+{"file": ".trellis/tasks/11-25-parse-idempotency-coach-md-and-guide-fix/prd.md", "reason": "Acceptance criteria verification"}
+{"file": ".trellis/tasks/11-25-parse-idempotency-coach-md-and-guide-fix/design.md", "reason": "Architecture compliance check"}

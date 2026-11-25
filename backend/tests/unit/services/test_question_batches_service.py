@@ -224,7 +224,7 @@ class TestListQuestionBatchesService:
         source_queries = [
             statement
             for statement in statements
-            if "materials" in statement and "questions" in statement
+            if "material_folders" in statement and "questions" in statement
         ]
         assert len(source_queries) == 1, "来源查询必须只有一次 (禁止逐批次查询)"
 

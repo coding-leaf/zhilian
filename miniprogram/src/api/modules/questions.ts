@@ -4,6 +4,7 @@ import type {
   AskCoachHistoryItem,
   AskCoachParams,
   AskCoachResponse,
+  CoachScopeKind,
   GenerateQuestionsParams,
   PollingRequestOptions,
   QuestionBankListResult,
@@ -35,6 +36,7 @@ import {
 export type {
   AskCoachHistoryItem,
   AskCoachParams,
+  CoachScopeKind,
   GenerateQuestionsParams,
   QuestionGenerateResult,
   QuestionBatchQuery,
@@ -197,10 +199,22 @@ export function apiAskQuestionCoach(
 }
 
 export function apiAskScopedCoach(params: ScopedCoachParams): Promise<AskCoachResponse> {
+  const payload: ScopedCoachParams = {
+    user_prompt: params.user_prompt,
+  }
+  if (params.scope) payload.scope = params.scope
+  if (params.folder_id) payload.folder_id = params.folder_id
+  if (params.material_id) payload.material_id = params.material_id
+  if (params.knowledge_point_id) payload.knowledge_point_id = params.knowledge_point_id
+  if (params.thread_id) payload.thread_id = params.thread_id
+  if (params.history && params.history.length > 0) {
+    payload.history = params.history
+  }
+
   return request<AskCoachResponse>({
     url: '/coach/ask',
     method: 'POST',
-    data: params,
+    data: payload,
     // 范围级助教同样同步等大模型。
     timeout: LONG_REQUEST_TIMEOUT_MS,
   })

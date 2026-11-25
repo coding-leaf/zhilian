@@ -50,8 +50,8 @@ from app.integrations.search.protocol import (
 
 logger = logging.getLogger(__name__)
 
-CoachIntent = Literal["chitchat", "overview", "noise", "detail_qa"]
-CoachMode = Literal["chitchat", "overview", "grounded", "fallback"]
+CoachIntent = Literal["chitchat", "overview", "study_profile", "noise", "detail_qa"]
+CoachMode = Literal["chitchat", "overview", "study_profile", "general", "grounded", "fallback"]
 
 
 class CoachDraft(BaseModel):
@@ -72,6 +72,19 @@ class CoachOverviewDraft(BaseModel):
     reply: str = Field(
         min_length=1,
         description="依据给定知识点梳理的条理化概览回复（先一句话总览，再分点列出核心考点）",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="2-3条简短口语化的追问建议（每条不超过15字）",
+    )
+
+
+class CoachGeneralDraft(BaseModel):
+    """通用学科答疑或个人学情复习规划回复（不要求切片引用）。"""
+
+    reply: str = Field(
+        min_length=1,
+        description="清晰有条理的助教回复（不编造任何教材页码或出处）",
     )
     suggestions: list[str] = Field(
         default_factory=list,
@@ -124,6 +137,8 @@ class CoachGraphState(TypedDict):
     scope_title: str
     suggested_topics: list[str]
     overview_context: str | None
+    allow_general_fallback: bool
+    study_profile_context: str | None
     intent: CoachIntent
     search_query: str
     candidates: list[SearchSnippetCandidate]
@@ -195,6 +210,11 @@ _OVERVIEW_PATTERN = re.compile(
     r"|(?:核心|主要|重要)?(?:考点|重点|知识点)(?:有哪些|是什么|都有什么|有什么)"
     r"|有哪些(?:考点|重点|知识点)|复习(?:重点|范围)"
 )
+_STUDY_PROFILE_PATTERN = re.compile(
+    r"复习(?:重点|计划|规划)|薄弱(?:考点|知识点|点)|错题|学情|学习(?:情况|进度)|掌握度"
+    r"|汇总.{0,6}(?:薄弱|考点|课程)|(?:全部|所有|整体).{0,4}(?:课程|资料|知识).{0,4}(?:框架|概览|总结|梳理)"
+    r"|跨课程.{0,6}(?:易错|考点|重点)"
+)
 _NOISE_STRIP_PATTERN = re.compile(r"[\W_]+")
 _NOISE_FILLER_CHARS = frozenset({"啊", "哦", "嗯", "额", "呃", "哈", "呵"})
 
@@ -252,27 +272,47 @@ def classify_chitchat(query: str) -> ChitchatKind | None:
     return None
 
 
-def classify_intent(query: str, *, has_overview: bool) -> CoachIntent:
-    """确定性意图分类：寒暄 / 短噪声 / 概览（需有结构化知识点）/ 细节答疑。"""
+def classify_intent(
+    query: str, *, has_overview: bool, allow_general_fallback: bool = False
+) -> CoachIntent:
+    """确定性意图分类：寒暄 / 短噪声 / 学情规划或概览 / 细节答疑。"""
     if classify_chitchat(query) is not None:
         return "chitchat"
     if is_short_noise(query):
         return "noise"
+    if allow_general_fallback:
+        if _STUDY_PROFILE_PATTERN.search(query):
+            return "study_profile"
+        return "detail_qa"
     if has_overview and _OVERVIEW_PATTERN.search(query):
         return "overview"
     return "detail_qa"
 
 
 _DEFAULT_TOPIC_SUGGESTIONS = ["帮我梳理本章重点", "解释一个核心概念", "举个例子帮我理解"]
+_DEFAULT_GLOBAL_SUGGESTIONS = ["帮我规划今天复习重点", "汇总我最近的薄弱考点", "解释一个核心概念"]
 
 
-def _default_suggestions(topics: Sequence[str]) -> list[str]:
-    return ([f"讲讲「{t}」" for t in topics[:3]] or list(_DEFAULT_TOPIC_SUGGESTIONS))[:3]
+def _default_suggestions(topics: Sequence[str], *, is_global: bool = False) -> list[str]:
+    defaults = _DEFAULT_GLOBAL_SUGGESTIONS if is_global else _DEFAULT_TOPIC_SUGGESTIONS
+    return ([f"讲讲「{t}」" for t in topics[:3]] or list(defaults))[:3]
 
 
-def build_chitchat_reply(kind: ChitchatKind, topics: Sequence[str]) -> tuple[str, list[str]]:
+def build_chitchat_reply(
+    kind: ChitchatKind, topics: Sequence[str], *, is_global: bool = False
+) -> tuple[str, list[str]]:
     """生成零成本的亲切引导回复与 2-3 条学习建议。"""
-    suggestions = _default_suggestions(topics)
+    suggestions = _default_suggestions(topics, is_global=is_global)
+    if is_global:
+        global_replies = {
+            "greeting": "你好呀～我是你的全局学习助教。可以帮你检索全库资料、规划今日复习重点、"
+            "汇总薄弱考点，也可以直接解答通用学科概念。",
+            "thanks": "不客气～学习路上有任何疑问随时来找我，我们可以一起梳理重点或查资料。",
+            "bye": "好的，下次见～记得按节奏复习巩固，有疑问随时回来找我。",
+            "identity": "我是你的全局学习助教，支持全库资料检索、薄弱考点复习规划和通用学科概念"
+            "答疑。想从哪里开始？",
+        }
+        return global_replies[kind], suggestions
     replies = {
         "greeting": "你好呀～我是你的课程助教。可以直接问我资料里的概念、公式或题目，"
         "也可以让我帮你梳理本章重点，我会尽量依据你的资料来回答。",
@@ -284,23 +324,28 @@ def build_chitchat_reply(kind: ChitchatKind, topics: Sequence[str]) -> tuple[str
     return replies[kind], suggestions
 
 
-def build_noise_reply(topics: Sequence[str]) -> tuple[str, list[str]]:
+def build_noise_reply(topics: Sequence[str], *, is_global: bool = False) -> tuple[str, list[str]]:
     """短噪声/无意义输入时的友好引导回复，避免无效检索与 LLM 改写开销。"""
-    suggestions = _default_suggestions(topics)
+    suggestions = _default_suggestions(topics, is_global=is_global)
     reply = (
-        "没太明白你想了解的具体内容～可以直接问我资料里的概念、公式或题目，"
-        "也可以点击下方推荐话题开始学习。"
-    )
+        "没太明白你想了解的具体内容～可以直接问我学科概念、复习规划或资料里的题目，"
+        if is_global
+        else "没太明白你想了解的具体内容～可以直接问我资料里的概念、公式或题目，"
+    ) + "也可以点击下方推荐话题开始学习。"
     return reply, suggestions
 
 
-def build_fallback_reply(topics: Sequence[str]) -> tuple[str, list[str]]:
+def build_fallback_reply(
+    topics: Sequence[str], *, is_global: bool = False
+) -> tuple[str, list[str]]:
     """证据不足时的诚实兜底：说明缺口并给出可回答的方向。"""
     reply = (
-        "这份资料里暂时没找到能可靠回答这个问题的依据，我就不随便猜测了。"
+        "当前暂时没能生成完整解答，换个更具体的学科概念或学习问题再试试吧。"
+        if is_global
+        else "这份资料里暂时没找到能可靠回答这个问题的依据，我就不随便猜测了。"
         "换个更具体的说法再试试，或者从资料里已有的内容问起。"
     )
-    suggestions = _default_suggestions(topics)
+    suggestions = _default_suggestions(topics, is_global=is_global)
     return reply, suggestions
 
 
@@ -324,6 +369,26 @@ def _augment_followup_query(query: str, intent_text: str, history: Sequence[Coac
     return query
 
 
+def _filter_candidate(
+    item: SearchSnippetCandidate,
+    *,
+    allowed_materials: set[uuid.UUID],
+    material_versions: dict[uuid.UUID, uuid.UUID],
+    fallback_version_id: uuid.UUID | None,
+    allowed_snippets: frozenset[uuid.UUID] | None,
+    apply_vector_gate: bool,
+    vector_gate: float,
+) -> bool:
+    if item.material_id not in allowed_materials:
+        return False
+    expected_version = material_versions.get(item.material_id, fallback_version_id)
+    if expected_version is not None and item.version_id != expected_version:
+        return False
+    if allowed_snippets is not None and item.snippet_id not in allowed_snippets:
+        return False
+    return not (apply_vector_gate and item.vector_score < vector_gate and item.bm25_score <= 0)
+
+
 def _search_pool(
     search: SearchProtocol,
     state: CoachGraphState,
@@ -332,32 +397,28 @@ def _search_pool(
     query: str,
     apply_vector_gate: bool,
 ) -> list[SearchSnippetCandidate]:
+    material_ids = state["material_ids"]
+    if not material_ids:
+        return []
     allowed = state["allowed_snippet_ids"]
     if allowed is not None and not allowed:
         return []
     allowed_tuple = None if allowed is None else tuple(sorted(allowed, key=str))
+    material_versions = state["material_versions"]
+    allowed_materials = set(material_ids)
     pool: dict[uuid.UUID, SearchSnippetCandidate] = {}
-    for material_id in state["material_ids"]:
-        expected_version = state["material_versions"].get(material_id, state["version_id"])
-        result = search.search(
-            query=query,
-            user_id=state["user_id"],
-            material_id=material_id,
-            version_id=expected_version,
-            options=SearchOptions(
-                top_k=cfg.retrieve_top_k,
-                vector_top_k=cfg.vector_top_k,
-                allowed_snippet_ids=allowed_tuple,
-            ),
-        )
-        for item in result.items:
-            if item.material_id != material_id:
-                continue
-            if expected_version is not None and item.version_id != expected_version:
-                continue
-            if allowed is not None and item.snippet_id not in allowed:
-                continue
-            if apply_vector_gate and item.vector_score < cfg.vector_gate and item.bm25_score <= 0:
+
+    def _collect(items: Sequence[SearchSnippetCandidate]) -> None:
+        for item in items:
+            if not _filter_candidate(
+                item,
+                allowed_materials=allowed_materials,
+                material_versions=material_versions,
+                fallback_version_id=state["version_id"],
+                allowed_snippets=allowed,
+                apply_vector_gate=apply_vector_gate,
+                vector_gate=cfg.vector_gate,
+            ):
                 continue
             previous = pool.get(item.snippet_id)
             if previous is None or (item.final_score, item.vector_score) > (
@@ -365,6 +426,40 @@ def _search_pool(
                 previous.vector_score,
             ):
                 pool[item.snippet_id] = item
+
+    # 多资料/全局模式且已知合法版本白名单时，收敛为 1 次 Embedding + 1 次 SQL 检索。
+    if len(material_ids) > 1 and all(mid in material_versions for mid in material_ids):
+        allowed_version_tuple = tuple(
+            sorted({material_versions[mid] for mid in material_ids}, key=str)
+        )
+        result = search.search(
+            query=query,
+            user_id=state["user_id"],
+            material_id=None,
+            version_id=None,
+            options=SearchOptions(
+                top_k=cfg.retrieve_top_k,
+                vector_top_k=cfg.vector_top_k,
+                allowed_snippet_ids=allowed_tuple,
+                allowed_version_ids=allowed_version_tuple,
+            ),
+        )
+        _collect(result.items)
+    else:
+        for material_id in material_ids:
+            expected_version = material_versions.get(material_id, state["version_id"])
+            result = search.search(
+                query=query,
+                user_id=state["user_id"],
+                material_id=material_id,
+                version_id=expected_version,
+                options=SearchOptions(
+                    top_k=cfg.retrieve_top_k,
+                    vector_top_k=cfg.vector_top_k,
+                    allowed_snippet_ids=allowed_tuple,
+                ),
+            )
+            _collect(result.items)
     ranked = sorted(pool.values(), key=lambda c: (c.final_score, c.vector_score), reverse=True)
     return ranked[: cfg.retrieve_top_k]
 
@@ -479,6 +574,28 @@ _REWRITE_SYSTEM_PROMPT = (
     "只输出改写后的查询，严禁回答问题或添加新概念。"
 )
 
+_GENERAL_SYSTEM_PROMPT = (
+    "你是亲切耐心的学习助教。当前资料库暂无直接匹配的讲义原文，"
+    "请结合通用学科知识，清晰、有条理地直接解答学生的问题。\n"
+    "【事实底线】严禁编造或猜测任何教材页码、章节号、讲义出处或文献来源；"
+    "请在开头或结尾自然提示「以上结合通用学科知识解答（当前资料库暂无直接对应讲义）」。\n"
+    "【表达规范】\n"
+    "1. 先用 1~2 句话直接给出核心结论；\n"
+    "2. 再补充 2~3 条简短要点或直觉例子，方便手机小屏阅读（总长约 150~300 字）；\n"
+    "3. 数学公式使用 $...$ / $$...$$ 写法；\n"
+    "4. suggestions 给出 2~3 条简短自然的追问建议（每条不超过 15 字）。"
+)
+
+_STUDY_PROFILE_SYSTEM_PROMPT = (
+    "你是亲切耐心的全局学习助教。学生希望了解学习进度、薄弱考点或复习规划，"
+    "请严格依据下方【个人学习概览】作答，不得编造不存在的课程名、资料数、掌握度或教材页码。\n"
+    "【表达规范】\n"
+    "1. 先概括当前已就绪资料/考点与整体掌握情况（若库为空则坦诚说明并给出入门建议）；\n"
+    "2. 若有薄弱考点，优先按掌握度从低到高列出今日复习重点与建议动作；\n"
+    "3. 条理清晰、适合手机小屏阅读（总长约 180~320 字）；\n"
+    "4. suggestions 给出 2~3 条简短追问建议（每条不超过 15 字）。"
+)
+
 
 # ---------------------------------------------------------------------------
 # 图构建
@@ -503,7 +620,9 @@ class _CoachNodes:
     def route_intent(self, state: CoachGraphState) -> dict[str, Any]:
         return {
             "intent": classify_intent(
-                state["intent_text"], has_overview=bool(state["overview_context"])
+                state["intent_text"],
+                has_overview=bool(state["overview_context"]),
+                allow_general_fallback=state["allow_general_fallback"],
             )
         }
 
@@ -514,13 +633,17 @@ class _CoachNodes:
     @staticmethod
     def conversational_reply(state: CoachGraphState) -> dict[str, Any]:
         kind = classify_chitchat(state["intent_text"]) or "greeting"
-        reply, suggestions = build_chitchat_reply(kind, state["suggested_topics"])
+        reply, suggestions = build_chitchat_reply(
+            kind, state["suggested_topics"], is_global=state["allow_general_fallback"]
+        )
         result = CoachGraphResult(reply=reply, suggestions=suggestions, cited=[], mode="chitchat")
         return {"result": result, "status": "ready"}
 
     @staticmethod
     def noise_reply(state: CoachGraphState) -> dict[str, Any]:
-        reply, suggestions = build_noise_reply(state["suggested_topics"])
+        reply, suggestions = build_noise_reply(
+            state["suggested_topics"], is_global=state["allow_general_fallback"]
+        )
         result = CoachGraphResult(reply=reply, suggestions=suggestions, cited=[], mode="chitchat")
         return {"result": result, "status": "ready"}
 
@@ -531,6 +654,7 @@ class _CoachNodes:
         user_content: str,
         options: LLMOptions,
         topics: Sequence[str],
+        is_global: bool = False,
     ) -> tuple[str, list[str]]:
         plain_messages = [
             LLMMessage(
@@ -542,8 +666,71 @@ class _CoachNodes:
         plain = self.llm.generate(messages=plain_messages, options=options)
         plain_text = plain.content.strip() if isinstance(plain.content, str) else ""
         if not plain_text:
-            return build_fallback_reply(topics)
-        return plain_text, _default_suggestions(topics)
+            return build_fallback_reply(topics, is_global=is_global)
+        return plain_text, _default_suggestions(topics, is_global=is_global)
+
+    def _run_ungrounded_generation(
+        self,
+        state: CoachGraphState,
+        *,
+        system_prompt: str,
+        user_content: str,
+        mode: Literal["study_profile", "general"],
+    ) -> dict[str, Any]:
+        options = LLMOptions(temperature=0.45, max_tokens=4096)
+        try:
+            draft, _ = self.llm.generate_structured(
+                messages=[
+                    LLMMessage(role="system", content=system_prompt),
+                    LLMMessage(role="user", content=user_content),
+                ],
+                response_model=CoachGeneralDraft,
+                options=options,
+            )
+            reply = draft.reply
+            suggestions = list(draft.suggestions)[:3]
+        except LLMResponseFormatError:
+            logger.warning("coach %s structured output degraded to plain generate", mode)
+            reply, suggestions = self._generate_plain_fallback(
+                system_prompt=system_prompt,
+                user_content=user_content,
+                options=options,
+                topics=state["suggested_topics"],
+                is_global=state["allow_general_fallback"],
+            )
+        result = CoachGraphResult(
+            reply=reply,
+            suggestions=suggestions,
+            cited=[],
+            mode=mode,
+            top_score=state["top_score"],
+            rewritten=state["rewrite_count"] > 0,
+        )
+        return {"result": result, "status": "ready"}
+
+    def generate_study_profile(self, state: CoachGraphState) -> dict[str, Any]:
+        history = _format_history(state["history"], self.cfg.max_history_turns)
+        profile_text = state["study_profile_context"] or "当前资料库暂无已解析资料与练习记录。"
+        user_content = f"{history}问题：{state['query']}\n\n{profile_text}"
+        return self._run_ungrounded_generation(
+            state,
+            system_prompt=_STUDY_PROFILE_SYSTEM_PROMPT,
+            user_content=user_content,
+            mode="study_profile",
+        )
+
+    def generate_general(self, state: CoachGraphState) -> dict[str, Any]:
+        history = _format_history(state["history"], self.cfg.max_history_turns)
+        profile_hint = (
+            f"\n\n{state['study_profile_context']}" if state["study_profile_context"] else ""
+        )
+        user_content = f"{history}学生问题：{state['query']}{profile_hint}"
+        return self._run_ungrounded_generation(
+            state,
+            system_prompt=_GENERAL_SYSTEM_PROMPT,
+            user_content=user_content,
+            mode="general",
+        )
 
     def generate_overview(self, state: CoachGraphState) -> dict[str, Any]:
         history = _format_history(state["history"], self.cfg.max_history_turns)
@@ -608,15 +795,19 @@ class _CoachNodes:
         }
 
     def check_evidence(self, state: CoachGraphState) -> str:
+        if not state["material_ids"]:
+            return "general" if state["allow_general_fallback"] else "fallback"
         can_rewrite = state["rewrite_count"] == 0
         if not state["candidates"]:
-            return "rewrite" if can_rewrite else "fallback"
+            if can_rewrite:
+                return "rewrite"
+            return "general" if state["allow_general_fallback"] else "fallback"
         top = state["top_score"]
         if top is not None and top < self.cfg.rewrite_threshold:
             if can_rewrite:
                 return "rewrite"
             if top < self.cfg.min_score:
-                return "fallback"
+                return "general" if state["allow_general_fallback"] else "fallback"
         return "generate"
 
     def rewrite_query(self, state: CoachGraphState) -> dict[str, Any]:
@@ -732,6 +923,8 @@ def build_coach_graph(
     graph.add_node("conversational_reply", nodes.conversational_reply)
     graph.add_node("noise_reply", nodes.noise_reply)
     graph.add_node("generate_overview", nodes.generate_overview)
+    graph.add_node("generate_study_profile", nodes.generate_study_profile)
+    graph.add_node("generate_general", nodes.generate_general)
     graph.add_node("retrieve_and_rerank", nodes.retrieve_and_rerank)
     graph.add_node("rewrite_query", nodes.rewrite_query)
     graph.add_node("honest_fallback", nodes.honest_fallback)
@@ -745,6 +938,7 @@ def build_coach_graph(
             "chitchat": "conversational_reply",
             "noise": "noise_reply",
             "overview": "generate_overview",
+            "study_profile": "generate_study_profile",
             "detail_qa": "retrieve_and_rerank",
         },
     )
@@ -755,6 +949,7 @@ def build_coach_graph(
             "generate": "generate_grounded",
             "rewrite": "rewrite_query",
             "fallback": "honest_fallback",
+            "general": "generate_general",
         },
     )
     graph.add_edge("rewrite_query", "retrieve_and_rerank")
@@ -762,6 +957,8 @@ def build_coach_graph(
     graph.add_edge("conversational_reply", END)
     graph.add_edge("noise_reply", END)
     graph.add_edge("generate_overview", END)
+    graph.add_edge("generate_study_profile", END)
+    graph.add_edge("generate_general", END)
     graph.add_edge("honest_fallback", END)
     graph.add_edge("verify_citations", END)
     return graph.compile(checkpointer=checkpointer if checkpointer is not None else MemorySaver())
@@ -790,6 +987,8 @@ def run_coach_graph(
     overview_context: str | None = None,
     thread_id: str | None = None,
     intent_text: str | None = None,
+    allow_general_fallback: bool = False,
+    study_profile_context: str | None = None,
 ) -> CoachGraphResult:
     """运行 Adaptive + Corrective 工作流并返回已校验的结果。"""
     cfg = config or CoachGraphConfig()
@@ -806,6 +1005,8 @@ def run_coach_graph(
         "scope_title": scope_title,
         "suggested_topics": list(suggested_topics),
         "overview_context": overview_context,
+        "allow_general_fallback": allow_general_fallback,
+        "study_profile_context": study_profile_context,
         "intent": "detail_qa",
         "search_query": _augment_followup_query(
             query, intent_text if intent_text is not None else query, recent
@@ -828,8 +1029,15 @@ def run_coach_graph(
     final = graph.invoke(state, config=run_config)
     result = final.get("result")
     if result is None:
-        reply, suggestions = build_fallback_reply(state["suggested_topics"])
-        return CoachGraphResult(reply=reply, suggestions=suggestions, cited=[], mode="fallback")
+        reply, suggestions = build_fallback_reply(
+            state["suggested_topics"], is_global=allow_general_fallback
+        )
+        return CoachGraphResult(
+            reply=reply,
+            suggestions=suggestions,
+            cited=[],
+            mode="general" if allow_general_fallback else "fallback",
+        )
     return cast(CoachGraphResult, result)
 
 
@@ -871,6 +1079,7 @@ def answer_with_course_evidence(
 
 __all__ = [
     "CoachDraft",
+    "CoachGeneralDraft",
     "CoachGraphConfig",
     "CoachGraphResult",
     "CoachOverviewDraft",

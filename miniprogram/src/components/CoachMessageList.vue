@@ -55,7 +55,9 @@
                 <text class="source-link" @tap="emit('open-source', source.material_id)">
                   {{ source.chapter_title || '打开来源讲义' }} ->
                 </text>
-                <text class="source-excerpt">{{ source.excerpt }}</text>
+                <view class="source-excerpt">
+                  <RichContent :content="source.excerpt" compact muted />
+                </view>
               </view>
             </view>
           </view>
@@ -75,7 +77,7 @@ import { nextTick, ref, watch } from 'vue'
 import RichContent from './RichContent.vue'
 import type { CoachMessage } from '@/composables/useCoachChat'
 
-defineOptions({ options: { virtualHost: true } })
+defineOptions({ options: { virtualHost: true, styleIsolation: 'apply-shared' } })
 
 const props = defineProps<{
   messages: CoachMessage[]
@@ -163,6 +165,6 @@ const copyContent = (content: string) => {
   background: var(--color-teal-bg); border-radius: 8rpx;
 }
 .sources-title, .source-link { color: var(--color-teal-dark); font-size: 22rpx; font-weight: 600; }
-.source-excerpt { display: block; color: var(--color-ink-secondary); font-size: 22rpx; margin-top: 4rpx; }
+.source-excerpt { display: block; margin-top: 4rpx; }
 .bottom-anchor { height: 8rpx; width: 100%; }
 </style>

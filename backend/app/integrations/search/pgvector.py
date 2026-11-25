@@ -202,6 +202,7 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
     ) -> list[MaterialSnippet]:
         """向量粗排 Top-K 与全库关键词候选的并集（按 id 去重，向量候选在前）。"""
         allowed_ids = search_options.allowed_snippet_ids
+        allowed_version_ids = search_options.allowed_version_ids
         snippets: list[MaterialSnippet] = []
         with self._read_session(session) as active_session:
             is_sqlite = (
@@ -215,6 +216,8 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
                 scope.append(MaterialSnippet.version_id == version_id)
             if allowed_ids is not None:
                 scope.append(MaterialSnippet.id.in_(allowed_ids))
+            if allowed_version_ids is not None:
+                scope.append(MaterialSnippet.version_id.in_(allowed_version_ids))
             stmt = select(MaterialSnippet).where(*scope)
 
             if is_sqlite:
@@ -277,6 +280,10 @@ class PgvectorHybridSearchAdapter(SearchProtocol):
         allowed_ids = search_options.allowed_snippet_ids
         if allowed_ids is not None and len(allowed_ids) == 0:
             # 白名单为空：无任何可检索切片，直接返回，无需向量化与访问数据库
+            return SearchResult(query=query, items=(), total_candidates=0, duration_ms=0.0)
+        allowed_version_ids = search_options.allowed_version_ids
+        if allowed_version_ids is not None and len(allowed_version_ids) == 0:
+            # 版本白名单为空：无任何合法在用版本，直接返回，无需向量化与访问数据库
             return SearchResult(query=query, items=(), total_candidates=0, duration_ms=0.0)
 
         try:

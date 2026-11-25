@@ -129,6 +129,18 @@ _MARKDOWN_BLOCK_PREFIX_RE: re.Pattern[str] = re.compile(
 _MATH_SYMBOL_CHARS: frozenset[str] = frozenset(
     "=+-\u2212\u2013\u00d7\u00f7\u2211\u222b\u221a\u221e\u2248\u2264\u2265\u2260\u00b1^_/\u2202\u2207\u2208\u2200\u2203\u00b7\u220f"
 )
+_GREEK_OR_MATH_ALPHANUM_RE: re.Pattern[str] = re.compile(r"[\u0370-\u03ff\U0001d400-\U0001d7ff]")
+_STRONG_MATH_CUES_CHARS: frozenset[str] = frozenset(
+    "^_\u2016\u2211\u222b\u220f\u221a\u221e\u2264\u2265\u2260\u2248\u2208\u2209\u2282\u2283\u222a\u2229\u2202\u2207"
+)
+_PLAIN_MATH_OP_CHARS: frozenset[str] = frozenset("+-*/=<>")
+_ISOLATED_MATH_SKIP_RE: re.Pattern[str] = re.compile(
+    r"^(?:https?://|www\.|\d+(?:\.\d+)*\s+[A-Za-z]|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$|\d+\s*/\s*\d+$)",
+    re.IGNORECASE,
+)
+_ISOLATED_MATH_MD_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^(?:#{1,6}\s+|[-*•]\s+|\d+[.)]\s+|>\s?|```)"
+)
 
 # 公式碎片页判定：非空行 >= 6 且超短公式碎行占比 > 45%
 _FORMULA_FRAGMENT_MAX_LINE_CHARS: int = 8
@@ -588,6 +600,56 @@ def detect_broken_math_layout(text: str) -> bool:
         if combined / len(non_code_lines) >= _COMBINED_FRAGMENT_LINE_RATIO:
             return True
 
+    return False
+
+
+def is_isolated_math_expression_block(text: str) -> bool:
+    """判断独立短块是否为未封装 LaTeX 的散落数学表达式（如 `ω^T x_i + b`、`||ω||`）。"""
+    stripped = text.strip()
+    if not (2 <= len(stripped) <= 45) or stripped.count("\n") > 1:
+        return False
+    if _CJK_RE.search(stripped) or _ISOLATED_MATH_MD_PREFIX_RE.match(stripped):
+        return False
+    if stripped.startswith("| ") and stripped.endswith(" |"):
+        return False
+    if stripped.startswith("$") and stripped.endswith("$"):
+        return False
+    if _ISOLATED_MATH_SKIP_RE.match(stripped):
+        return False
+    has_greek = _GREEK_OR_MATH_ALPHANUM_RE.search(stripped) is not None
+    has_strong_cue = "||" in stripped or any(ch in _STRONG_MATH_CUES_CHARS for ch in stripped)
+    op_count = sum(1 for ch in stripped if ch in _PLAIN_MATH_OP_CHARS)
+    if has_greek and (has_strong_cue or op_count >= 1):
+        return True
+    if has_strong_cue:
+        return True
+    return op_count >= 2 and any(ch.isalpha() for ch in stripped)
+
+
+def has_scattered_math_blocks(text: str) -> bool:
+    """探测整页文本中是否存在未封装 LaTeX 的散架二维公式块（用于 VLM 触发与小模型公式修复提示）。"""
+    if not text or not text.strip():
+        return False
+    blocks = re.split(r"\n\s*\n", text.strip())
+    candidates: list[str] = []
+    for block in blocks:
+        stripped = block.strip()
+        if not stripped:
+            continue
+        if is_isolated_math_expression_block(stripped):
+            candidates.append(stripped)
+            continue
+        for line in stripped.splitlines():
+            ln = line.strip()
+            if ln and is_isolated_math_expression_block(ln):
+                candidates.append(ln)
+    if len(candidates) >= 2:
+        return True
+    if len(candidates) == 1:
+        item = candidates[0]
+        has_greek = _GREEK_OR_MATH_ALPHANUM_RE.search(item) is not None
+        has_sub_sup = "^" in item or "_" in item or "||" in item or "\u2016" in item
+        return has_greek and has_sub_sup
     return False
 
 

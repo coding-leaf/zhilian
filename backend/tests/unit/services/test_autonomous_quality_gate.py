@@ -354,7 +354,7 @@ def test_batched_ai_judge_approve_repair_reject_and_escalating_temperature_loop(
     assert outcome.retry_count == 1
     assert llm.judge_call_count == 1
     assert llm.judge_options[0] is not None
-    assert llm.judge_options[0].max_tokens == 4096
+    assert llm.judge_options[0].max_tokens == 8192
 
     # Escalating temperatures 0.3 -> 0.5 and passed-stem dedup hint in round 1
     assert [opt.temperature for opt in llm.generation_options if opt is not None] == [0.3, 0.5]

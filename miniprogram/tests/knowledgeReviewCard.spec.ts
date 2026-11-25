@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { adaptKnowledgeSnippet, adaptStructuredContent } from '@/api/adapters/knowledge'
+import {
+  adaptKnowledgeSnippet,
+  adaptKnowledgeTreeNode,
+  adaptStructuredContent,
+  adaptStudyGuidePrewarmStatus,
+  adaptStudyGuideResult,
+} from '@/api/adapters/knowledge'
 import KnowledgeSnippetModal from '@/subpackages/material/components/KnowledgeSnippetModal.vue'
 import {
   formatSnippetPageRange,
@@ -258,5 +264,72 @@ describe('knowledge review card adaptation & rendering', () => {
     expect(wrapper.text()).toContain('当前暂无高质量教材原文依据，建议点击讲义页「重新解析」升级')
 
     wrapper.unmount()
+  })
+
+  it('adapts has_study_guide on tree nodes, study guide payload, and prewarm status', () => {
+    const node = adaptKnowledgeTreeNode({
+      id: 'kp-1',
+      name: '核方法',
+      has_study_guide: true,
+      children: [{ id: 'kp-2', name: 'RBF 核', has_study_guide: false }],
+    })
+    expect(node.hasStudyGuide).toBe(true)
+    expect(node.children?.[0].hasStudyGuide).toBe(false)
+
+    const guideRes = adaptStudyGuideResult({
+      knowledge_point_id: 'kp-1',
+      status: 'ready',
+      generated_at: '2026-11-25T10:00:00Z',
+      study_guide: {
+        schema_version: 1,
+        exam_positioning: '高频计算考点',
+        core_definition: '通过核函数隐式计算高维内积。',
+        symbol_table: [{ symbol: '$K(x,z)$', meaning: '核函数', note: '对称半正定' }],
+        key_formulas: ['$$K(x,z)=\\exp(-\\gamma\\|x-z\\|^2)$$'],
+        derivation_steps: [{ step_title: '对偶替换', formula: '', explanation: '内积替换为核函数' }],
+        worked_examples: [
+          {
+            title: '典型例题 1',
+            question_type: '概念辨析',
+            problem: '简述 Mercer 条件',
+            solution_idea: '核矩阵半正定',
+            solution_steps: ['任意样本集构造 Gram 矩阵半正定'],
+            final_answer: '满足对称且半正定即可作为有效核函数。',
+          },
+        ],
+        comparisons: [
+          {
+            target_concept: '多项式核',
+            similarities: '均映射高维内积',
+            differences: '高斯核对应无穷维映射',
+            exam_distinction: '局部平滑选高斯，低次交互选多项式',
+          },
+        ],
+        pitfalls: [{ mistake: '误以为带宽越大越欠拟合', why_wrong: '参数符号定义不同', correction: '看清 $\\gamma$ 与 $\\sigma$ 倒数关系' }],
+        memory_anchors: ['先对称，再半正定'],
+      },
+    })
+    expect(guideRes.status).toBe('ready')
+    expect(guideRes.study_guide?.symbol_table).toHaveLength(1)
+    expect(guideRes.study_guide?.worked_examples[0].solution_steps).toHaveLength(1)
+
+    const prewarm = adaptStudyGuidePrewarmStatus({
+      material_id: 'm-1',
+      version_id: 'v-1',
+      status: 'running',
+      total_kps: 10,
+      ready_kps: 4,
+      failed_kps: 0,
+      current_kp_name: '核方法',
+    })
+    expect(prewarm).toEqual({
+      material_id: 'm-1',
+      version_id: 'v-1',
+      status: 'running',
+      total_kps: 10,
+      ready_kps: 4,
+      failed_kps: 0,
+      current_kp_name: '核方法',
+    })
   })
 })

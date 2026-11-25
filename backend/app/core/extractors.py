@@ -1,6 +1,8 @@
 """Pure document text and binary magic-byte extractors without database/network I/O."""
 
 import io
+import logging
+import re
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,11 +15,17 @@ import pypdf
 
 from app.core.algorithms.document_denoising import PageTextBlock
 from app.core.algorithms.material_chunking import ParagraphInput
-from app.core.algorithms.ocr_quality import detect_broken_math_layout, detect_symbol_garble
+from app.core.algorithms.ocr_quality import (
+    detect_broken_math_layout,
+    detect_symbol_garble,
+    has_scattered_math_blocks,
+    is_isolated_math_expression_block,
+)
 from app.core.errors import MaterialInvalidError
 
 # PyMuPDF 仅提供部分类型标注，统一以 Any 访问以满足 mypy --strict。
 _pymupdf: Any = pymupdf
+_logger = logging.getLogger(__name__)
 
 # 依据：文件类型二进制魔数定义
 MAGIC_NUMBERS: dict[str, list[bytes]] = {
@@ -125,7 +133,16 @@ _SYMBOL_FONT_MARKERS: tuple[str, ...] = (
 _VISUAL_OCR_MAX_VALID_CHARS: int = 60
 _VISUAL_OCR_MIN_DRAWINGS: int = 8
 _FORMULA_VISUAL_RISK_MIN_DRAWINGS: int = 20
+_SLIDE_VISUAL_RISK_MIN_DRAWINGS: int = 4
+_SLIDE_ASPECT_RATIO: float = 1.15
 _FORMULA_RISK_OPERATORS: frozenset[str] = frozenset("=≤≥∈∑∫≈≠")
+_SLIDE_GREEK_RE: re.Pattern[str] = re.compile(r"[\u0370-\u03ff\U0001d400-\U0001d7ff]")
+_SLIDE_STRONG_MATH_CHARS: frozenset[str] = frozenset("^_‖∑∫∏√∞≤≥≠≈∈∉⊂⊃∪∩∂∇")
+_SLIDE_MATH_OPS: frozenset[str] = frozenset("=+-*/<>")
+_CJK_CHAR_RE: re.Pattern[str] = re.compile(r"[\u4e00-\u9fff]")
+_STACKED_MATH_TOKEN_RE: re.Pattern[str] = re.compile(
+    r"[\u0370-\u03ff^_+\-*/=|‖]|(?<![A-Za-z])[A-Za-z](?![A-Za-z])"
+)
 
 
 @dataclass(frozen=True)
@@ -142,6 +159,8 @@ class PdfPageExtraction:
     needs_visual_ocr: bool = False
     blocks: tuple[PageTextBlock, ...] = ()
     has_formula_visual_risk: bool = False
+    is_slide_layout: bool = False
+    has_math_expression_layout: bool = False
 
     @property
     def needs_repair(self) -> bool:
@@ -215,14 +234,22 @@ def _build_page_extraction(
     has_visual_content: bool = False,
     blocks: tuple[PageTextBlock, ...] = (),
     has_formula_visual_risk: bool = False,
+    is_slide_layout: bool = False,
+    has_math_expression_layout: bool = False,
 ) -> PdfPageExtraction:
     """基于单页文本与字体诊断构造 PdfPageExtraction（pypdf / PyMuPDF 共用）。"""
     has_garble, _ratio, frags = detect_symbol_garble(raw_text)
     broken_math = detect_broken_math_layout(raw_text)
+    math_expr_layout = has_math_expression_layout or has_scattered_math_blocks(raw_text)
     non_ws_count = sum(1 for ch in raw_text if not ch.isspace())
     needs_visual_ocr = has_visual_content and non_ws_count < _VISUAL_OCR_MAX_VALID_CHARS
     dirty = (
-        lacks_tounicode or has_garble or broken_math or needs_visual_ocr or has_formula_visual_risk
+        lacks_tounicode
+        or has_garble
+        or broken_math
+        or needs_visual_ocr
+        or has_formula_visual_risk
+        or math_expr_layout
     )
     embedded_images = image_loader() if (dirty or not raw_text) else ()
     return PdfPageExtraction(
@@ -236,6 +263,8 @@ def _build_page_extraction(
         needs_visual_ocr=needs_visual_ocr,
         blocks=blocks,
         has_formula_visual_risk=has_formula_visual_risk,
+        is_slide_layout=is_slide_layout,
+        has_math_expression_layout=math_expr_layout,
     )
 
 
@@ -287,11 +316,14 @@ def _order_blocks_reading_order(blocks: Sequence[Any], page_width: float) -> lis
     return ordered
 
 
-def _pymupdf_page_text_and_blocks(page: Any) -> tuple[str, tuple[PageTextBlock, ...]]:
+def _pymupdf_page_text_and_blocks(
+    page: Any,
+) -> tuple[str, tuple[PageTextBlock, ...], float, float]:
     """用 PyMuPDF 块级坐标抽取单页文本与保留位置元数据的块元组。"""
     raw_blocks = page.get_text("blocks")
-    page_width = float(getattr(page.rect, "width", 0.0) or 0.0)
-    page_height = float(getattr(page.rect, "height", 0.0) or 0.0)
+    rect = getattr(page, "rect", None)
+    page_width = float(getattr(rect, "width", 0.0) or 0.0)
+    page_height = float(getattr(rect, "height", 0.0) or 0.0)
     ordered = _order_blocks_reading_order(
         [b for b in raw_blocks if len(b) < 7 or int(b[6]) == 0], page_width
     )
@@ -313,12 +345,12 @@ def _pymupdf_page_text_and_blocks(page: Any) -> tuple[str, tuple[PageTextBlock, 
                 page_height=page_height,
             )
         )
-    return "\n\n".join(parts).strip(), tuple(page_blocks)
+    return "\n\n".join(parts).strip(), tuple(page_blocks), page_width, page_height
 
 
 def _pymupdf_page_text(page: Any) -> str:
     """用 PyMuPDF 块级坐标抽取单页文本，按阅读顺序以空行分隔段落块。"""
-    text, _blocks = _pymupdf_page_text_and_blocks(page)
+    text, _blocks, _w, _h = _pymupdf_page_text_and_blocks(page)
     return text
 
 
@@ -358,6 +390,97 @@ def _pymupdf_page_images(doc: Any, page: Any) -> tuple[bytes, ...]:
     return tuple(collected)
 
 
+def _pymupdf_page_drawings_count(page: Any) -> int:
+    """安全获取 PyMuPDF 页面矢量绘图路径数量。"""
+    try:
+        get_drawings = getattr(page, "get_drawings", None)
+        if callable(get_drawings):
+            return len(get_drawings())
+    except Exception:
+        return 0
+    return 0
+
+
+def _is_background_image_rect(rect: Any, page_width: float, page_height: float) -> bool:
+    """判断图片矩形是否覆盖整页 >=85%（典型 PPT 背景底图）。"""
+    if page_width <= 0.0 or page_height <= 0.0:
+        return False
+    w = float(getattr(rect, "width", 0.0) or 0.0)
+    h = float(getattr(rect, "height", 0.0) or 0.0)
+    return w * h >= 0.85 * page_width * page_height
+
+
+def _pymupdf_page_non_bg_image_count(page: Any, page_width: float, page_height: float) -> int:
+    """统计 PyMuPDF 页面中排除全页背景模板图后的有效内嵌位图数量。"""
+    try:
+        get_images = getattr(page, "get_images", None)
+        if not callable(get_images):
+            return 0
+        images = get_images(full=True)
+    except Exception:
+        return 0
+    if not images:
+        return 0
+    get_rects = getattr(page, "get_image_rects", None)
+    if not callable(get_rects) or page_width <= 0.0 or page_height <= 0.0:
+        return len(images)
+    non_bg = 0
+    for img in images:
+        try:
+            rects = get_rects(int(img[0]))
+        except Exception:
+            non_bg += 1
+            continue
+        if not rects or any(
+            not _is_background_image_rect(r, page_width, page_height) for r in rects
+        ):
+            non_bg += 1
+    return non_bg
+
+
+def _detect_stacked_fraction_blocks(blocks: Sequence[PageTextBlock]) -> bool:
+    """检测垂直紧邻且水平中心对齐的短非中文分子/分母块（2D 分式版面特征）。"""
+    short_blocks = [
+        b
+        for b in blocks
+        if (
+            2 <= len(b.text.strip()) <= 45
+            and not _CJK_CHAR_RE.search(b.text)
+            and not (b.text.strip().startswith("$") and b.text.strip().endswith("$"))
+        )
+    ]
+    if len(short_blocks) < 2:
+        return False
+    ordered = sorted(short_blocks, key=lambda b: (b.y0, b.x0))
+    for idx, top in enumerate(ordered):
+        top_cx = (top.x0 + top.x1) / 2.0
+        top_w = max(0.0, top.x1 - top.x0)
+        for bottom in ordered[idx + 1 :]:
+            gap = bottom.y0 - top.y1
+            if gap > 12.0:
+                break
+            if gap < -4.0:
+                continue
+            bot_cx = (bottom.x0 + bottom.x1) / 2.0
+            bot_w = max(0.0, bottom.x1 - bottom.x0)
+            if abs(top_cx - bot_cx) <= max(24.0, 0.5 * max(top_w, bot_w)) and (
+                _STACKED_MATH_TOKEN_RE.search(top.text)
+                or _STACKED_MATH_TOKEN_RE.search(bottom.text)
+            ):
+                return True
+    return False
+
+
+def _slide_has_math_cues(raw_text: str) -> bool:
+    """判断横屏 PPT 页文本是否包含希腊字母、上下标或典型数学运算符。"""
+    if _SLIDE_GREEK_RE.search(raw_text):
+        return True
+    if "||" in raw_text or any(ch in _SLIDE_STRONG_MATH_CHARS for ch in raw_text):
+        return True
+    op_hits = sum(1 for ch in raw_text if ch in _SLIDE_MATH_OPS)
+    return op_hits >= 2
+
+
 def _pymupdf_page_has_visual_content(page: Any) -> bool:
     """判断 PyMuPDF 单页是否包含内嵌位图或复杂矢量绘图（>= 8 条路径）。"""
     has_images = False
@@ -369,26 +492,39 @@ def _pymupdf_page_has_visual_content(page: Any) -> bool:
         has_images = False
     if has_images:
         return True
-    try:
-        get_drawings = getattr(page, "get_drawings", None)
-        if callable(get_drawings):
-            return len(get_drawings()) >= _VISUAL_OCR_MIN_DRAWINGS
-    except Exception:
-        return False
-    return False
+    return _pymupdf_page_drawings_count(page) >= _VISUAL_OCR_MIN_DRAWINGS
 
 
 def _pymupdf_page_has_formula_visual_risk(page: Any, raw_text: str) -> bool:
     """判断页面是否包含高密度矢量公式绘图（>=20 条路径）且含数学运算符。"""
     if not any(ch in _FORMULA_RISK_OPERATORS for ch in raw_text):
         return False
-    try:
-        get_drawings = getattr(page, "get_drawings", None)
-        if callable(get_drawings):
-            return len(get_drawings()) >= _FORMULA_VISUAL_RISK_MIN_DRAWINGS
-    except Exception:
-        return False
-    return False
+    return _pymupdf_page_drawings_count(page) >= _FORMULA_VISUAL_RISK_MIN_DRAWINGS
+
+
+def _pymupdf_page_visual_and_math_flags(
+    page: Any,
+    raw_text: str,
+    page_blocks: Sequence[PageTextBlock],
+    *,
+    is_slide_layout: bool,
+    page_width: float,
+    page_height: float,
+) -> tuple[bool, bool]:
+    """综合计算单页的公式排版风险与视觉风险。"""
+    drawings = _pymupdf_page_drawings_count(page)
+    isolated_block = any(is_isolated_math_expression_block(b.text) for b in page_blocks)
+    stacked_fraction = _detect_stacked_fraction_blocks(page_blocks)
+    has_math_layout = isolated_block or stacked_fraction
+
+    # 仅在含数学运算符且高密度矢量路径 (>=20) 时标为公式视觉风险；
+    # 不因 PPT 模板装饰线 (>=4) 或校徽小图误把纯文页轰进 VLM 触发限流。
+    _ = (is_slide_layout, page_width, page_height)
+    dense_vector_formula = (
+        any(ch in _FORMULA_RISK_OPERATORS for ch in raw_text)
+        and drawings >= _FORMULA_VISUAL_RISK_MIN_DRAWINGS
+    )
+    return has_math_layout, dense_vector_formula
 
 
 def _pypdf_page_has_visual_content(page: Any) -> bool:
@@ -412,7 +548,18 @@ def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | Non
         pages_out: list[PdfPageExtraction] = []
         for idx in range(doc.page_count):
             page = doc.load_page(idx)
-            raw_text, page_blocks = _pymupdf_page_text_and_blocks(page)
+            raw_text, page_blocks, page_w, page_h = _pymupdf_page_text_and_blocks(page)
+            is_slide_layout = (
+                page_w > 0.0 and page_h > 0.0 and page_w > page_h * _SLIDE_ASPECT_RATIO
+            )
+            has_math_layout, formula_visual_risk = _pymupdf_page_visual_and_math_flags(
+                page,
+                raw_text,
+                page_blocks,
+                is_slide_layout=is_slide_layout,
+                page_width=page_w,
+                page_height=page_h,
+            )
             pages_out.append(
                 _build_page_extraction(
                     page_number=idx + 1,
@@ -421,7 +568,9 @@ def _extract_pages_with_pymupdf(content: bytes) -> list[PdfPageExtraction] | Non
                     image_loader=partial(_pymupdf_page_images, doc, page),
                     has_visual_content=_pymupdf_page_has_visual_content(page),
                     blocks=page_blocks,
-                    has_formula_visual_risk=_pymupdf_page_has_formula_visual_risk(page, raw_text),
+                    has_formula_visual_risk=formula_visual_risk,
+                    is_slide_layout=is_slide_layout,
+                    has_math_expression_layout=has_math_layout,
                 )
             )
     except Exception:
@@ -469,6 +618,128 @@ def extract_pdf_pages_with_diagnostics(content: bytes) -> list[PdfPageExtraction
     return pages_out
 
 
+def _render_loaded_page_image(
+    page: Any,
+    *,
+    dpi: int,
+    image_format: str,
+    jpeg_quality: int,
+    max_image_edge: int,
+) -> bytes:
+    """将已加载的 PyMuPDF 页面按最长边上限缩放并编码为 JPEG 或 PNG 字节流。"""
+    rect = getattr(page, "rect", None)
+    page_w = float(getattr(rect, "width", 0.0) or 0.0)
+    page_h = float(getattr(rect, "height", 0.0) or 0.0)
+    zoom = dpi / 72.0
+    max_dim = max(page_w * zoom, page_h * zoom)
+    if max_image_edge > 0 and max_dim > max_image_edge and hasattr(_pymupdf, "Matrix"):
+        zoom *= max_image_edge / max_dim
+        pixmap = page.get_pixmap(matrix=_pymupdf.Matrix(zoom, zoom), alpha=False)
+    elif image_format == "jpeg":
+        pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+    else:
+        pixmap = page.get_pixmap(dpi=dpi)
+    if image_format == "jpeg":
+        jpeg_bytes: bytes = pixmap.tobytes("jpeg", jpg_quality=jpeg_quality)
+        return jpeg_bytes
+    png_bytes: bytes = pixmap.tobytes("png")
+    return png_bytes
+
+
+def render_pdf_page_image(
+    pdf_bytes: bytes,
+    page_number: int,
+    *,
+    dpi: int = 150,
+    image_format: str = "jpeg",
+    jpeg_quality: int = 85,
+    max_image_edge: int = 1440,
+) -> tuple[bytes, str]:
+    """将 PDF 指定页（1 起始）渲染为压缩 JPEG 或 PNG 字节流与 MIME 类型。"""
+    fmt = image_format.lower()
+    if fmt not in ("jpeg", "png"):
+        raise MaterialInvalidError(
+            f"不支持的图片渲染格式: {image_format}",
+            details={"image_format": image_format},
+        )
+    try:
+        doc = _pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise MaterialInvalidError(
+            "PDF 页面渲染失败：文件无法打开",
+            details={"error": type(exc).__name__},
+        ) from exc
+    try:
+        if page_number < 1 or page_number > doc.page_count:
+            raise MaterialInvalidError(
+                "PDF 页面渲染失败：页码越界",
+                details={"page_number": page_number, "page_count": doc.page_count},
+            )
+        page = doc.load_page(page_number - 1)
+        data = _render_loaded_page_image(
+            page,
+            dpi=dpi,
+            image_format=fmt,
+            jpeg_quality=jpeg_quality,
+            max_image_edge=max_image_edge,
+        )
+        mime = "image/jpeg" if fmt == "jpeg" else "image/png"
+        return data, mime
+    except MaterialInvalidError:
+        raise
+    except Exception as exc:
+        raise MaterialInvalidError(
+            "PDF 页面渲染失败",
+            details={"page_number": page_number, "error": type(exc).__name__},
+        ) from exc
+    finally:
+        doc.close()
+
+
+def render_pdf_pages_batch(
+    pdf_bytes: bytes,
+    page_numbers: Sequence[int],
+    *,
+    dpi: int = 150,
+    image_format: str = "jpeg",
+    jpeg_quality: int = 85,
+    max_image_edge: int = 1440,
+) -> tuple[dict[int, bytes], str]:
+    """单次打开 PDF 并批量渲染指定页码（用于滚动批渲染防内存峰值膨胀）。"""
+    fmt = image_format.lower()
+    mime = "image/jpeg" if fmt == "jpeg" else "image/png"
+    if not page_numbers:
+        return {}, mime
+    try:
+        doc = _pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:
+        return {}, mime
+    rendered: dict[int, bytes] = {}
+    try:
+        for pn in page_numbers:
+            if pn < 1 or pn > doc.page_count:
+                continue
+            try:
+                page = doc.load_page(pn - 1)
+                rendered[pn] = _render_loaded_page_image(
+                    page,
+                    dpi=dpi,
+                    image_format=fmt,
+                    jpeg_quality=jpeg_quality,
+                    max_image_edge=max_image_edge,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "pdf batch page render degraded: page=%s error=%s",
+                    pn,
+                    type(exc).__name__,
+                )
+                continue
+    finally:
+        doc.close()
+    return rendered, mime
+
+
 def render_pdf_page_png(pdf_bytes: bytes, page_number: int, dpi: int = 150) -> bytes:
     """将 PDF 指定页（1 起始）渲染为 PNG 字节流，供云端 VLM 转录脏页。
 
@@ -483,31 +754,14 @@ def render_pdf_page_png(pdf_bytes: bytes, page_number: int, dpi: int = 150) -> b
     Raises:
         MaterialInvalidError: PDF 无法打开、页码越界或渲染失败。
     """
-    try:
-        doc = _pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    except Exception as exc:
-        raise MaterialInvalidError(
-            "PDF 页面渲染失败：文件无法打开",
-            details={"error": type(exc).__name__},
-        ) from exc
-    try:
-        if page_number < 1 or page_number > doc.page_count:
-            raise MaterialInvalidError(
-                "PDF 页面渲染失败：页码越界",
-                details={"page_number": page_number, "page_count": doc.page_count},
-            )
-        pixmap = doc.load_page(page_number - 1).get_pixmap(dpi=dpi)
-        png_bytes: bytes = pixmap.tobytes("png")
-        return png_bytes
-    except MaterialInvalidError:
-        raise
-    except Exception as exc:
-        raise MaterialInvalidError(
-            "PDF 页面渲染失败",
-            details={"page_number": page_number, "error": type(exc).__name__},
-        ) from exc
-    finally:
-        doc.close()
+    png_bytes, _mime = render_pdf_page_image(
+        pdf_bytes,
+        page_number,
+        dpi=dpi,
+        image_format="png",
+        max_image_edge=0,
+    )
+    return png_bytes
 
 
 def _extract_text_from_pdf(content: bytes) -> str:
@@ -778,6 +1032,8 @@ __all__ = [
     "extract_pdf_pages_with_diagnostics",
     "extract_pptx_slides",
     "extract_text_from_raw_content",
+    "render_pdf_page_image",
     "render_pdf_page_png",
+    "render_pdf_pages_batch",
     "validate_file_magic",
 ]

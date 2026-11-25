@@ -4,10 +4,12 @@
 """
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -78,6 +80,25 @@ class KnowledgePoint(Base, TimestampMixin, TenantModelMixin):
         nullable=True,
         default=None,
         comment="知识点结构化内容 (core_summary/key_takeaways/key_formulas/boundary_notes)",
+    )
+    study_guide: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+        nullable=True,
+        default=None,
+        comment="考前精讲笔记永久缓存 JSON (StudyGuideContent v1)",
+    )
+    study_guide_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        comment="考前精讲笔记生成时间 (UTC)",
+    )
+    study_guide_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="考前精讲笔记 Schema 版本号 (0=未生成, 1=v1)",
     )
     sort_order: Mapped[int] = mapped_column(
         Integer,

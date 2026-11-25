@@ -1,7 +1,12 @@
 import { computed, ref, watch } from 'vue'
 import { apiAskQuestionCoach, apiAskScopedCoach } from '@/api'
 import { useAuthStore } from '@/stores/auth'
-import type { AskCoachHistoryItem, CoachSource } from '@/types'
+import type {
+  AskCoachHistoryItem,
+  CoachResponseMode,
+  CoachSource,
+  ScopedCoachParams,
+} from '@/types'
 import { RequestError } from '@/utils/requestError'
 
 export interface CoachMessage {
@@ -11,6 +16,7 @@ export interface CoachMessage {
   prompt?: string
   suggestions?: string[]
   sources?: CoachSource[]
+  mode?: CoachResponseMode
   error?: boolean
   retryQuery?: string
 }
@@ -30,6 +36,7 @@ const COACH_HISTORY_STORAGE_PREFIX = 'zhilian:coach:history:'
 const COACH_LRU_INDEX_PREFIX = 'zhilian:coach:lru:'
 const MAX_PERSISTED_MESSAGES = 30
 const MAX_REQUEST_HISTORY_ITEMS = 20
+const MAX_SCOPED_HISTORY_ITEMS = 12
 export const MAX_PERSISTED_SESSIONS = 30
 
 function resolveCoachUserId(): string {
@@ -223,6 +230,27 @@ function buildRequestHistory(
   }))
 }
 
+function buildScopedRequestHistory(
+  messages: CoachMessage[],
+  skipTrailingUserQuery?: string,
+): AskCoachHistoryItem[] {
+  const valid = messages.filter((msg) => !msg.error && msg.content.trim().length > 0)
+  const trimmedList =
+    skipTrailingUserQuery &&
+    valid.length > 0 &&
+    valid[valid.length - 1].role === 'user' &&
+    valid[valid.length - 1].content.trim() === skipTrailingUserQuery
+      ? valid.slice(0, -1)
+      : valid
+
+  return stripOrphanUserTurns(trimmedList)
+    .slice(-MAX_SCOPED_HISTORY_ITEMS)
+    .map((msg) => ({
+      role: msg.role,
+      content: msg.content.trim().slice(0, 2000),
+    }))
+}
+
 export function buildCoachSessionKey(ctx: CoachContextParams): string {
   if (ctx.questionId) return `q:${ctx.questionId}`
   if (ctx.knowledgePointId) return `kp:${ctx.knowledgePointId}`
@@ -245,10 +273,21 @@ const KP_QUICK_PROMPTS = [
   '结合典型场景帮我加深理解',
 ]
 
-const MATERIAL_QUICK_PROMPTS = [
+export const MATERIAL_QUICK_PROMPTS = [
   '帮我梳理这份资料的核心框架',
   '哪些核心公式和概念最容易混淆？',
   '总结这部分内容的关键适用条件',
+]
+
+export const FOLDER_QUICK_PROMPTS = [
+  '梳理这门课的核心知识框架',
+  '总结这门课的高频易错点',
+]
+
+export const GLOBAL_QUICK_PROMPTS = [
+  '帮我规划今天复习重点',
+  '汇总我最近的薄弱考点',
+  '直接问我一个概念问题',
 ]
 
 /** AI 助教对话流状态与多上下文/多用户会话隔离编排。 */
@@ -300,8 +339,9 @@ export function useCoachChat(getContext: () => CoachContextParams) {
     const ctx = getContext()
     if (ctx.questionId) return QUESTION_QUICK_PROMPTS
     if (ctx.knowledgePointId) return KP_QUICK_PROMPTS
-    if (ctx.materialId || ctx.folderId) return MATERIAL_QUICK_PROMPTS
-    return []
+    if (ctx.materialId) return MATERIAL_QUICK_PROMPTS
+    if (ctx.folderId) return FOLDER_QUICK_PROMPTS
+    return GLOBAL_QUICK_PROMPTS
   })
 
   const appendMessage = (userId: string, key: string, msg: CoachMessage): void => {
@@ -412,25 +452,27 @@ export function useCoachChat(getContext: () => CoachContextParams) {
         return
       }
 
-      if (!ctx.folderId && !ctx.materialId && !ctx.knowledgePointId) {
-        appendMessage(targetUserId, targetKey, {
-          id: nextId(),
-          role: 'assistant',
-          content: '请先选择一门课程或打开一份讲义，再向助教提问。',
-        })
-        return
-      }
-
-      const scopePayload = ctx.knowledgePointId
-        ? { knowledge_point_id: ctx.knowledgePointId }
+      const scopePayload: Pick<
+        ScopedCoachParams,
+        'scope' | 'knowledge_point_id' | 'material_id' | 'folder_id'
+      > = ctx.knowledgePointId
+        ? { scope: 'knowledge_point', knowledge_point_id: ctx.knowledgePointId }
         : ctx.materialId
-          ? { material_id: ctx.materialId }
-          : { folder_id: ctx.folderId }
+          ? { scope: 'material', material_id: ctx.materialId }
+          : ctx.folderId
+            ? { scope: 'folder', folder_id: ctx.folderId }
+            : { scope: 'global' }
+
+      const scopedHistory = buildScopedRequestHistory(
+        priorMessages,
+        options?.skipUserBubble ? query : undefined,
+      )
 
       const response = await apiAskScopedCoach({
         ...scopePayload,
         user_prompt: query,
         thread_id: targetKey,
+        ...(scopedHistory.length > 0 ? { history: scopedHistory } : {}),
       })
       appendMessage(targetUserId, targetKey, {
         id: nextId(),
@@ -438,6 +480,7 @@ export function useCoachChat(getContext: () => CoachContextParams) {
         content: response.reply,
         suggestions: response.suggestions,
         sources: response.sources,
+        mode: response.mode,
       })
     } catch (err) {
       appendMessage(targetUserId, targetKey, {

@@ -83,17 +83,20 @@
       </view>
     </view>
 
-    <!-- 课程全局悬浮助教入口 -->
-    <view class="floating-coach-btn" @tap="showCoachDrawer = true">
+    <!-- 工作台全局悬浮助教入口 -->
+    <view class="floating-coach-btn" @tap="openCoachDrawer">
       <text class="coach-btn-tag">AI</text>
       <text class="coach-btn-text">助教</text>
     </view>
 
     <AiCoachDrawer
       v-model:visible="showCoachDrawer"
-      title="课程随身助教"
+      :title="coachTitle"
       :context-text="coachContextText"
-      :folder-id="activeFolderDetail?.id"
+      :folder-id="coachFocusedFolderId"
+      :selectable-folders="coachSelectableFolders"
+      :enable-scope-selector="true"
+      @select-folder="selectCoachFolder"
     />
 
     <FolderFormModal
@@ -124,6 +127,7 @@ import FolderFormModal from './components/FolderFormModal.vue'
 import MaterialItemCard from './components/MaterialItemCard.vue'
 import { useMaterialDelete } from './composables/useMaterialDelete'
 import { useFolderModal } from './composables/useFolderModal'
+import { useHomeCoach } from './composables/useHomeCoach'
 import { useMaterialUpload } from './composables/useMaterialUpload'
 
 const materialStore = useMaterialStore()
@@ -131,11 +135,13 @@ const authStore = useAuthStore()
 const folderStore = useFolderStore()
 const taskStore = useBackgroundTaskStore()
 
-const { deletingId, requestDelete } = useMaterialDelete({
-  deleteMaterial: materialStore.deleteMaterial,
-})
+const { deletingId, requestDelete } = useMaterialDelete({ deleteMaterial: materialStore.deleteMaterial })
 
-const showCoachDrawer = ref(false)
+const {
+  showCoachDrawer, coachFocusedFolderId, coachSelectableFolders,
+  coachTitle, coachContextText, openCoachDrawer, selectCoachFolder,
+} = useHomeCoach(() => folderStore.folders)
+
 const isLoadingList = ref(false)
 
 const currentFolderName = computed(() => {
@@ -147,13 +153,6 @@ const currentFolderName = computed(() => {
 const activeFolderDetail = computed(() => {
   if (folderStore.currentFolderId === 'all' || folderStore.currentFolderId === '__none__') return null
   return folderStore.folders.find((f) => f.id === folderStore.currentFolderId) || null
-})
-
-const coachContextText = computed(() => {
-  if (activeFolderDetail.value) {
-    return `当前聚焦课程「${activeFolderDetail.value.name}」，涵盖 ${activeFolderDetail.value.knowledge_point_count} 个考点与 ${activeFolderDetail.value.ready_material_count} 份就绪资料。`
-  }
-  return '当前处于智练全景工作台，你可以随时询问学习方法、考点定义或复习建议。'
 })
 
 const loadMaterialListNonBlocking = async (folderId: string) => {
@@ -171,14 +170,8 @@ const switchFolder = async (folderId: string) => {
 }
 
 const {
-  showFolderModal,
-  initialFolderName,
-  folderToRename,
-  isCreatingFolder,
-  openCreateFolderModal,
-  openRenameFolder,
-  submitFolderModal,
-  confirmArchiveFolder,
+  showFolderModal, initialFolderName, folderToRename, isCreatingFolder,
+  openCreateFolderModal, openRenameFolder, submitFolderModal, confirmArchiveFolder,
 } = useFolderModal({
   activeFolderDetail,
   createFolder: folderStore.createFolder,

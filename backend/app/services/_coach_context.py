@@ -8,9 +8,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from app.models.knowledge import KnowledgePoint
+from app.models.material import MaterialFolder
+from app.models.practice import MasteryRecord
 
 _MAX_OVERVIEW_CHARS = 3200
+_MAX_GLOBAL_CHARS = 2800
 _MAX_LIST_ITEMS = 3
+_WEAK_MASTERY_THRESHOLD = 0.60
+_DEFAULT_WEAK_LIMIT = 5
 
 
 def _as_text_list(value: Any) -> list[str]:
@@ -68,4 +73,92 @@ def pick_suggested_topics(points: Sequence[KnowledgePoint], *, limit: int = 3) -
     return seen
 
 
-__all__ = ["build_overview_context", "pick_suggested_topics"]
+def _rank_weak_records(
+    points: Sequence[KnowledgePoint],
+    mastery_records: Sequence[MasteryRecord],
+    *,
+    limit: int = _DEFAULT_WEAK_LIMIT,
+) -> list[tuple[KnowledgePoint, MasteryRecord]]:
+    point_by_id = {point.id: point for point in points}
+    weak_pairs = [
+        (point_by_id[record.knowledge_point_id], record)
+        for record in mastery_records
+        if record.knowledge_point_id in point_by_id
+        and record.mastery_score < _WEAK_MASTERY_THRESHOLD
+    ]
+    weak_pairs.sort(key=lambda pair: (pair[1].mastery_score, -pair[1].practice_count))
+    return weak_pairs[:limit]
+
+
+def pick_global_suggested_topics(
+    points: Sequence[KnowledgePoint],
+    mastery_records: Sequence[MasteryRecord],
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """全局模式下优先推荐薄弱考点名称，其次补充前序核心考点。"""
+    seen: list[str] = []
+    for point, _ in _rank_weak_records(points, mastery_records, limit=_DEFAULT_WEAK_LIMIT):
+        name = point.name.strip()
+        if name and name not in seen:
+            seen.append(name)
+        if len(seen) >= limit:
+            return seen
+    for point in points:
+        name = point.name.strip()
+        if name and name not in seen:
+            seen.append(name)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def build_global_study_context(
+    *,
+    folders: Sequence[MaterialFolder],
+    ready_materials_count: int,
+    points: Sequence[KnowledgePoint],
+    mastery_records: Sequence[MasteryRecord],
+    max_chars: int = _MAX_GLOBAL_CHARS,
+    weak_limit: int = _DEFAULT_WEAK_LIMIT,
+) -> str:
+    """汇总全局学习画像：就绪资料数、考点总数、课程清单与薄弱考点 Top 5。"""
+    lines = [
+        f"【个人学习概览】未归档课程 {len(folders)} 门，"
+        f"已就绪资料 {ready_materials_count} 份，核心考点共 {len(points)} 个。"
+    ]
+    if folders:
+        folder_names = "、".join(folder.name for folder in folders[:10])
+        lines.append(f"课程清单：{folder_names}")
+
+    weak_pairs = _rank_weak_records(points, mastery_records, limit=weak_limit)
+    if weak_pairs:
+        lines.append(f"薄弱考点 Top {len(weak_pairs)}（掌握度由低到高）：")
+        for point, record in weak_pairs:
+            pct = round(record.mastery_score * 100)
+            lines.append(
+                f"- {point.name}（掌握度 {pct}%，练习 {record.practice_count} 次/"
+                f"答对 {record.correct_count} 次）"
+            )
+    elif points:
+        sample_names = "、".join(pick_suggested_topics(points, limit=8))
+        lines.append(f"暂无薄弱考点记录；代表性考点：{sample_names}")
+    else:
+        lines.append("当前资料库暂无已解析资料与练习记录。")
+
+    rendered: list[str] = []
+    total = 0
+    for line in lines:
+        if total + len(line) + 1 > max_chars:
+            break
+        rendered.append(line)
+        total += len(line) + 1
+    return "\n".join(rendered)
+
+
+__all__ = [
+    "build_global_study_context",
+    "build_overview_context",
+    "pick_global_suggested_topics",
+    "pick_suggested_topics",
+]

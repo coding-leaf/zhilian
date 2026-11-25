@@ -295,20 +295,60 @@ class MemoryQueueAdapter(QueueProtocol):
             self._tasks[task_id] = (message, cancelled_result)
             return True
 
+    @property
+    def supports_async_worker(self) -> bool:
+        """内存队列无独立后台 Worker 进程，标识为同步回退模式。"""
+        return False
+
+    @staticmethod
+    def _matches_message(
+        message: TaskMessage,
+        task_name: str,
+        match_payload: dict[str, str],
+    ) -> bool:
+        if message.task_name != task_name:
+            return False
+        return all(
+            str(message.payload.get(key, "")) == str(value) for key, value in match_payload.items()
+        )
+
     def has_active_job(self, task_name: str, match_payload: dict[str, str]) -> bool:
         """检查是否存在匹配任务名与载荷子集的排队中或执行中任务。"""
+        return self.has_live_job(task_name, match_payload)
+
+    def has_live_job(self, task_name: str, match_payload: dict[str, str]) -> bool:
+        """检查是否存在匹配任务名与载荷子集的排队中 (pending) 或执行中 (running) 任务。"""
         with self._lock:
-            for message, result in self._tasks.values():
-                if message.task_name != task_name:
-                    continue
-                if result.status not in {"pending", "running"}:
-                    continue
-                if all(
-                    str(message.payload.get(key, "")) == str(value)
-                    for key, value in match_payload.items()
-                ):
-                    return True
-            return False
+            return any(
+                result.status in {"pending", "running"}
+                and self._matches_message(message, task_name, match_payload)
+                for message, result in self._tasks.values()
+            )
+
+    def cancel_matching_jobs(self, task_name: str, match_payload: dict[str, str]) -> int:
+        """取消所有匹配的待执行 (pending) 任务，不中断运行中 (running) 任务。"""
+        with self._lock:
+            matched_ids = [
+                task_id
+                for task_id, (message, result) in self._tasks.items()
+                if result.status == "pending"
+                and self._matches_message(message, task_name, match_payload)
+            ]
+            if not matched_ids:
+                return 0
+            matched_set = set(matched_ids)
+            self._queue = [item for item in self._queue if item.task_id not in matched_set]
+            for task_id in matched_ids:
+                message, current_result = self._tasks[task_id]
+                self._tasks[task_id] = (
+                    message,
+                    TaskResult(
+                        task_id=task_id,
+                        status="cancelled",
+                        duration_ms=current_result.duration_ms,
+                    ),
+                )
+            return len(matched_ids)
 
     def __repr__(self) -> str:
         """安全脱敏的字符串表示。"""

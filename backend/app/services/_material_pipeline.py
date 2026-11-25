@@ -6,17 +6,20 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.core.algorithms.document_denoising import (
     PageRole,
+    PageTextBlock,
     PageTextInput,
     classify_pages_with_fallback,
+    classify_slide_or_page,
     is_non_substantive_chapter,
     strip_repeated_headers_footers,
 )
@@ -25,17 +28,21 @@ from app.core.algorithms.markdown_blocks import (
     unwrap_pdf_visual_line_breaks,
 )
 from app.core.algorithms.material_chunking import (
+    ChunkingResult,
     ParagraphInput,
     split_material_into_snippets,
 )
 from app.core.algorithms.ocr_quality import (
     OCRPageInput,
     detect_symbol_garble,
+    has_scattered_math_blocks,
+    is_isolated_math_expression_block,
     sanitize_symbol_garble,
     verify_ocr_quality,
 )
-from app.core.errors import MaterialInvalidError
-from app.core.extractors import PdfPageExtraction, render_pdf_page_png
+from app.core.algorithms.semantic_chunking import SemanticPageInput
+from app.core.errors import LLMTimeoutError, MaterialInvalidError
+from app.core.extractors import PdfPageExtraction, render_pdf_page_png, render_pdf_pages_batch
 from app.integrations.embedding.protocol import EmbeddingProtocol
 from app.integrations.llm.protocol import LLMMessage, LLMOptions, LLMProtocol
 from app.integrations.ocr.protocol import OCRProtocol
@@ -413,8 +420,17 @@ _VLM_TRANSCRIBE_SYSTEM_PROMPT: str = (
 )
 
 _VLM_TRANSCRIBE_USER_PROMPT: str = "请严格按要求转录第 {page_number} 页的全部内容。"
+_PADDLEOCR_VL_TASK_PROMPT: str = "OCR:"
+_DEEPSEEK_OCR_TASK_PROMPT: str = "Transcribe text and formulas as Markdown with LaTeX."
+_VLM_CONSECUTIVE_FAILURE_THRESHOLD: int = 3
+_VLM_SKIP_TEMPLATE_ROLES: frozenset[PageRole] = frozenset(
+    {PageRole.COVER, PageRole.TOC, PageRole.THANK_YOU, PageRole.REFERENCES}
+)
 
 _CODE_FENCE_WRAPPER = re.compile(r"^\s*```(?:markdown|md|latex|text)?\s*\n(.*?)\n\s*```\s*$", re.S)
+
+VlmPromptStyle = Literal["auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"]
+ResolvedVlmPromptStyle = Literal["general_markdown", "paddleocr_vl", "deepseek_ocr"]
 
 
 def _strip_vlm_code_fence(text: str) -> str:
@@ -424,41 +440,187 @@ def _strip_vlm_code_fence(text: str) -> str:
     return match.group(1).strip() if match else stripped
 
 
+def _resolve_vlm_prompt_style(
+    vlm: LLMProtocol,
+    prompt_style: VlmPromptStyle = "auto",
+) -> ResolvedVlmPromptStyle:
+    """按配置或模型名解析 VLM 提示词与消息序列化风格。"""
+    if prompt_style in ("general_markdown", "paddleocr_vl", "deepseek_ocr"):
+        return prompt_style
+    model_name = str(getattr(vlm, "model", "") or "").lower()
+    if "paddleocr-vl" in model_name or "paddleocr_vl" in model_name:
+        return "paddleocr_vl"
+    if "deepseek-ocr" in model_name or "deepseek_ocr" in model_name:
+        return "deepseek_ocr"
+    return "general_markdown"
+
+
+def _build_vlm_messages(
+    data_uri: str,
+    page_number: int,
+    resolved_style: ResolvedVlmPromptStyle,
+) -> list[LLMMessage]:
+    """构造 VLM 请求消息：专用 OCR 模型无 system 且图像在前，通用模式沿用原有指令。"""
+    if resolved_style == "paddleocr_vl":
+        return [
+            LLMMessage(
+                role="user",
+                content=_PADDLEOCR_VL_TASK_PROMPT,
+                image_urls=(data_uri,),
+                image_first=True,
+            )
+        ]
+    if resolved_style == "deepseek_ocr":
+        return [
+            LLMMessage(
+                role="user",
+                content=_DEEPSEEK_OCR_TASK_PROMPT,
+                image_urls=(data_uri,),
+                image_first=True,
+            )
+        ]
+    return [
+        LLMMessage(role="system", content=_VLM_TRANSCRIBE_SYSTEM_PROMPT),
+        LLMMessage(
+            role="user",
+            content=_VLM_TRANSCRIBE_USER_PROMPT.format(page_number=page_number),
+            image_urls=(data_uri,),
+        ),
+    ]
+
+
 def _transcribe_page_with_vlm(
     vlm: LLMProtocol,
-    png_bytes: bytes,
+    image_bytes: bytes,
     page_number: int,
     *,
     timeout: float,
+    mime_type: str = "image/jpeg",
+    prompt_style: VlmPromptStyle = "auto",
 ) -> str:
-    """把单页 PNG 编码为 data URI 送 VLM 转录；返回 Markdown+LaTeX 文本（空串表示无结果）。"""
-    data_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+    """把单页图像编码为 data URI 送 VLM 转录；返回 Markdown+LaTeX 文本（空串表示无结果）。"""
+    data_uri = f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("ascii")
+    resolved_style = _resolve_vlm_prompt_style(vlm, prompt_style)
+    messages = _build_vlm_messages(data_uri, page_number, resolved_style)
     resp = vlm.generate(
-        messages=[
-            LLMMessage(role="system", content=_VLM_TRANSCRIBE_SYSTEM_PROMPT),
-            LLMMessage(
-                role="user",
-                content=_VLM_TRANSCRIBE_USER_PROMPT.format(page_number=page_number),
-                image_urls=(data_uri,),
-            ),
-        ],
+        messages=messages,
         options=LLMOptions(temperature=0.0, max_tokens=4096, timeout=timeout),
     )
     transcript = _strip_vlm_code_fence(resp.content) if resp and resp.content else ""
-    if not transcript:
+    if not transcript or not any(ch.isalnum() for ch in transcript):
         return ""
     still_garbled, _, _ = detect_symbol_garble(transcript)
     return sanitize_symbol_garble(transcript) if still_garbled else transcript
 
 
-def _page_needs_vlm(page: PdfPageExtraction) -> bool:
-    """仅公式乱码 / 缺字库 / 图文少字页 / 高密度公式风险 / 无文字的脏页才送 VLM；干净页零成本。"""
-    return (
-        page.needs_repair
-        or page.needs_visual_ocr
-        or page.has_formula_visual_risk
-        or not page.text.strip()
+def _page_needs_vlm(page: PdfPageExtraction, *, total_pages: int = 1) -> bool:
+    """判断页面是否需要送 VLM：覆盖乱码/公式版面/PPT 视觉数学页，跳过清晰封面/目录/致谢。"""
+    if page.needs_repair or page.has_math_expression_layout or not page.text.strip():
+        return True
+    role = classify_slide_or_page(
+        page.text,
+        page.page_number,
+        max(1, total_pages),
+        is_slide_like=True,
     )
+    if role in _VLM_SKIP_TEMPLATE_ROLES:
+        return False
+    return page.needs_visual_ocr or page.has_formula_visual_risk
+
+
+def _select_dirty_pages_for_vlm(
+    pages: Sequence[PdfPageExtraction],
+    *,
+    max_pages_per_doc: int,
+) -> list[PdfPageExtraction]:
+    """筛选需送 VLM 的页面并在超出单档上限时按优先级截断。"""
+    total_pages = len(pages)
+    dirty = [p for p in pages if _page_needs_vlm(p, total_pages=total_pages)]
+    if max_pages_per_doc > 0 and len(dirty) > max_pages_per_doc:
+        prioritized = sorted(
+            dirty,
+            key=lambda p: (
+                not (p.needs_repair or not p.text.strip()),
+                not p.has_math_expression_layout,
+                p.page_number,
+            ),
+        )[:max_pages_per_doc]
+        _pipeline_logger.warning(
+            "VLM dirty page count capped: total_dirty=%s cap=%s",
+            len(dirty),
+            max_pages_per_doc,
+        )
+        return sorted(prioritized, key=lambda p: p.page_number)
+    return dirty
+
+
+def _is_vlm_timeout_error(exc: Exception) -> bool:
+    """判断 VLM 单页异常是否属于超时/瞬时网关阻塞。"""
+    if isinstance(exc, (TimeoutError, LLMTimeoutError, httpx.TimeoutException)):
+        return True
+    return "timeout" in type(exc).__name__.lower()
+
+
+def _execute_vlm_batch(
+    batch_rendered: dict[int, bytes],
+    *,
+    vlm: LLMProtocol,
+    workers: int,
+    timeout: float,
+    mime_type: str,
+    prompt_style: VlmPromptStyle,
+    consecutive_failures: int,
+    consecutive_timeouts: int,
+    results: dict[int, str],
+    completed_count: int,
+    total_dirty: int,
+    on_progress: Callable[[int, int], None] | None,
+) -> tuple[int, int, int, bool]:
+    """并发执行单批 VLM 转录并实时更新熔断计数与进度。"""
+    circuit_tripped = False
+    max_workers = max(1, min(workers, len(batch_rendered)))
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vlm-page") as pool:
+        futures: dict[Future[str], int] = {
+            pool.submit(
+                _transcribe_page_with_vlm,
+                vlm,
+                img_bytes,
+                page_number,
+                timeout=timeout,
+                mime_type=mime_type,
+                prompt_style=prompt_style,
+            ): page_number
+            for page_number, img_bytes in batch_rendered.items()
+        }
+        for future in as_completed(futures):
+            page_number = futures[future]
+            try:
+                transcript = future.result()
+            except Exception as exc:
+                consecutive_failures += 1
+                if _is_vlm_timeout_error(exc):
+                    consecutive_timeouts += 1
+                _pipeline_logger.warning(
+                    "pdf page VLM transcription degraded: page=%s error=%s",
+                    page_number,
+                    type(exc).__name__,
+                )
+                if (
+                    consecutive_timeouts >= _VLM_CONSECUTIVE_FAILURE_THRESHOLD
+                    or consecutive_failures >= _VLM_CONSECUTIVE_FAILURE_THRESHOLD
+                ):
+                    circuit_tripped = True
+                    for pending in futures:
+                        pending.cancel()
+            else:
+                consecutive_failures = 0
+                consecutive_timeouts = 0
+                if transcript.strip():
+                    results[page_number] = transcript
+            completed_count += 1
+            if on_progress is not None:
+                on_progress(completed_count, total_dirty)
+    return consecutive_failures, consecutive_timeouts, completed_count, circuit_tripped
 
 
 def transcribe_dirty_pages_with_vlm(
@@ -469,55 +631,88 @@ def transcribe_dirty_pages_with_vlm(
     dpi: int = 150,
     max_concurrency: int = 3,
     timeout: float = 45.0,
+    prompt_style: VlmPromptStyle = "auto",
+    image_format: Literal["jpeg", "png"] = "jpeg",
+    jpeg_quality: int = 85,
+    max_image_edge: int = 1440,
+    max_pages_per_doc: int = 40,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[int, str]:
-    """并发把脏页渲染为 PNG 并交 VLM 转录；单页失败只记录告警并从结果中缺席。
-
-    渲染在调用线程内串行完成（PyMuPDF 非线程安全），HTTP 调用在受限线程池内并发。
+    """滚动批渲染并并发把脏页交 VLM 转录；单批用完即释放字节，连续超时/失败快速熔断。
 
     Returns:
         dict[int, str]: 页码 -> 转录 Markdown（仅包含成功且非空的页）。
     """
-    rendered: dict[int, bytes] = {}
-    for page in pages:
-        if not _page_needs_vlm(page):
-            continue
-        try:
-            rendered[page.page_number] = render_pdf_page_png(pdf_bytes, page.page_number, dpi=dpi)
-        except Exception as exc:
-            _pipeline_logger.warning(
-                "pdf page render for VLM degraded: page=%s error=%s",
-                page.page_number,
-                type(exc).__name__,
-            )
-    if not rendered:
+    dirty_pages = _select_dirty_pages_for_vlm(pages, max_pages_per_doc=max_pages_per_doc)
+    if not dirty_pages:
         return {}
 
+    workers = max(1, max_concurrency)
+    batch_size = max(1, workers)
     results: dict[int, str] = {}
-    workers = max(1, min(max_concurrency, len(rendered)))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vlm-page") as pool:
-        futures = {
-            pool.submit(_transcribe_page_with_vlm, vlm, png, page_number, timeout=timeout): (
-                page_number
+    consecutive_failures = 0
+    consecutive_timeouts = 0
+    completed_count = 0
+    total_dirty = len(dirty_pages)
+
+    for start in range(0, total_dirty, batch_size):
+        batch = dirty_pages[start : start + batch_size]
+        batch_rendered, mime_type = render_pdf_pages_batch(
+            pdf_bytes,
+            [p.page_number for p in batch],
+            dpi=dpi,
+            image_format=image_format,
+            jpeg_quality=jpeg_quality,
+            max_image_edge=max_image_edge,
+        )
+        if not batch_rendered:
+            completed_count += len(batch)
+            if on_progress is not None:
+                on_progress(completed_count, total_dirty)
+            continue
+
+        consecutive_failures, consecutive_timeouts, completed_count, tripped = _execute_vlm_batch(
+            batch_rendered,
+            vlm=vlm,
+            workers=workers,
+            timeout=timeout,
+            mime_type=mime_type,
+            prompt_style=prompt_style,
+            consecutive_failures=consecutive_failures,
+            consecutive_timeouts=consecutive_timeouts,
+            results=results,
+            completed_count=completed_count,
+            total_dirty=total_dirty,
+            on_progress=on_progress,
+        )
+        batch_rendered.clear()
+        del batch_rendered
+
+        if tripped:
+            _pipeline_logger.warning(
+                "VLM circuit breaker tripped: completed=%s total=%s",
+                completed_count,
+                total_dirty,
             )
-            for page_number, png in rendered.items()
-        }
-        for future, page_number in futures.items():
-            try:
-                transcript = future.result()
-            except Exception as exc:
-                _pipeline_logger.warning(
-                    "pdf page VLM transcription degraded: page=%s error=%s",
-                    page_number,
-                    type(exc).__name__,
-                )
-                continue
-            if transcript.strip():
-                results[page_number] = transcript
+            break
+
     return results
 
 
-_MD_HEADING_BLOCK_RE: re.Pattern[str] = re.compile(r"^(#{1,6})\s+.+$")
-_PLAIN_HEADING_FORBIDDEN_CHARS: frozenset[str] = frozenset("。！？!?;:，,=$\\|`")
+_MD_HEADING_BLOCK_RE: re.Pattern[str] = re.compile(r"^(#{1,6})\s+(.+)$")
+_PLAIN_HEADING_FORBIDDEN_CHARS: frozenset[str] = frozenset(
+    "。！？!?;:：，,=$\\|`+-*/^_<>≤≥≠≈∈∉⊂⊃∪∩∑∫∏√∞±×÷·‖{}[]()\\−"
+)
+_HEADING_GREEK_OR_MATH_RE: re.Pattern[str] = re.compile(r"[\u0370-\u03ff\U0001d400-\U0001d7ff]")
+_EXPLICIT_ZH_SECTION_RE: re.Pattern[str] = re.compile(
+    r"^(?:"
+    r"第\s*[一二三四五六七八九十百\d]+\s*[章节讲篇部](?:[\s、.:：]+[\u4e00-\u9fffA-Za-z0-9\s]{1,28})?|"
+    r"[一二三四五六七八九十]+\s*[、.．]\s*[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9\s]{0,26}|"
+    r"\d+(?:\.\d+)*\s*[、.．]?\s*[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9\s]{0,26}"
+    r")$"
+)
+_PURE_ZH_SHORT_TITLE_RE: re.Pattern[str] = re.compile(r"^[\u4e00-\u9fff][\u4e00-\u9fff\s]{1,23}$")
+_TOP_TITLE_MAX_Y_RATIO: float = 0.22
 _PLAIN_LIST_OR_QUOTE_RE: re.Pattern[str] = re.compile(r"^(?:[-*•]\s+|\d+[.)]\s+|>\s?|```|\|)")
 _DOTTED_WORD_RE: re.Pattern[str] = re.compile(r"[A-Za-z]\.[A-Za-z]")
 _PLAIN_HEADING_TRAILING_STOP: tuple[str, ...] = (
@@ -542,27 +737,58 @@ _PLAIN_HEADING_TRAILING_STOP: tuple[str, ...] = (
 )
 
 
-def is_heading_block(block: str) -> bool:
-    """判断单个文本块是否为 Markdown 标题或独立短小节标题（如“基本概念”）。"""
+def is_heading_block(block: str, *, y_ratio: float | None = None) -> bool:
+    """判断单个文本块是否为 Markdown 标题或受控章节标题（严禁数学表达式误判为标题）。"""
     stripped = block.strip()
     if not stripped or "\n" in stripped:
         return False
-    if _MD_HEADING_BLOCK_RE.match(stripped):
-        return True
-    if not (2 <= len(stripped) <= 20):
+    md_match = _MD_HEADING_BLOCK_RE.match(stripped)
+    if md_match:
+        inner = md_match.group(2).strip()
+        return not (
+            not inner
+            or _HEADING_GREEK_OR_MATH_RE.search(inner)
+            or is_isolated_math_expression_block(inner)
+            or inner.startswith(("-", "+", "="))
+        )
+    if not (2 <= len(stripped) <= 32):
         return False
     if stripped.isdigit() or _PLAIN_LIST_OR_QUOTE_RE.match(stripped):
         return False
     if any(ch in _PLAIN_HEADING_FORBIDDEN_CHARS for ch in stripped):
         return False
-    if _DOTTED_WORD_RE.search(stripped):
+    if _HEADING_GREEK_OR_MATH_RE.search(stripped):
         return False
-    return not stripped.endswith(_PLAIN_HEADING_TRAILING_STOP)
+    if _DOTTED_WORD_RE.search(stripped) or stripped.endswith(_PLAIN_HEADING_TRAILING_STOP):
+        return False
+    if _EXPLICIT_ZH_SECTION_RE.match(stripped):
+        return True
+    return bool(
+        y_ratio is not None
+        and y_ratio <= _TOP_TITLE_MAX_Y_RATIO
+        and _PURE_ZH_SHORT_TITLE_RE.match(stripped)
+    )
+
+
+def _find_block_y_ratio(block: str, page_blocks: Sequence[PageTextBlock]) -> float | None:
+    """从 PyMuPDF 块坐标查找对应文本块的相对纵坐标 ``y0 / page_height``。"""
+    target = block.strip()
+    if not target or not page_blocks:
+        return None
+    for pb in page_blocks:
+        if pb.page_height <= 0.0:
+            continue
+        pb_text = pb.text.strip()
+        if pb_text == target or target in pb_text:
+            return pb.y0 / pb.page_height
+    return None
 
 
 def _build_pdf_paragraphs_from_classified(
     non_empty_pages: Sequence[tuple[int, str]],
     roles: Sequence[PageRole],
+    *,
+    blocks_by_page: dict[int, tuple[PageTextBlock, ...]] | None = None,
 ) -> tuple[list[ParagraphInput], str]:
     """根据页面角色分类结果，把去噪后的 PDF 页面转为带章节标记的段落序列。"""
     content_entries: list[tuple[int, str, list[str]]] = []
@@ -582,8 +808,11 @@ def _build_pdf_paragraphs_from_classified(
             continue
         content_entries.append((pn, txt, split_markdown_blocks(txt)))
 
+    page_blocks_map = blocks_by_page or {}
     has_substantive_body = any(
-        not is_heading_block(blk) for _pn, _txt, blks in content_entries for blk in blks
+        not is_heading_block(blk, y_ratio=_find_block_y_ratio(blk, page_blocks_map.get(pn, ())))
+        for pn, _txt, blks in content_entries
+        for blk in blks
     )
     paragraphs: list[ParagraphInput] = []
     page_texts: list[str] = []
@@ -607,13 +836,17 @@ def _build_pdf_paragraphs_from_classified(
             continue
         repaired_text, blocks = content_by_page[pn]
         page_texts.append(repaired_text)
-        page_has_body = any(not is_heading_block(blk) for blk in blocks)
+        pn_blocks = page_blocks_map.get(pn, ())
+        page_has_body = any(
+            not is_heading_block(blk, y_ratio=_find_block_y_ratio(blk, pn_blocks)) for blk in blocks
+        )
         for block in blocks:
             paragraphs.append(
                 _build_pdf_block_paragraph(
                     block,
                     pn,
                     has_body_context=page_has_body or has_substantive_body,
+                    y_ratio=_find_block_y_ratio(block, pn_blocks),
                 )
             )
     return paragraphs, "\n\n".join(page_texts)
@@ -624,14 +857,20 @@ def _build_pdf_block_paragraph(
     page_number: int,
     *,
     has_body_context: bool,
+    y_ratio: float | None = None,
 ) -> ParagraphInput:
     """构造单块 PDF ParagraphInput（非实质章节标题如「小结」不覆盖当前章节状态）。"""
     md_match = _MD_HEADING_BLOCK_RE.match(block.strip())
-    if md_match:
-        heading_text = _MD_HEADING_BLOCK_RE.sub("", block.strip()).lstrip("#").strip()
+    if md_match and is_heading_block(block, y_ratio=y_ratio):
+        heading_text = md_match.group(2).strip()
         is_title = not is_non_substantive_chapter(heading_text)
         title_level = len(md_match.group(1)) if is_title else 0
-    elif is_heading_block(block) and has_body_context and not is_non_substantive_chapter(block):
+    elif (
+        not md_match
+        and is_heading_block(block, y_ratio=y_ratio)
+        and has_body_context
+        and not is_non_substantive_chapter(block)
+    ):
         is_title = True
         title_level = 1
     else:
@@ -647,7 +886,7 @@ def _build_pdf_block_paragraph(
     )
 
 
-def repair_garbled_pdf_pages(
+def repair_garbled_pdf_pages_with_pages(
     pages: Sequence[PdfPageExtraction],
     pdf_bytes: bytes,
     *,
@@ -657,8 +896,14 @@ def repair_garbled_pdf_pages(
     vlm_dpi: int = 150,
     vlm_max_concurrency: int = 3,
     vlm_timeout: float = 45.0,
-) -> tuple[list[ParagraphInput], str]:
-    """逐页检测修复 PDF 乱码，执行跨页去噪与模板页过滤，产出保留页码溯源的段落列表与全文。"""
+    vlm_prompt_style: VlmPromptStyle = "auto",
+    vlm_image_format: Literal["jpeg", "png"] = "jpeg",
+    vlm_jpeg_quality: int = 85,
+    vlm_max_image_edge: int = 1440,
+    vlm_max_pages_per_doc: int = 40,
+    vlm_on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[list[ParagraphInput], str, list[SemanticPageInput]]:
+    """修复 PDF 乱码并跨页去噪，返回 (确定性段落列表, 合并全文, 语义切片页序列)。"""
     vlm_transcripts: dict[int, str] = {}
     if vlm is not None:
         vlm_transcripts = transcribe_dirty_pages_with_vlm(
@@ -668,6 +913,12 @@ def repair_garbled_pdf_pages(
             dpi=vlm_dpi,
             max_concurrency=vlm_max_concurrency,
             timeout=vlm_timeout,
+            prompt_style=vlm_prompt_style,
+            image_format=vlm_image_format,
+            jpeg_quality=vlm_jpeg_quality,
+            max_image_edge=vlm_max_image_edge,
+            max_pages_per_doc=vlm_max_pages_per_doc,
+            on_progress=vlm_on_progress,
         )
 
     repaired_pages: list[tuple[int, str, PdfPageExtraction, bool]] = []
@@ -684,7 +935,7 @@ def repair_garbled_pdf_pages(
         repaired_pages.append((page.page_number, repaired_text, page, used_vlm))
 
     if not repaired_pages:
-        return [], ""
+        return [], "", []
 
     denoised_texts = strip_repeated_headers_footers(
         [
@@ -697,18 +948,79 @@ def repair_garbled_pdf_pages(
         ]
     )
     non_empty_pages: list[tuple[int, str]] = []
-    for (pn, _raw, _pg, used_vlm), txt in zip(repaired_pages, denoised_texts, strict=True):
+    semantic_pages: list[SemanticPageInput] = []
+    blocks_by_page: dict[int, tuple[PageTextBlock, ...]] = {}
+    for (pn, _raw, pg, used_vlm), txt in zip(repaired_pages, denoised_texts, strict=True):
         stripped = txt.strip()
         if not stripped:
             continue
-        final_txt = stripped if used_vlm else unwrap_pdf_visual_line_breaks(stripped)
-        if final_txt.strip():
-            non_empty_pages.append((pn, final_txt.strip()))
+        final_txt = (stripped if used_vlm else unwrap_pdf_visual_line_breaks(stripped)).strip()
+        if not final_txt:
+            continue
+        non_empty_pages.append((pn, final_txt))
+        if not used_vlm and pg.blocks:
+            blocks_by_page[pn] = pg.blocks
+        formula_hint = (not used_vlm) and (
+            pg.has_math_expression_layout
+            or pg.has_broken_math_layout
+            or pg.has_formula_visual_risk
+            or has_scattered_math_blocks(final_txt)
+        )
+        semantic_pages.append(
+            SemanticPageInput(
+                page_number=pn,
+                text=final_txt,
+                used_vlm=used_vlm,
+                needs_formula_repair_hint=formula_hint,
+            )
+        )
     if not non_empty_pages:
-        return [], ""
+        return [], "", []
 
     roles = classify_pages_with_fallback(non_empty_pages, is_slide_like=True)
-    return _build_pdf_paragraphs_from_classified(non_empty_pages, roles)
+    paragraphs, full_text = _build_pdf_paragraphs_from_classified(
+        non_empty_pages,
+        roles,
+        blocks_by_page=blocks_by_page,
+    )
+    return paragraphs, full_text, semantic_pages
+
+
+def repair_garbled_pdf_pages(
+    pages: Sequence[PdfPageExtraction],
+    pdf_bytes: bytes,
+    *,
+    ocr: OCRProtocol | None,
+    llm: LLMProtocol | None,
+    vlm: LLMProtocol | None = None,
+    vlm_dpi: int = 150,
+    vlm_max_concurrency: int = 3,
+    vlm_timeout: float = 45.0,
+    vlm_prompt_style: VlmPromptStyle = "auto",
+    vlm_image_format: Literal["jpeg", "png"] = "jpeg",
+    vlm_jpeg_quality: int = 85,
+    vlm_max_image_edge: int = 1440,
+    vlm_max_pages_per_doc: int = 40,
+    vlm_on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[list[ParagraphInput], str]:
+    """逐页检测修复 PDF 乱码，执行跨页去噪与模板页过滤，产出保留页码溯源的段落列表与全文。"""
+    paragraphs, full_text, _semantic_pages = repair_garbled_pdf_pages_with_pages(
+        pages,
+        pdf_bytes,
+        ocr=ocr,
+        llm=llm,
+        vlm=vlm,
+        vlm_dpi=vlm_dpi,
+        vlm_max_concurrency=vlm_max_concurrency,
+        vlm_timeout=vlm_timeout,
+        vlm_prompt_style=vlm_prompt_style,
+        vlm_image_format=vlm_image_format,
+        vlm_jpeg_quality=vlm_jpeg_quality,
+        vlm_max_image_edge=vlm_max_image_edge,
+        vlm_max_pages_per_doc=vlm_max_pages_per_doc,
+        vlm_on_progress=vlm_on_progress,
+    )
+    return paragraphs, full_text
 
 
 def denoise_pptx_slides(
@@ -815,9 +1127,14 @@ def prepare_material_snippets(
     user_id: uuid.UUID,
     paragraphs: Sequence[str | ParagraphInput],
     require_non_empty: bool = True,
+    prechunked_result: ChunkingResult | None = None,
 ) -> list[MaterialSnippet]:
     """纯内存切分段落并批量向量化，返回带预分配主键的切片实体列表（不写库）。"""
-    chunk_result = split_material_into_snippets(paragraphs, allow_cross_page_merge=True)
+    chunk_result = (
+        prechunked_result
+        if prechunked_result is not None
+        else split_material_into_snippets(paragraphs, allow_cross_page_merge=True)
+    )
     if require_non_empty and not chunk_result.snippets:
         raise MaterialInvalidError("资料有效内容不足，未切分出有效知识片段")
 
@@ -926,6 +1243,7 @@ __all__ = [
     "prepare_material_snippets",
     "process_initial_ocr_page",
     "repair_garbled_pdf_pages",
+    "repair_garbled_pdf_pages_with_pages",
     "resolve_progress_redis_client",
     "set_cached_parse_progress",
     "transcribe_dirty_pages_with_vlm",

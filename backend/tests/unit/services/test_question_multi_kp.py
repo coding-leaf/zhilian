@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import KnowledgeNotFoundError, MissingSourceSnippetError
 from app.models.base import Base
+from app.models.material import Material
 from app.models.question import Question
 from app.services.question import (
     GenerateQuestionsOptions,
@@ -309,6 +310,17 @@ class TestMultiKnowledgePointAtomicity:
         )
         user_id = uuid.uuid4()
         material_id = uuid.uuid4()
+        sqlite_session.add(
+            Material(
+                id=material_id,
+                user_id=user_id,
+                title="原子性回滚测试讲义",
+                file_format="pdf",
+                file_size=512,
+                is_deleted=False,
+            )
+        )
+        sqlite_session.commit()
         kp_ids = [uuid.uuid4(), uuid.uuid4()]
         self._install_persisting_generate(service, monkeypatch, fail_on=kp_ids[1])
 
@@ -335,6 +347,17 @@ class TestMultiKnowledgePointAtomicity:
         )
         user_id = uuid.uuid4()
         material_id = uuid.uuid4()
+        sqlite_session.add(
+            Material(
+                id=material_id,
+                user_id=user_id,
+                title="原子性提交测试讲义",
+                file_format="pdf",
+                file_size=512,
+                is_deleted=False,
+            )
+        )
+        sqlite_session.commit()
         kp_ids = [uuid.uuid4(), uuid.uuid4()]
         commit_spy = MagicMock(wraps=sqlite_session.commit)
         monkeypatch.setattr(sqlite_session, "commit", commit_spy)

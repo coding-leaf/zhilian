@@ -47,6 +47,7 @@ from app.core.algorithms.knowledge_tree import (
 from app.core.errors import (
     KnowledgeExtractionRetryExceededError,
     KnowledgeNotFoundError,
+    LLMResponseFormatError,
     MaterialInvalidError,
     MaterialNotFoundError,
 )
@@ -61,6 +62,7 @@ from app.models.knowledge import KnowledgePoint, KnowledgePointSnippet
 from app.models.material import MaterialSnippet, ParseStatus
 from app.repositories.knowledge import KnowledgeRepository
 from app.repositories.material import MaterialRepository
+from app.services._study_guide import StudyGuideCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_BATCH_SNIPPETS: int = 12
 _RETRY_MAX_BATCH_SNIPPETS: int = 8
 _DEFAULT_MAX_BATCH_CHARS: int = 6000
+_ONE_SHOT_MAX_CHARS: int = 28_000
+_CHAPTER_BATCH_MAX_CHARS: int = 16_000
+_ONE_SHOT_MAX_TOKENS: int = 16384
+_BATCH_MAX_TOKENS: int = 16384
+_ONE_SHOT_FALLBACK_BATCH_CHARS: int = 8000
+_SIMILARITY_DEDUP_THRESHOLD: float = 0.86
+_CONSOLIDATION_MIN_CANDIDATES: int = 16
 
 
 def _has_structured_fields(item: ExtractedKnowledgeItem) -> bool:
@@ -118,6 +127,53 @@ def _build_snippet_batches(
     if current:
         batches.append(current)
     return batches
+
+
+def _build_chapter_batches(
+    snippets: Sequence[MaterialSnippet],
+    max_batch_chars: int = _CHAPTER_BATCH_MAX_CHARS,
+) -> list[list[MaterialSnippet]]:
+    """超长文档按章节边界分批（每批 <= max_batch_chars），减少跨章碎片化。"""
+    if not snippets:
+        return []
+    char_cap = max(1, max_batch_chars)
+    batches: list[list[MaterialSnippet]] = []
+    current: list[MaterialSnippet] = []
+    current_chars = 0
+
+    for snip in snippets:
+        snip_len = max(snip.char_length or 0, len(snip.content or ""))
+        if current:
+            prev_ch = (current[-1].chapter_title or "").strip()
+            curr_ch = (snip.chapter_title or "").strip()
+            chapter_changed = bool(prev_ch and curr_ch and prev_ch != curr_ch)
+            exceeds_chars = current_chars + snip_len > char_cap
+            if chapter_changed or exceeds_chars:
+                batches.append(current)
+                current = []
+                current_chars = 0
+        current.append(snip)
+        current_chars += snip_len
+
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _format_snippet_header(snippet: MaterialSnippet) -> str:
+    """格式化单个切片的提示词元数据标签（序号/页码/章节）。"""
+    parts: list[str] = [f"#{snippet.snippet_index}"]
+    info = snippet.source_info if isinstance(snippet.source_info, dict) else {}
+    page_num = info.get("page_number", info.get("page_index"))
+    page_end = info.get("page_end")
+    if isinstance(page_num, int) and page_num >= 1:
+        if isinstance(page_end, int) and page_end > page_num:
+            parts.append(f"第{page_num}-{page_end}页")
+        else:
+            parts.append(f"第{page_num}页")
+    if snippet.chapter_title:
+        parts.append(f"章节: {snippet.chapter_title}")
+    return f"片段 {' | '.join(parts)}"
 
 
 def build_knowledge_hierarchy(
@@ -181,6 +237,9 @@ class KnowledgeService:
         session: Session,
         llm: LLMProtocol,
         embedding: EmbeddingProtocol,
+        *,
+        queue: Any = None,
+        redis_client: Any = None,
     ) -> None:
         """初始化知识点服务实例。
 
@@ -188,29 +247,71 @@ class KnowledgeService:
             session: SQLAlchemy 数据库会话。
             llm: 大模型网关适配器。
             embedding: 向量化网关适配器。
+            queue: 可选异步任务队列适配器。
+            redis_client: 可选 Redis 客户端（用于单飞锁与预热进度）。
         """
         self.session = session
         self.llm = llm
         self.embedding = embedding
+        self._queue = queue
+        self._redis_client = redis_client
         self.knowledge_repo = KnowledgeRepository(session)
         self.material_repo = MaterialRepository(session)
+        self._study_guide = StudyGuideCoordinator(
+            knowledge_service=self,
+            knowledge_repo=self.knowledge_repo,
+            material_repo=self.material_repo,
+            llm=llm,
+        )
 
     def _build_batch_prompt(
         self,
         snippets: Sequence[MaterialSnippet],
         feedback: str | None = None,
         existing_outline: Sequence[dict[str, Any]] | None = None,
+        *,
+        one_shot: bool = False,
     ) -> list[LLMMessage]:
-        """构建知识点抽取的大模型输入消息序列。
+        """构建知识点抽取的大模型输入消息序列。"""
+        if one_shot:
+            tree_rule = (
+                "3. 严格构建**干净 2 层收敛考点树**：\n"
+                "   - Level-1：2~5 个核心知识模块/大主题（parent_temp_id=null, level=1）；\n"
+                "   - Level-2：6~12 个考试级核心考点（parent_temp_id 指向所属一级模块, level=2），"
+                "总节点数控制在 8~15 个，单个一级模块下不超过 8 个子节点；\n"
+                "   - 每个 Level-2 核心考点聚合同一主题下的定义、推导链与常见变式，"
+                "**严禁**把单个中间公式或单页 PPT 独立拆成碎考点；\n"
+            )
+            card_rule = (
+                "5. 本阶段仅生成考纲骨架与轻量预览卡（完整推导与例题在精讲阶段按需展开）：\n"
+                "   - core_summary：80~160 字直观定位与严谨定义"
+                "（严禁重复标题或写「未展开」等废话）；\n"
+                "   - key_takeaways：2~3 条完整复习陈述句"
+                "（包含主语与核心结论，严禁只列 2~5 字裸名词）；\n"
+                "   - key_formulas：1~3 条最核心公式（标准 `$...$`/`$$...$$`，纯概念类可为 []）；\n"
+                "   - boundary_notes：0~2 条关键前提或易混边界；"
+                "derivation_steps/common_mistakes 可留空 []；\n"
+                "   - **严禁捏造任何考试频次、重要度星级或'高频必考'等原文不存在的标签**；\n"
+            )
+        else:
+            tree_rule = "3. 正确标注父节点 temp_id，无父节点设为 null，层级深度 1~5 级；\n"
+            card_rule = (
+                "5. 必须基于原文切片中的定义、推导与前后文，用清晰的教学复习语言填写结构化内容：\n"
+                "   - core_summary：60~180 字符核心定义与直觉"
+                "（讲清是什么+解决什么问题+核心意义，严禁重复标题或写「未展开」等废话）；\n"
+                "   - key_takeaways：2~5 条完整复习陈述句"
+                "（每条 15~80 字，包含主语与核心结论，可直接背诵，严禁只列 2~5 字裸名词）；\n"
+                "   - key_formulas：关键公式（标准 `$...$` 或 `$$...$$` LaTeX）并说明关键符号含义"
+                "（如 `$\\min \\frac{1}{2}\\|w\\|^2 + C\\sum \\xi_i$，$w$ 为法向量`，"
+                "纯概念类可为 []）；\n"
+                "   - derivation_steps：0~5 步推导或解题步骤"
+                "（如「1. 构造拉格朗日函数 → 2. 求偏导置零」，纯概念类可为 []）；\n"
+                "   - boundary_notes：前提假设、适用场景与相邻易混概念对比（无则 []）；\n"
+                "   - common_mistakes：0~3 条高频易错点与纠偏"
+                "（如「误区：…；正解：…」，无则 []）；\n"
+                "   - **严禁捏造任何考试频次、重要度星级或'高频必考'等原文不存在的标签**；\n"
+            )
 
-        Args:
-            snippets: 当前批次的切片序列。
-            feedback: 上一轮质检失败反馈（若有）。
-            existing_outline: 前序批次已抽取的知识点骨架列表 ``{temp_id, name, level}``。
-
-        Returns:
-            list[LLMMessage]: 大模型上下文消息列表。
-        """
         system_content = (
             "你是一个专业的考纲分析与知识图谱构建专家。"
             "请从所提供的切片内容中抽取关键知识点及其父子层级关系，"
@@ -220,22 +321,10 @@ class KnowledgeService:
             "2. **严禁**从目录页、章末小结页、课程介绍、教学目标、参考文献、致谢页抽取元结构知识点"
             "（如「本章知识小结梳理」「知识梳理」「重点回顾」「目录结构」）；"
             "若切片仅罗列章节标题或名词而无具体原理/定义/公式/步骤，必须忽略该切片；\n"
-            "3. 正确标注父节点 temp_id，无父节点设为 null，层级深度 1~5 级；\n"
-            "4. 记录来源片段序号 (source_snippet_indices)；\n"
-            "5. 必须基于原文切片中的定义、推导与前后文，用清晰的教学复习语言填写结构化内容：\n"
-            "   - core_summary：60~180 字符核心定义与直觉"
-            "（讲清是什么+解决什么问题+核心意义，严禁重复标题或写「未展开」等废话）；\n"
-            "   - key_takeaways：2~5 条完整复习陈述句"
-            "（每条 15~80 字，包含主语与核心结论，可直接背诵，严禁只列 2~5 字裸名词）；\n"
-            "   - key_formulas：关键公式（标准 `$...$` 或 `$$...$$` LaTeX）并说明关键符号含义"
-            "（如 `$\\min \\frac{1}{2}\\|w\\|^2 + C\\sum \\xi_i$，$w$ 为法向量`，"
-            "纯概念类可为 []）；\n"
-            "   - derivation_steps：0~5 步推导或解题步骤"
-            "（如「1. 构造拉格朗日函数 → 2. 求偏导置零」，纯概念类可为 []）；\n"
-            "   - boundary_notes：前提假设、适用场景与相邻易混概念对比（无则 []）；\n"
-            "   - common_mistakes：0~3 条高频易错点与纠偏（如「误区：…；正解：…」，无则 []）；\n"
-            "   - **严禁捏造任何考试频次、重要度星级或'高频必考'等原文不存在的标签**；\n"
-            "6. 输出严格符合 JSON Schema 规范。"
+            + tree_rule
+            + "4. 记录来源片段序号 (source_snippet_indices)；\n"
+            + card_rule
+            + "6. 输出严格符合 JSON Schema 规范。"
         )
         if feedback:
             system_content += f"\n\n【上一轮质检未通过反馈与整改要求】\n{feedback}"
@@ -252,8 +341,7 @@ class KnowledgeService:
             )
         user_content_lines.append("请从以下切片内容中抽取知识点：")
         for s in snippets:
-            ch_info = f" [章节: {s.chapter_title}]" if s.chapter_title else ""
-            user_content_lines.append(f"片段 #{s.snippet_index}{ch_info}:\n{s.content}")
+            user_content_lines.append(f"{_format_snippet_header(s)}:\n{s.content}")
 
         return [
             LLMMessage(role="system", content=system_content),
@@ -265,19 +353,22 @@ class KnowledgeService:
         snippets: Sequence[MaterialSnippet],
         feedback: str | None = None,
         existing_outline: Sequence[dict[str, Any]] | None = None,
+        *,
+        one_shot: bool = False,
     ) -> list[ExtractedKnowledgeItem]:
-        """调用大模型抽取单批次切片的候选知识点。
-
-        Args:
-            snippets: 单批切片序列。
-            feedback: 上一轮质检反馈。
-            existing_outline: 前序批次已抽取知识点骨架。
-
-        Returns:
-            list[ExtractedKnowledgeItem]: 抽取的知识点项。
-        """
-        messages = self._build_batch_prompt(snippets, feedback, existing_outline=existing_outline)
-        options = LLMOptions(temperature=0.3, max_tokens=4096, timeout=90.0)
+        """调用大模型抽取单批次切片的候选知识点。"""
+        messages = self._build_batch_prompt(
+            snippets,
+            feedback,
+            existing_outline=existing_outline,
+            one_shot=one_shot,
+        )
+        options = LLMOptions(
+            temperature=0.25 if one_shot else 0.3,
+            max_tokens=_ONE_SHOT_MAX_TOKENS if one_shot else _BATCH_MAX_TOKENS,
+            timeout=120.0,
+            tool_choice="auto",
+        )
 
         output, _ = self.llm.generate_structured(
             messages=messages,
@@ -285,6 +376,51 @@ class KnowledgeService:
             options=options,
         )
         return output.knowledge_points
+
+    def _consolidate_extracted_points(
+        self,
+        items: Sequence[ExtractedKnowledgeItem],
+        *,
+        total_chars: int,
+    ) -> list[ExtractedKnowledgeItem]:
+        """超长文档多批抽取后的全局轻量归并 Pass，合并近义微节点并收敛结构。"""
+        target_kps = max(10, min(40, round(total_chars / 2200)))
+        candidate_lines = [
+            (
+                f"- temp_id={it.temp_id} | parent={it.parent_temp_id or 'null'} "
+                f"| level={it.level} | name={it.name} "
+                f"| summary={(it.core_summary or it.description)[:100]} "
+                f"| snippets={it.source_snippet_indices}"
+            )
+            for it in items
+        ]
+        system_prompt = (
+            "你是一个专业的课程考纲归并专家。以下是超长教材分章抽取的候选知识点骨架列表。\n"
+            f"请执行全局归并：合并近义微节点与重复主题，将总节点数收敛至约 {target_kps} 个"
+            "（上限 40 个），构建清晰的 2~3 层考纲树（Level-1 为章/模块，Level-2 为核心考点），"
+            "保留并合并被归并节点的 source_snippet_indices 与核心摘要/公式字段，"
+            "严禁丢失关键章节覆盖。"
+        )
+        messages = [
+            LLMMessage(role="system", content=system_prompt),
+            LLMMessage(role="user", content="候选知识点列表：\n" + "\n".join(candidate_lines)),
+        ]
+        try:
+            output, _ = self.llm.generate_structured(
+                messages=messages,
+                response_model=KnowledgeExtractionOutput,
+                options=LLMOptions(
+                    temperature=0.2,
+                    max_tokens=_ONE_SHOT_MAX_TOKENS,
+                    timeout=90.0,
+                    tool_choice="auto",
+                ),
+            )
+            if output.knowledge_points:
+                return output.knowledge_points
+        except Exception as exc:
+            logger.warning("global knowledge consolidation fallback: %s", str(exc)[:180])
+        return list(items)
 
     @staticmethod
     def _emit_progress(
@@ -351,6 +487,88 @@ class KnowledgeService:
         if not self.session.new and not self.session.dirty and not self.session.deleted:
             self.session.rollback()
 
+    def _select_extraction_batches(
+        self,
+        snippets: list[MaterialSnippet],
+        *,
+        current_batch_size: int,
+        explicit_small_batch: bool,
+        total_effective_chars: int,
+    ) -> tuple[list[list[MaterialSnippet]], bool]:
+        """选择 One-Shot 全局单次建树、超长文档按章分批或显式小批次策略。"""
+        if explicit_small_batch:
+            return (
+                _build_snippet_batches(
+                    snippets,
+                    max_batch_snippets=current_batch_size,
+                    max_batch_chars=_DEFAULT_MAX_BATCH_CHARS,
+                ),
+                False,
+            )
+        if total_effective_chars <= _ONE_SHOT_MAX_CHARS:
+            return [list(snippets)], True
+        return _build_chapter_batches(snippets, max_batch_chars=_CHAPTER_BATCH_MAX_CHARS), False
+
+    def _extract_batches_items(
+        self,
+        batches: list[list[MaterialSnippet]],
+        *,
+        snippets: list[MaterialSnippet],
+        prompt_feedback: str | None,
+        is_one_shot: bool,
+        on_progress: Callable[[int, int, str], None] | None,
+    ) -> tuple[list[ExtractedKnowledgeItem], bool, int]:
+        """执行批次抽取；若 One-Shot 因思考模型输出截断触发格式错误，自动降级小批次抽取。"""
+        if is_one_shot:
+            try:
+                items = self._extract_batch_points(
+                    batches[0],
+                    prompt_feedback,
+                    existing_outline=None,
+                    one_shot=True,
+                )
+                self._emit_progress(on_progress, 1, 1, ParseStatus.EXTRACTING_KNOWLEDGE.value)
+                return items, True, 1
+            except LLMResponseFormatError as exc:
+                logger.warning(
+                    "one-shot knowledge extraction format error, falling back to smaller batches:"
+                    " %s",
+                    str(exc)[:160],
+                )
+                batches = _build_snippet_batches(
+                    snippets,
+                    max_batch_snippets=_RETRY_MAX_BATCH_SNIPPETS,
+                    max_batch_chars=_ONE_SHOT_FALLBACK_BATCH_CHARS,
+                )
+                is_one_shot = False
+
+        raw_extracted: list[ExtractedKnowledgeItem] = []
+        outline_skeleton: list[dict[str, Any]] = []
+        total_batches = len(batches)
+        for batch_idx, batch in enumerate(batches):
+            batch_items = self._extract_batch_points(
+                batch,
+                prompt_feedback,
+                existing_outline=outline_skeleton if batch_idx > 0 else None,
+                one_shot=False,
+            )
+            raw_extracted.extend(batch_items)
+            for kp_item in batch_items:
+                outline_skeleton.append(
+                    {
+                        "temp_id": kp_item.temp_id,
+                        "name": kp_item.name,
+                        "level": kp_item.level,
+                    }
+                )
+            self._emit_progress(
+                on_progress,
+                batch_idx + 1,
+                total_batches,
+                ParseStatus.EXTRACTING_KNOWLEDGE.value,
+            )
+        return raw_extracted, is_one_shot, total_batches
+
     def _run_extraction_with_retries(
         self,
         snippets: list[MaterialSnippet],
@@ -360,7 +578,8 @@ class KnowledgeService:
     ) -> tuple[list[ExtractedKnowledgeItem], bool, int]:
         """执行分批抽取、向量语义去重与质量门禁重抽循环（最多 2 次重抽）。"""
         chapter_stats = compute_chapter_stats(snippets)
-        total_effective_chars = sum(s.char_length for s in snippets)
+        total_effective_chars = sum(max(s.char_length or 0, len(s.content or "")) for s in snippets)
+        explicit_small_batch = batch_size < _DEFAULT_MAX_BATCH_SNIPPETS
         current_batch_size = batch_size
         prompt_feedback: str | None = None
         re_extract_count = 0
@@ -368,34 +587,29 @@ class KnowledgeService:
         deduped_items: list[ExtractedKnowledgeItem] = []
 
         while re_extract_count <= 2:
-            batches = _build_snippet_batches(
+            batches, is_one_shot = self._select_extraction_batches(
                 snippets,
-                max_batch_snippets=current_batch_size,
-                max_batch_chars=_DEFAULT_MAX_BATCH_CHARS,
+                current_batch_size=current_batch_size,
+                explicit_small_batch=explicit_small_batch,
+                total_effective_chars=total_effective_chars,
             )
-            raw_extracted: list[ExtractedKnowledgeItem] = []
-            outline_skeleton: list[dict[str, Any]] = []
-            total_batches = len(batches)
-            for batch_idx, batch in enumerate(batches):
-                batch_items = self._extract_batch_points(
-                    batch,
-                    prompt_feedback,
-                    existing_outline=outline_skeleton if batch_idx > 0 else None,
-                )
-                raw_extracted.extend(batch_items)
-                for kp_item in batch_items:
-                    outline_skeleton.append(
-                        {
-                            "temp_id": kp_item.temp_id,
-                            "name": kp_item.name,
-                            "level": kp_item.level,
-                        }
-                    )
-                self._emit_progress(
-                    on_progress,
-                    batch_idx + 1,
-                    total_batches,
-                    ParseStatus.EXTRACTING_KNOWLEDGE.value,
+            raw_extracted, is_one_shot, total_batches = self._extract_batches_items(
+                batches,
+                snippets=snippets,
+                prompt_feedback=prompt_feedback,
+                is_one_shot=is_one_shot,
+                on_progress=on_progress,
+            )
+
+            if (
+                not is_one_shot
+                and total_batches > 1
+                and len(raw_extracted) >= _CONSOLIDATION_MIN_CANDIDATES
+                and not explicit_small_batch
+            ):
+                raw_extracted = self._consolidate_extracted_points(
+                    raw_extracted,
+                    total_chars=total_effective_chars,
                 )
 
             if not raw_extracted:
@@ -412,7 +626,7 @@ class KnowledgeService:
             deduped_items = deduplicate_candidate_points(
                 raw_extracted,
                 embeddings,
-                similarity_threshold=0.92,
+                similarity_threshold=_SIMILARITY_DEDUP_THRESHOLD,
             )
             deduped_items = normalize_extracted_temp_ids(deduped_items)
 
@@ -428,6 +642,7 @@ class KnowledgeService:
                         build_structured_content(it) if _has_structured_fields(it) else None
                     ),
                     is_leaf=(it.temp_id not in parent_temp_ids),
+                    parent_id=it.parent_temp_id,
                 )
                 for it in deduped_items
             ]
@@ -676,12 +891,12 @@ class KnowledgeService:
         else:
             target_version_id = version_id
 
-        points = self.knowledge_repo.get_knowledge_points_by_version(
+        rows = self.knowledge_repo.list_tree_nodes_with_guide_flag(
             material_id, target_version_id, user_id
         )
 
         node_map: dict[uuid.UUID, dict[str, Any]] = {}
-        for p in points:
+        for p, has_guide in rows:
             node_map[p.id] = {
                 "id": str(p.id),
                 "material_id": str(p.material_id),
@@ -693,11 +908,12 @@ class KnowledgeService:
                 "sort_order": p.sort_order,
                 "level": p.level,
                 "is_low_confidence": p.is_low_confidence,
+                "has_study_guide": has_guide,
                 "children": [],
             }
 
         roots: list[dict[str, Any]] = []
-        for p in points:
+        for p, _ in rows:
             node = node_map[p.id]
             if p.parent_id and p.parent_id in node_map:
                 node_map[p.parent_id]["children"].append(node)
@@ -829,6 +1045,118 @@ class KnowledgeService:
             "has_low_confidence": has_low_confidence,
             "status": "ready",
         }
+
+    # ==========================================
+    # Stage 2: 考前精讲笔记（懒生成 + 永久缓存 + 整章预热）
+    # ==========================================
+
+    def get_study_guide(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """纯只读查询单个考点的考前精讲笔记缓存或生成状态。"""
+        return self._study_guide.get_study_guide(
+            knowledge_point_id=knowledge_point_id,
+            user_id=user_id,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+        )
+
+    def generate_study_guide(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
+        queue: Any | None = None,
+        redis_client: Any | None = None,
+        lock_wait_seconds: float = 25.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> dict[str, Any]:
+        """懒生成并永久缓存单个考点的考前精讲笔记（支持异步高优队列与单飞锁防重）。"""
+        return self._study_guide.generate_study_guide(
+            knowledge_point_id=knowledge_point_id,
+            user_id=user_id,
+            force=force,
+            queue=queue if queue is not None else self._queue,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+            lock_wait_seconds=lock_wait_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+    def run_study_guide_generation(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
+        lock_token: str | None = None,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """RQ Worker 执行单考点考前精讲生成（承接单飞锁并写入短 TTL 失败态）。"""
+        return self._study_guide.run_study_guide_generation(
+            knowledge_point_id=knowledge_point_id,
+            user_id=user_id,
+            force=force,
+            lock_token=lock_token,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+        )
+
+    def prewarm_study_guides(
+        self,
+        *,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
+        force: bool = False,
+        queue: Any | None = None,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """触发整章考前精讲后台预热（投递普通队列 zhilian）。"""
+        return self._study_guide.prewarm_study_guides(
+            material_id=material_id,
+            user_id=user_id,
+            version_id=version_id,
+            force=force,
+            queue=queue if queue is not None else self._queue,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+        )
+
+    def get_study_guide_prewarm_status(
+        self,
+        *,
+        material_id: uuid.UUID,
+        user_id: uuid.UUID,
+        version_id: uuid.UUID | None = None,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """查询整章考前精讲后台预热进度。"""
+        return self._study_guide.get_study_guide_prewarm_status(
+            material_id=material_id,
+            user_id=user_id,
+            version_id=version_id,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+        )
+
+    def run_study_guide_prewarm(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """RQ Worker 执行整章考前精讲逐考点预热任务。"""
+        return self._study_guide.run_study_guide_prewarm(
+            material_id=material_id,
+            version_id=version_id,
+            user_id=user_id,
+            force=force,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
+        )
 
 
 __all__ = [

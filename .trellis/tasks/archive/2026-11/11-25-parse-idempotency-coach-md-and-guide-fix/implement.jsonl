@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend coding standards and layering boundaries"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Short transaction discipline, tenant isolation, and soft-delete filtering conventions"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend error handling and Redis/RQ failure boundaries"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture and Vue SFC constraints"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "WeChat Mini Program rich-text, styleIsolation, and no-span constraints"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer contract alignment for study guide status and parse idempotency"}
+{"file": ".trellis/tasks/11-25-parse-idempotency-coach-md-and-guide-fix/prd.md", "reason": "Task PRD and acceptance criteria"}
+{"file": ".trellis/tasks/11-25-parse-idempotency-coach-md-and-guide-fix/design.md", "reason": "Detailed technical design for all 4 fixes"}
+{"file": ".trellis/tasks/11-25-parse-idempotency-coach-md-and-guide-fix/implement.md", "reason": "File ownership and implementation plan"}

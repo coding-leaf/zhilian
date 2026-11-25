@@ -44,12 +44,16 @@ def _serialize_message(message: LLMMessage) -> dict[str, Any]:
     """将 LLMMessage 序列化为 OpenAI Chat Completions 消息体。
 
     无图片附件时保持纯字符串 content（与既有行为完全一致）；存在 ``image_urls`` 时
-    输出 OpenAI vision 兼容的内容块数组 (text + image_url)。
+    输出 OpenAI vision 兼容的内容块数组，默认 text 在前、image_url 在后，
+    当 ``message.image_first`` 为 True 时将 image_url 排在 text 之前。
     """
     if not message.image_urls:
         return {"role": message.role, "content": message.content}
-    parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
-    parts.extend({"type": "image_url", "image_url": {"url": url}} for url in message.image_urls)
+    image_blocks: list[dict[str, Any]] = [
+        {"type": "image_url", "image_url": {"url": url}} for url in message.image_urls
+    ]
+    text_block: dict[str, Any] = {"type": "text", "text": message.content}
+    parts = [*image_blocks, text_block] if message.image_first else [text_block, *image_blocks]
     return {"role": message.role, "content": parts}
 
 

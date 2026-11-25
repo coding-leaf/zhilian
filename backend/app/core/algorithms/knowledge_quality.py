@@ -8,6 +8,7 @@ Strictly adheres to pure functional kernel constraints
 
 import enum
 import re
+from collections import Counter
 from collections.abc import Sequence, Set
 from dataclasses import dataclass, field
 from typing import Any
@@ -19,13 +20,17 @@ from app.core.algorithms.document_denoising import is_non_substantive_chapter
 # 严格遵循《概要设计说明书》第 3.4/6.3 节与《软件需求规格说明书》FR-16~18、NFR-22
 # ==============================================================================
 
-# 依据：概要设计说明书第 3.4/6.3 节，每 5000 字有效文本对应 1 至 8 个知识点
-# 密度下限：5000 / 8 = 625 字符/知识点。字符/知识点 < 625 意味着 5000 字抽取超过 8 个，判为过度拆分
-MIN_EFFECTIVE_CHARS_PER_KP: int = 625
+# 依据：两阶段考前精讲架构单章密度基线（1000~4500 字符/考点）
+# 密度下限：1000 字符/考点。字符/考点 < 1000 意味着抽取过于细碎，判为过度拆分
+MIN_EFFECTIVE_CHARS_PER_KP: int = 1000
 
-# 依据：概要设计说明书第 3.4/6.3 节，每 5000 字有效文本对应 1 至 8 个知识点
-# 密度上限：5000 / 1 = 5000 字符/知识点。字符/知识点 > 5000 意味着 5000 字不足 1 个，判为过度粗略
-MAX_EFFECTIVE_CHARS_PER_KP: int = 5000
+# 密度上限：4500 字符/考点。字符/考点 > 4500 意味着抽取过疏，判为过度粗略
+MAX_EFFECTIVE_CHARS_PER_KP: int = 4500
+
+# 干净 2 层收敛树的节点与单模块子节点约束
+CONVERGENT_2_LAYER_MAX_NODES: int = 25
+CONVERGENT_2_LAYER_MIN_MODULES: int = 2
+CONVERGENT_2_LAYER_MAX_MODULE_CHILDREN: int = 8
 
 # 依据：概要设计说明书第 3.4/6.3 节，知识片段总数少于 20 个时要求知识点数量不少于 3 个
 # 短资料内容集中，必须至少形成三元微型知识结构，防止模型偷懒仅抽取单一宽泛概念
@@ -122,6 +127,7 @@ class CandidateKnowledgePoint:
     description: str = ""  # 知识点简述（可选）
     structured_content: dict[str, Any] | None = None  # 复习卡片结构化内容（可选，向后兼容）
     is_leaf: bool = True  # 是否为最细粒度叶子考点
+    parent_id: str | None = None  # 父节点临时/持久化标识（可选，用于单模块子节点上限校验）
 
 
 @dataclass(frozen=True)
@@ -332,9 +338,73 @@ def check_quantity_range(
     )
 
 
+def _check_convergent_two_layer_tree(
+    normalized_levels: Sequence[int],
+    max_module_children: int | None,
+) -> CheckResult:
+    """校验干净 2 层收敛树：豁免 level_2_ratio=0.60，要求一级模块 >= 2 且单模块子节点 <= 8。"""
+    level_1_count = sum(1 for level in normalized_levels if level == 1)
+    level_2_count = sum(1 for level in normalized_levels if level == 2)
+    level_2_ratio = level_2_count / len(normalized_levels)
+
+    if level_1_count < CONVERGENT_2_LAYER_MIN_MODULES:
+        return CheckResult(
+            item_code=CheckItemCode.HIERARCHY_DEPTH,
+            is_passed=False,
+            score=0.0,
+            reason=(
+                f"2 层收敛树的一级模块数为 {level_1_count} 个，"
+                f"少于最低要求 {CONVERGENT_2_LAYER_MIN_MODULES} 个"
+            ),
+            suggestion="请将核心考点划分到 2~5 个一级知识模块下，避免全部挂在单一模块",
+            details={
+                "max_depth": 2,
+                "level_1_count": level_1_count,
+                "level_2_count": level_2_count,
+                "issue": "too_few_modules",
+            },
+        )
+
+    avg_bound = (level_2_count + level_1_count - 1) // level_1_count
+    effective_max_children = (
+        max(max_module_children, avg_bound) if max_module_children is not None else avg_bound
+    )
+    if effective_max_children > CONVERGENT_2_LAYER_MAX_MODULE_CHILDREN:
+        return CheckResult(
+            item_code=CheckItemCode.HIERARCHY_DEPTH,
+            is_passed=False,
+            score=0.0,
+            reason=(
+                f"单个一级模块下的子节点数达到 {effective_max_children} 个，"
+                f"超过上限 {CONVERGENT_2_LAYER_MAX_MODULE_CHILDREN} 个"
+            ),
+            suggestion="请均衡拆分一级模块或合并细碎考点，确保每个模块不超过 8 个核心考点",
+            details={
+                "max_depth": 2,
+                "level_1_count": level_1_count,
+                "max_module_children": effective_max_children,
+                "issue": "module_overloaded",
+            },
+        )
+
+    return CheckResult(
+        item_code=CheckItemCode.HIERARCHY_DEPTH,
+        is_passed=True,
+        score=1.0,
+        details={
+            "max_depth": 2,
+            "level_2_ratio": level_2_ratio,
+            "level_1_count": level_1_count,
+            "convergent_2_layer": True,
+        },
+    )
+
+
 def check_hierarchy_depth(
     levels: Sequence[int],
     config: KnowledgeQualityConfig,
+    *,
+    max_module_children: int | None = None,
 ) -> CheckResult:
     """校验知识点层级深度与节点分布。
 
@@ -342,12 +412,15 @@ def check_hierarchy_depth(
     1. levels 为空或全为 0: 按平铺 (FLAT, depth=1) 处理，判不合格；
     2. 最大深度 < 2: 判为平铺 (FLAT)；
     3. 最大深度 > 5: 判为嵌套过深 (TOO_DEEP)；
-    4. 第 2 层节点数占比 > 60%: 判为层级退化 (LAYER_DEGENERATE)；
-    5. 否则通过。
+    4. 干净 2 层收敛树 (max_depth == 2 且总节点 <= 25): 豁免 MAX_LEVEL_2_RATIO=0.60，
+       改为校验 level_1_count >= 2 且单模块子节点 <= 8；
+    5. 其他情况: 第 2 层节点数占比 > 60% 判为层级退化 (LAYER_DEGENERATE)；
+    6. 否则通过。
 
     Args:
         levels: 各候选知识点的层级深度列表。
         config: 知识点质检配置对象。
+        max_module_children: 可选单模块最大子节点数（由外层父子关系统计传入）。
 
     Returns:
         CheckResult: 层级深度检查结果。
@@ -390,6 +463,9 @@ def check_hierarchy_depth(
             suggestion="树形层级嵌套过深，建议裁剪至5级以内",
             details={"max_depth": max_depth, "issue": "too_deep"},
         )
+
+    if max_depth == 2 and len(normalized_levels) <= CONVERGENT_2_LAYER_MAX_NODES:
+        return _check_convergent_two_layer_tree(normalized_levels, max_module_children)
 
     level_2_count = sum(1 for level in normalized_levels if level == 2)
     level_2_ratio = level_2_count / len(normalized_levels)
@@ -774,9 +850,15 @@ def verify_knowledge_points(
     covered_chapters = {
         point.chapter_title.strip() for point in knowledge_points if point.chapter_title.strip()
     }
+    parent_counts = Counter(
+        point.parent_id
+        for point in knowledge_points
+        if point.level == 2 and point.parent_id is not None
+    )
+    max_module_children = max(parent_counts.values(), default=0) if parent_counts else None
 
     r1 = check_quantity_range(count, context.effective_chars, context.total_snippets, active_config)
-    r2 = check_hierarchy_depth(levels, active_config)
+    r2 = check_hierarchy_depth(levels, active_config, max_module_children=max_module_children)
     r3 = check_naming_readability(names, active_config)
     r4 = check_chapter_coverage(covered_chapters, context.chapter_stats, active_config)
     r5 = check_content_depth(knowledge_points, active_config)

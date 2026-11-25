@@ -11,10 +11,12 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, Response, status
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.container import get_container
 from app.api.deps.knowledge import get_knowledge_service
+from app.container import AppContainer
 from app.models.user import User
 from app.schemas.knowledge import (
     ExtractKnowledgeRequest,
@@ -25,7 +27,10 @@ from app.schemas.knowledge import (
     PointSourceListResponse,
     SnippetKnowledgePointsResponse,
     SnippetSourceResponse,
+    StudyGuideGenerateRequest,
+    StudyGuideResponse,
 )
+from app.services._study_guide import resolve_study_guide_queue, resolve_study_guide_redis_client
 from app.services.knowledge import KnowledgeService
 
 router = APIRouter(tags=["knowledge"])
@@ -202,6 +207,59 @@ def trigger_knowledge_extraction(
         user_id=user.id,
     )
     return ExtractKnowledgeResponse.model_validate(result)
+
+
+@router.get(
+    "/knowledge/{kp_id}/study-guide",
+    response_model=StudyGuideResponse,
+    status_code=status.HTTP_200_OK,
+    summary="获取单考点考前精讲笔记缓存或状态",
+)
+def get_knowledge_point_study_guide(
+    kp_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
+) -> StudyGuideResponse:
+    """纯只读获取单考点考前精讲笔记永久缓存或当前生成状态。"""
+    result = knowledge_service.get_study_guide(
+        knowledge_point_id=kp_id,
+        user_id=user.id,
+        redis_client=resolve_study_guide_redis_client(container),
+    )
+    return StudyGuideResponse.model_validate(result)
+
+
+@router.post(
+    "/knowledge/{kp_id}/study-guide/generate",
+    response_model=StudyGuideResponse,
+    status_code=status.HTTP_200_OK,
+    summary="懒生成并永久缓存单考点考前精讲笔记",
+)
+def generate_knowledge_point_study_guide(
+    kp_id: uuid.UUID,
+    response: Response,
+    user: Annotated[User, Depends(get_current_user)],
+    knowledge_service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    request_data: Annotated[
+        StudyGuideGenerateRequest | None,
+        Body(description="生成配置参数（可选）"),
+    ] = None,
+    container: Annotated[AppContainer | None, Depends(get_container)] = None,
+) -> StudyGuideResponse:
+    """单飞防重懒生成单考点考前精讲笔记（并发抢锁超时返回 202）。"""
+    force = request_data.force if request_data else False
+    result = knowledge_service.generate_study_guide(
+        knowledge_point_id=kp_id,
+        user_id=user.id,
+        force=force,
+        queue=resolve_study_guide_queue(container),
+        redis_client=resolve_study_guide_redis_client(container),
+    )
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if result.get("status") == "generating" else status.HTTP_200_OK
+    )
+    return StudyGuideResponse.model_validate(result)
 
 
 __all__ = ["router"]

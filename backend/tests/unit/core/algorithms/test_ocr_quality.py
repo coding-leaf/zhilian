@@ -384,3 +384,33 @@ def test_detect_symbol_garble_catches_tofu_boxes_and_replacement_chars() -> None
     ):
         is_garbled, _ratio, _frags = detect_symbol_garble(clean)
         assert is_garbled is False, f"unexpected false positive for {clean!r}"
+
+
+def test_isolated_and_scattered_math_block_detection() -> None:
+    """Scattered un-wrapped 2D formula lines are detected without flagging prose or LaTeX."""
+    from app.core.algorithms.ocr_quality import (
+        has_scattered_math_blocks,
+        is_isolated_math_expression_block,
+    )
+
+    assert is_isolated_math_expression_block("ω^T x_i + b") is True
+    assert is_isolated_math_expression_block("-ω^T x_i + b") is True
+    assert is_isolated_math_expression_block("||ω||") is True
+    assert is_isolated_math_expression_block("1/2 ||w||^2") is True
+
+    assert is_isolated_math_expression_block("Header Line") is False
+    assert is_isolated_math_expression_block("1.2 Background") is False
+    assert is_isolated_math_expression_block("$\\omega^T x_i + b$") is False
+    assert is_isolated_math_expression_block("https://example.com/a+b=c") is False
+    assert is_isolated_math_expression_block("2026-11-25") is False
+
+    ppt_page = (
+        "点到超平面的几何间隔公式如下：\n\n|ω^T x_i + b|\n\n||ω||\n\n当样本正确分类时取正值。"
+    )
+    assert has_scattered_math_blocks(ppt_page) is True
+    assert (
+        has_scattered_math_blocks(
+            "这是正常中文讲义，公式已规范化为 $\\frac{|\\omega^T x_i + b|}{\\|\\omega\\|}$。"
+        )
+        is False
+    )

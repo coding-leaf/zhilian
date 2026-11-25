@@ -24,11 +24,14 @@ class LLMMessage:
         content: 文本内容。
         image_urls: 可选图片附件（HTTPS URL 或 ``data:`` URI），用于多模态 (VLM) 请求；
             仅 OpenAI 兼容适配器会序列化为 ``image_url`` 内容块，其余适配器忽略。
+        image_first: 为 True 时将 ``image_url`` 内容块排在 ``text`` 之前
+            （适配 PaddleOCR-VL 等模型）。
     """
 
     role: str
     content: str
     image_urls: tuple[str, ...] = ()
+    image_first: bool = False
 
     def __post_init__(self) -> None:
         """防御性参数校验。"""

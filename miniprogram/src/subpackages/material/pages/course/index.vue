@@ -6,6 +6,7 @@
       :material="course.material.value"
       :can-start-parse="course.canStartParse.value"
       :is-parsing="course.isParsing.value"
+      :is-starting-parse="course.isStartingParse.value"
       :is-parse-timed-out="course.isParseTimedOut.value"
       :is-refreshing="course.isRefreshing.value"
       :parse-progress-text="course.parseProgressText.value"
@@ -21,8 +22,11 @@
       v-if="course.material.value?.status === 'ready'"
       :nodes="course.knowledgeNodes.value"
       :mastery-map="course.masteryMap.value"
-      @select="course.openPointDetail"
+      :prewarm-status="course.prewarmStatus.value"
+      :prewarming="course.isStartingPrewarm.value"
+      @select="openPointStudyGuide"
       @practice="goToPracticePoint"
+      @prewarm="course.startPrewarmAll"
     />
 
     <view v-if="course.material.value?.status === 'ready'" class="bottom-fixed-bar bottom-action-bar">
@@ -94,6 +98,8 @@ onLoad(async (options) => {
 onShow(() => {
   if (course.material.value?.status === 'ready') {
     void course.refreshMastery()
+    void course.refreshKnowledgeTree()
+    void course.loadPrewarmStatus(true)
   } else if (!course.isLoading.value && course.materialId.value) {
     void course.loadDetail()
     void taskStore.refreshActiveTasks()
@@ -110,7 +116,7 @@ onUnmounted(() => {
 })
 
 const handleOpenTask = (task: BackgroundTaskItem) => {
-  if (task.kind === 'material_parse' && task.materialId) {
+  if ((task.kind === 'material_parse' || task.kind === 'study_guide_prewarm') && task.materialId) {
     if (task.materialId === course.materialId.value) {
       void course.loadDetail()
       return
@@ -132,6 +138,18 @@ const handleOpenTask = (task: BackgroundTaskItem) => {
     url: '/pages/review/index',
     fail: () => safeShowToast('跳转我的题库失败'),
   })
+}
+
+const openPointStudyGuide = (point: KnowledgeTreeNode) => {
+  if (!course.materialId.value || !point?.id) return
+  const parent = point.parent_id
+    ? course.knowledgeNodes.value.find((item) => item.id === point.parent_id)
+    : undefined
+  const chapter = parent?.name ? `&chapter=${encodeURIComponent(parent.name)}` : ''
+  safeNavigateTo(
+    `/subpackages/material/pages/knowledge/index?kp_id=${encodeURIComponent(point.id)}&material_id=${encodeURIComponent(course.materialId.value)}${chapter}`,
+    { failMessage: '打开考点精讲失败，请重试' },
+  )
 }
 
 const askAboutPoint = async () => {

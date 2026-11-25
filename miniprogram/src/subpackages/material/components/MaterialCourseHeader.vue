@@ -8,10 +8,10 @@
         </view>
         <text
           v-if="material.status === 'ready'"
-          class="reparse-top-btn"
-          @tap="emit('reparse')"
+          :class="['reparse-top-btn', { 'is-disabled': isStartingParse || isParsing }]"
+          @tap="handleReparseTap"
         >
-          重新解析
+          {{ isStartingParse ? '启动中...' : '重新解析' }}
         </text>
       </view>
     </view>
@@ -24,7 +24,14 @@
 
     <view v-if="canStartParse" class="status-box waiting-box">
       <text class="status-tips">讲义已上传，点击下方按钮立即启动解析流水线。</text>
-      <button class="paper-btn-primary parse-btn" @tap="emit('start-parse')">开始解析</button>
+      <button
+        :class="['paper-btn-primary', 'parse-btn', { 'is-disabled': isStartingParse || isParsing }]"
+        :loading="isStartingParse"
+        :disabled="isStartingParse || isParsing"
+        @tap="emit('start-parse')"
+      >
+        {{ isStartingParse ? '启动中...' : '开始解析' }}
+      </button>
     </view>
 
     <view v-else-if="isParsing" class="status-box loading-box">
@@ -50,12 +57,26 @@
 
     <view v-else-if="material.status === 'failed'" class="status-box error-box">
       <text class="error-tips">解析失败：{{ material.error_message || '文档内容异常或排队超时' }}</text>
-      <button class="retry-btn" @tap="emit('reparse-direct')">重新解析</button>
+      <button
+        :class="['retry-btn', { 'is-disabled': isStartingParse || isParsing }]"
+        :loading="isStartingParse"
+        :disabled="isStartingParse || isParsing"
+        @tap="emit('reparse-direct')"
+      >
+        {{ isStartingParse ? '启动中...' : '重新解析' }}
+      </button>
     </view>
 
     <view v-else-if="material.status === 'retake_required'" class="status-box retake-box">
       <text class="retake-tips">{{ material.error_message || '图片文字不够清晰，请重新拍摄后上传或尝试重新解析。' }}</text>
-      <button class="retake-reparse-btn" @tap="emit('reparse-direct')">重新解析</button>
+      <button
+        :class="['retake-reparse-btn', { 'is-disabled': isStartingParse || isParsing }]"
+        :loading="isStartingParse"
+        :disabled="isStartingParse || isParsing"
+        @tap="emit('reparse-direct')"
+      >
+        {{ isStartingParse ? '启动中...' : '重新解析' }}
+      </button>
     </view>
 
     <view v-else-if="material.status === 'ready'" class="status-box ready-box">
@@ -82,6 +103,7 @@ const props = defineProps<{
   material: MaterialItem | null
   canStartParse: boolean
   isParsing: boolean
+  isStartingParse?: boolean
   isParseTimedOut?: boolean
   isRefreshing?: boolean
   parseProgressText: string
@@ -97,6 +119,10 @@ const emit = defineEmits<{
 }>()
 
 const statusText = computed(() => materialStatusText(props.material))
+const handleReparseTap = () => {
+  if (props.isStartingParse || props.isParsing) return
+  emit('reparse')
+}
 </script>
 
 <style lang="scss" scoped>
@@ -111,6 +137,7 @@ const statusText = computed(() => materialStatusText(props.material))
   background: var(--color-blue-bg); border: 1px solid var(--color-blue-border);
   padding: 6rpx 16rpx; border-radius: 999rpx;
 }
+.is-disabled { opacity: 0.55; }
 .meta-section { border-top: 1px solid var(--color-surface-muted); padding-top: 16rpx; margin-bottom: 20rpx; }
 .meta-item { display: block; font-size: 23rpx; color: var(--color-ink-subtle); margin-bottom: 6rpx; }
 .status-box { padding: 22rpx; border-radius: 12rpx; font-size: 25rpx; }

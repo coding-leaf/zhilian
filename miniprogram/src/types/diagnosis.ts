@@ -73,10 +73,19 @@ export interface SelfEvaluateResponse {
   feedback?: string
 }
 
+export type CoachResponseMode =
+  | 'grounded'
+  | 'overview'
+  | 'study_profile'
+  | 'general'
+  | 'chitchat'
+  | 'fallback'
+
 export interface AskCoachResponse {
   reply: string
   suggestions: string[]
   sources?: CoachSource[]
+  mode?: CoachResponseMode
 }
 
 export interface CoachSource {

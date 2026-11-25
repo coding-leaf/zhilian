@@ -14,7 +14,7 @@ import logging
 import uuid
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from sqlalchemy import inspect as sa_inspect
@@ -23,10 +23,13 @@ from sqlalchemy.orm import Session
 if TYPE_CHECKING:
     from app.services.knowledge import KnowledgeService
 
+from app.core.algorithms.material_chunking import ChunkingResult, ParagraphInput
 from app.core.algorithms.ocr_quality import (
     OCRPageInput,
     verify_ocr_quality,
 )
+from app.core.algorithms.semantic_chunking import SemanticPageInput
+from app.core.config import get_settings
 from app.core.errors import (
     EmbeddingAuthError,
     EmbeddingError,
@@ -99,14 +102,68 @@ from app.services._material_pipeline import (
     prepare_material_snippets,
     process_initial_ocr_page,
     repair_garbled_pdf_pages,
+    repair_garbled_pdf_pages_with_pages,
     resolve_progress_redis_client,
     set_cached_parse_progress,
 )
+from app.services._semantic_chunker import chunk_pages_semantically
 
 logger = logging.getLogger(__name__)
 
 STALE_PARSE_TIMEOUT: timedelta = timedelta(minutes=20)
 ORPHAN_QUEUED_GRACE_PERIOD: timedelta = timedelta(seconds=30)
+_PARSE_DISPATCH_LOCK_PREFIX: str = "zhilian:material:parse:dispatch:"
+_PARSE_DISPATCH_LOCK_TTL_SECONDS: int = 10
+_PARSE_EXEC_LOCK_PREFIX: str = "zhilian:material:parse:exec:"
+_PARSE_EXEC_LOCK_TTL_SECONDS: int = 1800
+_RELEASE_REDIS_LOCK_LUA: str = (
+    'if redis.call("get", KEYS[1]) == ARGV[1] then '
+    'return redis.call("del", KEYS[1]) '
+    "else return 0 end"
+)
+
+
+def _decode_redis_scalar(raw: Any) -> str:
+    if raw is None:
+        return ""
+    return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+
+
+def _acquire_redis_lock(
+    redis_client: Any | None,
+    key: str,
+    ttl_seconds: int,
+) -> tuple[bool, str | None]:
+    """尝试获取短/长分布式锁；Redis 不可用时 fail-open 返回 (True, None)。"""
+    if redis_client is None:
+        return True, None
+    token = uuid.uuid4().hex
+    try:
+        acquired = bool(redis_client.set(key, token, nx=True, ex=ttl_seconds))
+        return (True, token) if acquired else (False, None)
+    except Exception as exc:
+        logger.warning("acquire redis lock failed for %s: %s", key, str(exc)[:160])
+        return True, None
+
+
+def _release_redis_lock(
+    redis_client: Any | None,
+    key: str,
+    token: str | None,
+) -> None:
+    """按持有者 token 安全释放 Redis 分布式锁（异常 fail-open 记录告警）。"""
+    if redis_client is None or not token:
+        return
+    try:
+        if callable(getattr(redis_client, "eval", None)):
+            redis_client.eval(_RELEASE_REDIS_LOCK_LUA, 1, key, token)
+        elif _decode_redis_scalar(redis_client.get(key)) == token and callable(
+            getattr(redis_client, "delete", None)
+        ):
+            redis_client.delete(key)
+    except Exception as exc:
+        logger.warning("release redis lock failed for %s: %s", key, str(exc)[:160])
+
 
 # 依据：系统架构设计文档与 NFR 规定，单文件最大字节数限制
 MAX_FILE_SIZES: dict[str, int] = {
@@ -172,6 +229,14 @@ class MaterialService:
         vlm_dpi: int = 150,
         vlm_max_concurrency: int = 3,
         vlm_timeout: float = 45.0,
+        vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"]
+        | None = None,
+        vlm_image_format: Literal["jpeg", "png"] | None = None,
+        vlm_jpeg_quality: int | None = None,
+        vlm_max_image_edge: int | None = None,
+        vlm_max_pages_per_doc: int | None = None,
+        vlm_page_timeout: float | None = None,
+        semantic_chunking_enabled: bool | None = None,
     ) -> None:
         self.session = session
         self.storage = storage_adapter
@@ -185,9 +250,36 @@ class MaterialService:
         self.knowledge_service = knowledge_service
         self.llm = llm_adapter
         self.vlm = vlm_adapter
+        settings = get_settings()
         self.vlm_dpi = vlm_dpi
         self.vlm_max_concurrency = vlm_max_concurrency
-        self.vlm_timeout = vlm_timeout
+        self.vlm_timeout = (
+            vlm_page_timeout
+            if vlm_page_timeout is not None
+            else (vlm_timeout if vlm_timeout != 45.0 else settings.vlm.page_timeout)
+        )
+        self.vlm_prompt_style: Literal[
+            "auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"
+        ] = vlm_prompt_style or settings.vlm.prompt_style
+        self.vlm_image_format: Literal["jpeg", "png"] = (
+            vlm_image_format or settings.vlm.image_format
+        )
+        self.vlm_jpeg_quality = (
+            vlm_jpeg_quality if vlm_jpeg_quality is not None else settings.vlm.jpeg_quality
+        )
+        self.vlm_max_image_edge = (
+            vlm_max_image_edge if vlm_max_image_edge is not None else settings.vlm.max_image_edge
+        )
+        self.vlm_max_pages_per_doc = (
+            vlm_max_pages_per_doc
+            if vlm_max_pages_per_doc is not None
+            else settings.vlm.max_pages_per_doc
+        )
+        self.semantic_chunking_enabled = (
+            semantic_chunking_enabled
+            if semantic_chunking_enabled is not None
+            else settings.llm.semantic_chunking_enabled
+        )
         self.bucket = bucket
         self._progress_redis = resolve_progress_redis_client(queue_adapter, idempotency_adapter)
 
@@ -449,6 +541,11 @@ class MaterialService:
                 vlm_dpi=self.vlm_dpi,
                 vlm_max_concurrency=self.vlm_max_concurrency,
                 vlm_timeout=self.vlm_timeout,
+                vlm_prompt_style=self.vlm_prompt_style,
+                vlm_image_format=self.vlm_image_format,
+                vlm_jpeg_quality=self.vlm_jpeg_quality,
+                vlm_max_image_edge=self.vlm_max_image_edge,
+                vlm_max_pages_per_doc=self.vlm_max_pages_per_doc,
             )
             return paragraphs, extracted_text, None
 
@@ -459,6 +556,121 @@ class MaterialService:
 
         paragraphs = extract_text_from_raw_content(file_bytes, clean_format)
         return paragraphs, "\n\n".join(paragraphs), None
+
+    def _build_range_progress_callback(
+        self,
+        version_id: uuid.UUID,
+        *,
+        start_pct: int,
+        end_pct: int,
+    ) -> Callable[[int, int], None]:
+        """构建线性单调不回退的阶段进度回调。"""
+        highest = start_pct
+
+        def _on_progress(completed: int, total: int) -> None:
+            nonlocal highest
+            safe_total = max(total, 1)
+            ratio = max(0.0, min(1.0, completed / safe_total))
+            computed = start_pct + round((end_pct - start_pct) * ratio)
+            if computed > highest:
+                highest = computed
+            set_cached_parse_progress(version_id, highest, redis_client=self._progress_redis)
+
+        return _on_progress
+
+    def _group_pptx_paragraphs_as_pages(
+        self, paragraphs: Sequence[ParagraphInput]
+    ) -> list[SemanticPageInput]:
+        """把去噪后的 PPTX 段落按幻灯片页码聚合为 SemanticPageInput 序列。"""
+        by_page: dict[int, list[str]] = {}
+        for idx, para in enumerate(paragraphs, start=1):
+            pn = para.page_number if para.page_number is not None else idx
+            by_page.setdefault(pn, []).append(para.text)
+        return [
+            SemanticPageInput(page_number=pn, text="\n\n".join(parts), used_vlm=False)
+            for pn, parts in sorted(by_page.items())
+            if any(p.strip() for p in parts)
+        ]
+
+    def _extract_source_content_with_semantic(
+        self,
+        *,
+        material_id: uuid.UUID,
+        version: MaterialVersion,
+        user_id: uuid.UUID,
+        clean_format: str,
+        file_bytes: bytes,
+    ) -> tuple[Any, str, ChunkingResult | None, MaterialVersion | None]:
+        """抽取文档正文并在满足条件时执行滑窗语义打标与局部公式重构。"""
+        if clean_format == "pdf":
+            pdf_pages = extract_pdf_pages_with_diagnostics(file_bytes)
+            paragraphs, extracted_text, semantic_pages = repair_garbled_pdf_pages_with_pages(
+                pdf_pages,
+                file_bytes,
+                ocr=self.ocr,
+                llm=self.llm,
+                vlm=self.vlm,
+                vlm_dpi=self.vlm_dpi,
+                vlm_max_concurrency=self.vlm_max_concurrency,
+                vlm_timeout=self.vlm_timeout,
+                vlm_prompt_style=self.vlm_prompt_style,
+                vlm_image_format=self.vlm_image_format,
+                vlm_jpeg_quality=self.vlm_jpeg_quality,
+                vlm_max_image_edge=self.vlm_max_image_edge,
+                vlm_max_pages_per_doc=self.vlm_max_pages_per_doc,
+                vlm_on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=30, end_pct=40
+                ),
+            )
+            outcome = chunk_pages_semantically(
+                pages=semantic_pages,
+                fallback_paragraphs=paragraphs,
+                llm=self.llm,
+                enabled=self.semantic_chunking_enabled,
+                doc_type="pdf",
+                on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=40, end_pct=45
+                ),
+            )
+            if outcome is not None:
+                if outcome.repaired_page_texts:
+                    rebuilt_pages = [
+                        outcome.repaired_page_texts.get(sp.page_number, sp.text)
+                        for sp in semantic_pages
+                    ]
+                    extracted_text = "\n\n".join(p for p in rebuilt_pages if p.strip())
+                return paragraphs, extracted_text, outcome.chunk_result, None
+            return paragraphs, extracted_text, None, None
+
+        if clean_format == "pptx":
+            raw_slides = extract_pptx_slides(file_bytes)
+            paragraphs, extracted_text = denoise_pptx_slides(raw_slides)
+            semantic_pages = self._group_pptx_paragraphs_as_pages(paragraphs)
+            outcome = chunk_pages_semantically(
+                pages=semantic_pages,
+                fallback_paragraphs=paragraphs,
+                llm=self.llm,
+                enabled=self.semantic_chunking_enabled,
+                doc_type="pptx",
+                on_progress=self._build_range_progress_callback(
+                    version.id, start_pct=40, end_pct=45
+                ),
+            )
+            return (
+                paragraphs,
+                extracted_text,
+                outcome.chunk_result if outcome is not None else None,
+                None,
+            )
+
+        paragraphs, extracted_text, early_version = self._extract_source_content(
+            material_id=material_id,
+            version=version,
+            user_id=user_id,
+            clean_format=clean_format,
+            file_bytes=file_bytes,
+        )
+        return paragraphs, extracted_text, None, early_version
 
     def _build_extraction_progress_callback(
         self, version_id: uuid.UUID
@@ -521,6 +733,7 @@ class MaterialService:
         version_id: uuid.UUID,
         user_id: uuid.UUID,
         force: bool = False,
+        sync: bool = False,
     ) -> MaterialVersion:
         """异步/同步资料解析调度流水线主入口。
 
@@ -529,6 +742,7 @@ class MaterialService:
             version_id: 版本标识。
             user_id: 租户用户标识。
             force: 为 True 时在所有提取与校验均成功后原子替换该版本旧知识点与切片。
+            sync: 为 True 时为同步直调路径；为 False 时由 Worker 获取版本级分布式执行锁防重。
 
         Returns:
             MaterialVersion: 完成或失败后的版本状态实体。
@@ -546,6 +760,27 @@ class MaterialService:
             raise MaterialNotFoundError("资料版本不属于指定资料")
         if not force and version.parse_status == ParseStatus.READY.value:
             return version
+
+        exec_lock_key: str | None = None
+        exec_token: str | None = None
+        if not sync:
+            exec_lock_key = f"{_PARSE_EXEC_LOCK_PREFIX}{version_id}"
+            exec_acquired, exec_token = _acquire_redis_lock(
+                self._progress_redis,
+                exec_lock_key,
+                _PARSE_EXEC_LOCK_TTL_SECONDS,
+            )
+            if not exec_acquired:
+                logger.warning(
+                    "material pipeline execution skipped; lock held by another worker",
+                    extra={
+                        "user_ref": user_ref,
+                        "target_id": str(material_id),
+                        "version_id": str(version_id),
+                        "error_code": 0,
+                    },
+                )
+                return version
 
         clean_format = material.file_format.lower().lstrip(".")
         current_stage = (
@@ -567,13 +802,15 @@ class MaterialService:
 
             file_bytes = self.storage.get_object(self.bucket, version.storage_key)
 
-            # 阶段 A: 提取文本与 OCR 质量门禁
-            paragraphs, extracted_text, early_version = self._extract_source_content(
-                material_id=material_id,
-                version=version,
-                user_id=user_id,
-                clean_format=clean_format,
-                file_bytes=file_bytes,
+            # 阶段 A: 提取文本、VLM 视觉重建、语义打标与 OCR 质量门禁
+            paragraphs, extracted_text, prechunked_result, early_version = (
+                self._extract_source_content_with_semantic(
+                    material_id=material_id,
+                    version=version,
+                    user_id=user_id,
+                    clean_format=clean_format,
+                    file_bytes=file_bytes,
+                )
             )
             if early_version is not None:
                 return early_version
@@ -601,6 +838,7 @@ class MaterialService:
                 user_id=user_id,
                 paragraphs=paragraphs,
                 require_non_empty=True,
+                prechunked_result=prechunked_result,
             )
 
             # 阶段 C: 自动串联知识树抽取（抽取与质检全通过后同事务原子替换旧知识点与切片）
@@ -684,6 +922,9 @@ class MaterialService:
                 redis_client=self._progress_redis,
             )
             raise
+        finally:
+            if exec_lock_key and exec_token:
+                _release_redis_lock(self._progress_redis, exec_lock_key, exec_token)
 
     def mark_orphaned_parse_failed(
         self,
@@ -764,6 +1005,13 @@ class MaterialService:
         )
         self.session.commit()
         clear_cached_parse_progress(version.id, redis_client=self._progress_redis)
+
+        cancel_fn = getattr(self.queue, "cancel_matching_jobs", None)
+        if callable(cancel_fn):
+            cancel_fn(
+                "parse_material_pipeline",
+                {"version_id": str(version.id)},
+            )
 
         self._enqueue_parse(material_id, version.id, user_id)
 
@@ -1450,8 +1698,46 @@ class MaterialService:
                 version_id=target_version.id,
                 user_id=user_id,
                 force=force,
+                sync=True,
             )
 
+        dispatch_lock_key = f"{_PARSE_DISPATCH_LOCK_PREFIX}{target_version.id}"
+        acquired, dispatch_token = _acquire_redis_lock(
+            self._progress_redis,
+            dispatch_lock_key,
+            _PARSE_DISPATCH_LOCK_TTL_SECONDS,
+        )
+        if not acquired:
+            with contextlib.suppress(Exception):
+                self.session.expire(target_version)
+            refreshed = self.repo.get_version_by_id(target_version.id, user_id)
+            return refreshed if refreshed is not None else target_version
+
+        try:
+            if dispatch_token is not None:
+                with contextlib.suppress(Exception):
+                    self.session.expire(target_version)
+                refreshed = self.repo.get_version_by_id(target_version.id, user_id)
+                if refreshed is not None:
+                    target_version = refreshed
+            return self._dispatch_async_parse(
+                user_id=user_id,
+                material_id=material_id,
+                target_version=target_version,
+                force=force,
+            )
+        finally:
+            _release_redis_lock(self._progress_redis, dispatch_lock_key, dispatch_token)
+
+    def _dispatch_async_parse(
+        self,
+        *,
+        user_id: uuid.UUID,
+        material_id: uuid.UUID,
+        target_version: MaterialVersion,
+        force: bool,
+    ) -> MaterialVersion:
+        """在派发锁与数据库 CAS 双重保护下安全入队唯一解析任务。"""
         stale_before: datetime | None = None
         if target_version.parse_status in ACTIVE_PARSE_STATUSES:
             if not force:
@@ -1459,8 +1745,18 @@ class MaterialService:
             can_recover, stale_before = self._check_stale_or_orphaned_parse(target_version)
             if not can_recover:
                 return target_version
-        elif target_version.parse_status == ParseStatus.READY.value and not force:
-            return target_version
+        else:
+            if target_version.parse_status == ParseStatus.READY.value and not force:
+                return target_version
+            has_live_fn = getattr(self.queue, "has_live_job", None)
+            if callable(has_live_fn) and (
+                has_live_fn(
+                    "parse_material_pipeline",
+                    {"version_id": str(target_version.id)},
+                )
+                is True
+            ):
+                return target_version
 
         # 派发必须是原子的：两个并发请求不能凭同一次陈旧读各入队一次，否则同一版本
         # 会被两个 worker 同时解析（重复 OCR/LLM 开销与重复切片）。条件更新未命中
@@ -1482,6 +1778,13 @@ class MaterialService:
             MaterialStatus.PARSING.value,
         )
         self.session.commit()
+
+        cancel_fn = getattr(self.queue, "cancel_matching_jobs", None)
+        if callable(cancel_fn):
+            cancel_fn(
+                "parse_material_pipeline",
+                {"version_id": str(target_version.id)},
+            )
 
         self._enqueue_parse(material_id, target_version.id, user_id, force=force)
         return target_version

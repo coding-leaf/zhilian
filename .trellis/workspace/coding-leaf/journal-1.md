@@ -784,3 +784,58 @@ Swarm 4轨并行落地M2：学情4 Tab课程全量联动过滤与自定义题单
 ### Next Steps
 
 - 可按需生成PR文档或推进M3（Academic Editorial全站UI视觉精修）并归档父任务11-24-product-ux-quality-upgrade。
+
+
+## Session 24: 主界面全局助教、视觉语义切片与两阶段考前精讲页落地
+<!-- trellis-session: v=2 fp=5d6149204406a200 -->
+
+**Date**: 2026-11-25
+**Task**: 主界面全局助教、视觉语义切片与两阶段考前精讲页落地
+**Branch**: `feat/coach-scope-and-deep-study`
+
+### Summary
+
+3条交付线+独立Verifier Swarm落地：主界面全局无绑定助教与1次Embedding跨课安全检索、PaddleOCR-VL-1.5协议与滚动JPEG渲染+标题禁公式+8页滑窗语义切片、8-15核心考点2层收敛树+迁移0015懒生成永久缓存考前精讲+全屏4段式精讲页；全量后端(2331 passed, 91.57% cov, 89% diff-cover)与前端(40 files/321 tests, 0 span warning)全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `814fd89` | feat(services): 主界面全局助教语境、单次Embedding跨资料安全检索与通用兜底 |
+| `81a61aa` | feat(algorithms): 高召回VLM协议与滚动JPEG渲染、标题禁公式及滑窗语义切片 |
+| `baeb9e8` | feat(models): 收敛2层考点树、迁移0015考前精讲永久缓存与RQ整章预热 |
+| `fd5b306` | feat(miniprogram): 工作台全局助教胶囊切换与全屏4段式考前精讲页 |
+| `1b9a4a3` | docs(docs): 沉淀全局助教、语义切片与考前精讲笔记跨层契约规范 |
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 在讲义详情页对SVM.pdf点重新解析验证新切片与全屏考前精讲页；M3纯UI视觉精修按用户要求继续暂缓。
+
+
+## Session 25: 解析幂等、AI助教Markdown、已删资料过滤与考前精讲异步高优队列
+<!-- trellis-session: v=2 fp=fc7e71ab0ecd717f -->
+
+**Date**: 2026-11-26
+**Task**: 解析幂等、AI助教Markdown、已删资料过滤与考前精讲异步高优队列
+**Branch**: `feat/coach-scope-and-deep-study`
+
+### Summary
+
+修复解析双击与RQ退避重试重复入队，补全AI助教Markdown与参考讲义富文本渲染，学情Tab全范围过滤已删资料（保留历史练习记录），并将考前精讲迁移至zhilian_high异步队列与2s实时耗时轮询。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `28213db` | fix(services): 加固资料解析三层幂等锁与RQ重试清理，并将考前精讲迁移至高优异步队列 |
+| `d2d1a7c` | fix(repositories): 学情Tab全范围过滤已删除资料的掌握度、错题、题库与题单（保留历史练习记录） |
+| `03d2328` | fix(miniprogram): 补全AI助教Markdown渲染、解析防双击与考前精讲异步轮询体验 |
+| `2e7def3` | docs(docs): 沉淀解析幂等、已删资料可见性与异步考前精讲跨层契约规范 |
+
+### Status
+
+[OK] **Completed**

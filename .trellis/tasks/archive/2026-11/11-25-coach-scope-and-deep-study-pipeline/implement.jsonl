@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Strict import-linter 6-layer boundaries and pure core/algorithms rules"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite+PG compatible models, Alembic 0015 migration, short-tx boundaries"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Structured errors and graceful fallback contracts"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Ruff complexity<=15, mypy strict, coverage gates"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured logging without leaking secrets"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend architecture, .vue<=300 lines, zero raw Hex, zero Emoji"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Subpackage routing and pages.json conventions"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "SFC modularization and scoped styling"}
+{"file": ".trellis/spec/frontend/network-contract.md", "reason": "Long timeout 60s, concurrency, error extraction"}
+{"file": ".trellis/spec/frontend/mp-weixin-compatibility.md", "reason": "WeChat Miniprogram hard rules: no PATCH, no dynamic import, no span WXSS, safe-area"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Wire* types and strict TS adapters"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer contract alignment across DB/API/Frontend"}
+{"file": ".trellis/tasks/11-25-coach-scope-and-deep-study-pipeline/research/01-home-coach-context.md", "reason": "Home Coach context research and contract spec"}
+{"file": ".trellis/tasks/11-25-coach-scope-and-deep-study-pipeline/research/02-semantic-chunking-and-deep-study-guide.md", "reason": "Semantic chunking and two-stage study guide research spec"}

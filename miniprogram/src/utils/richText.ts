@@ -26,6 +26,8 @@ const HEADING_SIZES: Record<number, string> = {
   2: 'font-size:1.06em;',
   3: 'font-size:1.03em;',
   4: 'font-size:1.0em;',
+  5: 'font-size:0.96em;',
+  6: 'font-size:0.94em;',
 }
 
 const KNOWN_MATH_ENVS = new Set([
@@ -237,6 +239,64 @@ function tryConsumeUnfencedScript(line: string, idx: number, out: RichTextNode[]
   return -1
 }
 
+function findClosingDoubleAsterisk(text: string, openIdx = 0): number {
+  let pos = openIdx + 2
+  while (pos < text.length) {
+    const ch = text[pos]
+    if (ch === '\n') return -1
+    if (text.startsWith('\\$', pos) && hasEvenBackslashesBefore(text, pos)) {
+      pos += 2
+      continue
+    }
+    if (ch === '`') {
+      const codeMatch = /^`([^`\n]+)`/.exec(text.slice(pos))
+      if (codeMatch) {
+        pos += codeMatch[0].length
+        continue
+      }
+    }
+    if (text.startsWith('\\(', pos) && hasEvenBackslashesBefore(text, pos)) {
+      const closeIdx = findUnescapedMarker(text, '\\)', pos + 2)
+      if (closeIdx !== -1) {
+        pos = closeIdx + 2
+        continue
+      }
+    }
+    if (text.startsWith('$$', pos) && hasEvenBackslashesBefore(text, pos)) {
+      const closeIdx = findUnescapedMarker(text, '$$', pos + 2)
+      if (closeIdx !== -1) {
+        pos = closeIdx + 2
+        continue
+      }
+    }
+    if (text.startsWith('\\[', pos) && hasEvenBackslashesBefore(text, pos)) {
+      const closeIdx = findUnescapedMarker(text, '\\]', pos + 2)
+      if (closeIdx !== -1) {
+        pos = closeIdx + 2
+        continue
+      }
+    }
+    if (ch === '$' && !text.startsWith('$$', pos) && hasEvenBackslashesBefore(text, pos)) {
+      const closeIdx = findClosingInlineDollar(text, pos)
+      if (closeIdx !== -1) {
+        pos = closeIdx + 1
+        continue
+      }
+    }
+    if (ch === '\\' && pos + 1 < text.length) {
+      pos += 2
+      continue
+    }
+    if (text.startsWith('**', pos) && hasEvenBackslashesBefore(text, pos)) {
+      if (pos > openIdx + 2) return pos
+      pos += 2
+      continue
+    }
+    pos += 1
+  }
+  return -1
+}
+
 /**
  * 行内解析：优先识别行内代码、转义 `\$` 与数学定界符（`$$...$$` / `\[...\]` / `$...$` / `\(...\)`），
  * 保护公式内部的 `_` / `*` 不被 Markdown 强调语法拆碎。
@@ -308,14 +368,40 @@ export function parseInline(line: string): RichTextNode[] {
     }
 
     if (rest.startsWith('**')) {
-      const boldMatch = /^\*\*([^*\n]+?)\*\*/.exec(rest)
-      if (boldMatch) {
+      const closeIdx = findClosingDoubleAsterisk(rest, 0)
+      if (closeIdx !== -1 && rest.slice(2, closeIdx).trim()) {
         out.push({
           name: 'strong',
           attrs: { style: STYLES.strong },
-          children: parseInline(boldMatch[1]),
+          children: parseInline(rest.slice(2, closeIdx)),
         })
-        i += boldMatch[0].length
+        i += closeIdx + 2
+        continue
+      }
+    }
+
+    if (rest.startsWith('~~')) {
+      const delMatch = /^~~([^\n]+?)~~/.exec(rest)
+      if (delMatch && !delMatch[1].startsWith('~') && delMatch[1].trim()) {
+        out.push({
+          name: 'span',
+          attrs: { class: 'rt-del', style: STYLES.del },
+          children: parseInline(delMatch[1]),
+        })
+        i += delMatch[0].length
+        continue
+      }
+    }
+
+    if (rest.startsWith('[')) {
+      const linkMatch = /^\[([^\]\n]+)\]\(([^)\s\n]+)\)/.exec(rest)
+      if (linkMatch) {
+        out.push({
+          name: 'span',
+          attrs: { class: 'rt-link', style: STYLES.link },
+          children: parseInline(linkMatch[1]),
+        })
+        i += linkMatch[0].length
         continue
       }
     }
@@ -499,9 +585,10 @@ function isBlockStarter(line: string): boolean {
   if (/^```/.test(trimmed)) return true
   if (/^\$\$/.test(trimmed) || /^\\\[/.test(trimmed)) return true
   if (startsWithKnownEnvironment(trimmed)) return true
-  if (/^#{1,4}\s+/.test(trimmed)) return true
+  if (/^([-*_])(?:\s*\1){2,}$/.test(trimmed)) return true
+  if (/^#{1,6}\s+/.test(trimmed)) return true
   if (/^>\s?/.test(trimmed)) return true
-  if (/^\s*[-*•]\s+/.test(line)) return true
+  if (/^\s*[-*•+]\s+/.test(line)) return true
   if (/^\s*\d+[.)]\s+/.test(line)) return true
   return false
 }
@@ -698,14 +785,23 @@ export function parseRichContent(raw: string | null | undefined): RichTextNode[]
       continue
     }
 
-    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(trimmed)
+    if (/^([-*_])(?:\s*\1){2,}$/.test(trimmed)) {
+      nodes.push({
+        name: 'div',
+        attrs: { class: 'rt-hr', style: STYLES.hr },
+      })
+      i += 1
+      continue
+    }
+
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed)
     if (headingMatch) {
       const level = headingMatch[1].length
       nodes.push({
         name: 'div',
         attrs: {
           class: `rt-h rt-h${level}`,
-          style: `${STYLES.headingBase}${HEADING_SIZES[level] || HEADING_SIZES[4]}`,
+          style: `${STYLES.headingBase}${HEADING_SIZES[level] || HEADING_SIZES[6]}`,
         },
         children: parseInline(headingMatch[2].trim()),
       })
@@ -727,17 +823,24 @@ export function parseRichContent(raw: string | null | undefined): RichTextNode[]
       continue
     }
 
-    if (/^\s*[-*•]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
+    if (/^\s*[-*•+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
       const listItems: RichTextNode[] = []
       while (i < lines.length) {
-        const ulMatch = /^\s*[-*•]\s+(.+)$/.exec(lines[i])
-        const olMatch = /^\s*(\d+)[.)]\s+(.+)$/.exec(lines[i])
+        if (/^([-*_])(?:\s*\1){2,}$/.test(lines[i].trim())) break
+        const ulMatch = /^(\s*)[-*•+]\s+(.+)$/.exec(lines[i])
+        const olMatch = /^(\s*)(\d+)[.)]\s+(.+)$/.exec(lines[i])
         if (!ulMatch && !olMatch) break
-        const marker = olMatch ? `${olMatch[1]}.` : '•'
-        const itemText = olMatch ? olMatch[2] : ulMatch![1]
+        const indentStr = olMatch ? olMatch[1] : ulMatch![1]
+        const spaces = indentStr.replace(/\t/g, '  ').length
+        const indentLevel = Math.min(3, Math.floor(spaces / 2))
+        const marker = olMatch ? `${olMatch[2]}.` : '•'
+        const itemText = olMatch ? olMatch[3] : ulMatch![2]
+        const itemStyle = indentLevel > 0
+          ? `${STYLES.listItem}padding-left:${indentLevel * 28}rpx;`
+          : STYLES.listItem
         listItems.push({
           name: 'div',
-          attrs: { class: 'rt-li', style: STYLES.listItem },
+          attrs: { class: 'rt-li', style: itemStyle },
           children: [
             { name: 'span', attrs: { style: STYLES.listMarker }, children: [makeText(marker)] },
             { name: 'span', attrs: { style: STYLES.listContent }, children: parseInline(itemText) },
@@ -872,4 +975,20 @@ export function isGarbledSnippetText(text: string | null | undefined): boolean {
   }
 
   return hasDenseSingleLetterFragments(text)
+}
+
+/** 折叠预览单行去 Markdown 标记工具（保留纯文本与可读符号）。 */
+export function stripMarkdownPreview(raw: string | null | undefined): string {
+  if (!raw) return ''
+  return raw
+    .replace(/^\s*#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*•+]\s+/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\[([^\]\n]+)\]\([^)\s\n]+\)/g, '$1')
+    .replace(/\*\*|__|~~|`/g, '')
+    .replace(/\$\$?/g, '')
+    .replace(/\\\(|\\\)|\\\[|\\\]/g, '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }

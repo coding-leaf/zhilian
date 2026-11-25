@@ -39,7 +39,9 @@ _pymupdf: Any = pymupdf
 T = TypeVar("T", bound=BaseModel)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
 _DATA_URI_PREFIX = "data:image/png;base64,"
+_JPEG_DATA_URI_PREFIX = "data:image/jpeg;base64,"
 _PAGE_NUMBER_RE = re.compile(r"第 (\d+) 页")
 
 # 页面 -> VLM 行为：返回文本，或抛出异常。
@@ -182,7 +184,9 @@ def _repair(
     vlm: LLMProtocol | None,
     llm: LLMProtocol | None = None,
     vlm_max_concurrency: int = 3,
+    vlm_image_format: str = "jpeg",
 ) -> tuple[list[ParagraphInput], str]:
+    fmt: Any = vlm_image_format
     return repair_garbled_pdf_pages(
         pages,
         pdf_bytes,
@@ -190,6 +194,7 @@ def _repair(
         llm=llm,
         vlm=vlm,
         vlm_max_concurrency=vlm_max_concurrency,
+        vlm_image_format=fmt,
     )
 
 
@@ -242,15 +247,24 @@ class TestVlmRouting:
             assert messages[0].image_urls == ()
             urls = messages[1].image_urls
             assert len(urls) == 1
-            assert urls[0].startswith(_DATA_URI_PREFIX)
-            decoded = base64.b64decode(urls[0][len(_DATA_URI_PREFIX) :], validate=True)
-            assert decoded.startswith(_PNG_MAGIC)
+            assert urls[0].startswith(_JPEG_DATA_URI_PREFIX)
+            decoded = base64.b64decode(urls[0][len(_JPEG_DATA_URI_PREFIX) :], validate=True)
+            assert decoded.startswith(_JPEG_MAGIC)
             assert options is not None
             assert options.temperature == 0.0
         by_page = {p.page_number: p.text for p in paragraphs}
         assert by_page[1] == "干净页"
         assert by_page[2] == "第2页转录结果"
         assert by_page[3] == "第3页转录结果"
+
+        # Explicit png image_format still produces PNG data URIs
+        vlm_png = StubVLM(lambda n: f"第{n}页PNG")
+        _repair([_page(2, "乱码", garbled=True)], pdf, vlm=vlm_png, vlm_image_format="png")
+        png_url = vlm_png.calls[0][0][1].image_urls[0]
+        assert png_url.startswith(_DATA_URI_PREFIX)
+        assert base64.b64decode(png_url[len(_DATA_URI_PREFIX) :], validate=True).startswith(
+            _PNG_MAGIC
+        )
 
     def test_dpi_is_forwarded_to_render(self) -> None:
         pdf = _make_pdf(1)
@@ -263,7 +277,9 @@ class TestVlmRouting:
         sizes: list[int] = []
         for dpi in (36, 144):
             vlm = StubVLM(lambda _n: "ok")
-            transcribe_dirty_pages_with_vlm(pages, pdf, vlm, dpi=dpi, max_concurrency=1)
+            transcribe_dirty_pages_with_vlm(
+                pages, pdf, vlm, dpi=dpi, max_concurrency=1, image_format="png"
+            )
             url = vlm.calls[0][0][1].image_urls[0]
             sizes.append(len(base64.b64decode(url[len(_DATA_URI_PREFIX) :])))
         assert sizes[1] > sizes[0]
@@ -775,3 +791,410 @@ class TestDenoisingAndRenderedOcrFallback:
                 "拉格朗日对偶将原始带约束凸优化转化为对偶变量的无约束最大化问题，满足 KKT 条件。",
             ),
         ]
+
+
+class TestPaddleOcrVlProtocolAndResilience:
+    def test_openai_adapter_image_first_serialization(self) -> None:
+        from unittest.mock import MagicMock
+
+        from app.integrations.llm.openai import OpenAICompatibleLLMAdapter
+
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OCR text"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        client = MagicMock()
+        client.post.return_value = resp
+        adapter = OpenAICompatibleLLMAdapter(
+            api_key="sk-test", model="PaddlePaddle/PaddleOCR-VL-1.5", client=client
+        )
+        adapter.generate(
+            [
+                LLMMessage(
+                    role="user",
+                    content="OCR:",
+                    image_urls=("data:image/jpeg;base64,AAAA",),
+                    image_first=True,
+                )
+            ]
+        )
+        sent = client.post.call_args.kwargs["json"]["messages"]
+        assert sent == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+                    {"type": "text", "text": "OCR:"},
+                ],
+            }
+        ]
+
+    def test_paddleocr_vl_auto_style_sends_single_image_first_user_message(self) -> None:
+        pdf = _make_pdf(1)
+
+        class _PaddleStubVLM(LLMProtocol):
+            def __init__(self) -> None:
+                self.model = "PaddlePaddle/PaddleOCR-VL-1.5"
+                self.calls: list[Sequence[LLMMessage]] = []
+
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                self.calls.append(messages)
+                return LLMResponse(
+                    content="$$\\frac{|\\omega^T x_i + b|}{\\|\\omega\\|}$$",
+                    usage=LLMUsage(),
+                    model=self.model,
+                )
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                raise NotImplementedError
+
+        vlm = _PaddleStubVLM()
+        out = transcribe_dirty_pages_with_vlm(
+            [PdfPageExtraction(1, "ω^T x_i + b", False, False, has_math_expression_layout=True)],
+            pdf,
+            vlm,
+            prompt_style="auto",
+        )
+        assert 1 in out
+        assert len(vlm.calls) == 1
+        msgs = vlm.calls[0]
+        assert len(msgs) == 1
+        assert msgs[0].role == "user"
+        assert msgs[0].content == "OCR:"
+        assert msgs[0].image_first is True
+        assert msgs[0].image_urls[0].startswith(_JPEG_DATA_URI_PREFIX)
+
+    def test_skips_clean_cover_toc_and_thank_you_pages_in_vlm_routing(self) -> None:
+        from app.services._material_pipeline import _page_needs_vlm
+
+        cover = PdfPageExtraction(
+            1,
+            "第五章 支持向量机\n主讲教师：王老师",
+            False,
+            False,
+            needs_visual_ocr=True,
+            is_slide_layout=True,
+        )
+        toc = PdfPageExtraction(
+            2,
+            "目录\n1. 基本概念\n2. 硬间隔\n3. 核函数",
+            False,
+            False,
+            needs_visual_ocr=True,
+            is_slide_layout=True,
+        )
+        math_slide = PdfPageExtraction(
+            3,
+            "几何间隔\nω^T x_i + b\n||ω||",
+            False,
+            False,
+            is_slide_layout=True,
+            has_math_expression_layout=True,
+        )
+        thanks = PdfPageExtraction(
+            4,
+            "谢谢！",
+            False,
+            False,
+            needs_visual_ocr=True,
+            has_formula_visual_risk=True,
+            is_slide_layout=True,
+        )
+        assert _page_needs_vlm(cover, total_pages=4) is False
+        assert _page_needs_vlm(toc, total_pages=4) is False
+        assert _page_needs_vlm(math_slide, total_pages=4) is True
+        assert _page_needs_vlm(thanks, total_pages=4) is False
+
+    def test_vlm_circuit_breaker_trips_after_three_consecutive_timeouts(self) -> None:
+        pdf = _make_pdf(8)
+        attempted_pages: list[int] = []
+
+        class _TimeoutVLM(LLMProtocol):
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                match = _PAGE_NUMBER_RE.search(messages[-1].content)
+                if match:
+                    attempted_pages.append(int(match.group(1)))
+                raise TimeoutError("SiliconFlow PaddleOCR-VL ReadTimeout")
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                raise NotImplementedError
+
+        pages = [_page(n, "", garbled=True) for n in range(1, 9)]
+        # max_concurrency=1 -> batch_size=2; trips after 3rd timeout, skipping pages 5-8
+        result = transcribe_dirty_pages_with_vlm(
+            pages, pdf, _TimeoutVLM(), max_concurrency=1, max_pages_per_doc=40
+        )
+        assert result == {}
+        assert len(attempted_pages) <= 4
+        assert set(attempted_pages).isdisjoint({5, 6, 7, 8})
+
+    def test_max_pages_per_doc_caps_dirty_vlm_calls(self) -> None:
+        pdf = _make_pdf(6)
+        vlm = StubVLM(lambda n: f"第{n}页转录")
+        pages = [_page(n, "", garbled=True) for n in range(1, 7)]
+        result = transcribe_dirty_pages_with_vlm(
+            pages, pdf, vlm, max_concurrency=2, max_pages_per_doc=3
+        )
+        assert len(result) == 3
+        assert len(vlm.called_pages) == 3
+
+
+class TestHeadingFixAndSemanticChunkerIntegration:
+    def test_is_heading_block_rejects_math_expressions_and_mid_page_prose(self) -> None:
+        from app.services._material_pipeline import is_heading_block
+
+        for bad in (
+            "ω^T x_i + b",
+            "-ω^T x_i + b",
+            "||ω||",
+            "# ω^T x_i + b",
+            "y_i (w^T x_i + b) >= 1",
+            "f(x) = a + b",
+        ):
+            assert is_heading_block(bad) is False
+            assert is_heading_block(bad, y_ratio=0.05) is False
+
+        assert is_heading_block("# 标题") is True
+        assert is_heading_block("## 支持向量机 (SVM)") is True
+        assert is_heading_block("3.2 线性可分支持向量机") is True
+        assert is_heading_block("第五章 核方法") is True
+        assert is_heading_block("基本概念", y_ratio=0.12) is True
+        assert is_heading_block("基本概念", y_ratio=0.55) is False
+
+    def test_semantic_chunker_repairs_broken_2d_math_and_falls_back_per_batch(self) -> None:
+        from app.core.algorithms.semantic_chunking import SemanticPageInput
+        from app.integrations.llm.fake import FakeLLMAdapter
+        from app.services._semantic_chunker import (
+            PageAnnotationSchema,
+            SemanticBatchAnnotationResponse,
+            chunk_pages_semantically,
+        )
+
+        pages = [
+            SemanticPageInput(page_number=1, text="封面：机器学习讲义"),
+            SemanticPageInput(page_number=2, text="几何间隔基础定义与超平面说明。"),
+            SemanticPageInput(
+                page_number=3,
+                text="点到超平面距离公式：\n\n|ω^T x_i + b|\n\n||ω||",
+                used_vlm=False,
+            ),
+            SemanticPageInput(page_number=4, text="下一批页面一：核函数引入。"),
+            SemanticPageInput(page_number=5, text="下一批页面二：常用高斯核。"),
+        ]
+        fallback_paras = [
+            ParagraphInput(p.text, f"第 {p.page_number} 页", "pdf", page_number=p.page_number)
+            for p in pages
+        ]
+
+        # Bypassed for FakeLLMAdapter or <3 pages or disabled
+        assert (
+            chunk_pages_semantically(
+                pages=pages, fallback_paragraphs=fallback_paras, llm=FakeLLMAdapter()
+            )
+            is None
+        )
+        assert (
+            chunk_pages_semantically(
+                pages=pages[:2], fallback_paragraphs=fallback_paras[:2], llm=StubTextLLM("x")
+            )
+            is None
+        )
+        assert (
+            chunk_pages_semantically(
+                pages=pages,
+                fallback_paragraphs=fallback_paras,
+                llm=StubTextLLM("x"),
+                enabled=False,
+            )
+            is None
+        )
+
+        class _PartialFailingSemanticLLM(LLMProtocol):
+            def __init__(self) -> None:
+                self.batch_calls = 0
+
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                raise NotImplementedError
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                self.batch_calls += 1
+                if "[PAGE 4" in messages[-1].content:
+                    raise TimeoutError("batch 2 timeout")
+                data = SemanticBatchAnnotationResponse(
+                    pages=[
+                        PageAnnotationSchema(
+                            page_number=1, topic_title="封面", is_substantive=False
+                        ),
+                        PageAnnotationSchema(
+                            page_number=2,
+                            topic_title="几何间隔",
+                            is_substantive=True,
+                            merge_with_prev=False,
+                        ),
+                        PageAnnotationSchema(
+                            page_number=3,
+                            topic_title="几何间隔",
+                            is_substantive=True,
+                            merge_with_prev=True,
+                            needs_formula_repair=True,
+                            repaired_markdown=(
+                                "点到超平面距离公式为 "
+                                "$$d = \\frac{|\\omega^T x_i + b|}{\\|\\omega\\|}$$。"
+                            ),
+                        ),
+                    ]
+                )
+                return data, LLMResponse(content="ok", usage=LLMUsage(), model="deepseek-flash")  # type: ignore[return-value]
+
+        outcome = chunk_pages_semantically(
+            pages=pages,
+            fallback_paragraphs=fallback_paras,
+            llm=_PartialFailingSemanticLLM(),
+            batch_max_pages=3,
+        )
+        assert outcome is not None
+        snippets = outcome.chunk_result.snippets
+        assert len(snippets) == 3
+        assert snippets[0].chapter_title == "几何间隔"
+        assert snippets[0].page_number == 2
+        assert snippets[0].page_end == 3
+        assert snippets[0].source_ref == "第 2-3 页"
+        assert "$$d = \\frac{|\\omega^T x_i + b|}{\\|\\omega\\|}$$" in snippets[0].content
+        assert 3 in outcome.repaired_page_texts
+        # Batch 2 fell back deterministically and survived
+        assert [s.page_number for s in snippets[1:]] == [4, 5]
+
+    def test_deepseek_ocr_auto_prompt_style_image_first_and_drops_tiny_junk(self) -> None:
+        pdf = _make_pdf(2)
+        captured: list[list[LLMMessage]] = []
+
+        class _DeepSeekOCRStub(LLMProtocol):
+            model = "deepseek-ai/DeepSeek-OCR"
+
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                captured.append(list(messages))
+                content = "}" if len(captured) == 1 else "Distance $r_i = |w^T x_i + b|/\\|w\\|$"
+                return LLMResponse(content=content, usage=LLMUsage(), model=self.model)
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                raise NotImplementedError
+
+        pages = [_page(1, "", garbled=True), _page(2, "", garbled=True)]
+        result = transcribe_dirty_pages_with_vlm(
+            pages, pdf, _DeepSeekOCRStub(), max_concurrency=1, prompt_style="auto"
+        )
+        assert len(captured) == 2
+        for msgs in captured:
+            assert len(msgs) == 1
+            assert msgs[0].role == "user"
+            assert msgs[0].image_first is True
+            assert "Markdown" in msgs[0].content
+        # 1-char degenerate '}' on page 1 must be discarded; page 2 survives
+        assert 1 not in result
+        assert 2 in result and "$r_i" in result[2]
+
+    def test_semantic_chunker_runs_batches_concurrently_and_preserves_order(self) -> None:
+        from app.core.algorithms.semantic_chunking import SemanticPageInput
+        from app.services._semantic_chunker import (
+            PageAnnotationSchema,
+            SemanticBatchAnnotationResponse,
+            chunk_pages_semantically,
+        )
+
+        pages = [
+            SemanticPageInput(
+                page_number=n, text=f"第{n}页关于支持向量机推导的实质内容说明。", used_vlm=True
+            )
+            for n in range(1, 7)
+        ]
+        fallback_paras = [
+            ParagraphInput(
+                text=p.text, source_ref=f"第 {p.page_number} 页", page_number=p.page_number
+            )
+            for p in pages
+        ]
+        barrier = threading.Barrier(2)
+
+        class _ConcurrentSemanticLLM(LLMProtocol):
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                raise NotImplementedError
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                barrier.wait(timeout=5.0)
+                prompt = messages[-1].content
+                batch_pages = [1, 2, 3] if "[PAGE 1" in prompt else [4, 5, 6]
+                topic = "线性可分" if batch_pages[0] == 1 else "核技巧"
+                data = SemanticBatchAnnotationResponse(
+                    pages=[
+                        PageAnnotationSchema(
+                            page_number=p,
+                            topic_title=topic,
+                            is_substantive=True,
+                            merge_with_prev=(p != batch_pages[0]),
+                        )
+                        for p in batch_pages
+                    ]
+                )
+                return data, LLMResponse(content="ok", usage=LLMUsage(), model="deepseek-flash")  # type: ignore[return-value]
+
+        outcome = chunk_pages_semantically(
+            pages=pages,
+            fallback_paragraphs=fallback_paras,
+            llm=_ConcurrentSemanticLLM(),
+            batch_max_pages=3,
+            max_concurrency=3,
+        )
+        assert outcome is not None
+        snippets = outcome.chunk_result.snippets
+        assert len(snippets) == 2
+        assert snippets[0].chapter_title == "线性可分"
+        assert snippets[0].page_number == 1 and snippets[0].page_end == 3
+        assert snippets[1].chapter_title == "核技巧"
+        assert snippets[1].page_number == 4 and snippets[1].page_end == 6
