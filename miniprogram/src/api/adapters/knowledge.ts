@@ -117,6 +117,7 @@ export interface WireStudyGuideResponse {
   status?: unknown
   study_guide?: WireStudyGuideContent | null
   generated_at?: string | null
+  error_message?: string | null
 }
 
 export interface WireStudyGuidePrewarmResponse {
@@ -299,17 +300,24 @@ export function adaptStudyGuideResult(raw: WireStudyGuideResponse): StudyGuideRe
   const studyGuide = adaptStudyGuideContent(raw.study_guide)
   const rawStatus = normalizeString(raw.status)
   let status: StudyGuideStatus = 'empty'
-  if (rawStatus === 'ready' || rawStatus === 'generating' || rawStatus === 'empty') {
+  if (
+    rawStatus === 'ready'
+    || rawStatus === 'generating'
+    || rawStatus === 'empty'
+    || rawStatus === 'failed'
+  ) {
     status = rawStatus
   } else if (studyGuide) {
     status = 'ready'
   }
   const generatedAt = normalizeString(raw.generated_at)
+  const errorMessage = normalizeString(raw.error_message)
   return {
     knowledge_point_id: raw.knowledge_point_id,
     status,
     study_guide: studyGuide,
     generated_at: generatedAt || null,
+    error_message: errorMessage || null,
   }
 }
 

@@ -228,7 +228,7 @@ describe('full-screen study guide page and prewarm integration', () => {
     expect(wrapper.text()).toContain('正在深度精讲生成中')
     expect(wrapper.text()).toContain('Stage 1 核函数预览摘要')
 
-    await vi.advanceTimersByTimeAsync(2500)
+    await vi.advanceTimersByTimeAsync(2000)
     await flushPromises()
     expect(guidePollCalls).toBe(2)
     expect(wrapper.text()).toContain('考法与直觉定位')
@@ -236,6 +236,79 @@ describe('full-screen study guide page and prewarm integration', () => {
     await wrapper.get('.regen-btn').trigger('tap')
     await flushPromises()
     expect(forceBodies).toEqual([{ force: true }])
+  })
+
+  it('shows live elapsedSec, tab-aware generating copy, and surfaces failed status with retry', async () => {
+    vi.useFakeTimers()
+    let failOnFirstLoad = true
+
+    mocks.request.mockImplementation(async (opts: { url: string; method?: string }) => {
+      if (opts.url === '/knowledge/kp-3') {
+        return { id: 'kp-3', material_id: 'm-1', name: '拉格朗日对偶', level: 2, created_at: '' }
+      }
+      if (opts.url === '/knowledge/kp-3/snippets') {
+        return { knowledge_point_id: 'kp-3', snippets: [] }
+      }
+      if (opts.url === '/knowledge/kp-3/study-guide' && opts.method === 'GET') {
+        if (failOnFirstLoad) {
+          return {
+            knowledge_point_id: 'kp-3',
+            status: 'failed',
+            study_guide: null,
+            generated_at: null,
+            error_message: '思考模型响应超时，请重试',
+          }
+        }
+        return {
+          knowledge_point_id: 'kp-3',
+          status: 'ready',
+          study_guide: sampleGuide,
+          generated_at: '2026-11-25T10:10:00Z',
+        }
+      }
+      if (opts.url === '/knowledge/kp-3/study-guide/generate' && opts.method === 'POST') {
+        failOnFirstLoad = false
+        return {
+          knowledge_point_id: 'kp-3',
+          status: 'generating',
+          study_guide: null,
+          generated_at: null,
+        }
+      }
+      if (opts.url.startsWith('/mastery')) return { total_points: 0, points: [] }
+      throw new Error(`unexpected: ${opts.method} ${opts.url}`)
+    })
+
+    wrapper = mount(KnowledgePage, { global: { stubs: pageStubs } })
+    await mocks.loadCallbacks[0]({ kp_id: 'kp-3', material_id: 'm-1' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('精讲生成未能完成')
+    expect(wrapper.text()).toContain('思考模型响应超时，请重试')
+
+    await wrapper.get('.generate-now-btn').trigger('tap')
+    await flushPromises()
+    expect(wrapper.text()).toContain('已耗时 0s')
+    expect(wrapper.text()).toContain('精讲笔记')
+    expect(wrapper.text()).toContain('教材原文')
+
+    const tabs = wrapper.findAll('.tab-item')
+    await tabs[1].trigger('tap')
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已耗时 1s')
+    expect(wrapper.text()).toContain('典型例题与分步标准解答')
+
+    await tabs[2].trigger('tap')
+    await flushPromises()
+    expect(wrapper.text()).toContain('易混概念对比与常见避坑')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('相邻易混概念对比')
+    await tabs[0].trigger('tap')
+    await flushPromises()
+    expect(wrapper.text()).toContain('考法与直觉定位')
   })
 
   it('starts chapter prewarm from CoursePage and syncs progress via BackgroundTaskStore', async () => {

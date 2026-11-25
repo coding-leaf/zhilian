@@ -57,9 +57,9 @@
             class="paper-btn-primary generate-now-btn"
             :loading="isGeneratingGuide"
             :disabled="isGeneratingGuide"
-            @tap="handleGenerate(false)"
+            @tap="handleGenerate(guideStatus === 'error')"
           >
-            点击生成考前精讲
+            {{ guideStatus === 'error' ? '重新生成考前精讲' : '点击生成考前精讲' }}
           </button>
         </view>
 
@@ -124,12 +124,21 @@ const masteryEntry = ref<MasteryEntry | null>(null)
 const guideStatus = ref<'loading' | 'empty' | 'generating' | 'ready' | 'error'>('loading')
 const studyGuide = ref<StudyGuideContent | null>(null)
 const errorText = ref('')
+const elapsedSec = ref(0)
 const showCoach = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
 let pollAttempts = 0
 let disposed = false
 
 const clearPollTimer = () => { if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null } }
+const clearElapsedTimer = () => { if (elapsedTimer !== null) { clearInterval(elapsedTimer); elapsedTimer = null } }
+const stopGeneratingTimers = () => { clearPollTimer(); clearElapsedTimer() }
+const startElapsedTimer = () => {
+  clearElapsedTimer()
+  elapsedSec.value = 0
+  elapsedTimer = setInterval(() => { if (!disposed && guideStatus.value === 'generating') elapsedSec.value += 1 }, 1000)
+}
 const isGeneratingGuide = computed(() => guideStatus.value === 'generating')
 const pointTitle = computed(() => pointDetail.value?.name || '考点精讲')
 const masteryBadge = computed(() => resolveMasteryBadge(masteryEntry.value))
@@ -140,10 +149,21 @@ const stage1Summary = computed(() =>
   || '正在加载本考点的核心定义预览，你也可以先切到「教材原文」查看溯源。',
 )
 const stage1Formulas = computed(() => pointDetail.value?.structured_content?.key_formulas ?? [])
+const GENERATING_TAB_LABELS: Record<'note' | 'examples' | 'compare', string> = {
+  note: '精讲笔记（考法定位、核心定义与推导链）',
+  examples: '典型例题与分步标准解答',
+  compare: '易混概念对比与常见避坑',
+}
 const statusMeta = computed(() => {
-  const defaultDesc = '正在为你深度拆解推导链、典型例题与易错对比，首次生成约 15~25 秒，生成后永久秒开；可随时先切「教材原文」阅读。'
+  const defaultDesc = '正在为你深度拆解推导链、典型例题与易错对比，首次生成约 15~25 秒，生成后永久秒开；可先切「教材原文」或离开页面，后台生成不会中断。'
   if (guideStatus.value === 'loading') return { title: '正在检查考前精讲缓存...', desc: defaultDesc }
-  if (guideStatus.value === 'generating') return { title: '正在深度精讲生成中...', desc: defaultDesc }
+  if (guideStatus.value === 'generating') {
+    const tabLabel = GENERATING_TAB_LABELS[activeTab.value === 'evidence' ? 'note' : activeTab.value]
+    return {
+      title: `正在深度精讲生成中（已耗时 ${elapsedSec.value}s）`,
+      desc: `正在后台生成${tabLabel}，通常约 15~25 秒。可随时切换「教材原文」或离开页面，后台生成不会取消。`,
+    }
+  }
   if (guideStatus.value === 'error') {
     return { title: '精讲生成未能完成', desc: errorText.value || '请检查网络后点击下方按钮重新生成，先切「教材原文」亦可阅读。' }
   }
@@ -152,8 +172,9 @@ const statusMeta = computed(() => {
 
 const scheduleNextPoll = () => {
   clearPollTimer()
-  if (disposed || !kpId.value || pollAttempts >= 32) {
-    if (pollAttempts >= 32 && guideStatus.value === 'generating') {
+  if (disposed || !kpId.value || pollAttempts >= 45) {
+    if (pollAttempts >= 45 && guideStatus.value === 'generating') {
+      clearElapsedTimer()
       guideStatus.value = 'error'
       errorText.value = '后台精讲生成耗时较长，请点击下方按钮重试。'
     }
@@ -166,24 +187,27 @@ const scheduleNextPoll = () => {
     try {
       const res = await apiGetKnowledgeStudyGuide(kpId.value, { silentToast: true })
       if (disposed) return
-      if (res.status === 'ready' && res.study_guide) { studyGuide.value = res.study_guide; guideStatus.value = 'ready'; return }
-      if (res.status === 'empty') { guideStatus.value = 'empty'; return }
+      if (res.status === 'ready' && res.study_guide) { stopGeneratingTimers(); studyGuide.value = res.study_guide; guideStatus.value = 'ready'; return }
+      if (res.status === 'failed') { stopGeneratingTimers(); guideStatus.value = 'error'; errorText.value = res.error_message || '后台精讲生成失败，请点击下方按钮重试。'; return }
+      if (res.status === 'empty') { stopGeneratingTimers(); guideStatus.value = 'empty'; return }
       scheduleNextPoll()
     } catch { if (!disposed) scheduleNextPoll() }
-  }, 2500)
+  }, 2000)
 }
 
 const handleGenerate = async (force: boolean) => {
   if (!kpId.value || isGeneratingGuide.value) return
-  clearPollTimer(); pollAttempts = 0; errorText.value = ''; guideStatus.value = 'generating'
+  stopGeneratingTimers(); pollAttempts = 0; errorText.value = ''; guideStatus.value = 'generating'; startElapsedTimer()
   try {
     const res = await apiGenerateKnowledgeStudyGuide(kpId.value, force)
     if (disposed) return
-    if (res.status === 'ready' && res.study_guide) { studyGuide.value = res.study_guide; guideStatus.value = 'ready'; return }
+    if (res.status === 'ready' && res.study_guide) { stopGeneratingTimers(); studyGuide.value = res.study_guide; guideStatus.value = 'ready'; return }
     if (res.status === 'generating') { scheduleNextPoll(); return }
-    guideStatus.value = 'empty'
+    if (res.status === 'failed') { stopGeneratingTimers(); guideStatus.value = 'error'; errorText.value = res.error_message || '考前精讲生成失败，请重试'; return }
+    stopGeneratingTimers(); guideStatus.value = 'empty'
   } catch (err) {
     if (disposed) return
+    stopGeneratingTimers()
     guideStatus.value = 'error'
     errorText.value = extractUserErrorMessage(err, '考前精讲生成失败，请重试')
   }
@@ -211,11 +235,13 @@ onLoad(async (options) => {
   if (guideRes.status === 'fulfilled' && guideRes.value.status === 'ready' && guideRes.value.study_guide) {
     studyGuide.value = guideRes.value.study_guide; guideStatus.value = 'ready'
   } else if (guideRes.status === 'fulfilled' && guideRes.value.status === 'generating') {
-    guideStatus.value = 'generating'; scheduleNextPoll()
+    guideStatus.value = 'generating'; startElapsedTimer(); scheduleNextPoll()
+  } else if (guideRes.status === 'fulfilled' && guideRes.value.status === 'failed') {
+    guideStatus.value = 'error'; errorText.value = guideRes.value.error_message || '后台精讲生成失败，请点击下方按钮重试。'
   } else await handleGenerate(false)
 })
 
-onUnmounted(() => { disposed = true; clearPollTimer() })
+onUnmounted(() => { disposed = true; stopGeneratingTimers() })
 
 const goToPractice = () => {
   if (!resolvedMaterialId.value || !kpId.value) return

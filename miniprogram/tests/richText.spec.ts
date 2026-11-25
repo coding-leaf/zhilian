@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
+import AiCoachDrawer from '@/components/AiCoachDrawer.vue'
 import CoachMessageList from '@/components/CoachMessageList.vue'
 import RichContent from '@/components/RichContent.vue'
 import {
@@ -7,6 +9,7 @@ import {
   isGarbledSnippetText,
   parseMathToNodes,
   parseRichContent,
+  stripMarkdownPreview,
   type RichTextElementNode,
   type RichTextNode,
 } from '@/utils/richText'
@@ -568,5 +571,139 @@ describe('richText extended LaTeX commands via KaTeX', () => {
       expect(style).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
       expect(style).not.toContain('var(')
     }
+  })
+})
+
+describe('richText AI Coach Markdown extensions and drawer integration', () => {
+  it('parses H5/H6 headings and horizontal rules (---, ***, ___, - - -)', () => {
+    const md = [
+      '##### 五级小节',
+      '###### 六级要点',
+      '正文段落',
+      '---',
+      '***',
+      '___',
+      '- - -',
+    ].join('\n')
+
+    const nodes = parseRichContent(md)
+    expect(nodes[0]).toMatchObject({ name: 'div', attrs: { class: 'rt-h rt-h5' } })
+    expect(nodes[1]).toMatchObject({ name: 'div', attrs: { class: 'rt-h rt-h6' } })
+    expect(nodes[2]).toMatchObject({ name: 'p', attrs: { class: 'rt-p' } })
+    expect(nodes.slice(3).every((n) => 'attrs' in n && n.attrs?.class === 'rt-hr')).toBe(true)
+    expect(nodes.slice(3)).toHaveLength(4)
+  })
+
+  it('parses bold spans containing inline math with * (e.g. **支持向量 $x^*$**) and single *', () => {
+    const nodes = parseRichContent('结论：**支持向量 $x^*$** 与 **最优解 $w^*$** 以及 **含 * 号加粗**')
+    const strongNodes = findAll(nodes, 'strong')
+    expect(strongNodes).toHaveLength(3)
+    const rendered = flattenText(nodes)
+    expect(rendered).not.toContain('**')
+    expect(rendered).toContain('支持向量')
+    expect(rendered).toContain('最优解')
+    expect(rendered).toContain('含 * 号加粗')
+  })
+
+  it('parses + unordered lists, nested list indentation capped at 3 levels, strikethrough, and links', () => {
+    const md = [
+      '+ 第一层 + 项',
+      '  - 第二层缩进',
+      '    + 第三层缩进',
+      '        - 第四层封顶 3 级',
+      '---',
+      '旧写法 ~~已废弃~~，详见 [公式手册](https://example.com/guide) 与 **重点**',
+    ].join('\n')
+
+    const nodes = parseRichContent(md)
+    expect(nodes[0]).toMatchObject({ name: 'div', attrs: { class: 'rt-list' } })
+    const items = findAll([nodes[0]], 'div').filter((n) => n.attrs?.class === 'rt-li')
+    expect(items).toHaveLength(4)
+    expect(items[0].attrs?.style).not.toContain('padding-left:')
+    expect(items[1].attrs?.style).toContain('padding-left:28rpx;')
+    expect(items[2].attrs?.style).toContain('padding-left:56rpx;')
+    expect(items[3].attrs?.style).toContain('padding-left:84rpx;')
+
+    expect(nodes[1]).toMatchObject({ name: 'div', attrs: { class: 'rt-hr' } })
+    const delNodes = findAll([nodes[2]], 'span').filter((n) => n.attrs?.class === 'rt-del')
+    expect(delNodes).toHaveLength(1)
+    expect(flattenText(delNodes)).toBe('已废弃')
+
+    const linkNodes = findAll([nodes[2]], 'span').filter((n) => n.attrs?.class === 'rt-link')
+    expect(linkNodes).toHaveLength(1)
+    expect(flattenText(linkNodes)).toBe('公式手册')
+    expect(flattenText([nodes[2]])).not.toContain('https://example.com/guide')
+  })
+
+  it('strips markdown markers cleanly in stripMarkdownPreview', () => {
+    expect(stripMarkdownPreview('### 核心定义\n**支持向量 $x^*$** 与 [链接](https://a.cn) ~~旧~~')).toBe(
+      '核心定义 支持向量 x^* 与 链接 旧',
+    )
+  })
+
+  it('renders source.excerpt via RichContent(compact, muted) in CoachMessageList', () => {
+    const coachWrapper = mount(CoachMessageList, {
+      props: {
+        isThinking: false,
+        messages: [
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: '回复正文',
+            sources: [
+              {
+                snippet_id: 's1',
+                material_id: 'm1',
+                chapter_title: '第三章 SVM',
+                excerpt: '### 摘录\n**支持向量 $x^*$**',
+              },
+            ],
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          'scroll-view': { template: '<div><slot /></div>' },
+          'rich-text': { template: '<div class="stub-rich-text" />' },
+        },
+      },
+    })
+
+    const richContents = coachWrapper.findAllComponents(RichContent)
+    expect(richContents).toHaveLength(2)
+    expect(richContents[1].props('content')).toBe('### 摘录\n**支持向量 $x^*$**')
+    expect(richContents[1].props('compact')).toBe(true)
+    expect(richContents[1].props('muted')).toBe(true)
+    coachWrapper.unmount()
+  })
+
+  it('renders contextText as stripped preview when collapsed and RichContent when expanded in AiCoachDrawer', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const drawerWrapper = mount(AiCoachDrawer, {
+      props: {
+        visible: true,
+        contextText: '### 当前考点\n**支持向量 $x^*$**',
+      },
+      global: {
+        plugins: [pinia],
+        stubs: {
+          CoachScopeSelector: true,
+          CoachMessageList: true,
+          'rich-text': { template: '<div class="stub-rich-text" />' },
+        },
+      },
+    })
+
+    expect(drawerWrapper.findComponent(RichContent).exists()).toBe(false)
+    expect(drawerWrapper.get('.context-text').text()).toBe('当前考点 支持向量 x^*')
+
+    await drawerWrapper.get('.context-bar').trigger('tap')
+    const rich = drawerWrapper.findComponent(RichContent)
+    expect(rich.exists()).toBe(true)
+    expect(rich.props('content')).toBe('### 当前考点\n**支持向量 $x^*$**')
+    expect(rich.props('compact')).toBe(true)
+    expect(rich.props('muted')).toBe(true)
+    drawerWrapper.unmount()
   })
 })

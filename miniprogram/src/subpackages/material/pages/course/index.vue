@@ -6,6 +6,7 @@
       :material="course.material.value"
       :can-start-parse="course.canStartParse.value"
       :is-parsing="course.isParsing.value"
+      :is-starting-parse="course.isStartingParse.value"
       :is-parse-timed-out="course.isParseTimedOut.value"
       :is-refreshing="course.isRefreshing.value"
       :parse-progress-text="course.parseProgressText.value"

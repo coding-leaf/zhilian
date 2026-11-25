@@ -92,13 +92,14 @@ export interface StudyGuideContent {
   memory_anchors: string[]
 }
 
-export type StudyGuideStatus = 'empty' | 'generating' | 'ready'
+export type StudyGuideStatus = 'empty' | 'generating' | 'ready' | 'failed'
 
 export interface StudyGuideResult {
   knowledge_point_id: string
   status: StudyGuideStatus
   study_guide: StudyGuideContent | null
   generated_at: string | null
+  error_message?: string | null
 }
 
 export type StudyGuidePrewarmStatus =

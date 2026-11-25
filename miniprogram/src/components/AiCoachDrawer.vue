@@ -29,7 +29,10 @@
 
       <view v-if="contextText" class="context-bar" @tap="toggleContextExpanded">
         <text class="context-tag">当前语境</text>
-        <text :class="['context-text', { expanded: contextExpanded }]">{{ contextText }}</text>
+        <view v-if="contextExpanded" class="context-rich-wrap">
+          <RichContent :content="contextText" compact muted />
+        </view>
+        <text v-else class="context-text">{{ contextPreviewText }}</text>
         <text class="context-toggle">{{ contextExpanded ? '收起' : '展开' }}</text>
       </view>
 
@@ -72,12 +75,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import CoachMessageList from './CoachMessageList.vue'
 import CoachScopeSelector from './CoachScopeSelector.vue'
+import RichContent from './RichContent.vue'
 import { useCoachChat } from '@/composables/useCoachChat'
 import type { FolderItem } from '@/types'
 import { safeNavigateTo } from '@/utils/navigation'
+import { stripMarkdownPreview } from '@/utils/richText'
 
 const props = defineProps<{
   visible: boolean
@@ -98,6 +103,7 @@ const emit = defineEmits<{
   (e: 'select-folder', folderId?: string): void
 }>()
 const contextExpanded = ref(false)
+const contextPreviewText = computed(() => stripMarkdownPreview(props.contextText))
 
 const {
   sessionKey,
@@ -179,7 +185,7 @@ const openSource = (id: string) => {
   flex: 1; min-width: 0; font-size: 22rpx; color: var(--color-ink-slate-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.context-text.expanded { white-space: normal; line-height: 1.5; }
+.context-rich-wrap { flex: 1; min-width: 0; }
 .context-toggle { font-size: 22rpx; color: var(--color-academic-blue); flex-shrink: 0; }
 .drawer-footer {
   padding: 16rpx 28rpx calc(16rpx + env(safe-area-inset-bottom));

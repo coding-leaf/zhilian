@@ -116,6 +116,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
   const isPolling = ref(false)
   let poller: PollerHandle = createPoller()
   let scheduleTimer: ReturnType<typeof setTimeout> | null = null
+  const inFlightParseRequests = new Map<string, Promise<{ message: string }>>()
 
   const clearScheduleTimer = (): void => {
     if (scheduleTimer !== null) {
@@ -242,24 +243,34 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     }
   }
 
-  const startMaterialParse = async (
+  const startMaterialParse = (
     materialId: string,
     title = '学习资料',
     force = false,
   ): Promise<{ message: string }> => {
-    const res = await apiParseMaterial(materialId, force)
-    unDismiss(`mat:${materialId}`)
-    setMaterialTask({
-      materialId,
-      title,
-      status: 'parsing',
-      parseStatus: 'queued',
-      progressPercentage: 0,
-      updatedAt: Date.now(),
-      timedOut: false,
+    const existing = inFlightParseRequests.get(materialId)
+    if (existing) return existing
+
+    const requestPromise = (async () => {
+      const res = await apiParseMaterial(materialId, force)
+      unDismiss(`mat:${materialId}`)
+      setMaterialTask({
+        materialId,
+        title,
+        status: 'parsing',
+        parseStatus: 'queued',
+        progressPercentage: 0,
+        updatedAt: Date.now(),
+        timedOut: false,
+      })
+      schedulePolling()
+      return res
+    })().finally(() => {
+      inFlightParseRequests.delete(materialId)
     })
-    schedulePolling()
-    return res
+
+    inFlightParseRequests.set(materialId, requestPromise)
+    return requestPromise
   }
 
   const startQuestionJob = async (
@@ -620,6 +631,7 @@ export const useBackgroundTaskStore = defineStore('backgroundTask', () => {
     clearScheduleTimer()
     poller.dispose()
     poller = createPoller()
+    inFlightParseRequests.clear()
     isPolling.value = false
     materialTasks.value = new Map()
     questionJobs.value = new Map()

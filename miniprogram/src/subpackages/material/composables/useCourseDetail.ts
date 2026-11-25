@@ -33,6 +33,7 @@ export function useCourseDetail() {
   const snippetLoadFailed = ref(false)
   const prewarmStatus = ref<StudyGuidePrewarmStatusResult | null>(null)
   const isStartingPrewarm = ref(false)
+  const isStartingParse = ref(false)
 
   const selectedPointDetail = computed(() => materialStore.activeKnowledgePoint)
   const canStartParse = computed(() => canStartMaterialParse(material.value))
@@ -236,7 +237,8 @@ export function useCourseDetail() {
   }
 
   const startParse = async (force = false) => {
-    if (!materialId.value) return
+    if (!materialId.value || isStartingParse.value || isParsing.value) return
+    isStartingParse.value = true
     const prevMaterial = material.value
     const title = prevMaterial?.title || '学习资料'
     try {
@@ -258,11 +260,13 @@ export function useCourseDetail() {
       if (!(err instanceof RequestError)) {
         safeShowToast(describeFailure(err, '解析启动失败'))
       }
+    } finally {
+      isStartingParse.value = false
     }
   }
 
   const confirmAndReparse = () => {
-    if (!materialId.value) return
+    if (!materialId.value || isStartingParse.value || isParsing.value) return
     if (material.value?.status === 'failed' || material.value?.status === 'retake_required') {
       void startParse(true)
       return
@@ -315,6 +319,7 @@ export function useCourseDetail() {
     snippetLoadFailed,
     prewarmStatus,
     isStartingPrewarm,
+    isStartingParse,
     canStartParse,
     isParsing,
     isParseTimedOut,
