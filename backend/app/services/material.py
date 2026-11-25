@@ -177,7 +177,8 @@ class MaterialService:
         vlm_dpi: int = 150,
         vlm_max_concurrency: int = 3,
         vlm_timeout: float = 45.0,
-        vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] | None = None,
+        vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"]
+        | None = None,
         vlm_image_format: Literal["jpeg", "png"] | None = None,
         vlm_jpeg_quality: int | None = None,
         vlm_max_image_edge: int | None = None,
@@ -205,9 +206,9 @@ class MaterialService:
             if vlm_page_timeout is not None
             else (vlm_timeout if vlm_timeout != 45.0 else settings.vlm.page_timeout)
         )
-        self.vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = (
-            vlm_prompt_style or settings.vlm.prompt_style
-        )
+        self.vlm_prompt_style: Literal[
+            "auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"
+        ] = vlm_prompt_style or settings.vlm.prompt_style
         self.vlm_image_format: Literal["jpeg", "png"] = (
             vlm_image_format or settings.vlm.image_format
         )

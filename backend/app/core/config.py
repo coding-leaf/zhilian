@@ -413,7 +413,7 @@ class VLMSettings(BaseSettings):
     max_retries: int = Field(default=2, description="失败最大重试次数")
     dpi: int = Field(default=150, ge=72, le=300, description="页面渲染 DPI")
     max_concurrency: int = Field(default=3, ge=1, le=16, description="脏页并发转录上限")
-    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = Field(
+    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"] = Field(
         default="auto",
         description="VLM 提示词与消息序列化风格",
     )

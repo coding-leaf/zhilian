@@ -1047,7 +1047,7 @@ class TestHeadingFixAndSemanticChunkerIntegration:
                 options: LLMOptions | None = None,
             ) -> tuple[T, LLMResponse]:
                 self.batch_calls += 1
-                if self.batch_calls == 2:
+                if "[PAGE 4" in messages[-1].content:
                     raise TimeoutError("batch 2 timeout")
                 data = SemanticBatchAnnotationResponse(
                     pages=[
@@ -1092,3 +1092,109 @@ class TestHeadingFixAndSemanticChunkerIntegration:
         assert 3 in outcome.repaired_page_texts
         # Batch 2 fell back deterministically and survived
         assert [s.page_number for s in snippets[1:]] == [4, 5]
+
+    def test_deepseek_ocr_auto_prompt_style_image_first_and_drops_tiny_junk(self) -> None:
+        pdf = _make_pdf(2)
+        captured: list[list[LLMMessage]] = []
+
+        class _DeepSeekOCRStub(LLMProtocol):
+            model = "deepseek-ai/DeepSeek-OCR"
+
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                captured.append(list(messages))
+                content = "}" if len(captured) == 1 else "Distance $r_i = |w^T x_i + b|/\\|w\\|$"
+                return LLMResponse(content=content, usage=LLMUsage(), model=self.model)
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                raise NotImplementedError
+
+        pages = [_page(1, "", garbled=True), _page(2, "", garbled=True)]
+        result = transcribe_dirty_pages_with_vlm(
+            pages, pdf, _DeepSeekOCRStub(), max_concurrency=1, prompt_style="auto"
+        )
+        assert len(captured) == 2
+        for msgs in captured:
+            assert len(msgs) == 1
+            assert msgs[0].role == "user"
+            assert msgs[0].image_first is True
+            assert "Markdown" in msgs[0].content
+        # 1-char degenerate '}' on page 1 must be discarded; page 2 survives
+        assert 1 not in result
+        assert 2 in result and "$r_i" in result[2]
+
+    def test_semantic_chunker_runs_batches_concurrently_and_preserves_order(self) -> None:
+        from app.core.algorithms.semantic_chunking import SemanticPageInput
+        from app.services._semantic_chunker import (
+            PageAnnotationSchema,
+            SemanticBatchAnnotationResponse,
+            chunk_pages_semantically,
+        )
+
+        pages = [
+            SemanticPageInput(
+                page_number=n, text=f"第{n}页关于支持向量机推导的实质内容说明。", used_vlm=True
+            )
+            for n in range(1, 7)
+        ]
+        fallback_paras = [
+            ParagraphInput(
+                text=p.text, source_ref=f"第 {p.page_number} 页", page_number=p.page_number
+            )
+            for p in pages
+        ]
+        barrier = threading.Barrier(2)
+
+        class _ConcurrentSemanticLLM(LLMProtocol):
+            def generate(
+                self,
+                messages: Sequence[LLMMessage],
+                options: LLMOptions | None = None,
+            ) -> LLMResponse:
+                raise NotImplementedError
+
+            def generate_structured(
+                self,
+                messages: Sequence[LLMMessage],
+                response_model: type[T],
+                options: LLMOptions | None = None,
+            ) -> tuple[T, LLMResponse]:
+                barrier.wait(timeout=5.0)
+                prompt = messages[-1].content
+                batch_pages = [1, 2, 3] if "[PAGE 1" in prompt else [4, 5, 6]
+                topic = "线性可分" if batch_pages[0] == 1 else "核技巧"
+                data = SemanticBatchAnnotationResponse(
+                    pages=[
+                        PageAnnotationSchema(
+                            page_number=p,
+                            topic_title=topic,
+                            is_substantive=True,
+                            merge_with_prev=(p != batch_pages[0]),
+                        )
+                        for p in batch_pages
+                    ]
+                )
+                return data, LLMResponse(content="ok", usage=LLMUsage(), model="deepseek-flash")  # type: ignore[return-value]
+
+        outcome = chunk_pages_semantically(
+            pages=pages,
+            fallback_paragraphs=fallback_paras,
+            llm=_ConcurrentSemanticLLM(),
+            batch_max_pages=3,
+            max_concurrency=3,
+        )
+        assert outcome is not None
+        snippets = outcome.chunk_result.snippets
+        assert len(snippets) == 2
+        assert snippets[0].chapter_title == "线性可分"
+        assert snippets[0].page_number == 1 and snippets[0].page_end == 3
+        assert snippets[1].chapter_title == "核技巧"
+        assert snippets[1].page_number == 4 and snippets[1].page_end == 6

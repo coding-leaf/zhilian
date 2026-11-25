@@ -12,6 +12,7 @@ Uses a lightweight LLM (e.g. ``deepseek-flash``) with Zero-Rewrite-by-Default:
 
 import logging
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
@@ -42,6 +43,7 @@ _logger = logging.getLogger(__name__)
 _MIN_PAGES_FOR_SEMANTIC_CHUNKING: int = 3
 _SEMANTIC_CHUNK_MAX_TOKENS: int = 4096
 _SEMANTIC_CHUNK_TIMEOUT: float = 35.0
+_SEMANTIC_DEFAULT_CONCURRENCY: int = 3
 _ANCHOR_TAIL_CHARS: int = 120
 
 _SEMANTIC_SYSTEM_PROMPT: str = (
@@ -263,6 +265,76 @@ def _update_batch_anchors(
     return topic, tail
 
 
+def _extract_raw_tail_anchor(batch: Sequence[SemanticPageInput]) -> str:
+    """从上一批最后非空页提取轻衔接摘要，支持多批并发打标而无需串行阻塞。"""
+    for page in reversed(batch):
+        cleaned = " ".join(page.text.split())
+        if cleaned:
+            return cleaned[-_ANCHOR_TAIL_CHARS:]
+    return ""
+
+
+def _run_batches_concurrently(
+    batches: Sequence[list[SemanticPageInput]],
+    llm: LLMProtocol,
+    *,
+    max_concurrency: int,
+    on_progress: Callable[[int, int], None] | None,
+) -> list[list[PageSemanticAnnotation] | None]:
+    """按上限并发执行语义打标批次，并严格按原批次顺序返回标注结果。"""
+    total = len(batches)
+    workers = max(1, min(max_concurrency, total))
+    if workers == 1:
+        results: list[list[PageSemanticAnnotation] | None] = []
+        last_topic = ""
+        last_tail = ""
+        for idx, batch in enumerate(batches, start=1):
+            annotations = _annotate_single_batch(
+                batch,
+                llm,
+                last_topic_title=last_topic,
+                last_tail_summary=last_tail,
+            )
+            results.append(annotations)
+            if annotations is not None:
+                last_topic, last_tail = _update_batch_anchors(batch, annotations, last_topic)
+            else:
+                last_tail = ""
+            if on_progress is not None:
+                on_progress(idx, total)
+        return results
+
+    tail_anchors = [""] + [_extract_raw_tail_anchor(batches[i - 1]) for i in range(1, total)]
+    ordered: list[list[PageSemanticAnnotation] | None] = [None] * total
+    completed = 0
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="sem-chunk") as pool:
+        futures: dict[Future[list[PageSemanticAnnotation] | None], int] = {
+            pool.submit(
+                _annotate_single_batch,
+                batch,
+                llm,
+                last_topic_title="",
+                last_tail_summary=tail_anchors[idx],
+            ): idx
+            for idx, batch in enumerate(batches)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                ordered[idx] = future.result()
+            except Exception as exc:
+                _logger.warning(
+                    "semantic chunking worker exception: batch=%s error=%s",
+                    idx,
+                    type(exc).__name__,
+                )
+                ordered[idx] = None
+            completed += 1
+            if on_progress is not None:
+                on_progress(completed, total)
+    return ordered
+
+
 def chunk_pages_semantically(
     *,
     pages: Sequence[SemanticPageInput],
@@ -272,9 +344,10 @@ def chunk_pages_semantically(
     doc_type: str = "pdf",
     batch_max_pages: int = SEMANTIC_BATCH_MAX_PAGES,
     batch_max_chars: int = SEMANTIC_BATCH_MAX_CHARS,
+    max_concurrency: int = _SEMANTIC_DEFAULT_CONCURRENCY,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> SemanticChunkingOutcome | None:
-    """Run 8-page sliding-window semantic tagging with per-batch deterministic fallback."""
+    """Run 8-page sliding-window semantic tagging (up to 3-way concurrent) with fallback."""
     if not should_use_semantic_chunking(pages, llm, enabled=enabled) or llm is None:
         return None
 
@@ -287,28 +360,18 @@ def chunk_pages_semantically(
     if not batches:
         return None
 
-    batch_annotations: list[list[PageSemanticAnnotation] | None] = []
+    batch_annotations = _run_batches_concurrently(
+        batches,
+        llm,
+        max_concurrency=max_concurrency,
+        on_progress=on_progress,
+    )
     repaired_pages: dict[int, str] = {}
-    last_topic = ""
-    last_tail = ""
-
-    for idx, batch in enumerate(batches, start=1):
-        annotations = _annotate_single_batch(
-            batch,
-            llm,
-            last_topic_title=last_topic,
-            last_tail_summary=last_tail,
-        )
-        batch_annotations.append(annotations)
+    for annotations in batch_annotations:
         if annotations is not None:
             for ann in annotations:
                 if ann.needs_formula_repair and ann.repaired_markdown:
                     repaired_pages[ann.page_number] = ann.repaired_markdown
-            last_topic, last_tail = _update_batch_anchors(batch, annotations, last_topic)
-        else:
-            last_tail = ""
-        if on_progress is not None:
-            on_progress(idx, len(batches))
 
     if all(item is None for item in batch_annotations):
         return None

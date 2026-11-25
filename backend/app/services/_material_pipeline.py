@@ -421,12 +421,16 @@ _VLM_TRANSCRIBE_SYSTEM_PROMPT: str = (
 
 _VLM_TRANSCRIBE_USER_PROMPT: str = "请严格按要求转录第 {page_number} 页的全部内容。"
 _PADDLEOCR_VL_TASK_PROMPT: str = "OCR:"
+_DEEPSEEK_OCR_TASK_PROMPT: str = "Transcribe text and formulas as Markdown with LaTeX."
 _VLM_CONSECUTIVE_FAILURE_THRESHOLD: int = 3
 _VLM_SKIP_TEMPLATE_ROLES: frozenset[PageRole] = frozenset(
     {PageRole.COVER, PageRole.TOC, PageRole.THANK_YOU, PageRole.REFERENCES}
 )
 
 _CODE_FENCE_WRAPPER = re.compile(r"^\s*```(?:markdown|md|latex|text)?\s*\n(.*?)\n\s*```\s*$", re.S)
+
+VlmPromptStyle = Literal["auto", "general_markdown", "paddleocr_vl", "deepseek_ocr"]
+ResolvedVlmPromptStyle = Literal["general_markdown", "paddleocr_vl", "deepseek_ocr"]
 
 
 def _strip_vlm_code_fence(text: str) -> str:
@@ -438,28 +442,39 @@ def _strip_vlm_code_fence(text: str) -> str:
 
 def _resolve_vlm_prompt_style(
     vlm: LLMProtocol,
-    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = "auto",
-) -> Literal["general_markdown", "paddleocr_vl"]:
+    prompt_style: VlmPromptStyle = "auto",
+) -> ResolvedVlmPromptStyle:
     """按配置或模型名解析 VLM 提示词与消息序列化风格。"""
-    if prompt_style in ("general_markdown", "paddleocr_vl"):
+    if prompt_style in ("general_markdown", "paddleocr_vl", "deepseek_ocr"):
         return prompt_style
     model_name = str(getattr(vlm, "model", "") or "").lower()
     if "paddleocr-vl" in model_name or "paddleocr_vl" in model_name:
         return "paddleocr_vl"
+    if "deepseek-ocr" in model_name or "deepseek_ocr" in model_name:
+        return "deepseek_ocr"
     return "general_markdown"
 
 
 def _build_vlm_messages(
     data_uri: str,
     page_number: int,
-    resolved_style: Literal["general_markdown", "paddleocr_vl"],
+    resolved_style: ResolvedVlmPromptStyle,
 ) -> list[LLMMessage]:
-    """构造 VLM 请求消息：``paddleocr_vl`` 无 system 且图像在前，通用模式沿用原有指令。"""
+    """构造 VLM 请求消息：专用 OCR 模型无 system 且图像在前，通用模式沿用原有指令。"""
     if resolved_style == "paddleocr_vl":
         return [
             LLMMessage(
                 role="user",
                 content=_PADDLEOCR_VL_TASK_PROMPT,
+                image_urls=(data_uri,),
+                image_first=True,
+            )
+        ]
+    if resolved_style == "deepseek_ocr":
+        return [
+            LLMMessage(
+                role="user",
+                content=_DEEPSEEK_OCR_TASK_PROMPT,
                 image_urls=(data_uri,),
                 image_first=True,
             )
@@ -481,7 +496,7 @@ def _transcribe_page_with_vlm(
     *,
     timeout: float,
     mime_type: str = "image/jpeg",
-    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = "auto",
+    prompt_style: VlmPromptStyle = "auto",
 ) -> str:
     """把单页图像编码为 data URI 送 VLM 转录；返回 Markdown+LaTeX 文本（空串表示无结果）。"""
     data_uri = f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("ascii")
@@ -492,7 +507,7 @@ def _transcribe_page_with_vlm(
         options=LLMOptions(temperature=0.0, max_tokens=4096, timeout=timeout),
     )
     transcript = _strip_vlm_code_fence(resp.content) if resp and resp.content else ""
-    if not transcript:
+    if not transcript or not any(ch.isalnum() for ch in transcript):
         return ""
     still_garbled, _, _ = detect_symbol_garble(transcript)
     return sanitize_symbol_garble(transcript) if still_garbled else transcript
@@ -553,7 +568,7 @@ def _execute_vlm_batch(
     workers: int,
     timeout: float,
     mime_type: str,
-    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"],
+    prompt_style: VlmPromptStyle,
     consecutive_failures: int,
     consecutive_timeouts: int,
     results: dict[int, str],
@@ -616,7 +631,7 @@ def transcribe_dirty_pages_with_vlm(
     dpi: int = 150,
     max_concurrency: int = 3,
     timeout: float = 45.0,
-    prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = "auto",
+    prompt_style: VlmPromptStyle = "auto",
     image_format: Literal["jpeg", "png"] = "jpeg",
     jpeg_quality: int = 85,
     max_image_edge: int = 1440,
@@ -633,7 +648,7 @@ def transcribe_dirty_pages_with_vlm(
         return {}
 
     workers = max(1, max_concurrency)
-    batch_size = max(1, workers * 2)
+    batch_size = max(1, workers)
     results: dict[int, str] = {}
     consecutive_failures = 0
     consecutive_timeouts = 0
@@ -881,7 +896,7 @@ def repair_garbled_pdf_pages_with_pages(
     vlm_dpi: int = 150,
     vlm_max_concurrency: int = 3,
     vlm_timeout: float = 45.0,
-    vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = "auto",
+    vlm_prompt_style: VlmPromptStyle = "auto",
     vlm_image_format: Literal["jpeg", "png"] = "jpeg",
     vlm_jpeg_quality: int = 85,
     vlm_max_image_edge: int = 1440,
@@ -981,7 +996,7 @@ def repair_garbled_pdf_pages(
     vlm_dpi: int = 150,
     vlm_max_concurrency: int = 3,
     vlm_timeout: float = 45.0,
-    vlm_prompt_style: Literal["auto", "general_markdown", "paddleocr_vl"] = "auto",
+    vlm_prompt_style: VlmPromptStyle = "auto",
     vlm_image_format: Literal["jpeg", "png"] = "jpeg",
     vlm_jpeg_quality: int = 85,
     vlm_max_image_edge: int = 1440,
