@@ -449,5 +449,18 @@ practice_title: str | None = None
   - `services/_semantic_chunker.py` + `core/algorithms/semantic_chunking.py` 按 8 页滑窗 Zero-Rewrite 轻量打标并跨页合并逻辑单元（上限 1400 字），未走/失败于 VLM 的散架公式页自动局部修复。
 - **两阶段收敛考点树 + 懒生成永久缓存考前精讲笔记（迁移 `0015_kp_study_guide`）**：
   - Stage 1 常规单章（`<=28,000` 字）One-Shot 全局建 2 层收敛树（8~15 核心考点，`knowledge_quality.py` 对 `<=25` 节点的 2 层树豁免 `MAX_LEVEL_2_RATIO=0.60`，去重阈值 `0.86`）。
-  - Stage 2 在 `knowledge_points` 新增 `study_guide`（JSONB）/ `study_guide_generated_at` / `study_guide_version`（列表查询 `defer` + 仅传 `has_study_guide: bool`）；`GET /knowledge/{kp_id}/study-guide`、`POST /knowledge/{kp_id}/study-guide/generate`（单飞锁 `zhilian:study_guide:lock:{kp_id}` + 短事务 + `max_tokens=6144` + `tool_choice="auto"`，并发超时返 `202`）、`POST /materials/{material_id}/study-guides/prewarm` & `GET .../status`（RQ `zhilian` 队列 `prewarm_study_guides`）。
-  - 前端独立分包全屏精讲页 `subpackages/material/pages/knowledge/index.vue`（<= 260 行）按 4 段呈现（`精讲笔记 | 典型例题 | 对比与避坑 | 教材原文`），60s 超时懒生成 + 2.5s 短轮询。
+  - Stage 2 在 `knowledge_points` 新增 `study_guide`（JSONB）/ `study_guide_generated_at` / `study_guide_version`（列表查询 `defer` + 仅传 `has_study_guide: bool`）；`GET /knowledge/{kp_id}/study-guide`、`POST /knowledge/{kp_id}/study-guide/generate`、`POST /materials/{material_id}/study-guides/prewarm` & `GET .../status`（RQ `zhilian` 队列 `prewarm_study_guides`）。
+  - 前端独立分包全屏精讲页 `subpackages/material/pages/knowledge/index.vue`（<= 300 行）按 4 段呈现（`精讲笔记 | 典型例题 | 对比与避坑 | 教材原文`）。
+
+## Scenario: 解析全链路幂等、AI 助教 Markdown 与考前精讲高优异步队列（2026-11-25）
+
+- **资料解析三层防重与退避重试清理**：
+  - 队列契约新增 `has_live_job`（仅 `queued`/`started`）、`cancel_matching_jobs`（清理 `queued`/`scheduled`/`deferred`，绝不强杀 `started`）与 `supports_async_worker`（`RQQueueAdapter=True`，`MemoryQueueAdapter=False`）；
+  - `MaterialService.trigger_parse` 外层加 Redis 派发短锁 `zhilian:material:parse:dispatch:{version_id}`（10s，无 Redis fail-open）+ 数据库 CAS 跃迁 + 失败重解析前 `cancel_matching_jobs` 清除残留 RQ 退避重试；Worker 侧 `parse_material_pipeline(sync=False)` 加执行锁 `zhilian:material:parse:exec:{version_id}`（1800s，token 校验释放），杜绝重复解析；
+  - 前端 `backgroundTaskStore.startMaterialParse` 维护 `inFlightParseRequests` 合并双击并发请求，`MaterialCourseHeader.vue` 在 `isStartingParse || isParsing` 时禁用解析按钮。
+- **考前精讲高优异步生成与失败透传**：
+  - 生产 RQ 模式（`queue.supports_async_worker == True`）下，`POST /api/v1/knowledge/{kp_id}/study-guide/generate` 已缓存秒返 `200 ready`，未缓存获取单飞锁 `zhilian:study_guide:lock:{kp_id}` 后入队 `zhilian_high`（`priority=1`、`generate_study_guide`）秒返 `202 generating`，彻底避免微信 60s HTTP 超时；单测/内存队列保持同步兼容路径；
+  - `StudyGuideResponse` 状态扩展为 `"ready" | "generating" | "empty" | "failed"` 并增加可选 `error_message`（由 `zhilian:study_guide:error:{kp_id}` 300s 缓存与 `worker.py::handle_job_terminal_failure` 回写）；前端 `pages/knowledge/index.vue` 2s 轮询（45 次 = 90s）+ 实时 `elapsedSec` + 分 Tab 生成中文案 + `failed` 即时重试。
+- **AI 助教完整 Markdown 渲染**：
+  - `miniprogram/src/utils/richText.ts` 支持 `#{1,6}`、`---`/`***`/`___` 分隔线、跳过公式/行内代码的 `findClosingDoubleAsterisk`（修复 `**支持向量 $x^*$**` 漏出原符号）、`+ ` 与最多 3 级缩进子列表、`~~删除线~~` 及 `[label](url)`；
+  - `CoachMessageList.vue` 的 `source.excerpt` 与 `AiCoachDrawer.vue` 展开态语境统一使用 `<RichContent compact muted />`（含 `styleIsolation: 'apply-shared'`）。
