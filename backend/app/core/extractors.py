@@ -513,21 +513,18 @@ def _pymupdf_page_visual_and_math_flags(
 ) -> tuple[bool, bool]:
     """综合计算单页的公式排版风险与视觉风险。"""
     drawings = _pymupdf_page_drawings_count(page)
-    non_bg_images = _pymupdf_page_non_bg_image_count(page, page_width, page_height)
-
     isolated_block = any(is_isolated_math_expression_block(b.text) for b in page_blocks)
     stacked_fraction = _detect_stacked_fraction_blocks(page_blocks)
-    slide_math = is_slide_layout and _slide_has_math_cues(raw_text)
-    has_math_layout = isolated_block or stacked_fraction or slide_math
+    has_math_layout = isolated_block or stacked_fraction
 
+    # 仅在含数学运算符且高密度矢量路径 (>=20) 时标为公式视觉风险；
+    # 不因 PPT 模板装饰线 (>=4) 或校徽小图误把纯文页轰进 VLM 触发限流。
+    _ = (is_slide_layout, page_width, page_height)
     dense_vector_formula = (
         any(ch in _FORMULA_RISK_OPERATORS for ch in raw_text)
         and drawings >= _FORMULA_VISUAL_RISK_MIN_DRAWINGS
     )
-    slide_visual = is_slide_layout and (
-        drawings >= _SLIDE_VISUAL_RISK_MIN_DRAWINGS or non_bg_images >= 1
-    )
-    return has_math_layout, dense_vector_formula or slide_visual
+    return has_math_layout, dense_vector_formula
 
 
 def _pypdf_page_has_visual_content(page: Any) -> bool:
