@@ -308,9 +308,10 @@ class StudyGuideResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     knowledge_point_id: uuid.UUID = Field(..., description="知识点主键")
-    status: Literal["empty", "generating", "ready"] = Field(..., description="精讲状态")
+    status: Literal["ready", "generating", "empty", "failed"] = Field(..., description="精讲状态")
     study_guide: StudyGuideContent | None = Field(default=None, description="精讲笔记内容")
     generated_at: datetime | None = Field(default=None, description="生成时间 (UTC)")
+    error_message: str | None = Field(default=None, description="生成失败时的安全错误提示")
 
 
 class StudyGuidePrewarmRequest(BaseModel):

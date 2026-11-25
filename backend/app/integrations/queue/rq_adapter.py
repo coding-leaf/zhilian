@@ -1,5 +1,6 @@
 """RQ-backed implementation of the application task queue contract."""
 
+import logging
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -13,6 +14,8 @@ from app.core.config import RedisSettings
 from app.core.errors import PermissionDeniedError, QueueError
 from app.integrations.queue.protocol import REGISTERED_TASK_NAMES, QueueProtocol, TaskResult
 from app.integrations.redis_client import build_redis_client, close_redis_client, mask_redis_url
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_QUEUE = "zhilian"
 HIGH_QUEUE = "zhilian_high"
@@ -163,6 +166,48 @@ class RQQueueAdapter(QueueProtocol):
             raise QueueError("后台任务取消失败") from exc
         return True
 
+    @property
+    def supports_async_worker(self) -> bool:
+        """RQ 队列由独立后台 Worker 进程消费，支持非阻塞异步投递。"""
+        return True
+
+    @staticmethod
+    def _job_matches(job: Job | None, task_name: str, match_payload: dict[str, str]) -> bool:
+        if job is None:
+            return False
+        raw_args = job.args if isinstance(job.args, (list, tuple)) else []
+        if len(raw_args) < 2 or raw_args[0] != task_name or not isinstance(raw_args[1], dict):
+            return False
+        return all(
+            str(raw_args[1].get(key, "")) == str(value) for key, value in match_payload.items()
+        )
+
+    def _any_job_matches(
+        self,
+        job_ids: list[str],
+        task_name: str,
+        match_payload: dict[str, str],
+    ) -> bool:
+        if not job_ids:
+            return False
+        jobs = Job.fetch_many(list(dict.fromkeys(job_ids)), connection=self._client)
+        return any(self._job_matches(job, task_name, match_payload) for job in jobs)
+
+    @staticmethod
+    def _is_started_job(job: Job | None, started_ids: set[str]) -> bool:
+        if job is None:
+            return False
+        job_id = getattr(job, "id", None)
+        if job_id is not None and str(job_id) in started_ids:
+            return True
+        get_status_fn = getattr(job, "get_status", None)
+        if callable(get_status_fn):
+            raw_status = get_status_fn()
+            status_val = getattr(raw_status, "value", raw_status)
+            if str(status_val) == "started":
+                return True
+        return False
+
     def has_active_job(self, task_name: str, match_payload: dict[str, str]) -> bool | None:
         """检查 RQ 队列与活跃注册表中是否存在匹配指定载荷的进行中任务。"""
         try:
@@ -173,27 +218,57 @@ class RQQueueAdapter(QueueProtocol):
                 job_ids.extend(queue.started_job_registry.get_job_ids())
                 job_ids.extend(queue.scheduled_job_registry.get_job_ids())
                 job_ids.extend(queue.deferred_job_registry.get_job_ids())
-            if not job_ids:
-                return False
-            jobs = Job.fetch_many(list(dict.fromkeys(job_ids)), connection=self._client)
-            for job in jobs:
-                if job is None:
-                    continue
-                raw_args = job.args if isinstance(job.args, (list, tuple)) else []
-                if (
-                    len(raw_args) < 2
-                    or raw_args[0] != task_name
-                    or not isinstance(raw_args[1], dict)
-                ):
-                    continue
-                if all(
-                    str(raw_args[1].get(key, "")) == str(value)
-                    for key, value in match_payload.items()
-                ):
-                    return True
-            return False
+            return self._any_job_matches(job_ids, task_name, match_payload)
         except Exception:
             return None
+
+    def has_live_job(self, task_name: str, match_payload: dict[str, str]) -> bool | None:
+        """仅检查 queued 与 started 任务（忽略 scheduled 延迟退避重试）。"""
+        try:
+            job_ids: list[str] = []
+            for queue_name in (HIGH_QUEUE, DEFAULT_QUEUE):
+                queue = Queue(queue_name, connection=self._client)
+                job_ids.extend(queue.get_job_ids())
+                job_ids.extend(queue.started_job_registry.get_job_ids())
+            return self._any_job_matches(job_ids, task_name, match_payload)
+        except Exception:
+            return None
+
+    def cancel_matching_jobs(self, task_name: str, match_payload: dict[str, str]) -> int:
+        """取消 HIGH_QUEUE 与 DEFAULT_QUEUE 中匹配的排队/延迟/挂起任务（不强杀 started）。"""
+        try:
+            job_ids: list[str] = []
+            started_ids: set[str] = set()
+            for queue_name in (HIGH_QUEUE, DEFAULT_QUEUE):
+                queue = Queue(queue_name, connection=self._client)
+                job_ids.extend(queue.get_job_ids())
+                job_ids.extend(queue.scheduled_job_registry.get_job_ids())
+                job_ids.extend(queue.deferred_job_registry.get_job_ids())
+                started_ids.update(str(jid) for jid in queue.started_job_registry.get_job_ids())
+            if not job_ids:
+                return 0
+            jobs = Job.fetch_many(list(dict.fromkeys(job_ids)), connection=self._client)
+        except Exception as exc:
+            logger.warning("inspect matching RQ jobs failed: %s", str(exc)[:160])
+            return 0
+
+        cancelled = 0
+        for job in jobs:
+            if not self._job_matches(job, task_name, match_payload):
+                continue
+            if self._is_started_job(job, started_ids):
+                continue
+            job_id = getattr(job, "id", None)
+            if job_id is None:
+                continue
+            try:
+                cancel_job(str(job_id), connection=self._client)
+                cancelled += 1
+            except NoSuchJobError:
+                continue
+            except Exception as exc:
+                logger.warning("cancel matching RQ job %s failed: %s", job_id, str(exc)[:160])
+        return cancelled
 
     def __repr__(self) -> str:
         return f"<RQQueueAdapter url={self._url}>"

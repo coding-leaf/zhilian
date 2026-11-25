@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import (
+    AppError,
     KnowledgeNotFoundError,
     LLMResponseFormatError,
     MaterialInvalidError,
@@ -26,8 +27,10 @@ from app.schemas.knowledge import StudyGuideContent
 logger = logging.getLogger(__name__)
 
 _STUDY_GUIDE_LOCK_PREFIX: str = "zhilian:study_guide:lock:"
+_STUDY_GUIDE_ERROR_PREFIX: str = "zhilian:study_guide:error:"
 _STUDY_GUIDE_PREWARM_PREFIX: str = "zhilian:study_guide:prewarm:"
-_STUDY_GUIDE_LOCK_TTL_SECONDS: int = 90
+_STUDY_GUIDE_LOCK_TTL_SECONDS: int = 180
+_STUDY_GUIDE_ERROR_TTL_SECONDS: int = 300
 _STUDY_GUIDE_PREWARM_TTL_SECONDS: int = 86400
 _STUDY_GUIDE_LOCK_WAIT_SECONDS: float = 25.0
 _STUDY_GUIDE_POLL_INTERVAL_SECONDS: float = 0.5
@@ -46,6 +49,9 @@ _JSON_FENCE_RE: re.Pattern[str] = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```",
 
 _LOCAL_LOCK_GUARD = threading.Lock()
 _LOCAL_STUDY_GUIDE_LOCKS: dict[uuid.UUID, tuple[str, float]] = {}
+
+_LOCAL_ERROR_GUARD = threading.Lock()
+_LOCAL_STUDY_GUIDE_ERRORS: dict[uuid.UUID, tuple[str, float]] = {}
 
 _LOCAL_PREWARM_GUARD = threading.Lock()
 _LOCAL_PREWARM_STATES: dict[uuid.UUID, dict[str, Any]] = {}
@@ -79,6 +85,10 @@ def resolve_study_guide_queue(container: Any) -> Any | None:
 
 def _lock_key(kp_id: uuid.UUID) -> str:
     return f"{_STUDY_GUIDE_LOCK_PREFIX}{kp_id}"
+
+
+def _error_key(kp_id: uuid.UUID) -> str:
+    return f"{_STUDY_GUIDE_ERROR_PREFIX}{kp_id}"
 
 
 def _prewarm_key(version_id: uuid.UUID) -> str:
@@ -138,6 +148,59 @@ def _release_study_guide_lock(
             _LOCAL_STUDY_GUIDE_LOCKS.pop(kp_id, None)
 
 
+def release_study_guide_lock(
+    kp_id: uuid.UUID,
+    token: str,
+    *,
+    redis_client: Any | None = None,
+) -> None:
+    """公开包装：按持有者 token 安全释放单考点精讲单飞锁。"""
+    _release_study_guide_lock(kp_id, token, redis_client=redis_client)
+
+
+def _adopt_or_acquire_study_guide_lock(
+    kp_id: uuid.UUID,
+    lock_token: str | None,
+    *,
+    redis_client: Any | None = None,
+    ttl_seconds: int = _STUDY_GUIDE_LOCK_TTL_SECONDS,
+) -> tuple[bool, str]:
+    """Worker 侧承接已有 lock_token（若仍由本任务持有则续期）或新抢锁。"""
+    if lock_token:
+        if redis_client is not None:
+            key = _lock_key(kp_id)
+            try:
+                if _decode_redis_scalar(redis_client.get(key)) == lock_token:
+                    if callable(getattr(redis_client, "expire", None)):
+                        redis_client.expire(key, ttl_seconds)
+                    return True, lock_token
+            except Exception as exc:
+                logger.warning("inspect study guide redis lock failed: %s", str(exc)[:160])
+        else:
+            now = time.monotonic()
+            with _LOCAL_LOCK_GUARD:
+                existing = _LOCAL_STUDY_GUIDE_LOCKS.get(kp_id)
+                if existing is not None and existing[0] == lock_token and existing[1] > now:
+                    _LOCAL_STUDY_GUIDE_LOCKS[kp_id] = (lock_token, now + ttl_seconds)
+                    return True, lock_token
+        acquired = _acquire_study_guide_lock(
+            kp_id,
+            lock_token,
+            redis_client=redis_client,
+            ttl_seconds=ttl_seconds,
+        )
+        return acquired, lock_token
+
+    new_token = uuid.uuid4().hex
+    acquired = _acquire_study_guide_lock(
+        kp_id,
+        new_token,
+        redis_client=redis_client,
+        ttl_seconds=ttl_seconds,
+    )
+    return acquired, new_token
+
+
 def is_study_guide_locked(
     kp_id: uuid.UUID,
     *,
@@ -161,6 +224,83 @@ def is_study_guide_locked(
             _LOCAL_STUDY_GUIDE_LOCKS.pop(kp_id, None)
             return False
         return True
+
+
+def format_study_guide_error_message(
+    exc: BaseException | None,
+    fallback_name: str = "UnknownError",
+) -> str:
+    """将后台生成异常映射为安全可展示的用户提示摘要。"""
+    if isinstance(exc, AppError) and exc.message:
+        return exc.message.strip()[:240]
+    exc_name = type(exc).__name__ if exc is not None else fallback_name
+    if "Timeout" in exc_name:
+        return "考前精讲生成超时，请点击重新生成重试"
+    return f"考前精讲生成失败 ({exc_name})，请点击重新生成重试"[:240]
+
+
+def set_study_guide_error(
+    kp_id: uuid.UUID,
+    error_message: str,
+    *,
+    redis_client: Any | None = None,
+    ttl_seconds: int = _STUDY_GUIDE_ERROR_TTL_SECONDS,
+) -> None:
+    """写入单考点精讲短 TTL 失败态（优先 Redis，降级进程内 TTL 缓存）。"""
+    clean_message = (error_message or "考前精讲生成失败，请点击重新生成重试").strip()[:240]
+    if redis_client is not None:
+        try:
+            redis_client.set(_error_key(kp_id), clean_message, ex=ttl_seconds)
+            return
+        except Exception as exc:
+            logger.warning("set study guide error redis failed: %s", str(exc)[:160])
+
+    with _LOCAL_ERROR_GUARD:
+        _LOCAL_STUDY_GUIDE_ERRORS[kp_id] = (clean_message, time.monotonic() + ttl_seconds)
+
+
+def get_study_guide_error(
+    kp_id: uuid.UUID,
+    *,
+    redis_client: Any | None = None,
+) -> str | None:
+    """读取单考点精讲短 TTL 失败态摘要；未命中或已过期返回 None。"""
+    if redis_client is not None:
+        try:
+            raw = redis_client.get(_error_key(kp_id))
+            decoded = _decode_redis_scalar(raw).strip()
+            return decoded or None
+        except Exception as exc:
+            logger.warning("get study guide error redis failed: %s", str(exc)[:160])
+
+    now = time.monotonic()
+    with _LOCAL_ERROR_GUARD:
+        entry = _LOCAL_STUDY_GUIDE_ERRORS.get(kp_id)
+        if entry is None:
+            return None
+        message, expires_at = entry
+        if expires_at <= now:
+            _LOCAL_STUDY_GUIDE_ERRORS.pop(kp_id, None)
+            return None
+        return message
+
+
+def clear_study_guide_error(
+    kp_id: uuid.UUID,
+    *,
+    redis_client: Any | None = None,
+) -> None:
+    """清除单考点精讲失败态缓存。"""
+    if redis_client is not None:
+        try:
+            if callable(getattr(redis_client, "delete", None)):
+                redis_client.delete(_error_key(kp_id))
+            return
+        except Exception as exc:
+            logger.warning("clear study guide error redis failed: %s", str(exc)[:160])
+
+    with _LOCAL_ERROR_GUARD:
+        _LOCAL_STUDY_GUIDE_ERRORS.pop(kp_id, None)
 
 
 def _set_prewarm_state(
@@ -313,18 +453,18 @@ def _build_study_guide_messages(
         "4. key_formulas：核心结论公式组（使用独立 `$$...$$` 展示公式，纯概念类可为 []）；\n"
         "5. derivation_steps：逐步推导或算法流程链"
         "（`step_title`, `formula`, `explanation`，讲清每一步成立依据）；\n"
-        "6. worked_examples：1~2 道典型例题（紧扣讲义原型或标准同构教学例题，"
+        "6. worked_examples：聚焦 1 道高含金量典型例题（紧扣讲义原型或标准同构教学例题，"
         "含题干 `problem`、切入点 `solution_idea`、"
-        "分步解答 `solution_steps` 与明确结论 `final_answer`）；\n"
-        "7. comparisons：相邻易混概念对比（优先对照同章兄弟考点，"
+        "3~5 步精炼分步解答 `solution_steps` 与明确结论 `final_answer`）；\n"
+        "7. comparisons：1~2 组相邻易混概念对比（优先对照同章兄弟考点，"
         "写明共同点、本质区别与考场快速判别依据）；\n"
-        "8. pitfalls：考场高频避坑（`mistake`, `why_wrong`, `correction`）；\n"
-        "9. memory_anchors：2~4 条考前 30 秒速记锚点或口诀。\n"
+        "8. pitfalls：2~3 条考场高频避坑（`mistake`, `why_wrong`, `correction`）；\n"
+        "9. memory_anchors：2~3 条考前 30 秒速记锚点或口诀。\n"
         "【硬性要求】\n"
         "- 所有定义、符号体系与定理必须严格忠实于传入的原文切片，"
         "禁止编造原文不存在的定理编号或考频；\n"
-        "- 精讲正文总字数控制在 1,400~2,400 汉字，推导严谨、步骤不跳步、结论可直接背诵；\n"
-        "- 思考过程保持精炼，并严格按 Schema 输出结构化 JSON。"
+        "- 精讲正文总字数控制在 800~1,500 汉字，直击核心推导与关键步骤、表达简洁不冗长；\n"
+        "- 思考过程保持简短精炼（不要长篇草稿推演），直接按 Schema 输出 JSON，9 个字段缺一不可。"
     )
 
     lines: list[str] = [f"【目标考点】{kp_name}"]
@@ -471,14 +611,32 @@ class StudyGuideCoordinator:
                 "status": "ready",
                 "study_guide": guide,
                 "generated_at": generated_at,
+                "error_message": None,
             }
         self._rollback_read_only()
-        locked = is_study_guide_locked(knowledge_point_id, redis_client=redis_client)
+        if is_study_guide_locked(knowledge_point_id, redis_client=redis_client):
+            return {
+                "knowledge_point_id": knowledge_point_id,
+                "status": "generating",
+                "study_guide": None,
+                "generated_at": None,
+                "error_message": None,
+            }
+        cached_error = get_study_guide_error(knowledge_point_id, redis_client=redis_client)
+        if cached_error:
+            return {
+                "knowledge_point_id": knowledge_point_id,
+                "status": "failed",
+                "study_guide": None,
+                "generated_at": None,
+                "error_message": cached_error,
+            }
         return {
             "knowledge_point_id": knowledge_point_id,
-            "status": "generating" if locked else "empty",
+            "status": "empty",
             "study_guide": None,
             "generated_at": None,
+            "error_message": None,
         }
 
     def generate_study_guide(
@@ -487,11 +645,12 @@ class StudyGuideCoordinator:
         knowledge_point_id: uuid.UUID,
         user_id: uuid.UUID,
         force: bool = False,
+        queue: Any | None = None,
         redis_client: Any | None = None,
         lock_wait_seconds: float = _STUDY_GUIDE_LOCK_WAIT_SECONDS,
         poll_interval_seconds: float = _STUDY_GUIDE_POLL_INTERVAL_SECONDS,
     ) -> dict[str, Any]:
-        """单飞防重生成考前精讲并永久写入 KnowledgePoint.study_guide。"""
+        """单飞防重生成考前精讲并永久写入 KnowledgePoint.study_guide（支持高优异步队列）。"""
         point = self._knowledge_repo.get_by_id(knowledge_point_id, user_id)
         if point is None:
             raise KnowledgeNotFoundError(
@@ -507,8 +666,18 @@ class StudyGuideCoordinator:
                 "status": "ready",
                 "study_guide": guide,
                 "generated_at": initial_generated_at,
+                "error_message": None,
             }
         self._rollback_read_only()
+
+        if queue is not None and getattr(queue, "supports_async_worker", False) is True:
+            return self._enqueue_async_generation(
+                knowledge_point_id=knowledge_point_id,
+                user_id=user_id,
+                force=force,
+                queue=queue,
+                redis_client=redis_client,
+            )
 
         lock_token = uuid.uuid4().hex
         acquired = _acquire_study_guide_lock(
@@ -516,6 +685,7 @@ class StudyGuideCoordinator:
         )
         if acquired:
             try:
+                clear_study_guide_error(knowledge_point_id, redis_client=redis_client)
                 return self._generate_with_lock_owned(
                     knowledge_point_id=knowledge_point_id,
                     user_id=user_id,
@@ -533,6 +703,105 @@ class StudyGuideCoordinator:
             lock_wait_seconds=lock_wait_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
+
+    def _enqueue_async_generation(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool,
+        queue: Any,
+        redis_client: Any | None,
+    ) -> dict[str, Any]:
+        """生产异步路径：单飞加锁后投递 HIGH_QUEUE (priority=1) 并立即返回 202 generating。"""
+        generating_payload: dict[str, Any] = {
+            "knowledge_point_id": knowledge_point_id,
+            "status": "generating",
+            "study_guide": None,
+            "generated_at": None,
+            "error_message": None,
+        }
+        if is_study_guide_locked(knowledge_point_id, redis_client=redis_client):
+            return generating_payload
+
+        lock_token = uuid.uuid4().hex
+        if not _acquire_study_guide_lock(knowledge_point_id, lock_token, redis_client=redis_client):
+            return generating_payload
+
+        clear_study_guide_error(knowledge_point_id, redis_client=redis_client)
+        try:
+            queue.enqueue(
+                "generate_study_guide",
+                {
+                    "knowledge_point_id": str(knowledge_point_id),
+                    "user_id": str(user_id),
+                    "force": "true" if force else "false",
+                    "lock_token": lock_token,
+                },
+                str(user_id),
+                priority=1,
+            )
+        except Exception:
+            _release_study_guide_lock(knowledge_point_id, lock_token, redis_client=redis_client)
+            raise
+        return generating_payload
+
+    def run_study_guide_generation(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
+        lock_token: str | None = None,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """Worker 侧单考点精讲生成入口：承接单飞锁、清错、落库并兜底写入短 TTL 失败态。"""
+        acquired, active_token = _adopt_or_acquire_study_guide_lock(
+            knowledge_point_id,
+            lock_token,
+            redis_client=redis_client,
+        )
+        if not acquired:
+            logger.info(
+                "async study guide generation skipped; lock held by another worker",
+                extra={
+                    "user_ref": generate_user_ref(user_id),
+                    "target_id": str(knowledge_point_id),
+                    "error_code": 0,
+                },
+            )
+            return self.get_study_guide(
+                knowledge_point_id=knowledge_point_id,
+                user_id=user_id,
+                redis_client=redis_client,
+            )
+
+        try:
+            clear_study_guide_error(knowledge_point_id, redis_client=redis_client)
+            return self._generate_with_lock_owned(
+                knowledge_point_id=knowledge_point_id,
+                user_id=user_id,
+                force=force,
+            )
+        except Exception as exc:
+            self._service.session.rollback()
+            set_study_guide_error(
+                knowledge_point_id,
+                format_study_guide_error_message(exc),
+                redis_client=redis_client,
+            )
+            logger.warning(
+                "async study guide generation failed",
+                extra={
+                    "user_ref": generate_user_ref(user_id),
+                    "target_id": str(knowledge_point_id),
+                    "error_code": getattr(exc, "error_code", 30011),
+                    "details": str(exc)[:180],
+                },
+            )
+            raise
+        finally:
+            _release_study_guide_lock(knowledge_point_id, active_token, redis_client=redis_client)
 
     def _generate_with_lock_owned(
         self,
@@ -626,6 +895,7 @@ class StudyGuideCoordinator:
             "status": "ready",
             "study_guide": guide,
             "generated_at": now,
+            "error_message": None,
         }
 
     def _wait_for_inflight_generation(
@@ -666,9 +936,19 @@ class StudyGuideCoordinator:
                     "status": "ready",
                     "study_guide": guide,
                     "generated_at": generated_at,
+                    "error_message": None,
                 }
             self._rollback_read_only()
             if not locked_now:
+                cached_error = get_study_guide_error(knowledge_point_id, redis_client=redis_client)
+                if cached_error:
+                    return {
+                        "knowledge_point_id": knowledge_point_id,
+                        "status": "failed",
+                        "study_guide": None,
+                        "generated_at": None,
+                        "error_message": cached_error,
+                    }
                 break
 
         return {
@@ -676,6 +956,7 @@ class StudyGuideCoordinator:
             "status": "generating",
             "study_guide": None,
             "generated_at": None,
+            "error_message": None,
         }
 
     def _resolve_material_version(

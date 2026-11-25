@@ -1070,18 +1070,38 @@ class KnowledgeService:
         knowledge_point_id: uuid.UUID,
         user_id: uuid.UUID,
         force: bool = False,
+        queue: Any | None = None,
         redis_client: Any | None = None,
         lock_wait_seconds: float = 25.0,
         poll_interval_seconds: float = 0.5,
     ) -> dict[str, Any]:
-        """懒生成并永久缓存单个考点的考前精讲笔记（支持单飞锁防重与短事务）。"""
+        """懒生成并永久缓存单个考点的考前精讲笔记（支持异步高优队列与单飞锁防重）。"""
         return self._study_guide.generate_study_guide(
             knowledge_point_id=knowledge_point_id,
             user_id=user_id,
             force=force,
+            queue=queue if queue is not None else self._queue,
             redis_client=redis_client if redis_client is not None else self._redis_client,
             lock_wait_seconds=lock_wait_seconds,
             poll_interval_seconds=poll_interval_seconds,
+        )
+
+    def run_study_guide_generation(
+        self,
+        *,
+        knowledge_point_id: uuid.UUID,
+        user_id: uuid.UUID,
+        force: bool = False,
+        lock_token: str | None = None,
+        redis_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """RQ Worker 执行单考点考前精讲生成（承接单飞锁并写入短 TTL 失败态）。"""
+        return self._study_guide.run_study_guide_generation(
+            knowledge_point_id=knowledge_point_id,
+            user_id=user_id,
+            force=force,
+            lock_token=lock_token,
+            redis_client=redis_client if redis_client is not None else self._redis_client,
         )
 
     def prewarm_study_guides(

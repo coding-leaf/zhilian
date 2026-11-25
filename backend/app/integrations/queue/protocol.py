@@ -21,6 +21,7 @@ REGISTERED_TASK_NAMES = frozenset(
         "grading_jobs",
         "generate_questions_job",
         "prewarm_study_guides",
+        "generate_study_guide",
     }
 )
 

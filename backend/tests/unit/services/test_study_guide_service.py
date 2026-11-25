@@ -641,3 +641,267 @@ async def test_study_guide_api_endpoints_contracts() -> None:
         assert r_status.status_code == 200
         assert r_status.json()["current_kp_name"] == "核技巧"
         assert r_status.json()["ready_kps"] == 4
+
+
+class _AsyncRQStubQueue(MemoryQueueAdapter):
+    """Stub queue mimicking RQQueueAdapter.supports_async_worker=True."""
+
+    def __init__(self, *, fail_enqueue: bool = False) -> None:
+        super().__init__()
+        self.fail_enqueue = fail_enqueue
+
+    @property
+    def supports_async_worker(self) -> bool:
+        return True
+
+    def enqueue(
+        self,
+        task_name: str,
+        payload: dict[str, Any],
+        user_id: str,
+        *,
+        task_id: str | None = None,
+        delay_seconds: int = 0,
+        priority: int = 0,
+    ) -> str:
+        if self.fail_enqueue:
+            raise RuntimeError("redis queue down")
+        return super().enqueue(
+            task_name,
+            payload,
+            user_id,
+            task_id=task_id,
+            delay_seconds=delay_seconds,
+            priority=priority,
+        )
+
+
+def test_async_high_priority_study_guide_enqueue_worker_and_failure_state(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证单考点精讲异步高优入队 (priority=1)、Worker 执行、失败态写回与单飞防重。"""
+    from types import SimpleNamespace
+
+    from app.schemas.knowledge import StudyGuideResponse
+    from app.services._study_guide import (
+        _build_study_guide_messages,
+        clear_study_guide_error,
+        get_study_guide_error,
+        set_study_guide_error,
+    )
+
+    assert "generate_study_guide" in REGISTERED_TASK_NAMES
+    assert "generate_study_guide" in worker.REGISTERED_TASKS
+
+    # Schema 支持 failed + error_message
+    failed_schema = StudyGuideResponse(
+        knowledge_point_id=uuid.uuid4(),
+        status="failed",
+        error_message="生成超时，请重试",
+    )
+    assert failed_schema.status == "failed"
+    assert failed_schema.error_message == "生成超时，请重试"
+
+    # Prompt 提速预算校验
+    prompt_msgs = _build_study_guide_messages(
+        kp_name="支持向量机",
+        kp_description="间隔最大化",
+        kp_structured=None,
+        snippet_items=[(0, "第 1 页", "原文内容")],
+        sibling_names=["软间隔"],
+    )
+    assert "800~1,500" in prompt_msgs[0].content
+    assert "1 道高含金量典型例题" in prompt_msgs[0].content
+    assert "3~5 步" in prompt_msgs[0].content
+
+    with session_factory() as session:
+        env = _seed_study_guide_material(session, kp_count=1)
+        kp_id = env["kps"][0].id
+        user_id = env["user_id"]
+        redis = _FakeRedis()
+
+        # 1. 入队异常时立即释放锁并抛错
+        broken_queue = _AsyncRQStubQueue(fail_enqueue=True)
+        svc_broken = KnowledgeService(
+            session,
+            _StudyGuideStubLLM(),
+            FakeEmbeddingAdapter(),
+            queue=broken_queue,
+            redis_client=redis,
+        )
+        with pytest.raises(RuntimeError, match="redis queue down"):
+            svc_broken.generate_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert redis.exists(f"zhilian:study_guide:lock:{kp_id}") == 0
+
+        # 2. 正常异步入队：返回 generating，投递 priority=1，重复触发单飞不重复入队
+        async_queue = _AsyncRQStubQueue()
+        llm = _StudyGuideStubLLM()
+        set_study_guide_error(kp_id, "旧失败摘要", redis_client=redis)
+        svc = KnowledgeService(
+            session, llm, FakeEmbeddingAdapter(), queue=async_queue, redis_client=redis
+        )
+        res_enqueue = svc.generate_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert res_enqueue["status"] == "generating"
+        assert res_enqueue["error_message"] is None
+        assert len(async_queue._queue) == 1
+        queued_msg = async_queue._queue[0]
+        assert queued_msg.task_name == "generate_study_guide"
+        assert queued_msg.priority == 1
+        assert queued_msg.payload["knowledge_point_id"] == str(kp_id)
+        assert queued_msg.payload["user_id"] == str(user_id)
+        assert queued_msg.payload["force"] == "false"
+        assert queued_msg.payload["lock_token"]
+        assert get_study_guide_error(kp_id, redis_client=redis) is None
+        assert len(llm.structured_calls) == 0
+
+        # 并发双击 -> 单飞不重复入队
+        res_dup = svc.generate_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert res_dup["status"] == "generating"
+        assert len(async_queue._queue) == 1
+
+        # GET 在持锁期间返回 generating
+        status_locked = svc.get_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert status_locked["status"] == "generating"
+
+        # 3. Worker 失败分支：记录安全错误摘要并释放锁，GET 返回 failed
+        failing_llm = _StudyGuideStubLLM(fail_kp_keyword="考点_0")
+        failing_svc = KnowledgeService(
+            session, failing_llm, FakeEmbeddingAdapter(), queue=async_queue, redis_client=redis
+        )
+        with pytest.raises(LLMResponseFormatError):
+            failing_svc.run_study_guide_generation(
+                knowledge_point_id=kp_id,
+                user_id=user_id,
+                lock_token=queued_msg.payload["lock_token"],
+            )
+        assert redis.exists(f"zhilian:study_guide:lock:{kp_id}") == 0
+        failed_get = svc.get_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert failed_get["status"] == "failed"
+        assert failed_get["error_message"]
+
+        # 4. Worker 成功分支：清除错误态，落库 study_guide，释放锁，GET 与 POST 均秒返 ready
+        res_retry = svc.generate_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert res_retry["status"] == "generating"
+        assert len(async_queue._queue) == 2
+        retry_token = async_queue._queue[1].payload["lock_token"]
+        run_res = svc.run_study_guide_generation(
+            knowledge_point_id=kp_id,
+            user_id=user_id,
+            lock_token=retry_token,
+        )
+        assert run_res["status"] == "ready"
+        assert redis.exists(f"zhilian:study_guide:lock:{kp_id}") == 0
+        assert get_study_guide_error(kp_id, redis_client=redis) is None
+        ready_res = svc.generate_study_guide(knowledge_point_id=kp_id, user_id=user_id)
+        assert ready_res["status"] == "ready"
+        assert len(async_queue._queue) == 2
+
+    # 5. worker.execute_registered_task & handle_job_terminal_failure
+    fake_session = MagicMock()
+    fake_knowledge_svc = MagicMock()
+    fake_redis = _FakeRedis()
+    fake_container = MagicMock()
+    fake_container.providers = MagicMock(
+        queue=SimpleNamespace(_client=fake_redis),
+        idempotency=None,
+    )
+    fake_container.get_session.return_value.__enter__.return_value = fake_session
+    fake_container.get_session.return_value.__exit__.return_value = False
+    fake_container.create_knowledge_service.return_value = fake_knowledge_svc
+    monkeypatch.setattr(worker.AppContainer, "create", classmethod(lambda cls: fake_container))
+
+    w_user = uuid.uuid4()
+    w_kp = uuid.uuid4()
+    worker_lock_val = uuid.uuid4().hex
+    worker.execute_registered_task(
+        "generate_study_guide",
+        {
+            "knowledge_point_id": str(w_kp),
+            "user_id": str(w_user),
+            "force": "true",
+            "lock_token": worker_lock_val,
+        },
+        str(w_user),
+    )
+    fake_knowledge_svc.run_study_guide_generation.assert_called_once_with(
+        knowledge_point_id=w_kp,
+        user_id=w_user,
+        force=True,
+        lock_token=worker_lock_val,
+        redis_client=fake_redis,
+    )
+
+    term_lock_val = uuid.uuid4().hex
+    assert _acquire_study_guide_lock(w_kp, term_lock_val, redis_client=fake_redis) is True
+    terminal_job = SimpleNamespace(
+        id="sg-term-1",
+        args=(
+            "generate_study_guide",
+            {
+                "knowledge_point_id": str(w_kp),
+                "user_id": str(w_user),
+                "lock_token": term_lock_val,
+            },
+            str(w_user),
+        ),
+        meta={},
+        should_retry=False,
+    )
+    worker.handle_job_terminal_failure(
+        terminal_job,
+        MagicMock(),
+        TimeoutError,
+        TimeoutError("llm timeout"),
+        None,  # type: ignore[arg-type]
+    )
+    assert fake_redis.exists(f"zhilian:study_guide:lock:{w_kp}") == 0
+    assert get_study_guide_error(w_kp, redis_client=fake_redis) is not None
+    clear_study_guide_error(w_kp, redis_client=fake_redis)
+    worker.shutdown_worker_container()
+
+
+@pytest.mark.asyncio
+async def test_study_guide_api_returns_failed_status_and_forwards_queue() -> None:
+    """验证 GET /study-guide 返回 failed+error_message 且 POST /generate 透传 queue。"""
+    app = FastAPI()
+    app.include_router(api_v1_router)
+
+    user = User(id=uuid.uuid4(), nickname="u", is_active=True, token_version=1)
+    kp_id = uuid.uuid4()
+    mock_svc = MagicMock()
+    mock_queue = _AsyncRQStubQueue()
+    mock_container = MagicMock()
+    mock_container.providers = MagicMock(queue=mock_queue, idempotency=None)
+    app.state.container = mock_container
+
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_knowledge_service] = lambda: mock_svc
+
+    mock_svc.get_study_guide.return_value = {
+        "knowledge_point_id": kp_id,
+        "status": "failed",
+        "study_guide": None,
+        "generated_at": None,
+        "error_message": "考前精讲生成超时，请点击重新生成重试",
+    }
+    mock_svc.generate_study_guide.return_value = {
+        "knowledge_point_id": kp_id,
+        "status": "generating",
+        "study_guide": None,
+        "generated_at": None,
+        "error_message": None,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r_failed = await client.get(f"/api/v1/knowledge/{kp_id}/study-guide")
+        assert r_failed.status_code == 200
+        assert r_failed.json()["status"] == "failed"
+        assert r_failed.json()["error_message"] == "考前精讲生成超时，请点击重新生成重试"
+
+        r_gen = await client.post(
+            f"/api/v1/knowledge/{kp_id}/study-guide/generate",
+            json={"force": False},
+        )
+        assert r_gen.status_code == 202
+        assert mock_svc.generate_study_guide.call_args.kwargs["queue"] is mock_queue

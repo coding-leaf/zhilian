@@ -30,7 +30,7 @@ from app.schemas.knowledge import (
     StudyGuideGenerateRequest,
     StudyGuideResponse,
 )
-from app.services._study_guide import resolve_study_guide_redis_client
+from app.services._study_guide import resolve_study_guide_queue, resolve_study_guide_redis_client
 from app.services.knowledge import KnowledgeService
 
 router = APIRouter(tags=["knowledge"])
@@ -253,6 +253,7 @@ def generate_knowledge_point_study_guide(
         knowledge_point_id=kp_id,
         user_id=user.id,
         force=force,
+        queue=resolve_study_guide_queue(container),
         redis_client=resolve_study_guide_redis_client(container),
     )
     response.status_code = (
